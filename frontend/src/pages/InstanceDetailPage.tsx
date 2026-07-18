@@ -36,14 +36,6 @@ type RangeHours = 1 | 6 | 24 | 168;
 
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
-const statusMeta: Record<string, { label: string; color: string }> = {
-  healthy: { label: "Healthy", color: "var(--success)" },
-  warning: { label: "Warning", color: "var(--warning)" },
-  alerting: { label: "Alerting", color: "var(--danger)" },
-  pending: { label: "Pending", color: "var(--muted)" },
-  disabled: { label: "Disabled", color: "var(--muted)" },
-};
-
 function timeLabel(iso: string): string {
   const d = new Date(iso);
   return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
