@@ -76,6 +76,16 @@ export interface IndexAdvice {
   existing_indexes: string[];
 }
 
+export interface PerformanceInsight {
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  title: string;
+  description: string;
+  recommendation: string;
+  metric_value: number | null;
+  metric_unit: string | null;
+}
+
 export interface AlertRule {
   id: number;
   instance_id: number | null;
@@ -178,6 +188,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ query }),
     }),
+  getInsights: (id: number) => request<PerformanceInsight[]>(`/api/instances/${id}/insights`),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
   createAlertRule: (data: Omit<AlertRule, "id" | "created_at">) =>
     request<AlertRule>("/api/alerts/rules", { method: "POST", body: JSON.stringify(data) }),

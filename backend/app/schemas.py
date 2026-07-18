@@ -239,3 +239,13 @@ class IndexAdviceOut(BaseModel):
     before_cost: float | None
     after_cost: float | None
     existing_indexes: list[str]
+
+
+class PerformanceInsightOut(BaseModel):
+    severity: str
+    category: str
+    title: str
+    description: str
+    recommendation: str
+    metric_value: float | None
+    metric_unit: str | None

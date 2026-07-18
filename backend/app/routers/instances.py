@@ -16,9 +16,11 @@ from app.schemas import (
     InstanceUpdate,
     MetricDefinitionOut,
     MetricSampleOut,
+    PerformanceInsightOut,
 )
 from app.config import settings
 from app.services.credentials import decrypt_secret, encrypt_secret
+from app.services.performance_insights import analyze_metrics
 
 router = APIRouter(prefix="/instances", tags=["instances"])
 
@@ -206,3 +208,34 @@ async def test_existing_instance(instance_id: int, db: AsyncSession = Depends(ge
     collector = get_collector(DatabaseEngine(instance.engine), target)
     ok, message, details = await collector.test_connection()
     return ConnectionTestResult(ok=ok, message=message, details=details)
+
+
+@router.get("/{instance_id}/insights", response_model=list[PerformanceInsightOut])
+async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get_db)) -> list[PerformanceInsightOut]:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    latest = (
+        await db.execute(
+            select(MetricSample)
+            .where(MetricSample.instance_id == instance_id)
+            .order_by(MetricSample.collected_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    metrics = latest.metrics_json or {} if latest else {}
+    insights = analyze_metrics(metrics)
+    return [
+        PerformanceInsightOut(
+            severity=i.severity,
+            category=i.category,
+            title=i.title,
+            description=i.description,
+            recommendation=i.recommendation,
+            metric_value=i.metric_value,
+            metric_unit=i.metric_unit,
+        )
+        for i in insights
+    ]

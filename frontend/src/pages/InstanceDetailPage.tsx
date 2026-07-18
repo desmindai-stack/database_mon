@@ -26,11 +26,12 @@ import {
   Instance,
   InstanceSummary,
   MetricSample,
+  PerformanceInsight,
   Prediction,
   SlowQuery,
 } from "../api";
 
-type Tab = "overview" | "metrics" | "queries" | "alerts" | "predictions";
+type Tab = "overview" | "metrics" | "queries" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
@@ -63,6 +64,7 @@ export default function InstanceDetailPage() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [insights, setInsights] = useState<PerformanceInsight[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [range, setRange] = useState<RangeHours>(6);
@@ -102,15 +104,17 @@ export default function InstanceDetailPage() {
         setQueries(q);
         setSummary(summaries.find((s) => s.instance.id === instanceId) || null);
 
-        const [r, e, p] = await Promise.all([
+        const [r, e, p, i] = await Promise.all([
           api.getAlertRules(),
           api.getAlertEvents(),
           api.getPredictions(),
+          api.getInsights(instanceId),
         ]);
         if (!mounted) return;
         setRules(r.filter((x) => x.instance_id === null || x.instance_id === instanceId));
         setEvents(e.filter((x) => x.instance_id === instanceId));
         setPredictions(p.filter((x) => x.instance_id === instanceId));
+        setInsights(i);
       } catch (e) {
         if (mounted) setError(String((e as Error).message || e));
       }
@@ -238,11 +242,12 @@ export default function InstanceDetailPage() {
       {error && <div className="error">{error}</div>}
 
       <div className="detail-tabs">
-        <TabButton value="overview" label="Overview" />
-        <TabButton value="metrics" label="Metrics" />
-        <TabButton value="queries" label="Slow Queries" />
-        <TabButton value="alerts" label="Alerts" />
-        <TabButton value="predictions" label="Predictions" />
+        <TabButton value="overview" label="Özet" />
+        <TabButton value="metrics" label="Metrikler" />
+        <TabButton value="queries" label="Yavaş Sorgular" />
+        <TabButton value="tuning" label="Tuning" />
+        <TabButton value="alerts" label="Uyarılar" />
+        <TabButton value="predictions" label="Tahminler" />
       </div>
 
       {tab === "overview" && (
@@ -260,20 +265,45 @@ export default function InstanceDetailPage() {
 
           <div className="stats-grid compact">
             <StatTile
-              label="Connections"
+              label="Bağlantı"
               value={latest ? `${latest.active_connections} / ${latest.max_connections}` : "—"}
               sub={connectionUtil ? `%${connectionUtil.toFixed(1)} kullanım` : ""}
               color={connectionUtil > 85 ? "var(--danger)" : connectionUtil > 60 ? "var(--warning)" : "var(--success)"}
             />
             <StatTile label="Cache hit ratio" value={latest ? `${latest.cache_hit_ratio.toFixed(1)}%` : "—"} color="#22d3ee" />
-            <StatTile label="Transactions/sec" value={latest ? latest.transactions_per_sec.toFixed(1) : "—"} color="#a78bfa" />
-            <StatTile label="Database size" value={latest ? formatBytes(latest.database_size_bytes) : "—"} color="#f59e0b" />
-            <StatTile label="Replication lag" value={latest ? formatBytes(latest.replication_lag_bytes ?? 0) : "—"} color="#f472b6" />
-            <StatTile label="Deadlocks" value={latest ? latest.deadlocks : "—"} color="var(--danger)" />
+            <StatTile label="Transaction/sn" value={latest ? latest.transactions_per_sec.toFixed(1) : "—"} color="#a78bfa" />
+            <StatTile label="Veritabanı boyutu" value={latest ? formatBytes(latest.database_size_bytes) : "—"} color="#f59e0b" />
+            <StatTile label="Replikasyon gecikmesi" value={latest ? formatBytes(latest.replication_lag_bytes ?? 0) : "—"} color="#f472b6" />
+            <StatTile label="Deadlock" value={latest ? latest.deadlocks : "—"} color="var(--danger)" />
           </div>
 
+          {insights.length > 0 && (
+            <div className="card insights-card">
+              <div className="insights-header">
+                <h3>Performans tuning önerileri</h3>
+                <button className="btn" onClick={() => setTab("tuning")}>Tümünü gör</button>
+              </div>
+              <div className="insights-list compact">
+                {insights.slice(0, 3).map((insight) => (
+                  <div key={insight.title} className={`insight-row ${insight.severity}`}>
+                    <span className="insight-dot" />
+                    <div className="insight-body">
+                      <strong>{insight.title}</strong>
+                      <p>{insight.description}</p>
+                    </div>
+                    {insight.metric_value !== null && (
+                      <span className="insight-metric">
+                        {insight.metric_value.toFixed(1)} {insight.metric_unit}
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-2">
-            <ChartCard title="Connections (son 60 dk)">
+            <ChartCard title="Bağlantılar (son 60 dk)">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={chartData}>
                   <defs>
@@ -312,7 +342,7 @@ export default function InstanceDetailPage() {
             <div className="grid grid-2">
               {events.length > 0 && (
                 <div className="card">
-                  <h3 className="chart-title">Aktif alarmlar</h3>
+                  <h3 className="chart-title">Aktif uyarılar</h3>
                   <ul className="event-list">
                     {events.slice(0, 5).map((e) => (
                       <li key={e.id}>
@@ -503,7 +533,7 @@ export default function InstanceDetailPage() {
         <>
           <div className="card">
             <div className="queries-header">
-              <h3 className="chart-title">Slow query dağılımı (top 10)</h3>
+              <h3 className="chart-title">Yavaş sorgu dağılımı (ilk 10)</h3>
               <div className="sort-bar">
                 <span>Sırala:</span>
                 {(["total", "mean", "calls"] as const).map((k) => (
@@ -531,10 +561,10 @@ export default function InstanceDetailPage() {
           </div>
 
           <div className="card">
-            <h3 className="chart-title">Slow query detayları ({queries.length})</h3>
+            <h3 className="chart-title">Yavaş sorgu detayları ({queries.length})</h3>
             {queries.length === 0 ? (
               <div className="empty">
-                No slow query data. Enable the extension: <code>CREATE EXTENSION pg_stat_statements;</code>
+                Yavaş sorgu verisi yok. Eklentiyi aktif edin: <code>CREATE EXTENSION pg_stat_statements;</code>
               </div>
             ) : (
               <div className="table-wrap">
@@ -564,14 +594,14 @@ export default function InstanceDetailPage() {
                               <pre>{q.query}</pre>
                               <p>queryid: {q.queryid || "—"}</p>
                               <div className="query-stats">
-                            <h4>Sorgu düzeyinde I/O & CPU</h4>
+                            <h4>Sorgu bazında I/O ve CPU</h4>
                             <div className="query-stats-grid">
-                              <div><span>shared read</span><strong>{q.shared_blks_read ?? 0}</strong></div>
+                              <div><span>shared okuma</span><strong>{q.shared_blks_read ?? 0}</strong></div>
                               <div><span>shared hit</span><strong>{q.shared_blks_hit ?? 0}</strong></div>
-                              <div><span>local read</span><strong>{q.local_blks_read ?? 0}</strong></div>
+                              <div><span>local okuma</span><strong>{q.local_blks_read ?? 0}</strong></div>
                               <div><span>local hit</span><strong>{q.local_blks_hit ?? 0}</strong></div>
-                              <div><span>temp read</span><strong>{q.temp_blks_read ?? 0}</strong></div>
-                              <div><span>temp write</span><strong>{q.temp_blks_written ?? 0}</strong></div>
+                              <div><span>temp okuma</span><strong>{q.temp_blks_read ?? 0}</strong></div>
+                              <div><span>temp yazma</span><strong>{q.temp_blks_written ?? 0}</strong></div>
                               {(q.exec_user_time || q.exec_sys_time) && (
                                 <div><span>CPU (exec)</span><strong>{((q.exec_user_time ?? 0) + (q.exec_sys_time ?? 0)).toFixed(2)} ms</strong></div>
                               )}
@@ -589,12 +619,12 @@ export default function InstanceDetailPage() {
                                   }}
                                   disabled={adviceLoading[q.id]}
                                 >
-                                  {adviceLoading[q.id] ? "Analyzing…" : "Index önerisi al"}
+                                  {adviceLoading[q.id] ? "İnceleniyor…" : "Index önerisi"}
                                 </button>
                                 {advice[q.id] && (
                                   <div className="advice-results">
                                     {advice[q.id].length === 0 ? (
-                                      <p className="advice-empty">Açık index önerisi bulunamadı.</p>
+                                      <p className="advice-empty">Index önerisi bulunamadı.</p>
                                     ) : (
                                       advice[q.id].map((a) => (
                                         <div className="advice-card" key={a.index_ddl}>
@@ -602,14 +632,14 @@ export default function InstanceDetailPage() {
                                             <span className="advice-table">{a.schema_name}.{a.table_name}</span>
                                             <span className="advice-pill">
                                               Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong>
-                                              {a.has_hypopg_estimate && " (hypopg gerçek plan)"}
+                                              {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
                                             </span>
                                           </div>
                                           <p className="advice-reason">{a.reason}</p>
                                           <code className="advice-ddl">{a.index_ddl}</code>
                                           {a.before_cost !== null && a.after_cost !== null && (
                                             <div className="advice-costs">
-                                              <span>Plan cost: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}</span>
+                                              <span>Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}</span>
                                             </div>
                                           )}
                                         </div>
@@ -629,19 +659,51 @@ export default function InstanceDetailPage() {
             )}
             {latest && (
               <p style={{ color: "var(--muted)", fontSize: "0.8rem", marginTop: "0.75rem" }}>
-                Last collected: {formatTime(latest.collected_at)}
+                Son toplama: {formatTime(latest.collected_at)}
               </p>
             )}
           </div>
         </>
       )}
 
+      {tab === "tuning" && (
+        <div className="card tuning-card">
+          <h3 className="chart-title">Performans tuning önerileri</h3>
+          {insights.length === 0 ? (
+            <div className="empty">Şu an için tuning önerisi yok. Metrikler geldikten sonra burada görünecek.</div>
+          ) : (
+            <div className="insights-list">
+              {insights.map((insight) => (
+                <div key={insight.title} className={`insight-row ${insight.severity}`}>
+                  <span className="insight-dot" />
+                  <div className="insight-body">
+                    <div className="insight-title">
+                      <strong>{insight.title}</strong>
+                      <span className={`insight-severity ${insight.severity}`}>{insight.severity}</span>
+                    </div>
+                    <p>{insight.description}</p>
+                    <div className="insight-recommendation">
+                      <span>Öneri:</span> {insight.recommendation}
+                    </div>
+                  </div>
+                  {insight.metric_value !== null && (
+                    <span className="insight-metric">
+                      {insight.metric_value.toFixed(1)} {insight.metric_unit}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {tab === "alerts" && (
         <div className="grid grid-2">
           <div className="card">
-            <h3 className="chart-title">Alert kuralları</h3>
+            <h3 className="chart-title">Alarm kuralları</h3>
             {rules.length === 0 ? (
-              <div className="empty">Kural tanımlı değil</div>
+              <div className="empty">Alarm kuralı tanımlı değil</div>
             ) : (
               <div className="table-wrap">
                 <table>
@@ -664,9 +726,9 @@ export default function InstanceDetailPage() {
             )}
           </div>
           <div className="card">
-            <h3 className="chart-title">Son alert olayları</h3>
+            <h3 className="chart-title">Son alarm olayları</h3>
             {events.length === 0 ? (
-              <div className="empty">Aktif olay yok</div>
+              <div className="empty">Aktif alarm yok</div>
             ) : (
               <ul className="event-list">
                 {events.map((e) => (

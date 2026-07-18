@@ -70,15 +70,40 @@ export default function DashboardPage() {
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
   }, [filtered, isPrivate]);
 
-  const StatCard = ({ label, value, color, sub }: { label: string; value: string | number; color?: string; sub?: string }) => (
-    <div className="card stat-card" style={{ borderLeftColor: color || "var(--accent)" }}>
-      <div className="stat-meta">
-        <h3>{label}</h3>
-        {sub && <span>{sub}</span>}
+  const StatCard = ({
+    label,
+    value,
+    color,
+    sub,
+    active,
+    onClick,
+  }: {
+    label: string;
+    value: string | number;
+    color?: string;
+    sub?: string;
+    active?: boolean;
+    onClick?: () => void;
+  }) => {
+    const card = (
+      <div
+        className={`card stat-card${onClick ? " clickable" : ""}${active ? " active" : ""}`}
+        style={{ borderLeftColor: color || "var(--accent)" }}
+      >
+        <div className="stat-meta">
+          <h3>{label}</h3>
+          {sub && <span>{sub}</span>}
+        </div>
+        <div className="value" style={{ color: color || "var(--text)" }}>{value}</div>
       </div>
-      <div className="value" style={{ color: color || "var(--text)" }}>{value}</div>
-    </div>
-  );
+    );
+    if (!onClick) return card;
+    return (
+      <button className="stat-card-btn" onClick={onClick} type="button">
+        {card}
+      </button>
+    );
+  };
 
   const FilterChip = ({ active, label, onClick, color }: { active: boolean; label: string; onClick: () => void; color?: string }) => (
     <button
@@ -110,12 +135,12 @@ export default function DashboardPage() {
       {error && <div className="error">{error}</div>}
 
       <div className="stats-grid">
-        <StatCard label="Toplam instance" value={summaries.length} color="var(--accent)" />
-        <StatCard label="Active connections" value={totalConnections} color="#22d3ee" sub="tüm sunucular" />
-        <StatCard label="Healthy" value={counts.healthy} color="var(--success)" />
-        <StatCard label="Alerting" value={counts.alerting} color="var(--danger)" />
-        <StatCard label="Warning" value={counts.warning} color="var(--warning)" />
-        <StatCard label="Tahmin (açık)" value={summaries.reduce((sum, s) => sum + (s.predictions_open ?? 0), 0)} color="#a78bfa" />
+        <StatCard label="Toplam instance" value={summaries.length} color="var(--accent)" sub="monitor ediliyor" />
+        <StatCard label="Aktif bağlantı" value={totalConnections} color="#22d3ee" sub="tüm sunucular" />
+        <StatCard label="Healthy" value={counts.healthy} color="var(--success)" active={statusFilter === "healthy"} onClick={() => setStatusFilter("healthy")} />
+        <StatCard label="Alerting" value={counts.alerting} color="var(--danger)" active={statusFilter === "alerting"} onClick={() => setStatusFilter("alerting")} />
+        <StatCard label="Warning" value={counts.warning} color="var(--warning)" active={statusFilter === "warning"} onClick={() => setStatusFilter("warning")} />
+        <StatCard label="Açık tahmin" value={summaries.reduce((sum, s) => sum + (s.predictions_open ?? 0), 0)} color="#a78bfa" />
       </div>
 
       <div className="filters-bar">
@@ -167,13 +192,13 @@ export default function DashboardPage() {
                     <th>Cluster / Rol</th>
                     <th>Motor</th>
                     <th>Durum</th>
-                    <th>Connections</th>
+                    <th>Bağlantı</th>
                     <th>Cache hit</th>
                     <th>TPS</th>
-                    <th>I/O read/hit</th>
+                    <th>I/O okuma/ hit</th>
                     <th>Temp</th>
-                    <th>DB size</th>
-                    <th>Alarm</th>
+                    <th>DB boyutu</th>
+                    <th>Uyarı</th>
                   </tr>
                 </thead>
                 <tbody>
