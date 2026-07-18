@@ -767,6 +767,78 @@ td code,
   background: rgba(34, 197, 94, 0.12);
 }
 
+/* Index advisor */
+.advice-section {
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+
+.advice-results {
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.advice-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.85rem;
+}
+
+.advice-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.advice-table {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.advice-pill {
+  font-size: 0.78rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12);
+  color: var(--success);
+}
+
+.advice-reason {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.advice-ddl {
+  display: block;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.78rem;
+  word-break: break-word;
+  color: var(--accent-2);
+}
+
+.advice-costs {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.advice-empty {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+
 @media (max-width: 1100px) {
   .detail-header {
     flex-direction: column;

@@ -22,6 +22,7 @@ import {
   api,
   formatBytes,
   formatTime,
+  IndexAdvice,
   Instance,
   InstanceSummary,
   MetricSample,
@@ -67,8 +68,22 @@ export default function InstanceDetailPage() {
   const [range, setRange] = useState<RangeHours>(6);
   const [querySort, setQuerySort] = useState<"total" | "mean" | "calls">("total");
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
+  const [advice, setAdvice] = useState<Record<number, IndexAdvice[]>>({});
+  const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
 
   const status = summary?.status || "pending";
+
+  const loadAdvice = async (q: SlowQuery) => {
+    setAdviceLoading((prev) => ({ ...prev, [q.id]: true }));
+    try {
+      const result = await api.getIndexAdvice(instanceId, q.query);
+      setAdvice((prev) => ({ ...prev, [q.id]: result }));
+    } catch (e) {
+      setAdvice((prev) => ({ ...prev, [q.id]: [] }));
+    } finally {
+      setAdviceLoading((prev) => ({ ...prev, [q.id]: false }));
+    }
+  };
 
   useEffect(() => {
     if (!instanceId) return;
@@ -455,6 +470,44 @@ export default function InstanceDetailPage() {
                             <td colSpan={5}>
                               <pre>{q.query}</pre>
                               <p>queryid: {q.queryid || "—"}</p>
+                              <div className="advice-section">
+                                <button
+                                  className="btn btn-primary"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    loadAdvice(q);
+                                  }}
+                                  disabled={adviceLoading[q.id]}
+                                >
+                                  {adviceLoading[q.id] ? "Analyzing…" : "Index önerisi al"}
+                                </button>
+                                {advice[q.id] && (
+                                  <div className="advice-results">
+                                    {advice[q.id].length === 0 ? (
+                                      <p className="advice-empty">Açık index önerisi bulunamadı.</p>
+                                    ) : (
+                                      advice[q.id].map((a) => (
+                                        <div className="advice-card" key={a.index_ddl}>
+                                          <div className="advice-header">
+                                            <span className="advice-table">{a.schema_name}.{a.table_name}</span>
+                                            <span className="advice-pill">
+                                              Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong>
+                                              {a.has_hypopg_estimate && " (hypopg gerçek plan)"}
+                                            </span>
+                                          </div>
+                                          <p className="advice-reason">{a.reason}</p>
+                                          <code className="advice-ddl">{a.index_ddl}</code>
+                                          {a.before_cost !== null && a.after_cost !== null && (
+                                            <div className="advice-costs">
+                                              <span>Plan cost: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ))
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         )}

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -21,7 +21,7 @@ async def get_metrics(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
 
-    since = datetime.utcnow() - timedelta(hours=hours)
+    since = datetime.now(UTC) - timedelta(hours=hours)
     result = await db.execute(
         select(MetricSample)
         .where(MetricSample.instance_id == instance_id, MetricSample.collected_at >= since)

@@ -210,3 +210,20 @@ class MetricDefinitionOut(BaseModel):
     category: str
     engines: list[str]
     description: str
+
+
+class IndexAdviceRequest(BaseModel):
+    query: str = Field(min_length=1)
+
+
+class IndexAdviceOut(BaseModel):
+    table_name: str
+    schema_name: str
+    columns: list[str]
+    index_ddl: str
+    reason: str
+    estimated_improvement_pct: float
+    has_hypopg_estimate: bool
+    before_cost: float | None
+    after_cost: float | None
+    existing_indexes: list[str]

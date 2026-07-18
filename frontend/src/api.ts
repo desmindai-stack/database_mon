@@ -53,6 +53,19 @@ export interface SlowQuery {
   rows: number;
 }
 
+export interface IndexAdvice {
+  table_name: string;
+  schema_name: string;
+  columns: string[];
+  index_ddl: string;
+  reason: string;
+  estimated_improvement_pct: number;
+  has_hypopg_estimate: boolean;
+  before_cost: number | null;
+  after_cost: number | null;
+  existing_indexes: string[];
+}
+
 export interface AlertRule {
   id: number;
   instance_id: number | null;
@@ -150,6 +163,11 @@ export const api = {
   getLatestMetrics: (id: number) =>
     request<MetricSample>(`/api/metrics/${id}/latest`),
   getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),
+  getIndexAdvice: (id: number, query: string) =>
+    request<IndexAdvice[]>(`/api/queries/${id}/advice`, {
+      method: "POST",
+      body: JSON.stringify({ query }),
+    }),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
   createAlertRule: (data: Omit<AlertRule, "id" | "created_at">) =>
     request<AlertRule>("/api/alerts/rules", { method: "POST", body: JSON.stringify(data) }),
