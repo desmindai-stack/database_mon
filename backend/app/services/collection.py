@@ -70,6 +70,16 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
                 total_time_ms=float(row.get("total_time_ms") or 0),
                 mean_time_ms=float(row.get("mean_time_ms") or 0),
                 rows=int(row.get("rows") or 0),
+                shared_blks_hit=int(row["shared_blks_hit"]) if row.get("shared_blks_hit") is not None else None,
+                shared_blks_read=int(row["shared_blks_read"]) if row.get("shared_blks_read") is not None else None,
+                local_blks_hit=int(row["local_blks_hit"]) if row.get("local_blks_hit") is not None else None,
+                local_blks_read=int(row["local_blks_read"]) if row.get("local_blks_read") is not None else None,
+                temp_blks_read=int(row["temp_blks_read"]) if row.get("temp_blks_read") is not None else None,
+                temp_blks_written=int(row["temp_blks_written"]) if row.get("temp_blks_written") is not None else None,
+                plan_user_time=float(row["plan_user_time"]) if row.get("plan_user_time") is not None else None,
+                plan_sys_time=float(row["plan_sys_time"]) if row.get("plan_sys_time") is not None else None,
+                exec_user_time=float(row["exec_user_time"]) if row.get("exec_user_time") is not None else None,
+                exec_sys_time=float(row["exec_sys_time"]) if row.get("exec_sys_time") is not None else None,
             )
         )
 

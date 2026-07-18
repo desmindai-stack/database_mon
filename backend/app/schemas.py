@@ -126,6 +126,18 @@ class SlowQueryOut(BaseModel):
     mean_time_ms: float
     rows: int
 
+    shared_blks_hit: int | None
+    shared_blks_read: int | None
+    local_blks_hit: int | None
+    local_blks_read: int | None
+    temp_blks_read: int | None
+    temp_blks_written: int | None
+
+    plan_user_time: float | None
+    plan_sys_time: float | None
+    exec_user_time: float | None
+    exec_sys_time: float | None
+
     model_config = {"from_attributes": True}
 
 

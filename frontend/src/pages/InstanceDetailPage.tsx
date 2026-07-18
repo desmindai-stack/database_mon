@@ -131,17 +131,37 @@ export default function InstanceDetailPage() {
 
   const chartData = useMemo(
     () =>
-      metrics.map((m) => ({
-        time: timeLabel(m.collected_at),
-        connections: m.active_connections,
-        maxConnections: m.max_connections,
-        cacheHit: m.cache_hit_ratio,
-        tps: m.transactions_per_sec,
-        size: m.database_size_bytes,
-        lag: m.replication_lag_bytes ?? 0,
-        deadlocks: m.deadlocks,
-        temp: m.temp_bytes,
-      })),
+      metrics.map((m) => {
+        const metricsJson = m.metrics ?? {};
+        return {
+          time: timeLabel(m.collected_at),
+          connections: m.active_connections,
+          maxConnections: m.max_connections,
+          cacheHit: m.cache_hit_ratio,
+          tps: m.transactions_per_sec,
+          size: m.database_size_bytes,
+          lag: m.replication_lag_bytes ?? 0,
+          deadlocks: m.deadlocks,
+          temp: m.temp_bytes,
+          blksRead: Number(metricsJson.blks_read_per_sec ?? 0),
+          blksHit: Number(metricsJson.blks_hit_per_sec ?? 0),
+          tupReturned: Number(metricsJson.tup_returned_per_sec ?? 0),
+          tupFetched: Number(metricsJson.tup_fetched_per_sec ?? 0),
+          tupInserted: Number(metricsJson.tup_inserted_per_sec ?? 0),
+          tupUpdated: Number(metricsJson.tup_updated_per_sec ?? 0),
+          tupDeleted: Number(metricsJson.tup_deleted_per_sec ?? 0),
+          tempFiles: Number(metricsJson.temp_files_per_sec ?? 0),
+          tempBytes: Number(metricsJson.temp_bytes_per_sec ?? 0),
+          ioReads: Number(metricsJson.io_reads_per_sec ?? 0),
+          ioWrites: Number(metricsJson.io_writes_per_sec ?? 0),
+          ioExtends: Number(metricsJson.io_extends_per_sec ?? 0),
+          checkpointsTimed: Number(metricsJson.checkpoints_timed ?? 0),
+          checkpointsReq: Number(metricsJson.checkpoints_req ?? 0),
+          buffersCheckpoint: Number(metricsJson.buffers_checkpoint_per_sec ?? 0),
+          buffersBackend: Number(metricsJson.buffers_backend_per_sec ?? 0),
+          buffersClean: Number(metricsJson.buffers_clean_per_sec ?? 0),
+        };
+      }),
     [metrics],
   );
 
@@ -403,6 +423,79 @@ export default function InstanceDetailPage() {
               </ComposedChart>
             </ResponsiveContainer>
           </ChartCard>
+
+          <ChartCard title="I/O blocks per second">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={chartData}>
+                <defs>
+                  <linearGradient id="ioReadGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                  </linearGradient>
+                  <linearGradient id="ioHitGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#22c55e" stopOpacity={0.4} />
+                    <stop offset="95%" stopColor="#22c55e" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
+                <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
+                <YAxis stroke="#8b9bb8" fontSize={11} />
+                <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} />
+                <Legend />
+                <Area type="monotone" dataKey="blksRead" name="Disk read" stroke="#ef4444" fill="url(#ioReadGrad)" strokeWidth={2} />
+                <Area type="monotone" dataKey="blksHit" name="Buffer hit" stroke="#22c55e" fill="url(#ioHitGrad)" strokeWidth={2} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Tuple throughput">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
+                <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
+                <YAxis stroke="#8b9bb8" fontSize={11} />
+                <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} />
+                <Legend />
+                <Line type="monotone" dataKey="tupReturned" name="Returned" stroke="#3b82f6" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="tupFetched" name="Fetched" stroke="#22d3ee" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="tupInserted" name="Inserted" stroke="#22c55e" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="tupUpdated" name="Updated" stroke="#f59e0b" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="tupDeleted" name="Deleted" stroke="#ef4444" dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Temp files & bytes">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={chartData}>
+                <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
+                <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
+                <YAxis yAxisId="left" stroke="#f59e0b" fontSize={11} />
+                <YAxis yAxisId="right" orientation="right" stroke="#a78bfa" fontSize={11} tickFormatter={(v) => formatBytes(Number(v))} />
+                <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} formatter={(v, n) => [n === "tempBytes" ? formatBytes(Number(v)) : v, n]} />
+                <Legend />
+                <Line yAxisId="left" type="monotone" dataKey="tempFiles" name="Temp files / s" stroke="#f59e0b" dot={false} strokeWidth={2} />
+                <Line yAxisId="right" type="monotone" dataKey="tempBytes" name="Temp bytes / s" stroke="#a78bfa" dot={false} strokeWidth={2} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </ChartCard>
+
+          <ChartCard title="Checkpoints & buffers">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData}>
+                <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
+                <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
+                <YAxis stroke="#8b9bb8" fontSize={11} />
+                <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} />
+                <Legend />
+                <Line type="monotone" dataKey="checkpointsTimed" name="Timed checkpoints" stroke="#3b82f6" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="checkpointsReq" name="Requested checkpoints" stroke="#ef4444" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="buffersCheckpoint" name="Buffers checkpoint / s" stroke="#22c55e" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="buffersBackend" name="Buffers backend / s" stroke="#f59e0b" dot={false} strokeWidth={2} />
+                <Line type="monotone" dataKey="buffersClean" name="Buffers clean / s" stroke="#a78bfa" dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartCard>
         </div>
       )}
 
@@ -470,7 +563,24 @@ export default function InstanceDetailPage() {
                             <td colSpan={5}>
                               <pre>{q.query}</pre>
                               <p>queryid: {q.queryid || "—"}</p>
-                              <div className="advice-section">
+                              <div className="query-stats">
+                            <h4>Sorgu düzeyinde I/O & CPU</h4>
+                            <div className="query-stats-grid">
+                              <div><span>shared read</span><strong>{q.shared_blks_read ?? 0}</strong></div>
+                              <div><span>shared hit</span><strong>{q.shared_blks_hit ?? 0}</strong></div>
+                              <div><span>local read</span><strong>{q.local_blks_read ?? 0}</strong></div>
+                              <div><span>local hit</span><strong>{q.local_blks_hit ?? 0}</strong></div>
+                              <div><span>temp read</span><strong>{q.temp_blks_read ?? 0}</strong></div>
+                              <div><span>temp write</span><strong>{q.temp_blks_written ?? 0}</strong></div>
+                              {(q.exec_user_time || q.exec_sys_time) && (
+                                <div><span>CPU (exec)</span><strong>{((q.exec_user_time ?? 0) + (q.exec_sys_time ?? 0)).toFixed(2)} ms</strong></div>
+                              )}
+                              {(q.plan_user_time || q.plan_sys_time) && (
+                                <div><span>CPU (plan)</span><strong>{((q.plan_user_time ?? 0) + (q.plan_sys_time ?? 0)).toFixed(2)} ms</strong></div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="advice-section">
                                 <button
                                   className="btn btn-primary"
                                   onClick={(e) => {

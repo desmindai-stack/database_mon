@@ -747,6 +747,48 @@ td code,
   color: var(--muted);
 }
 
+.query-stats {
+  margin: 0.75rem 0;
+  padding: 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.query-stats h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.query-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.5rem;
+}
+
+.query-stats-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.query-stats-grid span {
+  font-size: 0.7rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.query-stats-grid strong {
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
 .status.critical {
   color: var(--danger);
   background: rgba(239, 68, 68, 0.12);

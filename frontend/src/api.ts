@@ -51,6 +51,16 @@ export interface SlowQuery {
   total_time_ms: number;
   mean_time_ms: number;
   rows: number;
+  shared_blks_hit?: number;
+  shared_blks_read?: number;
+  local_blks_hit?: number;
+  local_blks_read?: number;
+  temp_blks_read?: number;
+  temp_blks_written?: number;
+  plan_user_time?: number;
+  plan_sys_time?: number;
+  exec_user_time?: number;
+  exec_sys_time?: number;
 }
 
 export interface IndexAdvice {

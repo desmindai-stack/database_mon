@@ -50,6 +50,16 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(
             conn, "metric_samples", "metrics_json", "metrics_json JSON"
         )
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "shared_blks_hit", "shared_blks_hit INTEGER")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "shared_blks_read", "shared_blks_read INTEGER")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "local_blks_hit", "local_blks_hit INTEGER")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "local_blks_read", "local_blks_read INTEGER")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "temp_blks_read", "temp_blks_read INTEGER")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "temp_blks_written", "temp_blks_written INTEGER")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "plan_user_time", "plan_user_time FLOAT")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "plan_sys_time", "plan_sys_time FLOAT")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "exec_user_time", "exec_user_time FLOAT")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "exec_sys_time", "exec_sys_time FLOAT")
 
 
 async def init_db() -> None:

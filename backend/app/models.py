@@ -86,6 +86,18 @@ class SlowQuerySample(Base):
     mean_time_ms: Mapped[float] = mapped_column(Float, default=0.0)
     rows: Mapped[int] = mapped_column(Integer, default=0)
 
+    shared_blks_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    shared_blks_read: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    local_blks_hit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    local_blks_read: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    temp_blks_read: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    temp_blks_written: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    plan_user_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    plan_sys_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exec_user_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exec_sys_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     instance: Mapped["Instance"] = relationship(back_populates="slow_queries")
 
 

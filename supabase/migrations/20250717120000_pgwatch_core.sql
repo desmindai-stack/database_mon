@@ -48,7 +48,17 @@ CREATE TABLE IF NOT EXISTS slow_query_samples (
   calls INTEGER NOT NULL DEFAULT 0,
   total_time_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
   mean_time_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
-  rows INTEGER NOT NULL DEFAULT 0
+  rows INTEGER NOT NULL DEFAULT 0,
+  shared_blks_hit INTEGER,
+  shared_blks_read INTEGER,
+  local_blks_hit INTEGER,
+  local_blks_read INTEGER,
+  temp_blks_read INTEGER,
+  temp_blks_written INTEGER,
+  plan_user_time DOUBLE PRECISION,
+  plan_sys_time DOUBLE PRECISION,
+  exec_user_time DOUBLE PRECISION,
+  exec_sys_time DOUBLE PRECISION
 );
 
 CREATE TABLE IF NOT EXISTS alert_rules (

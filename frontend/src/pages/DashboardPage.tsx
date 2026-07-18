@@ -170,6 +170,8 @@ export default function DashboardPage() {
                     <th>Connections</th>
                     <th>Cache hit</th>
                     <th>TPS</th>
+                    <th>I/O read/hit</th>
+                    <th>Temp</th>
                     <th>DB size</th>
                     <th>Alarm</th>
                   </tr>
@@ -178,6 +180,7 @@ export default function DashboardPage() {
                   {items.map((summary) => {
                     const { instance, latest_metrics, status, alerts_firing } = summary;
                     const util = connectionUtilPct(summary);
+                    const m = latest_metrics?.metrics ?? {};
                     return (
                       <tr key={instance.id}>
                         <td>
@@ -221,6 +224,20 @@ export default function DashboardPage() {
                           ) : "—"}
                         </td>
                         <td>{latest_metrics ? latest_metrics.transactions_per_sec.toFixed(1) : "—"}</td>
+                        <td>
+                          {latest_metrics ? (
+                            <span>
+                              {Number(m.blks_read_per_sec ?? 0).toFixed(0)} / {Number(m.blks_hit_per_sec ?? 0).toFixed(0)}
+                            </span>
+                          ) : "—"}
+                        </td>
+                        <td>
+                          {latest_metrics ? (
+                            <span>
+                              {Number(m.temp_files_per_sec ?? 0).toFixed(1)} f, {formatBytes(Number(m.temp_bytes_per_sec ?? 0))}/s
+                            </span>
+                          ) : "—"}
+                        </td>
                         <td>{latest_metrics ? formatBytes(latest_metrics.database_size_bytes) : "—"}</td>
                         <td>{alerts_firing ? <span className="alert-count">{alerts_firing}</span> : "—"}</td>
                       </tr>

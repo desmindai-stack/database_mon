@@ -257,7 +257,8 @@ class PostgreSQLIndexAdvisor:
         if any("group" in m["types"] for m in table_cols.values()):
             reason_parts.append("gruplama (GROUP BY) desteği")
 
-        estimated = self._estimate_improvement(row_count, ordered_cols, table_cols)
+        selectivity = await self._estimate_selectivity(conn, schema_name, table_name, ordered_cols, table_cols)
+        estimated = self._estimate_improvement(row_count, ordered_cols, table_cols, selectivity)
 
         before_cost: float | None = None
         after_cost: float | None = None
@@ -297,36 +298,109 @@ class PostgreSQLIndexAdvisor:
     def _has_placeholders(self, query: str) -> bool:
         return bool(re.search(r"\$\d+", query))
 
+    async def _estimate_selectivity(
+        self,
+        conn: asyncpg.Connection,
+        schema_name: str,
+        table_name: str,
+        ordered_cols: list[str],
+        table_cols: dict[str, dict[str, Any]],
+    ) -> float:
+        """Return a rough selectivity (0..1) for the leading index columns.
+
+        Lower selectivity means the index is more selective and therefore more useful.
+        """
+        if not ordered_cols:
+            return 1.0
+
+        selectivities: list[float] = []
+        for col in ordered_cols:
+            meta = table_cols.get(col, {})
+            kinds = meta.get("types", set())
+            try:
+                stats = await conn.fetchrow(
+                    """
+                    SELECT n_distinct, null_frac
+                    FROM pg_stats
+                    WHERE schemaname = $1 AND tablename = $2 AND attname = $3
+                    """,
+                    schema_name,
+                    table_name,
+                    col,
+                )
+                if not stats:
+                    selectivities.append(0.1)
+                    continue
+
+                n_distinct = stats["n_distinct"]
+                null_frac = float(stats["null_frac"] or 0)
+
+                # pg_stats.n_distinct can be negative: fraction of distinct values.
+                # Positive: absolute number of distinct values.
+                if n_distinct is None or n_distinct == 0:
+                    col_sel = 0.1
+                elif n_distinct < 0:
+                    # e.g. -0.5 means 50% of rows are distinct
+                    col_sel = max(0.001, min(1.0, abs(n_distinct)))
+                else:
+                    row_count = await conn.fetchval(
+                        "SELECT reltuples::bigint FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = $2",
+                        schema_name,
+                        table_name,
+                    )
+                    row_count = int(row_count or 1)
+                    col_sel = max(0.001, min(1.0, n_distinct / row_count))
+
+                # Adjust for query type: equality is much more selective than range/sort
+                if "eq" in kinds or "join" in kinds:
+                    col_sel = max(0.001, col_sel)
+                elif "range" in kinds:
+                    col_sel = min(0.3, max(0.01, col_sel * 3))
+                else:
+                    col_sel = min(0.5, max(0.01, col_sel * 5))
+
+                # Nulls reduce selectivity usefulness
+                col_sel = col_sel * (1 - null_frac)
+                selectivities.append(col_sel)
+            except Exception:
+                selectivities.append(0.1)
+
+        # Combine selectivities: product of leading column selectivities gives the
+        # approximate fraction of rows the index will need to visit.
+        combined = 1.0
+        for s in selectivities:
+            combined *= s
+        return max(0.001, combined)
+
     def _estimate_improvement(
         self,
         row_count: int,
         ordered_cols: list[str],
         table_cols: dict[str, dict[str, Any]],
+        selectivity: float,
     ) -> float:
         if row_count < 1000:
             return 10.0
 
-        base = 25.0
+        # Selectivity gives us a strong signal: the smaller the selectivity,
+        # the bigger the win over a sequential scan.
+        base = (1 - selectivity) * 80.0
+
         # Large tables benefit more
-        if row_count > 100_000:
-            base += 25.0
-        elif row_count > 10_000:
-            base += 15.0
-
-        # Equality-heavy queries benefit more from btree index
-        eq_count = sum(1 for m in table_cols.values() if "eq" in m["types"])
-        if eq_count >= 1:
-            base += 15.0
-
-        # Range + sort together often need a well-ordered index
-        if any("range" in m["types"] for m in table_cols.values()):
+        if row_count > 1_000_000:
             base += 10.0
-        if any("sort" in m["types"] for m in table_cols.values()):
+        elif row_count > 100_000:
+            base += 7.0
+        elif row_count > 10_000:
+            base += 4.0
+
+        # Bonus for equality/join leading columns
+        if ordered_cols and "eq" in table_cols.get(ordered_cols[0], {}).get("types", set()):
             base += 5.0
         if any("join" in m["types"] for m in table_cols.values()):
-            base += 15.0
+            base += 5.0
 
-        return min(95.0, base)
+        return min(95.0, max(10.0, base))
 
     async def _hypopg_estimate(
         self,
