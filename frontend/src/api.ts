@@ -135,6 +135,8 @@ export const api = {
   getInstances: () => request<Instance[]>("/api/instances"),
   createInstance: (data: InstanceCreate) =>
     request<Instance>("/api/instances", { method: "POST", body: JSON.stringify(data) }),
+  updateInstance: (id: number, data: Partial<InstanceCreate>) =>
+    request<Instance>(`/api/instances/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteInstance: (id: number) =>
     request<void>(`/api/instances/${id}`, { method: "DELETE" }),
   testConnection: (data: InstanceCreate) =>
