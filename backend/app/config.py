@@ -25,6 +25,9 @@ class Settings(BaseSettings):
 
     def get_cors_origins(self) -> list[str]:
         value = self.cors_origins.strip()
+        # Railway bazen değeri çift tırnak içine alır; temizle
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1].strip()
         if value.startswith("["):
             return json.loads(value)
         return [x.strip() for x in value.split(",") if x.strip()]
