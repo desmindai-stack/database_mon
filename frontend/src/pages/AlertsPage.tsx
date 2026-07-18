@@ -3,8 +3,10 @@ import { api, AlertEvent, AlertRule, formatTime, Instance } from "../api";
 
 const METRICS = [
   "active_connections",
+  "connection_utilization_pct",
   "cache_hit_ratio",
   "transactions_per_sec",
+  "ops_per_sec",
   "replication_lag_bytes",
   "database_size_bytes",
   "deadlocks",

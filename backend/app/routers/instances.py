@@ -2,23 +2,51 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collector.pg_collector import PostgresCollector, PostgresTarget
+from app.collectors.base import ConnectionTarget
+from app.collectors.registry import get_collector
 from app.database import get_db
-from app.models import AlertEvent, AlertRule, Instance, MetricSample, SlowQuerySample
+from app.domain.engines import DatabaseEngine
+from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
+from app.models import AlertEvent, Instance, MetricSample, PredictionInsight
 from app.schemas import (
-    AlertEventOut,
-    AlertRuleCreate,
-    AlertRuleOut,
     ConnectionTestResult,
     InstanceCreate,
     InstanceOut,
     InstanceSummary,
     InstanceUpdate,
+    MetricDefinitionOut,
     MetricSampleOut,
-    SlowQueryOut,
 )
+from app.services.credentials import decrypt_secret, encrypt_secret
 
 router = APIRouter(prefix="/instances", tags=["instances"])
+
+
+def _connection_target(payload: InstanceCreate) -> ConnectionTarget:
+    return ConnectionTarget(
+        host=payload.host,
+        port=payload.resolved_port(),
+        database=payload.database,
+        username=payload.username,
+        password=payload.password,
+        options=payload.options,
+    )
+
+
+@router.get("/catalog/metrics", response_model=list[MetricDefinitionOut])
+async def metric_catalog(engine: DatabaseEngine | None = None) -> list[MetricDefinitionOut]:
+    defs = metrics_for_engine(engine) if engine else list(CANONICAL_METRICS)
+    return [
+        MetricDefinitionOut(
+            key=m.key,
+            display_name=m.display_name,
+            unit=m.unit,
+            category=m.category,
+            engines=[e.value for e in m.engines],
+            description=m.description,
+        )
+        for m in defs
+    ]
 
 
 @router.get("", response_model=list[InstanceOut])
@@ -33,7 +61,12 @@ async def create_instance(payload: InstanceCreate, db: AsyncSession = Depends(ge
     if existing.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Instance name already exists")
 
-    instance = Instance(**payload.model_dump())
+    data = payload.model_dump(exclude={"password", "port"})
+    instance = Instance(
+        **data,
+        port=payload.resolved_port(),
+        password=encrypt_secret(payload.password),
+    )
     db.add(instance)
     await db.commit()
     await db.refresh(instance)
@@ -66,6 +99,17 @@ async def list_summaries(db: AsyncSession = Depends(get_db)) -> list[InstanceSum
             )
         ).scalar_one()
 
+        predictions_open = (
+            await db.execute(
+                select(func.count())
+                .select_from(PredictionInsight)
+                .where(
+                    PredictionInsight.instance_id == instance.id,
+                    PredictionInsight.acknowledged_at.is_(None),
+                )
+            )
+        ).scalar_one()
+
         status_label = "healthy"
         if not instance.enabled:
             status_label = "disabled"
@@ -73,15 +117,22 @@ async def list_summaries(db: AsyncSession = Depends(get_db)) -> list[InstanceSum
             status_label = "pending"
         elif firing:
             status_label = "alerting"
-        elif latest.active_connections >= latest.max_connections * 0.9:
+        elif predictions_open:
             status_label = "warning"
+        elif latest:
+            util = latest.get_metric("connection_utilization_pct")
+            if util is not None and float(util) >= 85:
+                status_label = "warning"
+            elif latest.max_connections and latest.active_connections >= latest.max_connections * 0.9:
+                status_label = "warning"
 
         summaries.append(
             InstanceSummary(
                 instance=InstanceOut.model_validate(instance),
-                latest_metrics=MetricSampleOut.model_validate(latest) if latest else None,
+                latest_metrics=MetricSampleOut.from_orm_sample(latest) if latest else None,
                 status=status_label,
                 alerts_firing=int(firing or 0),
+                predictions_open=int(predictions_open or 0),
             )
         )
     return summaries
@@ -103,8 +154,12 @@ async def update_instance(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
 
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    password = updates.pop("password", None)
+    for key, value in updates.items():
         setattr(instance, key, value)
+    if password is not None:
+        instance.password = encrypt_secret(password)
     await db.commit()
     await db.refresh(instance)
     return instance
@@ -121,7 +176,7 @@ async def delete_instance(instance_id: int, db: AsyncSession = Depends(get_db)) 
 
 @router.post("/test", response_model=ConnectionTestResult)
 async def test_connection(payload: InstanceCreate) -> ConnectionTestResult:
-    collector = PostgresCollector(PostgresTarget(**payload.model_dump()))
+    collector = get_collector(payload.engine, _connection_target(payload))
     ok, message, details = await collector.test_connection()
     return ConnectionTestResult(ok=ok, message=message, details=details)
 
@@ -131,14 +186,14 @@ async def test_existing_instance(instance_id: int, db: AsyncSession = Depends(ge
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    collector = PostgresCollector(
-        PostgresTarget(
-            host=instance.host,
-            port=instance.port,
-            database=instance.database,
-            username=instance.username,
-            password=instance.password,
-        )
+    target = ConnectionTarget(
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        username=instance.username,
+        password=decrypt_secret(instance.password),
+        options=instance.options,
     )
+    collector = get_collector(DatabaseEngine(instance.engine), target)
     ok, message, details = await collector.test_connection()
     return ConnectionTestResult(ok=ok, message=message, details=details)

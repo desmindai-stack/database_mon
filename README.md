@@ -1,8 +1,14 @@
 # pgwatch
 
-PostgreSQL monitoring platform inspired by pganalyze, Datadog, and SolarWinds. Collects metrics, tracks slow queries, and fires threshold alerts across multiple instances.
+Multi-database DBA monitoring (PostgreSQL, SQL Server, MongoDB) with alerts and trend-based predictions.
 
-## Features (MVP)
+**Bulut (Faz 1 — geliştirme/test):** [deploy/cloud/BULUT-KURULUM.md](deploy/cloud/BULUT-KURULUM.md)  
+**Yaşam döngüsü (bulut → on-prem paket):** [docs/YASAM-DONGUSU.md](docs/YASAM-DONGUSU.md)  
+**On-prem paket kurulumu (Faz 3):** [deploy/onprem/KURULUM.md](deploy/onprem/KURULUM.md)
+
+**Türkçe mimari (bulut):** [docs/MIMARI.md](docs/MIMARI.md)
+
+## Features
 
 - **Multi-instance monitoring** — register many PostgreSQL servers
 - **Core metrics** — connections, TPS, cache hit ratio, DB size, replication lag, deadlocks

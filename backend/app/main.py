@@ -1,5 +1,4 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,19 +8,21 @@ from app.collector.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample
-from app.routers import alerts, instances, metrics, queries
+from app.routers import alerts, instances, metrics, predictions, queries
 from app.schemas import HealthResponse
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await init_db()
-    start_scheduler()
+    if settings.run_mode in ("worker", "all"):
+        start_scheduler()
     yield
-    stop_scheduler()
+    if settings.run_mode in ("worker", "all"):
+        stop_scheduler()
 
 
-app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,6 +36,7 @@ app.include_router(instances.router, prefix="/api")
 app.include_router(metrics.router, prefix="/api")
 app.include_router(queries.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
+app.include_router(predictions.router, prefix="/api")
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -46,9 +48,14 @@ async def health() -> HealthResponse:
         last = (
             await session.execute(select(func.max(MetricSample.collected_at)))
         ).scalar_one_or_none()
-    return HealthResponse(status="ok", instances=int(count or 0), last_collection=last)
+    return HealthResponse(
+        status="ok",
+        mode=settings.run_mode,
+        instances=int(count or 0),
+        last_collection=last,
+    )
 
 
 @app.get("/")
 async def root() -> dict:
-    return {"name": settings.app_name, "docs": "/docs", "health": "/api/health"}
+    return {"name": settings.app_name, "docs": "/docs", "health": "/api/health", "mode": settings.run_mode}

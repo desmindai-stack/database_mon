@@ -1,0 +1,64 @@
+# pgwatch — production on-prem (tek sunucu)
+# Çalıştırma dizini: deploy/onprem  →  docker compose up -d
+
+name: pgwatch-onprem
+
+services:
+  pgwatch-db:
+    image: postgres:16-alpine
+    container_name: pgwatch-db
+    environment:
+      POSTGRES_USER: pgwatch
+      POSTGRES_PASSWORD: ${PGWATCH_DB_PASSWORD:?PGWATCH_DB_PASSWORD gerekli}
+      POSTGRES_DB: pgwatch
+    volumes:
+      - pgwatch-pgdata:/var/lib/postgresql/data
+      - ../../supabase/migrations/20250717120000_pgwatch_core.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pgwatch -d pgwatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - pgwatch-internal
+
+  pgwatch-app:
+    build:
+      context: ../..
+      dockerfile: deploy/onprem/Dockerfile.backend
+    image: pgwatch/backend:latest
+    container_name: pgwatch-app
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pgwatch:${PGWATCH_DB_PASSWORD}@pgwatch-db:5432/pgwatch
+      RUN_MODE: all
+      CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY:?CREDENTIALS_MASTER_KEY gerekli}
+      COLLECT_INTERVAL_SECONDS: ${COLLECT_INTERVAL_SECONDS:-15}
+      CORS_ORIGINS: '["http://localhost","http://127.0.0.1"]'
+    depends_on:
+      pgwatch-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - pgwatch-internal
+
+  pgwatch-web:
+    build:
+      context: ../..
+      dockerfile: deploy/onprem/Dockerfile.web
+    image: pgwatch/web:latest
+    container_name: pgwatch-web
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+    depends_on:
+      - pgwatch-app
+    restart: unless-stopped
+    networks:
+      - pgwatch-internal
+
+networks:
+  pgwatch-internal:
+    driver: bridge
+
+volumes:
+  pgwatch-pgdata:

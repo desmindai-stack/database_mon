@@ -1,6 +1,9 @@
+export type DbEngine = "postgresql" | "sqlserver" | "mongodb";
+
 export interface Instance {
   id: number;
   name: string;
+  engine: DbEngine;
   host: string;
   port: number;
   database: string;
@@ -13,6 +16,7 @@ export interface MetricSample {
   id: number;
   instance_id: number;
   collected_at: string;
+  metrics: Record<string, number | null>;
   active_connections: number;
   max_connections: number;
   transactions_per_sec: number;
@@ -28,6 +32,7 @@ export interface InstanceSummary {
   latest_metrics: MetricSample | null;
   status: string;
   alerts_firing: number;
+  predictions_open: number;
 }
 
 export interface SlowQuery {
@@ -63,17 +68,35 @@ export interface AlertEvent {
   resolved_at: string | null;
 }
 
+export interface Prediction {
+  id: number;
+  instance_id: number;
+  metric_key: string;
+  created_at: string;
+  horizon_minutes: number;
+  current_value: number;
+  predicted_value: number;
+  threshold: number;
+  confidence: number;
+  severity: string;
+  message: string;
+  acknowledged_at: string | null;
+}
+
 export interface InstanceCreate {
   name: string;
+  engine: DbEngine;
   host: string;
-  port: number;
+  port?: number;
   database: string;
   username: string;
   password: string;
 }
 
+const API_BASE = import.meta.env.VITE_API_URL ?? "";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...init?.headers },
     ...init,
   });
@@ -108,6 +131,9 @@ export const api = {
   getAlertEvents: () => request<AlertEvent[]>("/api/alerts/events"),
   resolveAlert: (id: number) =>
     request<AlertEvent>(`/api/alerts/events/${id}/resolve`, { method: "POST" }),
+  getPredictions: () => request<Prediction[]>("/api/predictions"),
+  ackPrediction: (id: number) =>
+    request<Prediction>(`/api/predictions/${id}/ack`, { method: "POST" }),
 };
 
 export function formatBytes(bytes: number): string {
@@ -120,3 +146,9 @@ export function formatBytes(bytes: number): string {
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString();
 }
+
+export const ENGINE_DEFAULTS: Record<DbEngine, { port: number; database: string }> = {
+  postgresql: { port: 5432, database: "postgres" },
+  sqlserver: { port: 1433, database: "master" },
+  mongodb: { port: 27017, database: "admin" },
+};

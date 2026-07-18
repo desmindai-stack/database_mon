@@ -17,13 +17,14 @@ export default function DashboardPage() {
     0,
   );
   const alerting = summaries.filter((s) => s.status === "alerting").length;
+  const predictions = summaries.reduce((sum, s) => sum + (s.predictions_open ?? 0), 0);
 
   return (
     <>
       <header className="page-header">
         <div>
           <h2>Dashboard</h2>
-          <p>Overview of all monitored PostgreSQL instances</p>
+          <p>Tüm veritabanı instance’larının DBA özeti</p>
         </div>
       </header>
 
@@ -43,6 +44,10 @@ export default function DashboardPage() {
           <div className="value">{alerting}</div>
         </div>
         <div className="card">
+          <h3>Tahmin (açık)</h3>
+          <div className="value">{predictions}</div>
+        </div>
+        <div className="card">
           <h3>Healthy</h3>
           <div className="value">{summaries.filter((s) => s.status === "healthy").length}</div>
         </div>
@@ -53,23 +58,25 @@ export default function DashboardPage() {
           <thead>
             <tr>
               <th>Instance</th>
-              <th>Status</th>
+              <th>Motor</th>
+              <th>Durum</th>
               <th>Connections</th>
               <th>Cache hit</th>
               <th>TPS</th>
               <th>DB size</th>
-              <th>Alerts</th>
+              <th>Alarm</th>
+              <th>Tahmin</th>
             </tr>
           </thead>
           <tbody>
             {summaries.length === 0 ? (
               <tr>
-                <td colSpan={7} className="empty">
-                  No instances yet. <Link to="/instances">Add your first PostgreSQL server</Link>.
+                <td colSpan={9} className="empty">
+                  Henüz instance yok. <Link to="/instances">İlk veritabanınızı ekleyin</Link>.
                 </td>
               </tr>
             ) : (
-              summaries.map(({ instance, latest_metrics, status, alerts_firing }) => (
+              summaries.map(({ instance, latest_metrics, status, alerts_firing, predictions_open }) => (
                 <tr key={instance.id}>
                   <td>
                     <Link to={`/instances/${instance.id}`}>{instance.name}</Link>
@@ -77,6 +84,7 @@ export default function DashboardPage() {
                       {instance.host}:{instance.port}/{instance.database}
                     </div>
                   </td>
+                  <td>{instance.engine}</td>
                   <td><span className={`status ${status}`}>{status}</span></td>
                   <td>
                     {latest_metrics
@@ -87,6 +95,7 @@ export default function DashboardPage() {
                   <td>{latest_metrics ? latest_metrics.transactions_per_sec.toFixed(1) : "—"}</td>
                   <td>{latest_metrics ? formatBytes(latest_metrics.database_size_bytes) : "—"}</td>
                   <td>{alerts_firing || "—"}</td>
+                  <td>{predictions_open || "—"}</td>
                 </tr>
               ))
             )}

@@ -17,7 +17,9 @@ services:
       - ./docker/init-demo.sql:/docker-entrypoint-initdb.d/init.sql:ro
 
   backend:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: deploy/onprem/Dockerfile.backend
     ports:
       - "8000:8000"
     volumes:
@@ -25,16 +27,16 @@ services:
       - pgwatch-data:/app/data
     environment:
       COLLECT_INTERVAL_SECONDS: 15
+      CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
     depends_on:
       - postgres-demo
 
   frontend:
-    build: ./frontend
+    build:
+      context: .
+      dockerfile: deploy/onprem/Dockerfile.web
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - "8080:80"
     depends_on:
       - backend
 

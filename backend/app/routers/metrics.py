@@ -27,7 +27,7 @@ async def get_metrics(
         .where(MetricSample.instance_id == instance_id, MetricSample.collected_at >= since)
         .order_by(MetricSample.collected_at.asc())
     )
-    return list(result.scalars().all())
+    return [MetricSampleOut.from_orm_sample(row) for row in result.scalars().all()]
 
 
 @router.get("/{instance_id}/latest", response_model=MetricSampleOut)
@@ -45,4 +45,4 @@ async def get_latest_metrics(instance_id: int, db: AsyncSession = Depends(get_db
     sample = result.scalar_one_or_none()
     if not sample:
         raise HTTPException(status_code=404, detail="No metrics collected yet")
-    return sample
+    return MetricSampleOut.from_orm_sample(sample)
