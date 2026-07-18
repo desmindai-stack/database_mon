@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, formatBytes, InstanceSummary } from "../api";
+import { api, formatBytes, HealthResponse, InstanceSummary } from "../api";
 
 export default function DashboardPage() {
   const [summaries, setSummaries] = useState<InstanceSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [config, setConfig] = useState<HealthResponse | null>(null);
 
   useEffect(() => {
     api.getSummaries()
       .then(setSummaries)
       .catch((err) => setError(String(err.message || err)));
+    api.getHealth().then(setConfig).catch(() => undefined);
   }, []);
 
   const totalConnections = summaries.reduce(
@@ -19,23 +21,31 @@ export default function DashboardPage() {
   const alerting = summaries.filter((s) => s.status === "alerting").length;
   const predictions = summaries.reduce((sum, s) => sum + (s.predictions_open ?? 0), 0);
 
+  const isPrivate = config?.deployment_mode === "private";
+
   const grouped = useMemo(() => {
     const map = new Map<string, InstanceSummary[]>();
     for (const s of summaries) {
-      const key = `${s.instance.customer_name || "Bilinmeyen Müşteri"} / ${s.instance.application || "—"}`;
+      const key = isPrivate
+        ? `${s.instance.application || "Uygulama"}${s.instance.cluster_name ? " / " + s.instance.cluster_name : ""}`
+        : `${s.instance.customer_name || "Bilinmeyen Müşteri"} / ${s.instance.application || "—"}`;
       const list = map.get(key) ?? [];
       list.push(s);
       map.set(key, list);
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [summaries]);
+  }, [summaries, isPrivate]);
 
   return (
     <>
       <header className="page-header">
         <div>
           <h2>Dashboard</h2>
-          <p>Tüm veritabanı instance’larının DBA özeti</p>
+          <p>
+            {isPrivate
+              ? `${config?.default_customer_name || "Private"} ortamı DBA özeti`
+              : "Tüm müşteri veritabanı instance’larının DBA özeti"}
+          </p>
         </div>
       </header>
 
@@ -72,6 +82,7 @@ export default function DashboardPage() {
               <thead>
                 <tr>
                   <th>Instance</th>
+                  {!isPrivate && <th>Müşteri</th>}
                   <th>Ortam</th>
                   <th>Cluster</th>
                   <th>Rol</th>
@@ -93,6 +104,7 @@ export default function DashboardPage() {
                         {instance.host}:{instance.port}/{instance.database}
                       </div>
                     </td>
+                    {!isPrivate && <td>{instance.customer_name || "—"}</td>}
                     <td>{instance.environment}</td>
                     <td>{instance.cluster_name || "—"}</td>
                     <td>{instance.role || "—"}</td>

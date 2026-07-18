@@ -17,9 +17,16 @@ from app.schemas import (
     MetricDefinitionOut,
     MetricSampleOut,
 )
+from app.config import settings
 from app.services.credentials import decrypt_secret, encrypt_secret
 
 router = APIRouter(prefix="/instances", tags=["instances"])
+
+
+def _apply_private_tenant(data: dict) -> dict:
+    if settings.deployment_mode == "private" and settings.default_customer_name:
+        data["customer_name"] = settings.default_customer_name
+    return data
 
 
 def _connection_target(payload: InstanceCreate) -> ConnectionTarget:
@@ -62,6 +69,7 @@ async def create_instance(payload: InstanceCreate, db: AsyncSession = Depends(ge
         raise HTTPException(status_code=409, detail="Instance name already exists")
 
     data = payload.model_dump(exclude={"password", "port"})
+    data = _apply_private_tenant(data)
     instance = Instance(
         **data,
         port=payload.resolved_port(),
@@ -155,6 +163,7 @@ async def update_instance(
         raise HTTPException(status_code=404, detail="Instance not found")
 
     updates = payload.model_dump(exclude_unset=True)
+    updates = _apply_private_tenant(updates)
     password = updates.pop("password", None)
     for key, value in updates.items():
         setattr(instance, key, value)

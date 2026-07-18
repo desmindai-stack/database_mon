@@ -89,6 +89,15 @@ export interface Prediction {
   acknowledged_at: string | null;
 }
 
+export interface HealthResponse {
+  status: string;
+  mode: string;
+  deployment_mode: "public" | "private";
+  default_customer_name: string | null;
+  instances: number;
+  last_collection: string | null;
+}
+
 export interface InstanceCreate {
   name: string;
   engine: DbEngine;
@@ -121,6 +130,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  getHealth: () => request<HealthResponse>("/api/health"),
   getSummaries: () => request<InstanceSummary[]>("/api/instances/summary"),
   getInstances: () => request<Instance[]>("/api/instances"),
   createInstance: (data: InstanceCreate) =>

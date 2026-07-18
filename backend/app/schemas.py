@@ -191,6 +191,8 @@ class InstanceSummary(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     mode: Literal["api", "worker", "all"]
+    deployment_mode: str
+    default_customer_name: str | None
     instances: int
     last_collection: datetime | None
 

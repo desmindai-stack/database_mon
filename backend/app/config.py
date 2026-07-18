@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     run_mode: Literal["api", "worker", "all"] = "all"
     credentials_master_key: str | None = None
 
+    # public = multi-customer dashboard; private = single-customer isolated
+    deployment_mode: Literal["public", "private"] = "public"
+    default_customer_name: str | None = None
+
     supabase_url: str | None = None
     supabase_anon_key: str | None = None
     supabase_service_role_key: str | None = None

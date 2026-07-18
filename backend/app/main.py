@@ -54,6 +54,8 @@ async def health() -> HealthResponse:
     return HealthResponse(
         status="ok",
         mode=settings.run_mode,
+        deployment_mode=settings.deployment_mode,
+        default_customer_name=settings.default_customer_name,
         instances=int(count or 0),
         last_collection=last,
     )

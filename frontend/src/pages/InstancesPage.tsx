@@ -1,10 +1,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, DbEngine, ENGINE_DEFAULTS, Instance, InstanceCreate } from "../api";
+import { api, DbEngine, ENGINE_DEFAULTS, HealthResponse, Instance, InstanceCreate } from "../api";
 
 const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
 
-const emptyForm = (engine: DbEngine = "postgresql"): InstanceCreate => ({
+const emptyForm = (engine: DbEngine = "postgresql", defaultCustomer?: string): InstanceCreate => ({
   name: "",
   engine,
   host: "localhost",
@@ -12,7 +12,7 @@ const emptyForm = (engine: DbEngine = "postgresql"): InstanceCreate => ({
   database: ENGINE_DEFAULTS[engine].database,
   username: engine === "mongodb" ? "admin" : engine === "sqlserver" ? "sa" : "postgres",
   password: "",
-  customer_name: "",
+  customer_name: defaultCustomer ?? "",
   environment: "public",
   application: "",
   cluster_name: "",
@@ -26,15 +26,23 @@ export default function InstancesPage() {
   const [error, setError] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [config, setConfig] = useState<HealthResponse | null>(null);
+
+  const isPrivate = config?.deployment_mode === "private";
+  const defaultCustomer = config?.default_customer_name ?? undefined;
 
   const load = () => api.getInstances().then(setInstances).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
     load();
+    api.getHealth().then((c) => {
+      setConfig(c);
+      setForm((prev) => ({ ...prev, customer_name: c.default_customer_name ?? prev.customer_name }));
+    }).catch(() => undefined);
   }, []);
 
   const setEngine = (engine: DbEngine) => {
-    setForm(emptyForm(engine));
+    setForm(emptyForm(engine, isPrivate ? defaultCustomer : undefined));
     setTestResult(null);
   };
 
@@ -112,10 +120,12 @@ export default function InstancesPage() {
               Ad
               <input value={form.name} onChange={(e) => update("name", e.target.value)} required />
             </label>
-            <label>
-              Müşteri
-              <input value={form.customer_name} onChange={(e) => update("customer_name", e.target.value)} />
-            </label>
+            {!isPrivate && (
+              <label>
+                Müşteri
+                <input value={form.customer_name} onChange={(e) => update("customer_name", e.target.value)} />
+              </label>
+            )}
             <label>
               Ortam
               <select value={form.environment} onChange={(e) => update("environment", e.target.value)}>
@@ -191,7 +201,7 @@ export default function InstancesPage() {
             <thead>
               <tr>
                 <th>Ad</th>
-                <th>Müşteri</th>
+                {!isPrivate && <th>Müşteri</th>}
                 <th>Ortam</th>
                 <th>Uygulama</th>
                 <th>Cluster</th>
@@ -202,12 +212,12 @@ export default function InstancesPage() {
             </thead>
             <tbody>
               {instances.length === 0 ? (
-                <tr><td colSpan={8} className="empty">Kayıtlı instance yok</td></tr>
+                <tr><td colSpan={isPrivate ? 7 : 8} className="empty">Kayıtlı instance yok</td></tr>
               ) : (
                 instances.map((inst) => (
                   <tr key={inst.id}>
                     <td><Link to={`/instances/${inst.id}`}>{inst.name}</Link></td>
-                    <td>{inst.customer_name || "—"}</td>
+                    {!isPrivate && <td>{inst.customer_name || "—"}</td>}
                     <td>{inst.environment}</td>
                     <td>{inst.application || "—"}</td>
                     <td>{inst.cluster_name || "—"}</td>
