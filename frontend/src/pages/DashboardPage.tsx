@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, formatBytes, InstanceSummary } from "../api";
 
@@ -18,6 +18,17 @@ export default function DashboardPage() {
   );
   const alerting = summaries.filter((s) => s.status === "alerting").length;
   const predictions = summaries.reduce((sum, s) => sum + (s.predictions_open ?? 0), 0);
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, InstanceSummary[]>();
+    for (const s of summaries) {
+      const key = `${s.instance.customer_name || "Bilinmeyen Müşteri"} / ${s.instance.application || "—"}`;
+      const list = map.get(key) ?? [];
+      list.push(s);
+      map.set(key, list);
+    }
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [summaries]);
 
   return (
     <>
@@ -53,55 +64,56 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Instance</th>
-              <th>Motor</th>
-              <th>Durum</th>
-              <th>Connections</th>
-              <th>Cache hit</th>
-              <th>TPS</th>
-              <th>DB size</th>
-              <th>Alarm</th>
-              <th>Tahmin</th>
-            </tr>
-          </thead>
-          <tbody>
-            {summaries.length === 0 ? (
-              <tr>
-                <td colSpan={9} className="empty">
-                  Henüz instance yok. <Link to="/instances">İlk veritabanınızı ekleyin</Link>.
-                </td>
-              </tr>
-            ) : (
-              summaries.map(({ instance, latest_metrics, status, alerts_firing, predictions_open }) => (
-                <tr key={instance.id}>
-                  <td>
-                    <Link to={`/instances/${instance.id}`}>{instance.name}</Link>
-                    <div style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
-                      {instance.host}:{instance.port}/{instance.database}
-                    </div>
-                  </td>
-                  <td>{instance.engine}</td>
-                  <td><span className={`status ${status}`}>{status}</span></td>
-                  <td>
-                    {latest_metrics
-                      ? `${latest_metrics.active_connections} / ${latest_metrics.max_connections}`
-                      : "—"}
-                  </td>
-                  <td>{latest_metrics ? `${latest_metrics.cache_hit_ratio.toFixed(1)}%` : "—"}</td>
-                  <td>{latest_metrics ? latest_metrics.transactions_per_sec.toFixed(1) : "—"}</td>
-                  <td>{latest_metrics ? formatBytes(latest_metrics.database_size_bytes) : "—"}</td>
-                  <td>{alerts_firing || "—"}</td>
-                  <td>{predictions_open || "—"}</td>
+      {grouped.map(([group, items]) => (
+        <div className="card" key={group} style={{ marginBottom: "1rem" }}>
+          <h3 style={{ color: "var(--text)", marginBottom: "0.75rem" }}>{group}</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Instance</th>
+                  <th>Ortam</th>
+                  <th>Cluster</th>
+                  <th>Rol</th>
+                  <th>Motor</th>
+                  <th>Durum</th>
+                  <th>Connections</th>
+                  <th>Cache hit</th>
+                  <th>TPS</th>
+                  <th>DB size</th>
+                  <th>Alarm</th>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+              </thead>
+              <tbody>
+                {items.map(({ instance, latest_metrics, status, alerts_firing }) => (
+                  <tr key={instance.id}>
+                    <td>
+                      <Link to={`/instances/${instance.id}`}>{instance.name}</Link>
+                      <div style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
+                        {instance.host}:{instance.port}/{instance.database}
+                      </div>
+                    </td>
+                    <td>{instance.environment}</td>
+                    <td>{instance.cluster_name || "—"}</td>
+                    <td>{instance.role || "—"}</td>
+                    <td>{instance.engine}</td>
+                    <td><span className={`status ${status}`}>{status}</span></td>
+                    <td>
+                      {latest_metrics
+                        ? `${latest_metrics.active_connections} / ${latest_metrics.max_connections}`
+                        : "—"}
+                    </td>
+                    <td>{latest_metrics ? `${latest_metrics.cache_hit_ratio.toFixed(1)}%` : "—"}</td>
+                    <td>{latest_metrics ? latest_metrics.transactions_per_sec.toFixed(1) : "—"}</td>
+                    <td>{latest_metrics ? formatBytes(latest_metrics.database_size_bytes) : "—"}</td>
+                    <td>{alerts_firing || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
     </>
   );
 }

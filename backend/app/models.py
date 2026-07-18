@@ -19,6 +19,14 @@ class Instance(Base):
     username: Mapped[str] = mapped_column(String(128), nullable=False)
     password: Mapped[str] = mapped_column(String(512), nullable=False)
     options: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    customer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    environment: Mapped[str] = mapped_column(String(32), default="public", nullable=False)
+    application: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cluster_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    role: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    services: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 

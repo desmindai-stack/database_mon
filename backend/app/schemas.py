@@ -16,6 +16,13 @@ class InstanceCreate(BaseModel):
     password: str
     options: dict[str, Any] | None = None
 
+    customer_name: str | None = None
+    environment: str = "public"
+    application: str | None = None
+    cluster_name: str | None = None
+    role: str | None = None
+    services: list[str] | None = None
+
     def resolved_port(self) -> int:
         if self.port is not None:
             return self.port
@@ -31,6 +38,12 @@ class InstanceUpdate(BaseModel):
     username: str | None = None
     password: str | None = None
     options: dict[str, Any] | None = None
+    customer_name: str | None = None
+    environment: str | None = None
+    application: str | None = None
+    cluster_name: str | None = None
+    role: str | None = None
+    services: list[str] | None = None
     enabled: bool | None = None
 
 
@@ -44,6 +57,12 @@ class InstanceOut(BaseModel):
     username: str
     enabled: bool
     created_at: datetime
+    customer_name: str | None
+    environment: str
+    application: str | None
+    cluster_name: str | None
+    role: str | None
+    services: list[str] | None
 
     model_config = {"from_attributes": True}
 

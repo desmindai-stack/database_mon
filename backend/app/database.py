@@ -41,6 +41,12 @@ async def migrate_schema() -> None:
     async with engine.begin() as conn:
         await _sqlite_add_column_if_missing(conn, "instances", "engine", "engine VARCHAR(32) DEFAULT 'postgresql'")
         await _sqlite_add_column_if_missing(conn, "instances", "options", "options JSON")
+        await _sqlite_add_column_if_missing(conn, "instances", "customer_name", "customer_name VARCHAR(128)")
+        await _sqlite_add_column_if_missing(conn, "instances", "environment", "environment VARCHAR(32) DEFAULT 'public'")
+        await _sqlite_add_column_if_missing(conn, "instances", "application", "application VARCHAR(128)")
+        await _sqlite_add_column_if_missing(conn, "instances", "cluster_name", "cluster_name VARCHAR(128)")
+        await _sqlite_add_column_if_missing(conn, "instances", "role", "role VARCHAR(32)")
+        await _sqlite_add_column_if_missing(conn, "instances", "services", "services JSON")
         await _sqlite_add_column_if_missing(
             conn, "metric_samples", "metrics_json", "metrics_json JSON"
         )

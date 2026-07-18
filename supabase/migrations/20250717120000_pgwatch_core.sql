@@ -11,6 +11,12 @@ CREATE TABLE IF NOT EXISTS instances (
   username VARCHAR(128) NOT NULL,
   password VARCHAR(512) NOT NULL,
   options JSONB,
+  customer_name VARCHAR(128),
+  environment VARCHAR(32) NOT NULL DEFAULT 'public',
+  application VARCHAR(128),
+  cluster_name VARCHAR(128),
+  role VARCHAR(32),
+  services JSONB,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

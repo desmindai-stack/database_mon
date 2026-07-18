@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, DbEngine, ENGINE_DEFAULTS, Instance, InstanceCreate } from "../api";
 
+const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
+
 const emptyForm = (engine: DbEngine = "postgresql"): InstanceCreate => ({
   name: "",
   engine,
@@ -10,6 +12,12 @@ const emptyForm = (engine: DbEngine = "postgresql"): InstanceCreate => ({
   database: ENGINE_DEFAULTS[engine].database,
   username: engine === "mongodb" ? "admin" : engine === "sqlserver" ? "sa" : "postgres",
   password: "",
+  customer_name: "",
+  environment: "public",
+  application: "",
+  cluster_name: "",
+  role: "",
+  services: [],
 });
 
 export default function InstancesPage() {
@@ -30,8 +38,16 @@ export default function InstancesPage() {
     setTestResult(null);
   };
 
-  const update = (key: keyof InstanceCreate, value: string | number) => {
+  const update = (key: keyof InstanceCreate, value: string | number | string[]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const toggleService = (service: string) => {
+    const current = form.services ?? [];
+    const next = current.includes(service)
+      ? current.filter((s) => s !== service)
+      : [...current, service];
+    update("services", next);
   };
 
   const onTest = async () => {
@@ -97,6 +113,44 @@ export default function InstancesPage() {
               <input value={form.name} onChange={(e) => update("name", e.target.value)} required />
             </label>
             <label>
+              Müşteri
+              <input value={form.customer_name} onChange={(e) => update("customer_name", e.target.value)} />
+            </label>
+            <label>
+              Ortam
+              <select value={form.environment} onChange={(e) => update("environment", e.target.value)}>
+                <option value="public">Public</option>
+                <option value="private">Private</option>
+              </select>
+            </label>
+            <label>
+              Uygulama
+              <input value={form.application} onChange={(e) => update("application", e.target.value)} />
+            </label>
+            <label>
+              Cluster
+              <input value={form.cluster_name} onChange={(e) => update("cluster_name", e.target.value)} />
+            </label>
+            <label>
+              Rol
+              <input value={form.role} onChange={(e) => update("role", e.target.value)} placeholder="primary, replica, haproxy..." />
+            </label>
+            <label>
+              Sunucu servisleri
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.35rem" }}>
+                {PG_SERVICES.map((svc) => (
+                  <label key={svc} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontWeight: 400 }}>
+                    <input
+                      type="checkbox"
+                      checked={(form.services ?? []).includes(svc)}
+                      onChange={() => toggleService(svc)}
+                    />
+                    {svc}
+                  </label>
+                ))}
+              </div>
+            </label>
+            <label>
               Host
               <input value={form.host} onChange={(e) => update("host", e.target.value)} required />
             </label>
@@ -137,20 +191,28 @@ export default function InstancesPage() {
             <thead>
               <tr>
                 <th>Ad</th>
+                <th>Müşteri</th>
+                <th>Ortam</th>
+                <th>Uygulama</th>
+                <th>Cluster</th>
+                <th>Rol</th>
                 <th>Motor</th>
-                <th>Hedef</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {instances.length === 0 ? (
-                <tr><td colSpan={4} className="empty">Kayıtlı instance yok</td></tr>
+                <tr><td colSpan={8} className="empty">Kayıtlı instance yok</td></tr>
               ) : (
                 instances.map((inst) => (
                   <tr key={inst.id}>
                     <td><Link to={`/instances/${inst.id}`}>{inst.name}</Link></td>
+                    <td>{inst.customer_name || "—"}</td>
+                    <td>{inst.environment}</td>
+                    <td>{inst.application || "—"}</td>
+                    <td>{inst.cluster_name || "—"}</td>
+                    <td>{inst.role || "—"}</td>
                     <td>{inst.engine}</td>
-                    <td>{inst.host}:{inst.port}/{inst.database}</td>
                     <td><button className="btn btn-danger" onClick={() => onDelete(inst.id)}>Sil</button></td>
                   </tr>
                 ))

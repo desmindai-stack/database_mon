@@ -10,6 +10,12 @@ export interface Instance {
   username: string;
   enabled: boolean;
   created_at: string;
+  customer_name: string | null;
+  environment: string;
+  application: string | null;
+  cluster_name: string | null;
+  role: string | null;
+  services: string[] | null;
 }
 
 export interface MetricSample {
@@ -91,6 +97,12 @@ export interface InstanceCreate {
   database: string;
   username: string;
   password: string;
+  customer_name?: string;
+  environment?: string;
+  application?: string;
+  cluster_name?: string;
+  role?: string;
+  services?: string[];
 }
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
