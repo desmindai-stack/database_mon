@@ -28,7 +28,7 @@ class Instance(Base):
     services: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     metrics: Mapped[list["MetricSample"]] = relationship(back_populates="instance")
     slow_queries: Mapped[list["SlowQuerySample"]] = relationship(back_populates="instance")
@@ -41,7 +41,7 @@ class MetricSample(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)
-    collected_at: Mapped[datetime] = mapped_column(DateTime, index=True, server_default=func.now())
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
     metrics_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     active_connections: Mapped[int] = mapped_column(Integer, default=0)
@@ -77,7 +77,7 @@ class SlowQuerySample(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)
-    collected_at: Mapped[datetime] = mapped_column(DateTime, index=True, server_default=func.now())
+    collected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, server_default=func.now())
 
     queryid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     query: Mapped[str] = mapped_column(Text, nullable=False)
@@ -99,7 +99,7 @@ class AlertRule(Base):
     operator: Mapped[str] = mapped_column(String(8), nullable=False)
     threshold: Mapped[float] = mapped_column(Float, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     instance: Mapped["Instance | None"] = relationship(back_populates="alert_rules")
 
@@ -112,8 +112,8 @@ class AlertEvent(Base):
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)
     metric_value: Mapped[float] = mapped_column(Float, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    triggered_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class PredictionInsight(Base):
@@ -122,7 +122,7 @@ class PredictionInsight(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)
     metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     horizon_minutes: Mapped[int] = mapped_column(Integer, default=60)
     current_value: Mapped[float] = mapped_column(Float, nullable=False)
     predicted_value: Mapped[float] = mapped_column(Float, nullable=False)
@@ -130,6 +130,6 @@ class PredictionInsight(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     severity: Mapped[str] = mapped_column(String(16), default="info")
     message: Mapped[str] = mapped_column(Text, nullable=False)
-    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="predictions")
