@@ -63,6 +63,11 @@ async def health() -> HealthResponse:
     )
 
 
+@app.get("/api/debug/cors")
+async def debug_cors() -> dict:
+    return {"cors_origins_raw": settings.cors_origins, "cors_origins_parsed": settings.get_cors_origins()}
+
+
 @app.get("/")
 async def root() -> dict:
     return {"name": settings.app_name, "docs": "/docs", "health": "/api/health", "mode": settings.run_mode}
