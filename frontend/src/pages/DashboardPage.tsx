@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { api, formatBytes, HealthResponse, InstanceSummary } from "../api";
 
 type StatusFilter = "all" | "healthy" | "warning" | "alerting" | "pending" | "disabled";
 type EnvFilter = "all" | "public" | "private";
-type AppFilter = string | "all";
 
 const statusMeta: Record<string, { label: string; color: string }> = {
   healthy: { label: "Healthy", color: "var(--success)" },
@@ -31,7 +30,9 @@ export default function DashboardPage() {
   const [config, setConfig] = useState<HealthResponse | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [envFilter, setEnvFilter] = useState<EnvFilter>("all");
-  const [appFilter, setAppFilter] = useState<AppFilter>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const customerFilter = searchParams.get("customer");
+  const appFilter = searchParams.get("app");
 
   useEffect(() => {
     api.getSummaries()
@@ -52,30 +53,26 @@ export default function DashboardPage() {
 
   const isPrivate = config?.deployment_mode === "private";
 
-  const applications = useMemo(() => {
-    const apps = new Set<string>();
-    for (const s of summaries) {
-      if (s.instance.application) apps.add(s.instance.application);
-    }
-    return Array.from(apps).sort((a, b) => a.localeCompare(b));
-  }, [summaries]);
-
   const filtered = useMemo(() => {
     let list = summaries;
     if (statusFilter !== "all") list = list.filter((s) => s.status === statusFilter);
     if (envFilter !== "all") list = list.filter((s) => s.instance.environment === envFilter);
-    if (appFilter !== "all") list = list.filter((s) => s.instance.application === appFilter);
+    if (customerFilter) list = list.filter((s) => (s.instance.customer_name || "Bilinmeyen Müşteri") === customerFilter);
+    if (appFilter) list = list.filter((s) => s.instance.application === appFilter);
     return list.sort((a, b) => severityRank(a) - severityRank(b));
-  }, [summaries, statusFilter, envFilter, appFilter]);
+  }, [summaries, statusFilter, envFilter, customerFilter, appFilter]);
 
   const grouped = useMemo(() => {
     const map = new Map<string, InstanceSummary[]>();
     for (const s of filtered) {
       let key: string;
-      if (appFilter !== "all") {
+      if (appFilter) {
         // Within a selected app, group by cluster
         const cluster = s.instance.cluster_name || "Tekil sunucular";
         key = `${appFilter} / ${cluster}`;
+      } else if (customerFilter) {
+        // Within a selected customer, group by application/cluster
+        key = `${s.instance.application || "Uygulamasız"}${s.instance.cluster_name ? " / " + s.instance.cluster_name : ""}`;
       } else if (isPrivate) {
         key = `${s.instance.application || "Uygulama"}${s.instance.cluster_name ? " / " + s.instance.cluster_name : ""}`;
       } else {
@@ -86,7 +83,7 @@ export default function DashboardPage() {
       map.set(key, list);
     }
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filtered, isPrivate, appFilter]);
+  }, [filtered, isPrivate, customerFilter, appFilter]);
 
   const StatCard = ({
     label,
@@ -185,19 +182,20 @@ export default function DashboardPage() {
             />
           ))}
         </div>
-        <div className="filter-group">
-          <span className="filter-label">Uygulama bazlı</span>
-          <select
-            className="app-select"
-            value={appFilter}
-            onChange={(e) => setAppFilter(e.target.value)}
-          >
-            <option value="all">Tüm uygulamalar</option>
-            {applications.map((app) => (
-              <option key={app} value={app}>{app}</option>
-            ))}
-          </select>
-        </div>
+        {(customerFilter || appFilter) && (
+          <div className="filter-group active-filter">
+            <span className="filter-label">Aktif filtre</span>
+            <span className="filter-chip active">
+              {customerFilter || ""} {customerFilter && appFilter ? "/" : ""} {appFilter || ""}
+            </span>
+            <button
+              className="filter-chip"
+              onClick={() => setSearchParams({})}
+            >
+              Temizle
+            </button>
+          </div>
+        )}
       </div>
 
       {grouped.length === 0 ? (

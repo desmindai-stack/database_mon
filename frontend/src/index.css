@@ -84,11 +84,111 @@ textarea {
   padding: 0.75rem 0.85rem;
   border-radius: 10px;
   color: var(--muted);
-  margin-bottom: 0.35rem;
 }
 
 .nav-link.active,
 .nav-link:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nav-group {
+  margin-bottom: 0.35rem;
+}
+
+.nav-parent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.nav-parent .nav-link {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.nav-toggle {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  padding: 0.75rem 0.85rem;
+  cursor: pointer;
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+
+.nav-toggle.open {
+  transform: rotate(180deg);
+}
+
+.nav-tree {
+  padding: 0.35rem 0 0.35rem 0.75rem;
+  border-left: 2px solid var(--border);
+  margin-left: 0.85rem;
+}
+
+.nav-tree-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  padding: 0.35rem 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.nav-tree-section {
+  margin-bottom: 0.2rem;
+}
+
+.nav-tree-customer {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.nav-tree-customer:hover {
+  background: var(--surface-2);
+}
+
+.nav-tree-arrow {
+  font-size: 0.6rem;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.nav-tree-arrow.open {
+  transform: rotate(90deg);
+}
+
+.nav-tree-apps {
+  padding-left: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.nav-tree-app {
+  display: block;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.nav-tree-app:hover,
+.nav-tree-app.active {
   background: var(--surface-2);
   color: var(--text);
 }
@@ -413,6 +513,11 @@ td code,
   border-color: var(--accent);
   color: var(--text);
   background: var(--surface);
+}
+
+.active-filter .filter-chip.active {
+  border-color: var(--accent-2);
+  color: var(--accent-2);
 }
 
 .app-select {
