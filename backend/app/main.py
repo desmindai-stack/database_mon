@@ -27,6 +27,10 @@ app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
 _cors_origins = settings.get_cors_origins()
 _allow_credentials = "*" not in _cors_origins
 
+import logging
+logger = logging.getLogger(__name__)
+logger.info("CORS origins configured: %s", _cors_origins)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
