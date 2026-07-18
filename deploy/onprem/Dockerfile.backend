@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Cache-bust: increment below when app code must be re-copied
+RUN echo "cache-bust-v2" > /tmp/.pgwatch-cache-bust
 COPY backend/app ./app
 COPY deploy/onprem/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /app/data
