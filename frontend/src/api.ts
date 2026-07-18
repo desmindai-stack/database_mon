@@ -133,6 +133,7 @@ export const api = {
   getHealth: () => request<HealthResponse>("/api/health"),
   getSummaries: () => request<InstanceSummary[]>("/api/instances/summary"),
   getInstances: () => request<Instance[]>("/api/instances"),
+  getInstance: (id: number) => request<Instance>(`/api/instances/${id}`),
   createInstance: (data: InstanceCreate) =>
     request<Instance>("/api/instances", { method: "POST", body: JSON.stringify(data) }),
   updateInstance: (id: number, data: Partial<InstanceCreate>) =>
@@ -146,6 +147,8 @@ export const api = {
     ),
   getMetrics: (id: number, hours = 1) =>
     request<MetricSample[]>(`/api/metrics/${id}?hours=${hours}`),
+  getLatestMetrics: (id: number) =>
+    request<MetricSample>(`/api/metrics/${id}/latest`),
   getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
   createAlertRule: (data: Omit<AlertRule, "id" | "created_at">) =>
