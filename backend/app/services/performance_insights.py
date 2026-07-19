@@ -31,9 +31,6 @@ class PerformanceInsight:
     queryid: str | None = None
     query_hint: str | None = None
     suggested_action: str | None = None  # explain | index_advice | analyze
-    queryid: str | None = None
-    query_hint: str | None = None
-    suggested_action: str | None = None  # explain | index_advice | analyze
 
 
 @dataclass
@@ -369,30 +366,66 @@ def analyze_metrics(
         heavy = sorted(slow_queries, key=lambda q: float(q.get("total_time_ms") or 0), reverse=True)
         top = heavy[0] if heavy else None
         mean_heavy = [q for q in heavy if float(q.get("mean_time_ms") or 0) >= 50]
+
+        def _query_hint(q: dict[str, Any]) -> str:
+            text = " ".join(str(q.get("query") or "").split())
+            if len(text) > 140:
+                return text[:140] + "…"
+            return text
+
         if top and float(top.get("total_time_ms") or 0) > 1000:
+            top_qid = str(top.get("queryid") or "") or None
+            top_mean = float(top.get("mean_time_ms") or 0)
+            top_total = float(top.get("total_time_ms") or 0)
+            top_calls = int(top.get("calls") or 0)
             insights.append(
                 PerformanceInsight(
                     severity="medium",
                     category="queries",
-                    title="Yüksek toplam süreye sahip sorgu var",
-                    description=f"En pahalı sorgu toplam {float(top.get('total_time_ms') or 0):.0f} ms, ortalama {float(top.get('mean_time_ms') or 0):.1f} ms.",
-                    recommendation="Yavaş Sorgular sekmesinde bu sorgu için index önerisi çalıştırın; EXPLAIN ANALYZE ile planı doğrulayın.",
-                    metric_value=float(top.get("total_time_ms") or 0),
+                    title="En pahalı sorgu tuning gerektiriyor",
+                    description=(
+                        f"Toplam {top_total:.0f} ms · ortalama {top_mean:.1f} ms · {top_calls} çağrı"
+                        + (f" · queryid={top_qid}" if top_qid else "")
+                    ),
+                    recommendation=(
+                        "1) Bu sorgu için EXPLAIN plan açın. "
+                        "2) Index advisor çalıştırın. "
+                        "3) Seq Scan / Sort Spill görürseniz index veya work_mem aksiyon alın."
+                    ),
+                    metric_value=top_total,
                     metric_unit="ms",
                     action="queries",
+                    queryid=top_qid,
+                    query_hint=_query_hint(top),
+                    suggested_action="explain",
                 )
             )
         if mean_heavy:
+            top_3 = mean_heavy[:3]
+            first = top_3[0]
+            first_qid = str(first.get("queryid") or "") or None
+            hints = " | ".join(
+                f"#{i + 1} {float(q.get('mean_time_ms') or 0):.1f}ms"
+                + (f" id={q.get('queryid')}" if q.get("queryid") else "")
+                for i, q in enumerate(top_3)
+            )
             insights.append(
                 PerformanceInsight(
                     severity="high" if len(mean_heavy) >= 3 else "medium",
                     category="queries",
-                    title=f"{len(mean_heavy)} yavaş ortalama süreli sorgu",
-                    description="Ortalama süresi ≥ 50 ms olan sorgular tespit edildi.",
-                    recommendation="Bu sorgular için index advice ve plan iyileştirmesi öncelikli aksiyon olmalı.",
+                    title=f"{len(mean_heavy)} sorgu ortalama süre ≥50 ms",
+                    description=f"Öncelikli sorgular: {hints}",
+                    recommendation=(
+                        "En sık / en yavaş sorguyu önce hedefleyin: "
+                        "EXPLAIN plan + index advisor çalıştırın; "
+                        "sonra Yavaş Sorgular sekmesinde iyileşmeyi doğrulayın."
+                    ),
                     metric_value=float(len(mean_heavy)),
                     metric_unit="adet",
                     action="queries",
+                    queryid=first_qid,
+                    query_hint=_query_hint(first),
+                    suggested_action="index_advice",
                 )
             )
             checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "warn", f"{len(mean_heavy)} adet ≥50ms"))

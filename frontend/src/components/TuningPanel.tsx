@@ -1,4 +1,4 @@
-import type { TuningReport } from "../api";
+import type { PerformanceInsight, TuningReport } from "../api";
 import { formatTime } from "../api";
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -19,14 +19,27 @@ const SEVERITY_TR: Record<string, string> = {
   info: "Bilgi",
 };
 
+const ACTION_LABEL: Record<string, string> = {
+  explain: "EXPLAIN plan aç",
+  index_advice: "Index önerisi çalıştır",
+  analyze: "Sorguyu incele",
+};
+
 type Props = {
   report: TuningReport | null;
   onOpenTab: (tab: "queries" | "metrics" | "alerts") => void;
+  onFocusQuery?: (insight: PerformanceInsight) => void;
   onRunIndexAdvice: () => void;
   adviceRunning?: boolean;
 };
 
-export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, adviceRunning }: Props) {
+export default function TuningPanel({
+  report,
+  onOpenTab,
+  onFocusQuery,
+  onRunIndexAdvice,
+  adviceRunning,
+}: Props) {
   if (!report) {
     return (
       <div className="card tuning-card">
@@ -123,21 +136,42 @@ export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, advic
                       </span>
                     </div>
                     <p>{insight.description}</p>
+
+                    {(insight.query_hint || insight.queryid) && (
+                      <div className="insight-query-block">
+                        {insight.queryid && (
+                          <div className="insight-query-meta">
+                            <span>İlgili sorgu</span>
+                            <code>queryid={insight.queryid}</code>
+                          </div>
+                        )}
+                        {insight.query_hint && <pre className="insight-query-sql">{insight.query_hint}</pre>}
+                      </div>
+                    )}
+
                     <div className="insight-recommendation">
                       <span>Aksiyon:</span> {insight.recommendation}
                     </div>
-                    {insight.action && insight.action !== "none" && (
-                      <button
-                        className="btn linkish"
-                        onClick={() => {
-                          if (insight.action === "queries") onOpenTab("queries");
-                          else if (insight.action === "metrics") onOpenTab("metrics");
-                          else if (insight.action === "alerts") onOpenTab("alerts");
-                        }}
-                      >
-                        İlgili sekmeye git →
-                      </button>
-                    )}
+
+                    <div className="insight-actions">
+                      {insight.action && insight.action !== "none" && (
+                        <button
+                          className="btn linkish"
+                          onClick={() => {
+                            if (insight.action === "queries") onOpenTab("queries");
+                            else if (insight.action === "metrics") onOpenTab("metrics");
+                            else if (insight.action === "alerts") onOpenTab("alerts");
+                          }}
+                        >
+                          İlgili sekmeye git →
+                        </button>
+                      )}
+                      {(insight.queryid || insight.query_hint) && onFocusQuery && (
+                        <button className="btn primary linkish" onClick={() => onFocusQuery(insight)}>
+                          {ACTION_LABEL[insight.suggested_action || ""] || "Bu sorguya git →"}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   {insight.metric_value !== null && insight.metric_value !== undefined && (
                     <span className="insight-metric">

@@ -387,6 +387,9 @@ async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get
                 metric_value=i.metric_value,
                 metric_unit=i.metric_unit,
                 action=i.action,
+                queryid=i.queryid,
+                query_hint=i.query_hint,
+                suggested_action=i.suggested_action,
             )
             for i in report.insights
         ],

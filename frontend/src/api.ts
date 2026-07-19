@@ -98,6 +98,9 @@ export interface PerformanceInsight {
   metric_value: number | null;
   metric_unit: string | null;
   action?: string | null;
+  queryid?: string | null;
+  query_hint?: string | null;
+  suggested_action?: "explain" | "index_advice" | "analyze" | string | null;
 }
 
 export interface TuningChecklistItem {
