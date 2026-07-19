@@ -104,6 +104,75 @@ export interface TuningReport {
   checklist: TuningChecklistItem[];
 }
 
+export interface ActivitySession {
+  pid: number;
+  usename: string | null;
+  datname: string | null;
+  application_name: string;
+  client_addr: string | null;
+  state: string;
+  wait_event_type: string | null;
+  wait_event: string | null;
+  backend_type: string | null;
+  query_start: string | null;
+  state_change: string | null;
+  xact_start: string | null;
+  query_duration_sec: number;
+  xact_duration_sec: number | null;
+  query: string;
+  blocking_pids: number[];
+  blocked: boolean;
+}
+
+export interface ActivitySnapshot {
+  sessions: ActivitySession[];
+  wait_events: { wait_event_type: string; wait_event: string; count: number }[];
+  state_summary: { state: string; count: number }[];
+  blocking: {
+    blocked_pid: number;
+    blocking_pid: number;
+    blocked_query: string;
+    wait_event_type: string | null;
+    wait_event: string | null;
+    duration_sec: number;
+  }[];
+  totals: {
+    total: number;
+    active: number;
+    idle: number;
+    idle_in_transaction: number;
+    waiting: number;
+    blocked: number;
+  };
+}
+
+export interface ExplainPlanNode {
+  node_type: string;
+  relation_name: string | null;
+  alias: string | null;
+  startup_cost: number | null;
+  total_cost: number | null;
+  plan_rows: number | null;
+  plan_width: number | null;
+  actual_total_time: number | null;
+  actual_rows: number | null;
+  shared_hit_blocks: number | null;
+  shared_read_blocks: number | null;
+  insights: string[];
+  children: ExplainPlanNode[];
+}
+
+export interface ExplainResult {
+  query: string;
+  analyzed: boolean;
+  planning_time_ms: number | null;
+  execution_time_ms: number | null;
+  total_cost: number | null;
+  insights: string[];
+  plan: ExplainPlanNode | null;
+  raw_plan: unknown[];
+}
+
 export interface AlertRule {
   id: number;
   instance_id: number | null;
@@ -207,6 +276,12 @@ export const api = {
       body: JSON.stringify({ query }),
     }),
   getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
+  getActivity: (id: number) => request<ActivitySnapshot>(`/api/instances/${id}/activity`),
+  explainQuery: (id: number, query: string, analyze = false) =>
+    request<ExplainResult>(`/api/queries/${id}/explain`, {
+      method: "POST",
+      body: JSON.stringify({ query, analyze }),
+    }),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
   createAlertRule: (data: Omit<AlertRule, "id" | "created_at">) =>
     request<AlertRule>("/api/alerts/rules", { method: "POST", body: JSON.stringify(data) }),

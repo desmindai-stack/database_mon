@@ -9,6 +9,7 @@ from app.domain.engines import DatabaseEngine
 from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
 from app.models import AlertEvent, Instance, MetricSample, PredictionInsight, SlowQuerySample
 from app.schemas import (
+    ActivityOut,
     ConnectionTestResult,
     InstanceCreate,
     InstanceOut,
@@ -210,6 +211,30 @@ async def test_existing_instance(instance_id: int, db: AsyncSession = Depends(ge
     collector = get_collector(DatabaseEngine(instance.engine), target)
     ok, message, details = await collector.test_connection()
     return ConnectionTestResult(ok=ok, message=message, details=details)
+
+
+@router.get("/{instance_id}/activity", response_model=ActivityOut)
+async def get_instance_activity(instance_id: int, db: AsyncSession = Depends(get_db)) -> ActivityOut:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    if instance.engine != "postgresql":
+        raise HTTPException(status_code=400, detail="Activity view is currently PostgreSQL-only")
+
+    target = ConnectionTarget(
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        username=instance.username,
+        password=decrypt_secret(instance.password),
+        options=instance.options,
+    )
+    collector = get_collector(DatabaseEngine(instance.engine), target)
+    try:
+        data = await collector.collect_activity(limit=100)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Activity collection failed: {exc}") from exc
+    return ActivityOut.model_validate(data)
 
 
 @router.get("/{instance_id}/insights", response_model=TuningReportOut)

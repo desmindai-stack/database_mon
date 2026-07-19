@@ -17,9 +17,11 @@ import {
   YAxis,
 } from "recharts";
 import {
+  ActivitySnapshot,
   AlertEvent,
   AlertRule,
   api,
+  ExplainResult,
   formatBytes,
   formatTime,
   IndexAdvice,
@@ -30,12 +32,14 @@ import {
   SlowQuery,
   TuningReport,
 } from "../api";
+import ActivityPanel from "../components/ActivityPanel";
+import ExplainPlanTree from "../components/ExplainPlanTree";
 import TuningPanel from "../components/TuningPanel";
 
-type Tab = "overview" | "metrics" | "queries" | "tuning" | "alerts" | "predictions";
+type Tab = "overview" | "metrics" | "queries" | "activity" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
-const TABS: Tab[] = ["overview", "metrics", "queries", "tuning", "alerts", "predictions"];
+const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
 function timeLabel(iso: string): string {
@@ -62,6 +66,9 @@ export default function InstanceDetailPage() {
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [tuning, setTuning] = useState<TuningReport | null>(null);
+  const [activity, setActivity] = useState<ActivitySnapshot | null>(null);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [range, setRange] = useState<RangeHours>(6);
@@ -69,6 +76,9 @@ export default function InstanceDetailPage() {
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
   const [advice, setAdvice] = useState<Record<number, IndexAdvice[]>>({});
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
+  const [explain, setExplain] = useState<Record<number, ExplainResult | null>>({});
+  const [explainLoading, setExplainLoading] = useState<Record<number, boolean>>({});
+  const [explainError, setExplainError] = useState<Record<number, string>>({});
   const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
 
   const status = summary?.status || "pending";
@@ -97,6 +107,34 @@ export default function InstanceDetailPage() {
       setAdvice((prev) => ({ ...prev, [q.id]: [] }));
     } finally {
       setAdviceLoading((prev) => ({ ...prev, [q.id]: false }));
+    }
+  };
+
+  const loadExplain = async (q: SlowQuery, analyze = false) => {
+    setExplainLoading((prev) => ({ ...prev, [q.id]: true }));
+    setExplainError((prev) => ({ ...prev, [q.id]: "" }));
+    try {
+      const result = await api.explainQuery(instanceId, q.query, analyze);
+      setExplain((prev) => ({ ...prev, [q.id]: result }));
+    } catch (e) {
+      setExplain((prev) => ({ ...prev, [q.id]: null }));
+      setExplainError((prev) => ({ ...prev, [q.id]: String((e as Error).message || e) }));
+    } finally {
+      setExplainLoading((prev) => ({ ...prev, [q.id]: false }));
+    }
+  };
+
+  const loadActivity = async () => {
+    if (!instanceId) return;
+    setActivityLoading(true);
+    setActivityError(null);
+    try {
+      const data = await api.getActivity(instanceId);
+      setActivity(data);
+    } catch (e) {
+      setActivityError(String((e as Error).message || e));
+    } finally {
+      setActivityLoading(false);
     }
   };
 
@@ -171,6 +209,15 @@ export default function InstanceDetailPage() {
       clearInterval(timer);
     };
   }, [instanceId, range]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "activity") return;
+    loadActivity();
+    const timer = setInterval(() => {
+      api.getActivity(instanceId).then(setActivity).catch(() => undefined);
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [instanceId, tab]);
 
   const latest = metrics.at(-1);
 
@@ -291,6 +338,11 @@ export default function InstanceDetailPage() {
         <TabButton value="overview" label="Özet" />
         <TabButton value="metrics" label="Metrikler" />
         <TabButton value="queries" label="Yavaş Sorgular" />
+        <TabButton
+          value="activity"
+          label="Activity"
+          badge={activity?.totals.blocked || activity?.totals.idle_in_transaction || 0}
+        />
         <TabButton value="tuning" label="Tuning" badge={tuningIssues} />
         <TabButton value="alerts" label="Uyarılar" />
         <TabButton value="predictions" label="Tahminler" />
@@ -321,6 +373,12 @@ export default function InstanceDetailPage() {
             <StatTile label="Veritabanı boyutu" value={latest ? formatBytes(latest.database_size_bytes) : "—"} color="#f59e0b" />
             <StatTile label="Replikasyon gecikmesi" value={latest ? formatBytes(latest.replication_lag_bytes ?? 0) : "—"} color="#f472b6" />
             <StatTile label="Deadlock" value={latest ? latest.deadlocks : "—"} color="var(--danger)" />
+          </div>
+
+          <div className="overview-actions-row">
+            <button className="btn" onClick={() => setActiveTab("activity")}>Activity / Blocking</button>
+            <button className="btn primary" onClick={() => setActiveTab("tuning")}>Tuning paneli</button>
+            <button className="btn" onClick={() => setActiveTab("queries")}>Yavaş sorgular</button>
           </div>
 
           <div className="card insights-card">
@@ -673,6 +731,16 @@ export default function InstanceDetailPage() {
                           </div>
                           <div className="advice-section">
                                 <button
+                                  className="btn"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    loadExplain(q, false);
+                                  }}
+                                  disabled={explainLoading[q.id]}
+                                >
+                                  {explainLoading[q.id] ? "EXPLAIN…" : "EXPLAIN plan"}
+                                </button>
+                                <button
                                   className="btn btn-primary"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -682,6 +750,10 @@ export default function InstanceDetailPage() {
                                 >
                                   {adviceLoading[q.id] ? "İnceleniyor…" : "Index önerisi"}
                                 </button>
+                                {explainError[q.id] && (
+                                  <p className="advice-empty">{explainError[q.id]}</p>
+                                )}
+                                {explain[q.id] && <ExplainPlanTree result={explain[q.id]!} />}
                                 {advice[q.id] && (
                                   <div className="advice-results">
                                     {advice[q.id].length === 0 ? (
@@ -725,6 +797,15 @@ export default function InstanceDetailPage() {
             )}
           </div>
         </>
+      )}
+
+      {tab === "activity" && (
+        <ActivityPanel
+          activity={activity}
+          error={activityError}
+          loading={activityLoading}
+          onRefresh={loadActivity}
+        />
       )}
 
       {tab === "tuning" && (

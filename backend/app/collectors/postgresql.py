@@ -293,3 +293,140 @@ class PostgreSQLCollector(BaseCollector):
             return [dict(row) for row in rows]
         finally:
             await conn.close()
+
+    async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    a.pid,
+                    a.usename::text AS usename,
+                    a.datname::text AS datname,
+                    COALESCE(a.application_name, '') AS application_name,
+                    host(a.client_addr) AS client_addr,
+                    a.state::text AS state,
+                    a.wait_event_type::text AS wait_event_type,
+                    a.wait_event::text AS wait_event,
+                    a.backend_type::text AS backend_type,
+                    a.query_start,
+                    a.state_change,
+                    a.xact_start,
+                    EXTRACT(EPOCH FROM (now() - a.query_start))::float AS query_duration_sec,
+                    EXTRACT(EPOCH FROM (now() - a.xact_start))::float AS xact_duration_sec,
+                    LEFT(a.query, 2000) AS query,
+                    pg_blocking_pids(a.pid) AS blocking_pids
+                FROM pg_stat_activity a
+                WHERE a.pid <> pg_backend_pid()
+                  AND a.backend_type = 'client backend'
+                ORDER BY
+                    CASE
+                        WHEN cardinality(pg_blocking_pids(a.pid)) > 0 THEN 0
+                        WHEN a.state = 'active' THEN 1
+                        WHEN a.state = 'idle in transaction' THEN 2
+                        ELSE 3
+                    END,
+                    a.query_start ASC NULLS LAST
+                LIMIT $1
+                """,
+                limit,
+            )
+
+            sessions: list[dict[str, Any]] = []
+            blocking: list[dict[str, Any]] = []
+            totals = {
+                "total": 0,
+                "active": 0,
+                "idle": 0,
+                "idle_in_transaction": 0,
+                "waiting": 0,
+                "blocked": 0,
+            }
+
+            for row in rows:
+                blocking_pids = list(row["blocking_pids"] or [])
+                session = {
+                    "pid": int(row["pid"]),
+                    "usename": row["usename"],
+                    "datname": row["datname"],
+                    "application_name": row["application_name"] or "",
+                    "client_addr": row["client_addr"],
+                    "state": row["state"] or "unknown",
+                    "wait_event_type": row["wait_event_type"],
+                    "wait_event": row["wait_event"],
+                    "backend_type": row["backend_type"],
+                    "query_start": row["query_start"].isoformat() if row["query_start"] else None,
+                    "state_change": row["state_change"].isoformat() if row["state_change"] else None,
+                    "xact_start": row["xact_start"].isoformat() if row["xact_start"] else None,
+                    "query_duration_sec": float(row["query_duration_sec"] or 0),
+                    "xact_duration_sec": float(row["xact_duration_sec"] or 0) if row["xact_duration_sec"] is not None else None,
+                    "query": row["query"] or "",
+                    "blocking_pids": blocking_pids,
+                    "blocked": len(blocking_pids) > 0,
+                }
+                sessions.append(session)
+
+                totals["total"] += 1
+                state = (session["state"] or "").lower()
+                if state == "active":
+                    totals["active"] += 1
+                elif state == "idle":
+                    totals["idle"] += 1
+                elif "idle in transaction" in state:
+                    totals["idle_in_transaction"] += 1
+                if session["wait_event_type"]:
+                    totals["waiting"] += 1
+                if session["blocked"]:
+                    totals["blocked"] += 1
+                    for blocker in blocking_pids:
+                        blocking.append(
+                            {
+                                "blocked_pid": session["pid"],
+                                "blocking_pid": int(blocker),
+                                "blocked_query": session["query"],
+                                "wait_event_type": session["wait_event_type"],
+                                "wait_event": session["wait_event"],
+                                "duration_sec": session["query_duration_sec"],
+                            }
+                        )
+
+            wait_rows = await conn.fetch(
+                """
+                SELECT
+                    COALESCE(wait_event_type::text, 'None') AS wait_event_type,
+                    COALESCE(wait_event::text, 'None') AS wait_event,
+                    count(*)::int AS count
+                FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                  AND backend_type = 'client backend'
+                  AND wait_event IS NOT NULL
+                GROUP BY 1, 2
+                ORDER BY count DESC
+                LIMIT 20
+                """
+            )
+            wait_events = [dict(r) for r in wait_rows]
+
+            state_rows = await conn.fetch(
+                """
+                SELECT
+                    COALESCE(state::text, 'unknown') AS state,
+                    count(*)::int AS count
+                FROM pg_stat_activity
+                WHERE pid <> pg_backend_pid()
+                  AND backend_type = 'client backend'
+                GROUP BY 1
+                ORDER BY count DESC
+                """
+            )
+            state_summary = [dict(r) for r in state_rows]
+
+            return {
+                "sessions": sessions,
+                "wait_events": wait_events,
+                "state_summary": state_summary,
+                "blocking": blocking,
+                "totals": totals,
+            }
+        finally:
+            await conn.close()

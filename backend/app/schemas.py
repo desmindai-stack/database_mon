@@ -267,3 +267,95 @@ class TuningReportOut(BaseModel):
     summary: dict[str, int]
     insights: list[PerformanceInsightOut]
     checklist: list[TuningChecklistOut]
+
+
+class ActivitySessionOut(BaseModel):
+    pid: int
+    usename: str | None
+    datname: str | None
+    application_name: str
+    client_addr: str | None
+    state: str
+    wait_event_type: str | None
+    wait_event: str | None
+    backend_type: str | None
+    query_start: str | None
+    state_change: str | None
+    xact_start: str | None
+    query_duration_sec: float
+    xact_duration_sec: float | None
+    query: str
+    blocking_pids: list[int]
+    blocked: bool
+
+
+class WaitEventOut(BaseModel):
+    wait_event_type: str
+    wait_event: str
+    count: int
+
+
+class StateCountOut(BaseModel):
+    state: str
+    count: int
+
+
+class BlockingEdgeOut(BaseModel):
+    blocked_pid: int
+    blocking_pid: int
+    blocked_query: str
+    wait_event_type: str | None
+    wait_event: str | None
+    duration_sec: float
+
+
+class ActivityTotalsOut(BaseModel):
+    total: int
+    active: int
+    idle: int
+    idle_in_transaction: int
+    waiting: int
+    blocked: int
+
+
+class ActivityOut(BaseModel):
+    sessions: list[ActivitySessionOut]
+    wait_events: list[WaitEventOut]
+    state_summary: list[StateCountOut]
+    blocking: list[BlockingEdgeOut]
+    totals: ActivityTotalsOut
+
+
+class ExplainRequest(BaseModel):
+    query: str = Field(min_length=1)
+    analyze: bool = False
+
+
+class ExplainPlanNodeOut(BaseModel):
+    node_type: str
+    relation_name: str | None = None
+    alias: str | None = None
+    startup_cost: float | None = None
+    total_cost: float | None = None
+    plan_rows: float | None = None
+    plan_width: float | None = None
+    actual_total_time: float | None = None
+    actual_rows: float | None = None
+    shared_hit_blocks: float | None = None
+    shared_read_blocks: float | None = None
+    insights: list[str] = []
+    children: list["ExplainPlanNodeOut"] = []
+
+
+class ExplainOut(BaseModel):
+    query: str
+    analyzed: bool
+    planning_time_ms: float | None
+    execution_time_ms: float | None
+    total_cost: float | None
+    insights: list[str]
+    plan: ExplainPlanNodeOut | None
+    raw_plan: list[Any] = []
+
+
+ExplainPlanNodeOut.model_rebuild()

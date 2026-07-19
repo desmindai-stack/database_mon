@@ -26,3 +26,20 @@ class BaseCollector(ABC):
 
     async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
         return []
+
+    async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
+        """Live session snapshot: sessions, wait events, blocking edges."""
+        return {
+            "sessions": [],
+            "wait_events": [],
+            "state_summary": [],
+            "blocking": [],
+            "totals": {
+                "total": 0,
+                "active": 0,
+                "idle": 0,
+                "idle_in_transaction": 0,
+                "waiting": 0,
+                "blocked": 0,
+            },
+        }
