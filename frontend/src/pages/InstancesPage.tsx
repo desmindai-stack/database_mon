@@ -1,8 +1,28 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, DbEngine, ENGINE_DEFAULTS, HealthResponse, Instance, InstanceCreate } from "../api";
+import {
+  api,
+  ClusterServiceOptions,
+  DbEngine,
+  ENGINE_DEFAULTS,
+  HealthResponse,
+  Instance,
+  InstanceCreate,
+} from "../api";
 
 const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
+
+const defaultOptions = (): ClusterServiceOptions => ({
+  patroni_port: 8008,
+  etcd_port: 2379,
+  haproxy_stats_port: 8404,
+  haproxy_stats_path: "/stats;csv",
+  keepalived_vip: "",
+  probe_timeout_sec: 3,
+  patroni_tls: false,
+  agent_url: "",
+  agent_token: "",
+});
 
 const emptyForm = (engine: DbEngine = "postgresql", defaultCustomer?: string): InstanceCreate => ({
   name: "",
@@ -18,6 +38,7 @@ const emptyForm = (engine: DbEngine = "postgresql", defaultCustomer?: string): I
   cluster_name: "",
   role: "",
   services: [],
+  options: defaultOptions(),
 });
 
 const instanceToForm = (inst: Instance): InstanceCreate => ({
@@ -34,6 +55,7 @@ const instanceToForm = (inst: Instance): InstanceCreate => ({
   cluster_name: inst.cluster_name ?? "",
   role: inst.role ?? "",
   services: inst.services ?? [],
+  options: { ...defaultOptions(), ...(inst.options || {}) },
 });
 
 export default function InstancesPage() {
@@ -63,8 +85,15 @@ export default function InstancesPage() {
     setForm((prev) => ({ ...prev, engine, port: ENGINE_DEFAULTS[engine].port, database: ENGINE_DEFAULTS[engine].database }));
   };
 
-  const update = (key: keyof InstanceCreate, value: string | number | string[]) => {
+  const update = (key: keyof InstanceCreate, value: string | number | string[] | ClusterServiceOptions) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateOption = <K extends keyof ClusterServiceOptions>(key: K, value: ClusterServiceOptions[K]) => {
+    setForm((prev) => ({
+      ...prev,
+      options: { ...defaultOptions(), ...(prev.options || {}), [key]: value },
+    }));
   };
 
   const toggleService = (service: string) => {
@@ -194,6 +223,66 @@ export default function InstancesPage() {
             ))}
           </div>
         </label>
+        {form.engine === "postgresql" && (
+          <>
+            <label>
+              Patroni port
+              <input
+                type="number"
+                value={form.options?.patroni_port ?? 8008}
+                onChange={(e) => updateOption("patroni_port", Number(e.target.value))}
+              />
+            </label>
+            <label>
+              etcd port
+              <input
+                type="number"
+                value={form.options?.etcd_port ?? 2379}
+                onChange={(e) => updateOption("etcd_port", Number(e.target.value))}
+              />
+            </label>
+            <label>
+              HAProxy stats port
+              <input
+                type="number"
+                value={form.options?.haproxy_stats_port ?? 8404}
+                onChange={(e) => updateOption("haproxy_stats_port", Number(e.target.value))}
+              />
+            </label>
+            <label>
+              HAProxy stats path
+              <input
+                value={form.options?.haproxy_stats_path ?? "/stats;csv"}
+                onChange={(e) => updateOption("haproxy_stats_path", e.target.value)}
+              />
+            </label>
+            <label>
+              Keepalived VIP
+              <input
+                value={form.options?.keepalived_vip ?? ""}
+                onChange={(e) => updateOption("keepalived_vip", e.target.value)}
+                placeholder="10.0.0.50"
+              />
+            </label>
+            <label>
+              Host agent URL
+              <input
+                value={form.options?.agent_url ?? ""}
+                onChange={(e) => updateOption("agent_url", e.target.value)}
+                placeholder="http://db-host:9105"
+              />
+            </label>
+            <label>
+              Host agent token
+              <input
+                type="password"
+                value={form.options?.agent_token ?? ""}
+                onChange={(e) => updateOption("agent_token", e.target.value)}
+                placeholder="shared secret"
+              />
+            </label>
+          </>
+        )}
         <label>
           Host
           <input value={form.host} onChange={(e) => update("host", e.target.value)} required />

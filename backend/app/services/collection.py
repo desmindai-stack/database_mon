@@ -10,7 +10,12 @@ from app.collectors.registry import get_collector
 from app.config import settings
 from app.domain.engines import DatabaseEngine
 from app.models import Instance, MetricSample, SlowQuerySample
-from app.services.alert_engine import evaluate_alerts
+from app.services.alert_engine import ensure_cluster_alert_rules, evaluate_alerts
+from app.services.cluster_health import (
+    cluster_health_metric_flags,
+    collect_cluster_health,
+    compact_cluster_snapshot,
+)
 from app.services.credentials import decrypt_secret
 from app.services.prediction import run_predictions
 
@@ -82,6 +87,19 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
                 exec_sys_time=float(row["exec_sys_time"]) if row.get("exec_sys_time") is not None else None,
             )
         )
+
+    # Cluster/Patroni stack health snapshot (probe + optional host agent)
+    try:
+        if instance.cluster_name or (instance.services and len(instance.services) > 0):
+            report = await collect_cluster_health(instance)
+            flags = cluster_health_metric_flags(report)
+            metrics_json = dict(sample.metrics_json or {})
+            metrics_json["cluster_services"] = compact_cluster_snapshot(report)
+            metrics_json.update(flags)
+            sample.metrics_json = metrics_json
+            await ensure_cluster_alert_rules(session, instance.id)
+    except Exception as exc:
+        logger.warning("cluster health collect failed for instance %s: %s", instance.id, exc)
 
     normalized = sample.metrics_json or {}
     await evaluate_alerts(session, instance.id, normalized)

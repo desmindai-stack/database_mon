@@ -1,5 +1,17 @@
 export type DbEngine = "postgresql" | "sqlserver" | "mongodb";
 
+export interface ClusterServiceOptions {
+  patroni_port?: number;
+  etcd_port?: number;
+  haproxy_stats_port?: number;
+  haproxy_stats_path?: string;
+  keepalived_vip?: string | null;
+  probe_timeout_sec?: number;
+  patroni_tls?: boolean;
+  agent_url?: string | null;
+  agent_token?: string | null;
+}
+
 export interface Instance {
   id: number;
   name: string;
@@ -16,6 +28,7 @@ export interface Instance {
   cluster_name: string | null;
   role: string | null;
   services: string[] | null;
+  options?: ClusterServiceOptions | null;
 }
 
 export interface MetricSample {
@@ -306,6 +319,47 @@ export interface InstanceCreate {
   cluster_name?: string;
   role?: string;
   services?: string[];
+  options?: ClusterServiceOptions;
+}
+
+export interface ClusterServiceStatus {
+  service: string;
+  status: string;
+  latency_ms: number | null;
+  detail: string;
+  source: string;
+  checked_at?: string | null;
+  role?: string | null;
+  state?: string | null;
+  up_backends?: number | null;
+  down_backends?: number | null;
+  vip?: string | null;
+  vip_owner_local?: boolean | null;
+  systemd_active?: string | null;
+  patroni_version?: string | null;
+}
+
+export interface ClusterHealth {
+  instance_id: number;
+  cluster_name: string | null;
+  overall: string;
+  checked_at: string;
+  services: ClusterServiceStatus[];
+  cluster: {
+    leader: string | null;
+    members: { name: string | null; role: string | null; state: string | null; host: string | null }[];
+    member_count: number;
+    has_leader: boolean;
+  } | null;
+  agent: { configured: boolean; reachable: boolean; url: string | null };
+  totals: { up: number; down: number; unknown: number; skipped: number };
+}
+
+export interface ClusterLogs {
+  service: string;
+  unit: string | null;
+  lines: string[];
+  error: string | null;
 }
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -351,6 +405,9 @@ export const api = {
     }),
   getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
   getActivity: (id: number) => request<ActivitySnapshot>(`/api/instances/${id}/activity`),
+  getClusterHealth: (id: number) => request<ClusterHealth>(`/api/instances/${id}/cluster-health`),
+  getClusterLogs: (id: number, service: string, lines = 100) =>
+    request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
   getQueryHistory: (id: number, hours = 24, limit = 10) =>
     request<QueryHistoryList>(`/api/queries/${id}/history?hours=${hours}&limit=${limit}`),
