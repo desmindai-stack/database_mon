@@ -41,6 +41,8 @@ textarea {
   display: grid;
   grid-template-columns: 240px 1fr;
   min-height: 100vh;
+  max-width: 100vw;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -237,6 +239,8 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: default;
+  user-select: none;
 }
 
 .nav-tree-instance:hover {
@@ -256,6 +260,8 @@ textarea {
 
 .main {
   padding: 1.5rem 2rem 2rem;
+  min-width: 0;
+  overflow-x: hidden;
 }
 
 .page-header {

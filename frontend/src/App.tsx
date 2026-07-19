@@ -120,15 +120,14 @@ function CustomerTree() {
                           {isAppOpen && (
                             <div className="nav-tree-instances">
                               {app.instances.map((inst) => (
-                                <Link
+                                <span
                                   key={inst.id}
-                                  to={`/instances/${inst.id}`}
                                   className="nav-tree-instance"
                                   title={inst.cluster_name || undefined}
                                 >
                                   {inst.name}
                                   {inst.cluster_name && <span className="nav-tree-cluster">{inst.cluster_name}</span>}
-                                </Link>
+                                </span>
                               ))}
                             </div>
                           )}
