@@ -1,5 +1,5 @@
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   Area,
   AreaChart,
@@ -26,14 +26,16 @@ import {
   Instance,
   InstanceSummary,
   MetricSample,
-  PerformanceInsight,
   Prediction,
   SlowQuery,
+  TuningReport,
 } from "../api";
+import TuningPanel from "../components/TuningPanel";
 
 type Tab = "overview" | "metrics" | "queries" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
+const TABS: Tab[] = ["overview", "metrics", "queries", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
 function timeLabel(iso: string): string {
@@ -48,6 +50,9 @@ function queryFingerprint(q: string): string {
 export default function InstanceDetailPage() {
   const { id } = useParams();
   const instanceId = Number(id);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const initialTab: Tab = TABS.includes(tabParam as Tab) ? (tabParam as Tab) : "overview";
 
   const [instance, setInstance] = useState<Instance | null>(null);
   const [summary, setSummary] = useState<InstanceSummary | null>(null);
@@ -56,26 +61,60 @@ export default function InstanceDetailPage() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
-  const [insights, setInsights] = useState<PerformanceInsight[]>([]);
+  const [tuning, setTuning] = useState<TuningReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("overview");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [range, setRange] = useState<RangeHours>(6);
   const [querySort, setQuerySort] = useState<"total" | "mean" | "calls">("total");
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
   const [advice, setAdvice] = useState<Record<number, IndexAdvice[]>>({});
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
+  const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
 
   const status = summary?.status || "pending";
+  const insights = tuning?.insights || [];
+
+  const setActiveTab = (next: Tab) => {
+    setTab(next);
+    const params = new URLSearchParams(searchParams);
+    if (next === "overview") params.delete("tab");
+    else params.set("tab", next);
+    setSearchParams(params, { replace: true });
+  };
+
+  useEffect(() => {
+    if (TABS.includes(tabParam as Tab) && tabParam !== tab) {
+      setTab(tabParam as Tab);
+    }
+  }, [tabParam]);
 
   const loadAdvice = async (q: SlowQuery) => {
     setAdviceLoading((prev) => ({ ...prev, [q.id]: true }));
     try {
       const result = await api.getIndexAdvice(instanceId, q.query);
       setAdvice((prev) => ({ ...prev, [q.id]: result }));
-    } catch (e) {
+    } catch {
       setAdvice((prev) => ({ ...prev, [q.id]: [] }));
     } finally {
       setAdviceLoading((prev) => ({ ...prev, [q.id]: false }));
+    }
+  };
+
+  const runTopQueryAdvice = async () => {
+    const top = [...queries].sort((a, b) => b.total_time_ms - a.total_time_ms).slice(0, 3);
+    if (top.length === 0) {
+      setActiveTab("queries");
+      return;
+    }
+    setBulkAdviceRunning(true);
+    setActiveTab("queries");
+    try {
+      for (const q of top) {
+        setExpandedQuery(q.id);
+        await loadAdvice(q);
+      }
+    } finally {
+      setBulkAdviceRunning(false);
     }
   };
 
@@ -95,18 +134,27 @@ export default function InstanceDetailPage() {
         setMetrics(m);
         setQueries(q);
         setSummary(summaries.find((s) => s.instance.id === instanceId) || null);
+        setError(null);
 
-        const [r, e, p, i] = await Promise.all([
+        const [r, e, p, i] = await Promise.allSettled([
           api.getAlertRules(),
           api.getAlertEvents(),
           api.getPredictions(),
           api.getInsights(instanceId),
         ]);
         if (!mounted) return;
-        setRules(r.filter((x) => x.instance_id === null || x.instance_id === instanceId));
-        setEvents(e.filter((x) => x.instance_id === instanceId));
-        setPredictions(p.filter((x) => x.instance_id === instanceId));
-        setInsights(i);
+        if (r.status === "fulfilled") {
+          setRules(r.value.filter((x) => x.instance_id === null || x.instance_id === instanceId));
+        }
+        if (e.status === "fulfilled") {
+          setEvents(e.value.filter((x) => x.instance_id === instanceId));
+        }
+        if (p.status === "fulfilled") {
+          setPredictions(p.value.filter((x) => x.instance_id === instanceId));
+        }
+        if (i.status === "fulfilled") {
+          setTuning(i.value);
+        }
       } catch (e) {
         if (mounted) setError(String((e as Error).message || e));
       }
@@ -116,6 +164,7 @@ export default function InstanceDetailPage() {
       api.getMetrics(instanceId, range).then(setMetrics).catch(() => undefined);
       api.getSlowQueries(instanceId).then(setQueries).catch(() => undefined);
       api.getSummaries().then((s) => setSummary(s.find((x) => x.instance.id === instanceId) || null)).catch(() => undefined);
+      api.getInsights(instanceId).then(setTuning).catch(() => undefined);
     }, 15000);
     return () => {
       mounted = false;
@@ -182,11 +231,15 @@ export default function InstanceDetailPage() {
 
   const connectionUtil = latest && latest.max_connections ? (latest.active_connections / latest.max_connections) * 100 : 0;
 
-  const TabButton = ({ value, label }: { value: Tab; label: string }) => (
-    <button className={`tab-btn${tab === value ? " active" : ""}`} onClick={() => setTab(value)}>
+  const TabButton = ({ value, label, badge }: { value: Tab; label: string; badge?: number }) => (
+    <button className={`tab-btn${tab === value ? " active" : ""}`} onClick={() => setActiveTab(value)}>
       {label}
+      {badge !== undefined && badge > 0 && <span className="tab-badge">{badge}</span>}
     </button>
   );
+
+  const tuningIssues =
+    (tuning?.summary.critical || 0) + (tuning?.summary.high || 0) + (tuning?.summary.medium || 0);
 
   const StatTile = ({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) => (
     <div className="card stat-tile" style={{ borderLeftColor: color || "var(--accent)" }}>
@@ -216,9 +269,10 @@ export default function InstanceDetailPage() {
             <span className={`status ${status}`}>{status}</span>
           </div>
           <p className="detail-subtitle">
-            <Link to="/instances">← Instances</Link>
+            <Link to="/">← Dashboard</Link>
             <span className="detail-meta">
               {instance.host}:{instance.port}/{instance.database} · {instance.engine}
+              {instance.application ? ` · ${instance.application}` : ""}
             </span>
           </p>
         </div>
@@ -237,7 +291,7 @@ export default function InstanceDetailPage() {
         <TabButton value="overview" label="Özet" />
         <TabButton value="metrics" label="Metrikler" />
         <TabButton value="queries" label="Yavaş Sorgular" />
-        <TabButton value="tuning" label="Tuning" />
+        <TabButton value="tuning" label="Tuning" badge={tuningIssues} />
         <TabButton value="alerts" label="Uyarılar" />
         <TabButton value="predictions" label="Tahminler" />
       </div>
@@ -269,30 +323,45 @@ export default function InstanceDetailPage() {
             <StatTile label="Deadlock" value={latest ? latest.deadlocks : "—"} color="var(--danger)" />
           </div>
 
-          {insights.length > 0 && (
-            <div className="card insights-card">
-              <div className="insights-header">
-                <h3>Performans tuning önerileri</h3>
-                <button className="btn" onClick={() => setTab("tuning")}>Tümünü gör</button>
-              </div>
-              <div className="insights-list compact">
-                {insights.slice(0, 3).map((insight) => (
-                  <div key={insight.title} className={`insight-row ${insight.severity}`}>
-                    <span className="insight-dot" />
-                    <div className="insight-body">
-                      <strong>{insight.title}</strong>
-                      <p>{insight.description}</p>
-                    </div>
-                    {insight.metric_value !== null && (
-                      <span className="insight-metric">
-                        {insight.metric_value.toFixed(1)} {insight.metric_unit}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
+          <div className="card insights-card">
+            <div className="insights-header">
+              <h3>
+                Performans tuning
+                {tuning && (
+                  <span className={`tuning-mini-score grade-${tuning.grade.toLowerCase()}`}>
+                    {tuning.health_score} · {tuning.grade}
+                  </span>
+                )}
+              </h3>
+              <button className="btn primary" onClick={() => setActiveTab("tuning")}>
+                Tuning paneli
+              </button>
             </div>
-          )}
+            <div className="insights-list compact">
+              {(insights.length ? insights : [{
+                severity: "info" as const,
+                category: "tuning",
+                title: "Tuning paneli hazır",
+                description: "Sağlık skoru, DBA checklist ve aksiyon önerileri Tuning sekmesinde.",
+                recommendation: "",
+                metric_value: null,
+                metric_unit: null,
+              }]).slice(0, 3).map((insight) => (
+                <div key={insight.title} className={`insight-row ${insight.severity}`}>
+                  <span className="insight-dot" />
+                  <div className="insight-body">
+                    <strong>{insight.title}</strong>
+                    <p>{insight.description}</p>
+                  </div>
+                  {insight.metric_value !== null && insight.metric_value !== undefined && (
+                    <span className="insight-metric">
+                      {insight.metric_value.toFixed(1)} {insight.metric_unit}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
 
           <div className="grid grid-2">
             <ChartCard title="Bağlantılar (son 60 dk)">
@@ -659,35 +728,12 @@ export default function InstanceDetailPage() {
       )}
 
       {tab === "tuning" && (
-        <div className="card tuning-card">
-          <h3 className="chart-title">Performans tuning önerileri</h3>
-          {insights.length === 0 ? (
-            <div className="empty">Şu an için tuning önerisi yok. Metrikler geldikten sonra burada görünecek.</div>
-          ) : (
-            <div className="insights-list">
-              {insights.map((insight) => (
-                <div key={insight.title} className={`insight-row ${insight.severity}`}>
-                  <span className="insight-dot" />
-                  <div className="insight-body">
-                    <div className="insight-title">
-                      <strong>{insight.title}</strong>
-                      <span className={`insight-severity ${insight.severity}`}>{insight.severity}</span>
-                    </div>
-                    <p>{insight.description}</p>
-                    <div className="insight-recommendation">
-                      <span>Öneri:</span> {insight.recommendation}
-                    </div>
-                  </div>
-                  {insight.metric_value !== null && (
-                    <span className="insight-metric">
-                      {insight.metric_value.toFixed(1)} {insight.metric_unit}
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        <TuningPanel
+          report={tuning}
+          onOpenTab={(t) => setActiveTab(t)}
+          onRunIndexAdvice={runTopQueryAdvice}
+          adviceRunning={bulkAdviceRunning}
+        />
       )}
 
       {tab === "alerts" && (

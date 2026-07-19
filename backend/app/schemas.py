@@ -249,3 +249,21 @@ class PerformanceInsightOut(BaseModel):
     recommendation: str
     metric_value: float | None
     metric_unit: str | None
+    action: str | None = None
+
+
+class TuningChecklistOut(BaseModel):
+    key: str
+    label: str
+    status: str
+    detail: str
+
+
+class TuningReportOut(BaseModel):
+    health_score: int
+    grade: str
+    status: str
+    collected_at: datetime | None
+    summary: dict[str, int]
+    insights: list[PerformanceInsightOut]
+    checklist: list[TuningChecklistOut]

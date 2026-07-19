@@ -120,14 +120,15 @@ function CustomerTree() {
                           {isAppOpen && (
                             <div className="nav-tree-instances">
                               {app.instances.map((inst) => (
-                                <span
+                                <Link
                                   key={inst.id}
+                                  to={`/instances/${inst.id}?tab=tuning`}
                                   className="nav-tree-instance"
-                                  title={inst.cluster_name || undefined}
+                                  title={`${inst.name} · Tuning`}
                                 >
                                   {inst.name}
                                   {inst.cluster_name && <span className="nav-tree-cluster">{inst.cluster_name}</span>}
-                                </span>
+                                </Link>
                               ))}
                             </div>
                           )}
@@ -161,7 +162,7 @@ export default function App() {
             Dashboard
           </NavLink>
           <CustomerTree />
-          <NavLink to="/instances" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+          <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances
           </NavLink>
           <NavLink to="/predictions" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>

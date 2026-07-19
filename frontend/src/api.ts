@@ -84,6 +84,24 @@ export interface PerformanceInsight {
   recommendation: string;
   metric_value: number | null;
   metric_unit: string | null;
+  action?: string | null;
+}
+
+export interface TuningChecklistItem {
+  key: string;
+  label: string;
+  status: "ok" | "warn" | "critical" | "unknown" | string;
+  detail: string;
+}
+
+export interface TuningReport {
+  health_score: number;
+  grade: string;
+  status: string;
+  collected_at: string | null;
+  summary: Record<string, number>;
+  insights: PerformanceInsight[];
+  checklist: TuningChecklistItem[];
 }
 
 export interface AlertRule {
@@ -188,7 +206,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ query }),
     }),
-  getInsights: (id: number) => request<PerformanceInsight[]>(`/api/instances/${id}/insights`),
+  getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
   createAlertRule: (data: Omit<AlertRule, "id" | "created_at">) =>
     request<AlertRule>("/api/alerts/rules", { method: "POST", body: JSON.stringify(data) }),

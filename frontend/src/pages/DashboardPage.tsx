@@ -302,7 +302,10 @@ export default function DashboardPage() {
                         <td>{latest_metrics ? formatBytes(latest_metrics.database_size_bytes) : "—"}</td>
                         <td>{alerts_firing ? <span className="alert-count">{alerts_firing}</span> : "—"}</td>
                         <td>
-                          <Link to={`/instances/${instance.id}`} className="detail-link">detay</Link>
+                          <div className="detail-actions">
+                            <Link to={`/instances/${instance.id}`} className="detail-link">İzle</Link>
+                            <Link to={`/instances/${instance.id}?tab=tuning`} className="detail-link tuning">Tuning</Link>
+                          </div>
                         </td>
                       </tr>
                     );

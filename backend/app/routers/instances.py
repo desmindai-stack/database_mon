@@ -7,7 +7,7 @@ from app.collectors.registry import get_collector
 from app.database import get_db
 from app.domain.engines import DatabaseEngine
 from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
-from app.models import AlertEvent, Instance, MetricSample, PredictionInsight
+from app.models import AlertEvent, Instance, MetricSample, PredictionInsight, SlowQuerySample
 from app.schemas import (
     ConnectionTestResult,
     InstanceCreate,
@@ -17,6 +17,8 @@ from app.schemas import (
     MetricDefinitionOut,
     MetricSampleOut,
     PerformanceInsightOut,
+    TuningChecklistOut,
+    TuningReportOut,
 )
 from app.config import settings
 from app.services.credentials import decrypt_secret, encrypt_secret
@@ -210,8 +212,8 @@ async def test_existing_instance(instance_id: int, db: AsyncSession = Depends(ge
     return ConnectionTestResult(ok=ok, message=message, details=details)
 
 
-@router.get("/{instance_id}/insights", response_model=list[PerformanceInsightOut])
-async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get_db)) -> list[PerformanceInsightOut]:
+@router.get("/{instance_id}/insights", response_model=TuningReportOut)
+async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get_db)) -> TuningReportOut:
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
@@ -225,17 +227,79 @@ async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get
         )
     ).scalar_one_or_none()
 
-    metrics = latest.metrics_json or {} if latest else {}
-    insights = analyze_metrics(metrics)
-    return [
-        PerformanceInsightOut(
-            severity=i.severity,
-            category=i.category,
-            title=i.title,
-            description=i.description,
-            recommendation=i.recommendation,
-            metric_value=i.metric_value,
-            metric_unit=i.metric_unit,
+    metrics: dict = dict(latest.metrics_json or {}) if latest else {}
+    if latest:
+        # Ensure column-level fields are available even if JSON is sparse.
+        metrics.setdefault("active_connections", latest.active_connections)
+        metrics.setdefault("max_connections", latest.max_connections)
+        metrics.setdefault("transactions_per_sec", latest.transactions_per_sec)
+        metrics.setdefault("cache_hit_ratio", latest.cache_hit_ratio)
+        metrics.setdefault("replication_lag_bytes", latest.replication_lag_bytes)
+        metrics.setdefault("database_size_bytes", latest.database_size_bytes)
+        metrics.setdefault("deadlocks", latest.deadlocks)
+        metrics.setdefault("temp_bytes", latest.temp_bytes)
+        if latest.max_connections:
+            metrics.setdefault(
+                "connection_utilization_pct",
+                (latest.active_connections / latest.max_connections) * 100,
+            )
+
+    latest_q_at = (
+        await db.execute(
+            select(SlowQuerySample.collected_at)
+            .where(SlowQuerySample.instance_id == instance_id)
+            .order_by(SlowQuerySample.collected_at.desc())
+            .limit(1)
         )
-        for i in insights
-    ]
+    ).scalar_one_or_none()
+
+    slow_rows: list[dict] = []
+    if latest_q_at is not None:
+        q_result = await db.execute(
+            select(SlowQuerySample)
+            .where(
+                SlowQuerySample.instance_id == instance_id,
+                SlowQuerySample.collected_at == latest_q_at,
+            )
+            .order_by(SlowQuerySample.total_time_ms.desc())
+            .limit(20)
+        )
+        slow_rows = [
+            {
+                "query": r.query,
+                "calls": r.calls,
+                "total_time_ms": r.total_time_ms,
+                "mean_time_ms": r.mean_time_ms,
+            }
+            for r in q_result.scalars().all()
+        ]
+
+    report = analyze_metrics(
+        metrics,
+        slow_queries=slow_rows,
+        collected_at=latest.collected_at if latest else None,
+    )
+    return TuningReportOut(
+        health_score=report.health_score,
+        grade=report.grade,
+        status=report.status,
+        collected_at=report.collected_at,
+        summary=report.summary,
+        insights=[
+            PerformanceInsightOut(
+                severity=i.severity,
+                category=i.category,
+                title=i.title,
+                description=i.description,
+                recommendation=i.recommendation,
+                metric_value=i.metric_value,
+                metric_unit=i.metric_unit,
+                action=i.action,
+            )
+            for i in report.insights
+        ],
+        checklist=[
+            TuningChecklistOut(key=c.key, label=c.label, status=c.status, detail=c.detail)
+            for c in report.checklist
+        ],
+    )
