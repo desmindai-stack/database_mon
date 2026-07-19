@@ -163,4 +163,70 @@ def analyze_metrics(metrics: dict[str, Any]) -> list[PerformanceInsight]:
             )
         )
 
+    # If everything looks healthy, add informational insights so the page is not empty.
+    if not insights:
+        insights.append(
+            PerformanceInsight(
+                severity="info",
+                category="tuning",
+                title="Genel durum sağlıklı",
+                description="Anlık metriklere göre kritik bir sorun tespit edilmedi.",
+                recommendation="Yavaş sorguları ve index önerilerini kontrol etmek için Yavaş Sorgular tab’ine bakın.",
+            )
+        )
+
+    cache_hit = float(metrics.get("cache_hit_ratio") or 0)
+    if cache_hit >= 95:
+        insights.append(
+            PerformanceInsight(
+                severity="info",
+                category="memory",
+                title="Cache hit ratio iyi",
+                description=f"Buffer cache hit ratio % {cache_hit:.1f}.",
+                recommendation="shared_buffers ayarı mevcut yük için yeterli görünüyor.",
+                metric_value=cache_hit,
+                metric_unit="%",
+            )
+        )
+
+    conn_util = float(metrics.get("connection_utilization_pct") or 0)
+    if conn_util < 75:
+        insights.append(
+            PerformanceInsight(
+                severity="info",
+                category="connections",
+                title="Bağlantı kullanımı normal",
+                description=f"Bağlantı kullanımı % {conn_util:.1f}.",
+                recommendation="Mevcut connection pool ve max_connections ayarı yeterli.",
+                metric_value=conn_util,
+                metric_unit="%",
+            )
+        )
+
+    if temp_files == 0 and temp_bytes == 0:
+        insights.append(
+            PerformanceInsight(
+                severity="info",
+                category="memory",
+                title="Temp kullanımı yok",
+                description="Disk üzerinde temp file veya temp byte yazma görülmedi.",
+                recommendation="work_mem ayarı mevcut sorgular için yeterli.",
+                metric_value=0,
+                metric_unit="B/s",
+            )
+        )
+
+    if deadlocks == 0:
+        insights.append(
+            PerformanceInsight(
+                severity="info",
+                category="queries",
+                title="Deadlock yok",
+                description="Son dönemde deadlock tespit edilmedi.",
+                recommendation="Concurrency kontrolü iyi görünüyor.",
+                metric_value=0,
+                metric_unit="count",
+            )
+        )
+
     return sorted(insights, key=lambda x: {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}.get(x.severity, 5))
