@@ -18,6 +18,7 @@ from app.schemas import (
     MetricDefinitionOut,
     MetricSampleOut,
     PerformanceInsightOut,
+    SchemaHealthOut,
     TuningChecklistOut,
     TuningReportOut,
 )
@@ -235,6 +236,30 @@ async def get_instance_activity(instance_id: int, db: AsyncSession = Depends(get
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Activity collection failed: {exc}") from exc
     return ActivityOut.model_validate(data)
+
+
+@router.get("/{instance_id}/schema-health", response_model=SchemaHealthOut)
+async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)) -> SchemaHealthOut:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    if instance.engine != "postgresql":
+        raise HTTPException(status_code=400, detail="Schema health is currently PostgreSQL-only")
+
+    target = ConnectionTarget(
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        username=instance.username,
+        password=decrypt_secret(instance.password),
+        options=instance.options,
+    )
+    collector = get_collector(DatabaseEngine(instance.engine), target)
+    try:
+        data = await collector.collect_schema_health(limit=50)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Schema health collection failed: {exc}") from exc
+    return SchemaHealthOut.model_validate(data)
 
 
 @router.get("/{instance_id}/insights", response_model=TuningReportOut)

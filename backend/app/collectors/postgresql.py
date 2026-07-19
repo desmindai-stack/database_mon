@@ -430,3 +430,158 @@ class PostgreSQLCollector(BaseCollector):
             }
         finally:
             await conn.close()
+
+    async def collect_schema_health(self, limit: int = 50) -> dict[str, Any]:
+        conn = await self._connect()
+        try:
+            unused_rows = await conn.fetch(
+                """
+                SELECT
+                    n.nspname AS schema_name,
+                    c.relname AS table_name,
+                    i.relname AS index_name,
+                    pg_relation_size(i.oid)::bigint AS index_bytes,
+                    s.idx_scan::bigint AS idx_scan,
+                    s.idx_tup_read::bigint AS idx_tup_read,
+                    s.idx_tup_fetch::bigint AS idx_tup_fetch,
+                    pg_get_indexdef(i.oid) AS index_def
+                FROM pg_stat_user_indexes s
+                JOIN pg_index x ON x.indexrelid = s.indexrelid
+                JOIN pg_class i ON i.oid = s.indexrelid
+                JOIN pg_class c ON c.oid = s.relid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE s.idx_scan = 0
+                  AND NOT x.indisunique
+                  AND NOT x.indisprimary
+                  AND NOT x.indisexclusion
+                  AND i.relkind = 'i'
+                  AND pg_relation_size(i.oid) > 8192
+                ORDER BY pg_relation_size(i.oid) DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            unused_indexes = [
+                {
+                    "schema_name": r["schema_name"],
+                    "table_name": r["table_name"],
+                    "index_name": r["index_name"],
+                    "index_bytes": int(r["index_bytes"] or 0),
+                    "idx_scan": int(r["idx_scan"] or 0),
+                    "idx_tup_read": int(r["idx_tup_read"] or 0),
+                    "idx_tup_fetch": int(r["idx_tup_fetch"] or 0),
+                    "index_def": r["index_def"] or "",
+                    "drop_ddl": f'DROP INDEX CONCURRENTLY IF EXISTS "{r["schema_name"]}"."{r["index_name"]}";',
+                }
+                for r in unused_rows
+            ]
+
+            bloat_rows = await conn.fetch(
+                """
+                SELECT
+                    n.nspname AS schema_name,
+                    c.relname AS table_name,
+                    s.n_live_tup::bigint AS live_tup,
+                    s.n_dead_tup::bigint AS dead_tup,
+                    CASE
+                        WHEN s.n_live_tup > 0
+                        THEN round((s.n_dead_tup::numeric / s.n_live_tup::numeric) * 100, 2)
+                        ELSE 0
+                    END AS dead_ratio_pct,
+                    pg_table_size(c.oid)::bigint AS table_bytes,
+                    s.last_vacuum,
+                    s.last_autovacuum,
+                    s.last_analyze,
+                    s.last_autoanalyze,
+                    age(c.relfrozenxid)::bigint AS freeze_age
+                FROM pg_stat_user_tables s
+                JOIN pg_class c ON c.oid = s.relid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE s.n_dead_tup >= 1000
+                   OR (s.n_live_tup > 0 AND s.n_dead_tup::numeric / s.n_live_tup::numeric >= 0.1)
+                ORDER BY s.n_dead_tup DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            bloated_tables = [
+                {
+                    "schema_name": r["schema_name"],
+                    "table_name": r["table_name"],
+                    "live_tup": int(r["live_tup"] or 0),
+                    "dead_tup": int(r["dead_tup"] or 0),
+                    "dead_ratio_pct": float(r["dead_ratio_pct"] or 0),
+                    "table_bytes": int(r["table_bytes"] or 0),
+                    "last_vacuum": r["last_vacuum"].isoformat() if r["last_vacuum"] else None,
+                    "last_autovacuum": r["last_autovacuum"].isoformat() if r["last_autovacuum"] else None,
+                    "last_analyze": r["last_analyze"].isoformat() if r["last_analyze"] else None,
+                    "last_autoanalyze": r["last_autoanalyze"].isoformat() if r["last_autoanalyze"] else None,
+                    "freeze_age": int(r["freeze_age"] or 0),
+                    "severity": (
+                        "critical"
+                        if float(r["dead_ratio_pct"] or 0) >= 40 or int(r["dead_tup"] or 0) >= 1_000_000
+                        else "high"
+                        if float(r["dead_ratio_pct"] or 0) >= 20 or int(r["dead_tup"] or 0) >= 100_000
+                        else "medium"
+                    ),
+                }
+                for r in bloat_rows
+            ]
+
+            vacuum_rows = await conn.fetch(
+                """
+                SELECT
+                    n.nspname AS schema_name,
+                    c.relname AS table_name,
+                    s.n_live_tup::bigint AS live_tup,
+                    s.n_dead_tup::bigint AS dead_tup,
+                    s.last_autovacuum,
+                    s.last_autoanalyze,
+                    GREATEST(
+                        COALESCE(EXTRACT(EPOCH FROM (now() - s.last_autovacuum)), 0),
+                        COALESCE(EXTRACT(EPOCH FROM (now() - s.last_autoanalyze)), 0)
+                    )::float AS lag_sec,
+                    age(c.relfrozenxid)::bigint AS freeze_age
+                FROM pg_stat_user_tables s
+                JOIN pg_class c ON c.oid = s.relid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE s.n_live_tup > 1000
+                  AND (
+                    s.last_autovacuum IS NULL
+                    OR s.last_autovacuum < now() - interval '24 hours'
+                    OR age(c.relfrozenxid) > 100000000
+                  )
+                ORDER BY lag_sec DESC NULLS FIRST, freeze_age DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            vacuum_lag = [
+                {
+                    "schema_name": r["schema_name"],
+                    "table_name": r["table_name"],
+                    "live_tup": int(r["live_tup"] or 0),
+                    "dead_tup": int(r["dead_tup"] or 0),
+                    "last_autovacuum": r["last_autovacuum"].isoformat() if r["last_autovacuum"] else None,
+                    "last_autoanalyze": r["last_autoanalyze"].isoformat() if r["last_autoanalyze"] else None,
+                    "lag_sec": float(r["lag_sec"] or 0),
+                    "freeze_age": int(r["freeze_age"] or 0),
+                    "severity": "critical" if int(r["freeze_age"] or 0) > 500_000_000 else "high" if r["last_autovacuum"] is None else "medium",
+                }
+                for r in vacuum_rows
+            ]
+
+            unused_bytes = sum(i["index_bytes"] for i in unused_indexes)
+            return {
+                "unused_indexes": unused_indexes,
+                "bloated_tables": bloated_tables,
+                "vacuum_lag": vacuum_lag,
+                "totals": {
+                    "unused_indexes": len(unused_indexes),
+                    "unused_index_bytes": unused_bytes,
+                    "bloated_tables": len(bloated_tables),
+                    "vacuum_lag_tables": len(vacuum_lag),
+                },
+            }
+        finally:
+            await conn.close()

@@ -43,3 +43,17 @@ class BaseCollector(ABC):
                 "blocked": 0,
             },
         }
+
+    async def collect_schema_health(self, limit: int = 50) -> dict[str, Any]:
+        """Unused indexes + vacuum/bloat signals."""
+        return {
+            "unused_indexes": [],
+            "bloated_tables": [],
+            "vacuum_lag": [],
+            "totals": {
+                "unused_indexes": 0,
+                "unused_index_bytes": 0,
+                "bloated_tables": 0,
+                "vacuum_lag_tables": 0,
+            },
+        }

@@ -359,3 +359,85 @@ class ExplainOut(BaseModel):
 
 
 ExplainPlanNodeOut.model_rebuild()
+
+
+class QueryHistoryPointOut(BaseModel):
+    collected_at: datetime
+    calls: int
+    total_time_ms: float
+    mean_time_ms: float
+    rows: int
+    calls_delta: int | None = None
+    total_time_delta_ms: float | None = None
+    interval_mean_ms: float | None = None
+
+
+class QueryHistorySeriesOut(BaseModel):
+    queryid: str
+    query: str
+    points: list[QueryHistoryPointOut]
+    latest_mean_ms: float
+    latest_calls: int
+    max_mean_ms: float
+    min_mean_ms: float
+    avg_mean_ms: float
+    calls_delta_sum: int
+    trend_pct: float
+
+
+class QueryHistoryListOut(BaseModel):
+    hours: int
+    series: list[QueryHistorySeriesOut]
+
+
+class UnusedIndexOut(BaseModel):
+    schema_name: str
+    table_name: str
+    index_name: str
+    index_bytes: int
+    idx_scan: int
+    idx_tup_read: int
+    idx_tup_fetch: int
+    index_def: str
+    drop_ddl: str
+
+
+class BloatedTableOut(BaseModel):
+    schema_name: str
+    table_name: str
+    live_tup: int
+    dead_tup: int
+    dead_ratio_pct: float
+    table_bytes: int
+    last_vacuum: str | None
+    last_autovacuum: str | None
+    last_analyze: str | None
+    last_autoanalyze: str | None
+    freeze_age: int
+    severity: str
+
+
+class VacuumLagOut(BaseModel):
+    schema_name: str
+    table_name: str
+    live_tup: int
+    dead_tup: int
+    last_autovacuum: str | None
+    last_autoanalyze: str | None
+    lag_sec: float
+    freeze_age: int
+    severity: str
+
+
+class SchemaHealthTotalsOut(BaseModel):
+    unused_indexes: int
+    unused_index_bytes: int
+    bloated_tables: int
+    vacuum_lag_tables: int
+
+
+class SchemaHealthOut(BaseModel):
+    unused_indexes: list[UnusedIndexOut]
+    bloated_tables: list[BloatedTableOut]
+    vacuum_lag: list[VacuumLagOut]
+    totals: SchemaHealthTotalsOut

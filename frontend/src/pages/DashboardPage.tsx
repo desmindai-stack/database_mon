@@ -305,6 +305,7 @@ export default function DashboardPage() {
                           <div className="detail-actions">
                             <Link to={`/instances/${instance.id}`} className="detail-link">İzle</Link>
                             <Link to={`/instances/${instance.id}?tab=activity`} className="detail-link">Activity</Link>
+                            <Link to={`/instances/${instance.id}?tab=schema`} className="detail-link">Schema</Link>
                             <Link to={`/instances/${instance.id}?tab=tuning`} className="detail-link tuning">Tuning</Link>
                           </div>
                         </td>

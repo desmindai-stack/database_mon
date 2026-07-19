@@ -29,17 +29,21 @@ import {
   InstanceSummary,
   MetricSample,
   Prediction,
+  QueryHistorySeries,
+  SchemaHealth,
   SlowQuery,
   TuningReport,
 } from "../api";
 import ActivityPanel from "../components/ActivityPanel";
 import ExplainPlanTree from "../components/ExplainPlanTree";
+import QueryHistoryChart from "../components/QueryHistoryChart";
+import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import TuningPanel from "../components/TuningPanel";
 
-type Tab = "overview" | "metrics" | "queries" | "activity" | "tuning" | "alerts" | "predictions";
+type Tab = "overview" | "metrics" | "queries" | "activity" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
-const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "tuning", "alerts", "predictions"];
+const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "schema", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
 function timeLabel(iso: string): string {
@@ -69,6 +73,12 @@ export default function InstanceDetailPage() {
   const [activity, setActivity] = useState<ActivitySnapshot | null>(null);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [schemaHealth, setSchemaHealth] = useState<SchemaHealth | null>(null);
+  const [schemaError, setSchemaError] = useState<string | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(false);
+  const [queryHistoryTop, setQueryHistoryTop] = useState<QueryHistorySeries[]>([]);
+  const [queryHistory, setQueryHistory] = useState<Record<string, QueryHistorySeries>>({});
+  const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [range, setRange] = useState<RangeHours>(6);
@@ -135,6 +145,33 @@ export default function InstanceDetailPage() {
       setActivityError(String((e as Error).message || e));
     } finally {
       setActivityLoading(false);
+    }
+  };
+
+  const loadSchemaHealth = async () => {
+    if (!instanceId) return;
+    setSchemaLoading(true);
+    setSchemaError(null);
+    try {
+      const data = await api.getSchemaHealth(instanceId);
+      setSchemaHealth(data);
+    } catch (e) {
+      setSchemaError(String((e as Error).message || e));
+    } finally {
+      setSchemaLoading(false);
+    }
+  };
+
+  const loadQueryHistoryDetail = async (queryid: string) => {
+    if (!instanceId || !queryid) return;
+    setHistoryLoading((prev) => ({ ...prev, [queryid]: true }));
+    try {
+      const data = await api.getQueryHistoryDetail(instanceId, queryid, range === 168 ? 168 : 24);
+      setQueryHistory((prev) => ({ ...prev, [queryid]: data }));
+    } catch {
+      // ignore — chart empty state handles it
+    } finally {
+      setHistoryLoading((prev) => ({ ...prev, [queryid]: false }));
     }
   };
 
@@ -218,6 +255,18 @@ export default function InstanceDetailPage() {
     }, 10000);
     return () => clearInterval(timer);
   }, [instanceId, tab]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "schema") return;
+    loadSchemaHealth();
+  }, [instanceId, tab]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "queries") return;
+    api.getQueryHistory(instanceId, range === 168 ? 168 : 24, 8)
+      .then((res) => setQueryHistoryTop(res.series))
+      .catch(() => undefined);
+  }, [instanceId, tab, range]);
 
   const latest = metrics.at(-1);
 
@@ -343,6 +392,11 @@ export default function InstanceDetailPage() {
           label="Activity"
           badge={activity?.totals.blocked || activity?.totals.idle_in_transaction || 0}
         />
+        <TabButton
+          value="schema"
+          label="Schema"
+          badge={(schemaHealth?.totals.unused_indexes || 0) + (schemaHealth?.totals.bloated_tables || 0)}
+        />
         <TabButton value="tuning" label="Tuning" badge={tuningIssues} />
         <TabButton value="alerts" label="Uyarılar" />
         <TabButton value="predictions" label="Tahminler" />
@@ -377,6 +431,7 @@ export default function InstanceDetailPage() {
 
           <div className="overview-actions-row">
             <button className="btn" onClick={() => setActiveTab("activity")}>Activity / Blocking</button>
+            <button className="btn" onClick={() => setActiveTab("schema")}>Schema health</button>
             <button className="btn primary" onClick={() => setActiveTab("tuning")}>Tuning paneli</button>
             <button className="btn" onClick={() => setActiveTab("queries")}>Yavaş sorgular</button>
           </div>
@@ -650,6 +705,22 @@ export default function InstanceDetailPage() {
 
       {tab === "queries" && (
         <>
+          {queryHistoryTop.length > 0 && (
+            <div className="card">
+              <h3 className="chart-title">Sorgu geçmişi (trend)</h3>
+              <p className="muted-note">Son {range === 168 ? "7 gün" : "24 saat"} · mean latency + çağrı delta</p>
+              <div className="history-grid">
+                {queryHistoryTop.slice(0, 4).map((s) => (
+                  <div key={s.queryid} className="history-card">
+                    <div className="history-card-title" title={s.query}>
+                      {s.query.length > 90 ? s.query.slice(0, 90) + "…" : s.query}
+                    </div>
+                    <QueryHistoryChart series={s} compact />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="card">
             <div className="queries-header">
               <h3 className="chart-title">Yavaş sorgu dağılımı (ilk 10)</h3>
@@ -700,7 +771,14 @@ export default function InstanceDetailPage() {
                   <tbody>
                     {sortedQueries.map((q) => (
                       <Fragment key={q.id}>
-                        <tr className="query-row" onClick={() => setExpandedQuery(expandedQuery === q.id ? null : q.id)}>
+                        <tr
+                          className="query-row"
+                          onClick={() => {
+                            const next = expandedQuery === q.id ? null : q.id;
+                            setExpandedQuery(next);
+                            if (next && q.queryid) loadQueryHistoryDetail(q.queryid);
+                          }}
+                        >
                           <td className="query-cell">{queryFingerprint(q.query)}</td>
                           <td>{q.calls.toLocaleString()}</td>
                           <td>{q.mean_time_ms.toFixed(2)}</td>
@@ -712,6 +790,18 @@ export default function InstanceDetailPage() {
                             <td colSpan={5}>
                               <pre>{q.query}</pre>
                               <p>queryid: {q.queryid || "—"}</p>
+                              {q.queryid && (
+                                <div className="query-history-block">
+                                  <h4>Zaman serisi</h4>
+                                  {historyLoading[q.queryid] && <p className="muted-note">History yükleniyor…</p>}
+                                  {queryHistory[q.queryid] && (
+                                    <QueryHistoryChart series={queryHistory[q.queryid]} />
+                                  )}
+                                  {!historyLoading[q.queryid] && !queryHistory[q.queryid] && (
+                                    <p className="muted-note">Bu queryid için henüz geçmiş örnek yok.</p>
+                                  )}
+                                </div>
+                              )}
                               <div className="query-stats">
                             <h4>Sorgu bazında I/O ve CPU</h4>
                             <div className="query-stats-grid">
@@ -805,6 +895,15 @@ export default function InstanceDetailPage() {
           error={activityError}
           loading={activityLoading}
           onRefresh={loadActivity}
+        />
+      )}
+
+      {tab === "schema" && (
+        <SchemaHealthPanel
+          data={schemaHealth}
+          error={schemaError}
+          loading={schemaLoading}
+          onRefresh={loadSchemaHealth}
         />
       )}
 

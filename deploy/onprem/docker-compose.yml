@@ -16,6 +16,7 @@ services:
       - ../../supabase/migrations/20250717120000_pgwatch_core.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ../../supabase/migrations/20250718180000_add_instance_metadata.sql:/docker-entrypoint-initdb.d/02-metadata.sql:ro
       - ../../supabase/migrations/20250718210000_add_slow_query_io_columns.sql:/docker-entrypoint-initdb.d/03-slow-query-io.sql:ro
+      - ../../supabase/migrations/20250719140000_query_history_index.sql:/docker-entrypoint-initdb.d/04-query-history-index.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U pgwatch -d pgwatch"]
       interval: 5s

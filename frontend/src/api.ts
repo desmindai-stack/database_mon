@@ -173,6 +173,80 @@ export interface ExplainResult {
   raw_plan: unknown[];
 }
 
+export interface QueryHistoryPoint {
+  collected_at: string;
+  calls: number;
+  total_time_ms: number;
+  mean_time_ms: number;
+  rows: number;
+  calls_delta: number | null;
+  total_time_delta_ms: number | null;
+  interval_mean_ms: number | null;
+}
+
+export interface QueryHistorySeries {
+  queryid: string;
+  query: string;
+  points: QueryHistoryPoint[];
+  latest_mean_ms: number;
+  latest_calls: number;
+  max_mean_ms: number;
+  min_mean_ms: number;
+  avg_mean_ms: number;
+  calls_delta_sum: number;
+  trend_pct: number;
+}
+
+export interface QueryHistoryList {
+  hours: number;
+  series: QueryHistorySeries[];
+}
+
+export interface SchemaHealth {
+  unused_indexes: {
+    schema_name: string;
+    table_name: string;
+    index_name: string;
+    index_bytes: number;
+    idx_scan: number;
+    idx_tup_read: number;
+    idx_tup_fetch: number;
+    index_def: string;
+    drop_ddl: string;
+  }[];
+  bloated_tables: {
+    schema_name: string;
+    table_name: string;
+    live_tup: number;
+    dead_tup: number;
+    dead_ratio_pct: number;
+    table_bytes: number;
+    last_vacuum: string | null;
+    last_autovacuum: string | null;
+    last_analyze: string | null;
+    last_autoanalyze: string | null;
+    freeze_age: number;
+    severity: string;
+  }[];
+  vacuum_lag: {
+    schema_name: string;
+    table_name: string;
+    live_tup: number;
+    dead_tup: number;
+    last_autovacuum: string | null;
+    last_autoanalyze: string | null;
+    lag_sec: number;
+    freeze_age: number;
+    severity: string;
+  }[];
+  totals: {
+    unused_indexes: number;
+    unused_index_bytes: number;
+    bloated_tables: number;
+    vacuum_lag_tables: number;
+  };
+}
+
 export interface AlertRule {
   id: number;
   instance_id: number | null;
@@ -277,6 +351,11 @@ export const api = {
     }),
   getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
   getActivity: (id: number) => request<ActivitySnapshot>(`/api/instances/${id}/activity`),
+  getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
+  getQueryHistory: (id: number, hours = 24, limit = 10) =>
+    request<QueryHistoryList>(`/api/queries/${id}/history?hours=${hours}&limit=${limit}`),
+  getQueryHistoryDetail: (id: number, queryid: string, hours = 24) =>
+    request<QueryHistorySeries>(`/api/queries/${id}/history/${encodeURIComponent(queryid)}?hours=${hours}`),
   explainQuery: (id: number, query: string, analyze = false) =>
     request<ExplainResult>(`/api/queries/${id}/explain`, {
       method: "POST",
