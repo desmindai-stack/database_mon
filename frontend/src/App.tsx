@@ -7,9 +7,20 @@ import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import PredictionsPage from "./pages/PredictionsPage";
 
+type AppNode = {
+  name: string;
+  instances: { id: number; name: string; cluster_name: string | null }[];
+};
+
+type CustomerNode = {
+  name: string;
+  apps: AppNode[];
+};
+
 function CustomerTree() {
   const [summaries, setSummaries] = useState<InstanceSummary[]>([]);
   const [openCustomers, setOpenCustomers] = useState<Set<string>>(new Set());
+  const [openApps, setOpenApps] = useState<Set<string>>(new Set());
   const [isOpen, setIsOpen] = useState(false);
   const [searchParams] = useSearchParams();
   const activeCustomer = searchParams.get("customer");
@@ -19,20 +30,31 @@ function CustomerTree() {
     api.getSummaries().then(setSummaries).catch(() => undefined);
   }, []);
 
-  const tree = useMemo(() => {
-    const map = new Map<string, Set<string>>();
+  const tree = useMemo<CustomerNode[]>(() => {
+    const customerMap = new Map<string, Map<string, AppNode>>();
     for (const s of summaries) {
       const customer = s.instance.customer_name || "Bilinmeyen Müşteri";
       const app = s.instance.application || "Uygulamasız";
-      const apps = map.get(customer) ?? new Set<string>();
-      apps.add(app);
-      map.set(customer, apps);
+      if (!customerMap.has(customer)) customerMap.set(customer, new Map());
+      const appMap = customerMap.get(customer)!;
+      if (!appMap.has(app)) {
+        appMap.set(app, { name: app, instances: [] });
+      }
+      appMap.get(app)!.instances.push({
+        id: s.instance.id,
+        name: s.instance.name,
+        cluster_name: s.instance.cluster_name,
+      });
     }
-    const result: [string, string[]][] = [];
-    for (const [customer, apps] of map.entries()) {
-      result.push([customer, Array.from(apps).sort((a, b) => a.localeCompare(b))]);
+    const result: CustomerNode[] = [];
+    for (const [customer, apps] of customerMap.entries()) {
+      const appList = Array.from(apps.values()).sort((a, b) => a.name.localeCompare(b.name));
+      appList.forEach((app) => {
+        app.instances.sort((a, b) => a.name.localeCompare(b.name));
+      });
+      result.push({ name: customer, apps: appList });
     }
-    return result.sort((a, b) => a[0].localeCompare(b[0]));
+    return result.sort((a, b) => a.name.localeCompare(b.name));
   }, [summaries]);
 
   const toggleCustomer = (customer: string) => {
@@ -40,6 +62,15 @@ function CustomerTree() {
       const next = new Set(prev);
       if (next.has(customer)) next.delete(customer);
       else next.add(customer);
+      return next;
+    });
+  };
+
+  const toggleApp = (app: string) => {
+    setOpenApps((prev) => {
+      const next = new Set(prev);
+      if (next.has(app)) next.delete(app);
+      else next.add(app);
       return next;
     });
   };
@@ -57,26 +88,51 @@ function CustomerTree() {
       </button>
       {isOpen && (
         <div className="nav-tree">
-          {tree.map(([customer, apps]) => {
-            const isCustomerOpen = openCustomers.has(customer) || (activeCustomer === customer && activeApp !== null);
+          {tree.map((customer) => {
+            const isCustomerOpen = openCustomers.has(customer.name) || (activeCustomer === customer.name && activeApp !== null);
             return (
-              <div key={customer} className="nav-tree-section">
-                <button className="nav-tree-customer" onClick={() => toggleCustomer(customer)}>
+              <div key={customer.name} className="nav-tree-section">
+                <button className="nav-tree-customer" onClick={() => toggleCustomer(customer.name)}>
                   <span className={`nav-tree-arrow${isCustomerOpen ? " open" : ""}`}>▶</span>
-                  {customer}
+                  {customer.name}
                 </button>
                 {isCustomerOpen && (
                   <div className="nav-tree-apps">
-                    {apps.map((app) => {
-                      const active = activeCustomer === customer && activeApp === app;
+                    {customer.apps.map((app) => {
+                      const isAppOpen = openApps.has(app.name) || (activeCustomer === customer.name && activeApp === app.name);
+                      const appActive = activeCustomer === customer.name && activeApp === app.name;
                       return (
-                        <Link
-                          key={app}
-                          to={`/?customer=${encodeURIComponent(customer)}&app=${encodeURIComponent(app)}`}
-                          className={`nav-tree-app${active ? " active" : ""}`}
-                        >
-                          {app}
-                        </Link>
+                        <div key={app.name} className="nav-tree-app-section">
+                          <div className="nav-tree-app-row">
+                            <Link
+                              to={`/?customer=${encodeURIComponent(customer.name)}&app=${encodeURIComponent(app.name)}`}
+                              className={`nav-tree-app${appActive ? " active" : ""}`}
+                            >
+                              {app.name}
+                            </Link>
+                            <button
+                              className={`nav-tree-app-toggle${isAppOpen ? " open" : ""}`}
+                              onClick={() => toggleApp(app.name)}
+                            >
+                              ▶
+                            </button>
+                          </div>
+                          {isAppOpen && (
+                            <div className="nav-tree-instances">
+                              {app.instances.map((inst) => (
+                                <Link
+                                  key={inst.id}
+                                  to={`/instances/${inst.id}`}
+                                  className="nav-tree-instance"
+                                  title={inst.cluster_name || undefined}
+                                >
+                                  {inst.name}
+                                  {inst.cluster_name && <span className="nav-tree-cluster">{inst.cluster_name}</span>}
+                                </Link>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
                   </div>
