@@ -84,6 +84,7 @@ textarea {
   padding: 0.75rem 0.85rem;
   border-radius: 10px;
   color: var(--muted);
+  margin-bottom: 0.35rem;
 }
 
 .nav-link.active,
@@ -96,31 +97,26 @@ textarea {
   margin-bottom: 0.35rem;
 }
 
-.nav-parent {
+.nav-tree-root {
   display: flex;
-  align-items: center;
   justify-content: space-between;
-  border-radius: 10px;
-  background: var(--surface-2);
-}
-
-.nav-parent .nav-link {
-  flex: 1;
-  margin-bottom: 0;
-}
-
-.nav-toggle {
+  align-items: center;
+  width: 100%;
   border: none;
   background: transparent;
-  color: var(--muted);
-  padding: 0.75rem 0.85rem;
   cursor: pointer;
-  font-size: 0.7rem;
-  transition: transform 0.15s ease;
+  text-align: left;
 }
 
-.nav-toggle.open {
-  transform: rotate(180deg);
+.nav-tree-root.active,
+.nav-tree-root:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.nav-tree-chevron {
+  font-size: 0.7rem;
+  color: var(--muted);
 }
 
 .nav-tree {
@@ -577,6 +573,19 @@ td code,
 }
 
 .instance-name:hover {
+  color: var(--accent-2);
+}
+
+.detail-link {
+  font-size: 0.75rem;
+  color: var(--accent);
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.detail-link:hover {
+  border-color: var(--accent);
   color: var(--accent-2);
 }
 

@@ -44,23 +44,19 @@ function CustomerTree() {
     });
   };
 
+  const isActive = activeCustomer !== null || activeApp !== null;
+
   return (
     <div className="nav-group">
-      <div className="nav-parent">
-        <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-          Dashboard
-        </NavLink>
-        <button
-          className={`nav-toggle${isOpen ? " open" : ""}`}
-          onClick={() => setIsOpen(!isOpen)}
-          aria-label="Müşterileri aç/kapa"
-        >
-          ▼
-        </button>
-      </div>
+      <button
+        className={`nav-link nav-tree-root${isActive ? " active" : ""}${isOpen ? " open" : ""}`}
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <span>Müşteriler</span>
+        <span className="nav-tree-chevron">{isOpen ? "▾" : "▸"}</span>
+      </button>
       {isOpen && (
         <div className="nav-tree">
-          <div className="nav-tree-label">Müşteriler</div>
           {tree.map(([customer, apps]) => {
             const isCustomerOpen = openCustomers.has(customer) || (activeCustomer === customer && activeApp !== null);
             return (
@@ -106,6 +102,9 @@ export default function App() {
           </div>
         </div>
         <nav>
+          <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+            Dashboard
+          </NavLink>
           <CustomerTree />
           <NavLink to="/instances" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances

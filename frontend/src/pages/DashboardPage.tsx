@@ -228,6 +228,7 @@ export default function DashboardPage() {
                     <th>Temp</th>
                     <th>DB boyutu</th>
                     <th>Uyarı</th>
+                    <th>Detay</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -238,7 +239,13 @@ export default function DashboardPage() {
                     return (
                       <tr key={instance.id}>
                         <td>
-                          <Link to={`/instances/${instance.id}`} className="instance-name">{instance.name}</Link>
+                          <Link
+                            to={instance.application ? `/?app=${encodeURIComponent(instance.application)}` : `/instances/${instance.id}`}
+                            className="instance-name"
+                            title="Uygulama filtresine git"
+                          >
+                            {instance.name}
+                          </Link>
                           <div className="instance-meta">
                             {instance.host}:{instance.port}/{instance.database}
                           </div>
@@ -294,6 +301,9 @@ export default function DashboardPage() {
                         </td>
                         <td>{latest_metrics ? formatBytes(latest_metrics.database_size_bytes) : "—"}</td>
                         <td>{alerts_firing ? <span className="alert-count">{alerts_firing}</span> : "—"}</td>
+                        <td>
+                          <Link to={`/instances/${instance.id}`} className="detail-link">detay</Link>
+                        </td>
                       </tr>
                     );
                   })}
