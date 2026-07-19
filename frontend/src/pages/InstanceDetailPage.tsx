@@ -29,6 +29,7 @@ import {
   Instance,
   InstanceSummary,
   MetricSample,
+  PerformanceInsight,
   Prediction,
   QueryHistorySeries,
   SchemaHealth,
@@ -191,6 +192,21 @@ export default function InstanceDetailPage() {
       // ignore — chart empty state handles it
     } finally {
       setHistoryLoading((prev) => ({ ...prev, [queryid]: false }));
+    }
+  };
+
+  const focusTuningQuery = async (insight: PerformanceInsight) => {
+    setActiveTab("queries");
+    const match =
+      queries.find((q) => insight.queryid && q.queryid === insight.queryid) ||
+      queries.find((q) => insight.query_hint && q.query.includes(insight.query_hint.slice(0, 40))) ||
+      [...queries].sort((a, b) => b.total_time_ms - a.total_time_ms)[0];
+    if (!match) return;
+    setExpandedQuery(match.id);
+    if (insight.suggested_action === "explain") {
+      await loadExplain(match, false);
+    } else if (insight.suggested_action === "index_advice") {
+      await loadAdvice(match);
     }
   };
 
@@ -955,6 +971,7 @@ export default function InstanceDetailPage() {
         <TuningPanel
           report={tuning}
           onOpenTab={(t) => setActiveTab(t)}
+          onFocusQuery={focusTuningQuery}
           onRunIndexAdvice={runTopQueryAdvice}
           adviceRunning={bulkAdviceRunning}
         />

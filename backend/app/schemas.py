@@ -251,6 +251,9 @@ class PerformanceInsightOut(BaseModel):
     metric_value: float | None
     metric_unit: str | None
     action: str | None = None
+    queryid: str | None = None
+    query_hint: str | None = None
+    suggested_action: str | None = None
 
 
 class TuningChecklistOut(BaseModel):
