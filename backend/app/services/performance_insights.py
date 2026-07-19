@@ -28,6 +28,12 @@ class PerformanceInsight:
     metric_value: float | None = None
     metric_unit: str | None = None
     action: str | None = None  # queries | metrics | alerts | none
+    queryid: str | None = None
+    query_hint: str | None = None
+    suggested_action: str | None = None  # explain | index_advice | analyze
+    queryid: str | None = None
+    query_hint: str | None = None
+    suggested_action: str | None = None  # explain | index_advice | analyze
 
 
 @dataclass
