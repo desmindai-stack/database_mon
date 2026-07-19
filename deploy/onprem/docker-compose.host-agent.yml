@@ -1,0 +1,34 @@
+# Host agent — her Patroni/etcd/HAProxy sunucusunda ayrı çalıştırılır
+# Örnek:
+#   cd deploy/onprem
+#   AGENT_TOKEN=strong-secret KEEPALIVED_VIP=10.0.0.50 docker compose -f docker-compose.host-agent.yml up -d --build
+#
+# Not: systemctl/journalctl için host network + host socket mount gerekir.
+# Üretimde çoğu zaman agent'ı container yerine native systemd unit olarak çalıştırmak daha doğrudur
+# (bkz. agents/host-agent/README.md).
+
+name: pgwatch-host-agent
+
+services:
+  host-agent:
+    build:
+      context: ../../agents/host-agent
+      dockerfile: Dockerfile
+    image: pgwatch/host-agent:latest
+    container_name: pgwatch-host-agent
+    network_mode: host
+    environment:
+      AGENT_TOKEN: ${AGENT_TOKEN:?AGENT_TOKEN gerekli}
+      KEEPALIVED_VIP: ${KEEPALIVED_VIP:-}
+      UNIT_PATRONI: ${UNIT_PATRONI:-patroni}
+      UNIT_ETCD: ${UNIT_ETCD:-etcd}
+      UNIT_POSTGRESQL: ${UNIT_POSTGRESQL:-postgresql}
+      UNIT_KEEPALIVED: ${UNIT_KEEPALIVED:-keepalived}
+      UNIT_HAPROXY: ${UNIT_HAPROXY:-haproxy}
+      BIND_PORT: ${BIND_PORT:-9105}
+    volumes:
+      - /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket:ro
+      - /run/systemd:/run/systemd:ro
+      - /var/log/journal:/var/log/journal:ro
+    restart: unless-stopped
+    pid: host

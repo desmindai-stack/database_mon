@@ -5,6 +5,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AlertEvent, AlertRule
 
+CLUSTER_RULE_SPECS = [
+    ("Patroni down", "patroni_down", ">", 0),
+    ("etcd unhealthy", "etcd_down", ">", 0),
+    ("HAProxy down", "haproxy_down", ">", 0),
+    ("Keepalived VIP unreachable", "keepalived_vip_down", ">", 0),
+    ("Cluster no leader", "cluster_has_leader", "<", 1),
+    ("Cluster services down", "cluster_services_down", ">", 0),
+]
+
 
 def _compare(value: float, operator: str, threshold: float) -> bool:
     if operator == ">":
@@ -18,6 +27,28 @@ def _compare(value: float, operator: str, threshold: float) -> bool:
     if operator == "==":
         return value == threshold
     return False
+
+
+async def ensure_cluster_alert_rules(session: AsyncSession, instance_id: int) -> None:
+    """Create default cluster health alert rules for an instance if missing."""
+    existing = (
+        await session.execute(select(AlertRule).where(AlertRule.instance_id == instance_id))
+    ).scalars().all()
+    existing_metrics = {r.metric for r in existing}
+    for name, metric, operator, threshold in CLUSTER_RULE_SPECS:
+        if metric in existing_metrics:
+            continue
+        session.add(
+            AlertRule(
+                instance_id=instance_id,
+                name=name,
+                metric=metric,
+                operator=operator,
+                threshold=float(threshold),
+                enabled=True,
+            )
+        )
+    await session.flush()
 
 
 async def evaluate_alerts(session: AsyncSession, instance_id: int, metrics: dict) -> None:

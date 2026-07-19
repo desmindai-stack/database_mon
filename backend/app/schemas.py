@@ -63,6 +63,7 @@ class InstanceOut(BaseModel):
     cluster_name: str | None
     role: str | None
     services: list[str] | None
+    options: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}
 
@@ -441,3 +442,65 @@ class SchemaHealthOut(BaseModel):
     bloated_tables: list[BloatedTableOut]
     vacuum_lag: list[VacuumLagOut]
     totals: SchemaHealthTotalsOut
+
+
+class ClusterServiceStatusOut(BaseModel):
+    service: str
+    status: str
+    latency_ms: float | None = None
+    detail: str = ""
+    source: str = "probe"
+    checked_at: str | None = None
+    role: str | None = None
+    state: str | None = None
+    up_backends: int | None = None
+    down_backends: int | None = None
+    vip: str | None = None
+    vip_owner_local: bool | None = None
+    systemd_active: str | None = None
+    patroni_version: str | None = None
+
+
+class ClusterMemberOut(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    state: str | None = None
+    host: str | None = None
+
+
+class ClusterSummaryOut(BaseModel):
+    leader: str | None = None
+    members: list[ClusterMemberOut] = []
+    member_count: int = 0
+    has_leader: bool = False
+
+
+class ClusterAgentInfoOut(BaseModel):
+    configured: bool = False
+    reachable: bool = False
+    url: str | None = None
+
+
+class ClusterTotalsOut(BaseModel):
+    up: int = 0
+    down: int = 0
+    unknown: int = 0
+    skipped: int = 0
+
+
+class ClusterHealthOut(BaseModel):
+    instance_id: int
+    cluster_name: str | None = None
+    overall: str
+    checked_at: str
+    services: list[ClusterServiceStatusOut]
+    cluster: ClusterSummaryOut | None = None
+    agent: ClusterAgentInfoOut
+    totals: ClusterTotalsOut
+
+
+class ClusterLogsOut(BaseModel):
+    service: str
+    unit: str | None = None
+    lines: list[str] = []
+    error: str | None = None

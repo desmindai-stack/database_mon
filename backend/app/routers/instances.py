@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,8 @@ from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
 from app.models import AlertEvent, Instance, MetricSample, PredictionInsight, SlowQuerySample
 from app.schemas import (
     ActivityOut,
+    ClusterHealthOut,
+    ClusterLogsOut,
     ConnectionTestResult,
     InstanceCreate,
     InstanceOut,
@@ -23,6 +25,7 @@ from app.schemas import (
     TuningReportOut,
 )
 from app.config import settings
+from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
 from app.services.performance_insights import analyze_metrics
 
@@ -236,6 +239,45 @@ async def get_instance_activity(instance_id: int, db: AsyncSession = Depends(get
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Activity collection failed: {exc}") from exc
     return ActivityOut.model_validate(data)
+
+
+@router.get("/{instance_id}/cluster-health", response_model=ClusterHealthOut)
+async def get_cluster_health(instance_id: int, db: AsyncSession = Depends(get_db)) -> ClusterHealthOut:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    try:
+        report = await collect_cluster_health(instance)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Cluster health failed: {exc}") from exc
+    return ClusterHealthOut.model_validate(report)
+
+
+@router.get("/{instance_id}/cluster-logs", response_model=ClusterLogsOut)
+async def get_cluster_logs(
+    instance_id: int,
+    service: str = Query(default="patroni"),
+    lines: int = Query(default=100, ge=10, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> ClusterLogsOut:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    opts = instance.options or {}
+    try:
+        payload = await fetch_agent_logs(opts, service=service, lines=lines)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Cluster logs failed: {exc}") from exc
+    return ClusterLogsOut.model_validate(
+        {
+            "service": service,
+            "unit": payload.get("unit"),
+            "lines": payload.get("lines") or [],
+            "error": payload.get("error"),
+        }
+    )
 
 
 @router.get("/{instance_id}/schema-health", response_model=SchemaHealthOut)

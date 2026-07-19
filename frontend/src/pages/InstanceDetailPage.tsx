@@ -21,6 +21,7 @@ import {
   AlertEvent,
   AlertRule,
   api,
+  ClusterHealth,
   ExplainResult,
   formatBytes,
   formatTime,
@@ -35,15 +36,16 @@ import {
   TuningReport,
 } from "../api";
 import ActivityPanel from "../components/ActivityPanel";
+import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import ExplainPlanTree from "../components/ExplainPlanTree";
 import QueryHistoryChart from "../components/QueryHistoryChart";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import TuningPanel from "../components/TuningPanel";
 
-type Tab = "overview" | "metrics" | "queries" | "activity" | "schema" | "tuning" | "alerts" | "predictions";
+type Tab = "overview" | "metrics" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
-const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "schema", "tuning", "alerts", "predictions"];
+const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "cluster", "schema", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
 function timeLabel(iso: string): string {
@@ -76,6 +78,9 @@ export default function InstanceDetailPage() {
   const [schemaHealth, setSchemaHealth] = useState<SchemaHealth | null>(null);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
+  const [clusterHealth, setClusterHealth] = useState<ClusterHealth | null>(null);
+  const [clusterError, setClusterError] = useState<string | null>(null);
+  const [clusterLoading, setClusterLoading] = useState(false);
   const [queryHistoryTop, setQueryHistoryTop] = useState<QueryHistorySeries[]>([]);
   const [queryHistory, setQueryHistory] = useState<Record<string, QueryHistorySeries>>({});
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
@@ -159,6 +164,20 @@ export default function InstanceDetailPage() {
       setSchemaError(String((e as Error).message || e));
     } finally {
       setSchemaLoading(false);
+    }
+  };
+
+  const loadClusterHealth = async () => {
+    if (!instanceId) return;
+    setClusterLoading(true);
+    setClusterError(null);
+    try {
+      const data = await api.getClusterHealth(instanceId);
+      setClusterHealth(data);
+    } catch (e) {
+      setClusterError(String((e as Error).message || e));
+    } finally {
+      setClusterLoading(false);
     }
   };
 
@@ -259,6 +278,15 @@ export default function InstanceDetailPage() {
   useEffect(() => {
     if (!instanceId || tab !== "schema") return;
     loadSchemaHealth();
+  }, [instanceId, tab]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "cluster") return;
+    loadClusterHealth();
+    const timer = setInterval(() => {
+      api.getClusterHealth(instanceId).then(setClusterHealth).catch(() => undefined);
+    }, 15000);
+    return () => clearInterval(timer);
   }, [instanceId, tab]);
 
   useEffect(() => {
@@ -393,6 +421,11 @@ export default function InstanceDetailPage() {
           badge={activity?.totals.blocked || activity?.totals.idle_in_transaction || 0}
         />
         <TabButton
+          value="cluster"
+          label="Cluster"
+          badge={clusterHealth?.totals.down || 0}
+        />
+        <TabButton
           value="schema"
           label="Schema"
           badge={(schemaHealth?.totals.unused_indexes || 0) + (schemaHealth?.totals.bloated_tables || 0)}
@@ -431,6 +464,7 @@ export default function InstanceDetailPage() {
 
           <div className="overview-actions-row">
             <button className="btn" onClick={() => setActiveTab("activity")}>Activity / Blocking</button>
+            <button className="btn" onClick={() => setActiveTab("cluster")}>Cluster health</button>
             <button className="btn" onClick={() => setActiveTab("schema")}>Schema health</button>
             <button className="btn primary" onClick={() => setActiveTab("tuning")}>Tuning paneli</button>
             <button className="btn" onClick={() => setActiveTab("queries")}>Yavaş sorgular</button>
@@ -895,6 +929,16 @@ export default function InstanceDetailPage() {
           error={activityError}
           loading={activityLoading}
           onRefresh={loadActivity}
+        />
+      )}
+
+      {tab === "cluster" && (
+        <ClusterHealthPanel
+          instanceId={instanceId}
+          data={clusterHealth}
+          error={clusterError}
+          loading={clusterLoading}
+          onRefresh={loadClusterHealth}
         />
       )}
 
