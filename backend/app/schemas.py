@@ -4,6 +4,113 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.domain.engines import DEFAULT_PORTS, DatabaseEngine
+from app.domain.topology import CustomerType, GroupTopology, NodeRoleHint, NodeSite
+
+
+class CustomerCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    type: CustomerType = CustomerType.PUBLIC
+
+
+class CustomerUpdate(BaseModel):
+    name: str | None = None
+    type: CustomerType | None = None
+
+
+class CustomerOut(BaseModel):
+    id: int
+    name: str
+    type: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ApplicationCreate(BaseModel):
+    customer_id: int
+    name: str = Field(min_length=1, max_length=128)
+    description: str | None = None
+
+
+class ApplicationUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class ApplicationOut(BaseModel):
+    id: int
+    customer_id: int
+    name: str
+    description: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DatabaseGroupCreate(BaseModel):
+    application_id: int
+    name: str = Field(min_length=1, max_length=128)
+    engine: DatabaseEngine = DatabaseEngine.POSTGRESQL
+    topology: GroupTopology = GroupTopology.STANDALONE
+    notes: str | None = None
+
+
+class DatabaseGroupUpdate(BaseModel):
+    name: str | None = None
+    engine: DatabaseEngine | None = None
+    topology: GroupTopology | None = None
+    notes: str | None = None
+
+
+class DatabaseGroupOut(BaseModel):
+    id: int
+    application_id: int
+    name: str
+    engine: str
+    topology: str
+    notes: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NodeCreate(BaseModel):
+    group_id: int
+    name: str = Field(min_length=1, max_length=128)
+    host: str
+    port: int
+    site: NodeSite = NodeSite.PRIMARY
+    role_hint: NodeRoleHint = NodeRoleHint.UNKNOWN
+    agent_url: str | None = None
+    agent_token: str | None = None
+    options: dict[str, Any] | None = None
+
+
+class NodeUpdate(BaseModel):
+    name: str | None = None
+    host: str | None = None
+    port: int | None = None
+    site: NodeSite | None = None
+    role_hint: NodeRoleHint | None = None
+    agent_url: str | None = None
+    agent_token: str | None = None
+    options: dict[str, Any] | None = None
+
+
+class NodeOut(BaseModel):
+    id: int
+    group_id: int
+    name: str
+    host: str
+    port: int
+    site: str
+    role_hint: str
+    agent_url: str | None
+    agent_token: str | None
+    options: dict[str, Any] | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
 
 
 class InstanceCreate(BaseModel):
@@ -22,6 +129,7 @@ class InstanceCreate(BaseModel):
     cluster_name: str | None = None
     role: str | None = None
     services: list[str] | None = None
+    group_id: int | None = None
 
     def resolved_port(self) -> int:
         if self.port is not None:
@@ -44,6 +152,7 @@ class InstanceUpdate(BaseModel):
     cluster_name: str | None = None
     role: str | None = None
     services: list[str] | None = None
+    group_id: int | None = None
     enabled: bool | None = None
 
 
@@ -63,6 +172,7 @@ class InstanceOut(BaseModel):
     cluster_name: str | None
     role: str | None
     services: list[str] | None
+    group_id: int | None = None
     options: dict[str, Any] | None = None
 
     model_config = {"from_attributes": True}

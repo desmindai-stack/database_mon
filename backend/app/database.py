@@ -47,6 +47,7 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "instances", "cluster_name", "cluster_name VARCHAR(128)")
         await _sqlite_add_column_if_missing(conn, "instances", "role", "role VARCHAR(32)")
         await _sqlite_add_column_if_missing(conn, "instances", "services", "services JSON")
+        await _sqlite_add_column_if_missing(conn, "instances", "group_id", "group_id INTEGER")
         await _sqlite_add_column_if_missing(
             conn, "metric_samples", "metrics_json", "metrics_json JSON"
         )

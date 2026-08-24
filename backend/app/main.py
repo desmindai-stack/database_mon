@@ -8,7 +8,17 @@ from app.collectors.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample
-from app.routers import alerts, instances, metrics, predictions, queries
+from app.routers import (
+    alerts,
+    applications,
+    customers,
+    database_groups,
+    instances,
+    metrics,
+    nodes,
+    predictions,
+    queries,
+)
 from app.schemas import HealthResponse
 
 
@@ -40,6 +50,10 @@ app.include_router(metrics.router, prefix="/api")
 app.include_router(queries.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
 app.include_router(predictions.router, prefix="/api")
+app.include_router(customers.router, prefix="/api")
+app.include_router(applications.router, prefix="/api")
+app.include_router(database_groups.router, prefix="/api")
+app.include_router(nodes.router, prefix="/api")
 
 
 @app.get("/api/health", response_model=HealthResponse)

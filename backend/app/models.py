@@ -1,10 +1,86 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    type: Mapped[str] = mapped_column(String(16), default="public", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    applications: Mapped[list["Application"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+
+
+class Application(Base):
+    __tablename__ = "applications"
+    __table_args__ = (UniqueConstraint("customer_id", "name", name="uq_application_customer_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    customer: Mapped["Customer"] = relationship(back_populates="applications")
+    groups: Mapped[list["DatabaseGroup"]] = relationship(
+        back_populates="application", cascade="all, delete-orphan"
+    )
+
+
+class DatabaseGroup(Base):
+    __tablename__ = "database_groups"
+    __table_args__ = (UniqueConstraint("application_id", "name", name="uq_group_application_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    engine: Mapped[str] = mapped_column(String(32), default="postgresql", nullable=False)
+    topology: Mapped[str] = mapped_column(String(32), default="standalone", nullable=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    application: Mapped["Application"] = relationship(back_populates="groups")
+    nodes: Mapped[list["Node"]] = relationship(back_populates="group", cascade="all, delete-orphan")
+    instances: Mapped[list["Instance"]] = relationship(back_populates="group")
+
+
+class Node(Base):
+    __tablename__ = "nodes"
+    __table_args__ = (UniqueConstraint("group_id", "name", name="uq_node_group_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("database_groups.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    site: Mapped[str] = mapped_column(String(16), default="primary", nullable=False)
+    role_hint: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
+    agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    agent_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    options: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    group: Mapped["DatabaseGroup"] = relationship(back_populates="nodes")
 
 
 class Instance(Base):
@@ -27,6 +103,8 @@ class Instance(Base):
     role: Mapped[str | None] = mapped_column(String(32), nullable=True)
     services: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
 
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("database_groups.id"), nullable=True)
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -34,6 +112,7 @@ class Instance(Base):
     slow_queries: Mapped[list["SlowQuerySample"]] = relationship(back_populates="instance")
     alert_rules: Mapped[list["AlertRule"]] = relationship(back_populates="instance")
     predictions: Mapped[list["PredictionInsight"]] = relationship(back_populates="instance")
+    group: Mapped["DatabaseGroup | None"] = relationship(back_populates="instances")
 
 
 class MetricSample(Base):
