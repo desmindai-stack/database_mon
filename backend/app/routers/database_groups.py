@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,10 +15,13 @@ from app.schemas import (
     NodeOut,
     ParameterAuditOut,
 )
+from app.services.alert_engine import ensure_group_alert_rules, evaluate_group_alerts
 from app.services.alwayson_health import collect_alwayson_health
-from app.services.cluster_health import collect_group_health
+from app.services.cluster_health import collect_group_health, group_health_metric_flags
 from app.services.credentials import redact_node_options
 from app.services.parameter_audit import collect_parameter_audit
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/groups", tags=["database-groups"])
 
@@ -111,6 +116,16 @@ async def get_group_health(group_id: int, db: AsyncSession = Depends(get_db)) ->
         report = await collect_group_health(group, nodes)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Group health failed: {exc}") from exc
+
+    try:
+        flags = group_health_metric_flags(report)
+        await ensure_group_alert_rules(db, group_id)
+        await evaluate_group_alerts(db, group_id, flags)
+        await db.commit()
+    except Exception:
+        logger.exception("group alert persistence failed for group %s", group_id)
+        await db.rollback()
+
     return GroupHealthOut.model_validate(report)
 
 

@@ -254,6 +254,7 @@ class SlowQueryOut(BaseModel):
 
 class AlertRuleCreate(BaseModel):
     instance_id: int | None = None
+    group_id: int | None = None
     name: str
     metric: str
     operator: str
@@ -264,6 +265,7 @@ class AlertRuleCreate(BaseModel):
 class AlertRuleOut(BaseModel):
     id: int
     instance_id: int | None
+    group_id: int | None = None
     name: str
     metric: str
     operator: str
@@ -277,7 +279,8 @@ class AlertRuleOut(BaseModel):
 class AlertEventOut(BaseModel):
     id: int
     rule_id: int
-    instance_id: int
+    instance_id: int | None
+    group_id: int | None = None
     metric_value: float
     message: str
     triggered_at: datetime

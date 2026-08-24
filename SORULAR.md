@@ -3,22 +3,22 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
-## Faz 2 — Grup seviyeli alert kalıcılığı
+## ~~Faz 2 — Grup seviyeli alert kalıcılığı~~ (KAPANDI — Faz 6)
 
-`AlertRule`/`AlertEvent` modelleri `instance_id`'ye bağlı (nullable ama bir
-`Instance` satırına referans veriyor); `DatabaseGroup`'un tek bir temsilci
-`Instance`'ı yok. Bu yüzden `replication_lag_bytes`, `etcd_quorum_lost`,
-`split_brain`, `node_down` flag'lerini `GET /api/groups/{id}/health`
-yanıtında hesaplayıp döndürdüm ve `alert_engine.GROUP_RULE_SPECS` içine
-metrik kataloğu olarak ekledim, ama bunları kalıcı `AlertEvent` satırlarına
-yazan bir evaluate/ensure fonksiyonu yazmadım.
+~~`AlertRule`/`AlertEvent` modelleri `instance_id`'ye bağlı...~~
 
-**Varsayım:** Bunu kalıcı hale getirmek `AlertRule`/`AlertEvent`'e
-`group_id` eklemeyi gerektirir — bu Faz 1'de tanımlanmayan bir şema
-değişikliği olur. Faz 2'nin isteği "flag'leri genişlet" idi; ben bunu
-"katalog + canlı health yanıtında hesapla" olarak yorumladım. Grup
-seviyeli alarmların e-posta/UI'da kalıcı olarak görünmesi isteniyorsa
-ayrı bir faz olarak ele alınmalı.
+**Çözüm (Faz 6):** `AlertRule`/`AlertEvent`'e nullable `group_id` eklendi
+(`instance_id` de nullable'a çevrildi — bir event ya bir instance'a ya bir
+gruba ait, ikisi birden değil). `alert_engine.ensure_group_alert_rules()` /
+`evaluate_group_alerts()` eklendi; `GET /api/groups/{id}/health` artık
+health raporunu döndürmeden önce `group_health_metric_flags()`'i
+`evaluate_group_alerts`'e besleyip sonucu commit ediyor (alert yazımı
+başarısız olursa health yanıtını bozmuyor, sadece loglayıp rollback
+ediyor). `/api/alerts/rules` ve `/api/alerts/events` artık `group_id`
+alanını da döndürüyor; AlertsPage bunu "Group #id" olarak gösterip
+`/groups/{id}`'e linkliyor. Doğrulandı: TestClient ile grup health'i iki
+kez çağırdım — 4 kural otomatik oluştu, 2 event tetiklendi, ikinci çağrıda
+tekrar event açılmadı (idempotent), resolve edince aktif listeden düştü.
 
 ## Faz 2 — Node servis seçimi
 
@@ -33,7 +33,7 @@ yığınını (`etcd, patroni, postgresql, keepalived, haproxy`), değilse
 motor adı değil — Faz 4'teki `alwayson_health.py` asıl AG sağlığını
 DMV'lerle ayrı bir endpoint'te verecek.
 
-## Faz 3 — Node'da veritabanı kimlik bilgisi yok
+## Faz 3 — Node'da veritabanı kimlik bilgisi yok (plaintext sorunu Faz 6'da KAPANDI)
 
 Kullanıcının verdiği `Node` şeması (id, group_id, name, host, port, site,
 role_hint, agent_url, agent_token, options) veritabanına bağlanmak için
@@ -45,14 +45,20 @@ denetimi (`pg_settings` okumak) gerçek bir SQL bağlantısı gerektiriyor.
 `"postgres"`). `db_username` tanımlı değilse endpoint 400 ile açık bir hata
 mesajı döner (`Node '{name}' için node.options.db_username tanımlı değil`).
 
-**Bilinen sınır:** Bu değerler `Instance.password` gibi
-`credentials.encrypt_secret` ile şifrelenmiyor — `options` JSON'ı zaten
-şifrelenmeden saklanıyor (`Node.agent_token` de aynı durumda). Üretimde
-gerçek şifreler burada plaintext saklanmamalı; bu, Node'a da `Instance`
-tarzı şifreli bir credential deposu eklemeyi gerektiren ayrı bir iş —
-kapsam dışı bıraktım ama not ediyorum.
+**Çözüm (Faz 6):** `services/credentials.py`'e `encrypt_node_options`/
+`decrypt_node_options`/`redact_node_options` eklendi — `db_password`
+artık `Instance.password` ile birebir aynı Fernet mekanizmasıyla
+şifreleniyor (`CREDENTIALS_MASTER_KEY` yoksa aynı `plain:` dev-fallback'i
+kullanıyor). Node router'ları yazarken şifreliyor, `parameter_audit.py`/
+`alwayson_health.py` bağlanırken çözüyor, API yanıtları (`create_node`,
+`get_node`, `update_node`, `list_group_nodes`) her zaman `"***"` döndürüyor
+— artık ne düz metin ne de şifreli blob API'den sızmıyor.
 
-## Faz 4 — Always On denetimi de aynı Node credential varsayımını kullanıyor
+**Kapsam dışı kalan (bilerek):** `Node.agent_token` hâlâ düz metin — bu ayrı
+bir mekanizma (host-agent paylaşımlı sırrı, DB kimlik bilgisi değil) ve bu
+istekte adı geçmedi; istenirse aynı desenle kolayca eklenebilir.
+
+## Faz 4 — Always On denetimi de aynı Node credential varsayımını kullanıyor (Faz 6'da şifrelendi)
 
 `services/alwayson_health.py`, `node.options.db_username/db_password/
 db_database` alanlarını Faz 3'teki parametre denetimiyle aynı şekilde

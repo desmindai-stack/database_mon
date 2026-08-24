@@ -263,6 +263,7 @@ export interface SchemaHealth {
 export interface AlertRule {
   id: number;
   instance_id: number | null;
+  group_id?: number | null;
   name: string;
   metric: string;
   operator: string;
@@ -274,7 +275,8 @@ export interface AlertRule {
 export interface AlertEvent {
   id: number;
   rule_id: number;
-  instance_id: number;
+  instance_id: number | null;
+  group_id: number | null;
   metric_value: number;
   message: string;
   triggered_at: string;

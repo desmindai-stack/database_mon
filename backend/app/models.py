@@ -185,6 +185,7 @@ class AlertRule(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int | None] = mapped_column(ForeignKey("instances.id"), nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("database_groups.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     metric: Mapped[str] = mapped_column(String(64), nullable=False)
     operator: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -200,7 +201,8 @@ class AlertEvent(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     rule_id: Mapped[int] = mapped_column(ForeignKey("alert_rules.id"), index=True)
-    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)
+    instance_id: Mapped[int | None] = mapped_column(ForeignKey("instances.id"), index=True, nullable=True)
+    group_id: Mapped[int | None] = mapped_column(ForeignKey("database_groups.id"), index=True, nullable=True)
     metric_value: Mapped[float] = mapped_column(Float, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, AlertEvent, AlertRule, formatTime, Instance } from "../api";
 
 const METRICS = [
@@ -119,7 +120,13 @@ export default function AlertsPage() {
                   <tr key={rule.id}>
                     <td>{rule.name}</td>
                     <td><code>{rule.metric} {rule.operator} {rule.threshold}</code></td>
-                    <td>{rule.instance_id ? `#${rule.instance_id}` : "All"}</td>
+                    <td>
+                      {rule.instance_id
+                        ? `Instance #${rule.instance_id}`
+                        : rule.group_id
+                          ? `Group #${rule.group_id}`
+                          : "All"}
+                    </td>
                     <td>
                       <button className="btn btn-danger" onClick={() => api.deleteAlertRule(rule.id).then(load)}>
                         Delete
@@ -140,7 +147,7 @@ export default function AlertsPage() {
             <thead>
               <tr>
                 <th>When</th>
-                <th>Instance</th>
+                <th>Scope</th>
                 <th>Message</th>
                 <th></th>
               </tr>
@@ -152,7 +159,15 @@ export default function AlertsPage() {
                 events.map((event) => (
                   <tr key={event.id}>
                     <td>{formatTime(event.triggered_at)}</td>
-                    <td>#{event.instance_id}</td>
+                    <td>
+                      {event.instance_id ? (
+                        `Instance #${event.instance_id}`
+                      ) : event.group_id ? (
+                        <Link to={`/groups/${event.group_id}`}>Group #{event.group_id}</Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td>{event.message}</td>
                     <td>
                       <button className="btn" onClick={() => api.resolveAlert(event.id).then(load)}>
