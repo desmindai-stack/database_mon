@@ -15,6 +15,7 @@ from app.schemas import (
 )
 from app.services.alwayson_health import collect_alwayson_health
 from app.services.cluster_health import collect_group_health
+from app.services.credentials import redact_node_options
 from app.services.parameter_audit import collect_parameter_audit
 
 router = APIRouter(prefix="/groups", tags=["database-groups"])
@@ -84,12 +85,16 @@ async def delete_group(group_id: int, db: AsyncSession = Depends(get_db)) -> Non
 
 
 @router.get("/{group_id}/nodes", response_model=list[NodeOut])
-async def list_group_nodes(group_id: int, db: AsyncSession = Depends(get_db)) -> list[Node]:
+async def list_group_nodes(group_id: int, db: AsyncSession = Depends(get_db)) -> list[NodeOut]:
     group = await db.get(DatabaseGroup, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
     result = await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))
-    return list(result.scalars().all())
+    nodes = result.scalars().all()
+    outs = [NodeOut.model_validate(n) for n in nodes]
+    for out in outs:
+        out.options = redact_node_options(out.options)
+    return outs
 
 
 @router.get("/{group_id}/health", response_model=GroupHealthOut)

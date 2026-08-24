@@ -8,6 +8,7 @@ import asyncpg
 import httpx
 
 from app.models import DatabaseGroup, Node
+from app.services.credentials import decrypt_node_options
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +217,7 @@ def _evaluate_parameter(name: str, spec: dict[str, Any], row: dict[str, Any] | N
 
 
 async def _pg_connect(node: Node) -> asyncpg.Connection:
-    opts = node.options or {}
+    opts = decrypt_node_options(node.options) or {}
     username = opts.get("db_username")
     if not username:
         raise ValueError(
