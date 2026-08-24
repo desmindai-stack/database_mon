@@ -48,7 +48,13 @@ async def _get_or_create_application(session, customer: Customer, name: str, des
 
 
 async def _get_or_create_group(
-    session, application: Application, name: str, engine: str, topology: str, notes: str
+    session,
+    application: Application,
+    name: str,
+    engine: str,
+    topology: str,
+    notes: str,
+    environment: str = "prod",
 ) -> DatabaseGroup:
     existing = (
         await session.execute(
@@ -60,7 +66,12 @@ async def _get_or_create_group(
     if existing:
         return existing
     group = DatabaseGroup(
-        application_id=application.id, name=name, engine=engine, topology=topology, notes=notes
+        application_id=application.id,
+        name=name,
+        engine=engine,
+        topology=topology,
+        environment=environment,
+        notes=notes,
     )
     session.add(group)
     await session.flush()
@@ -108,11 +119,25 @@ async def seed() -> None:
             engine="sqlserver",
             topology="alwayson",
             notes="4 düğüm Always On AG, düğüm 4 disaster site'ta.",
+            environment="prod",
         )
         await _ensure_node(session, boa_group, "boa-node-1", "boa-node-1.internal", 1433, "primary", "primary")
         await _ensure_node(session, boa_group, "boa-node-2", "boa-node-2.internal", 1433, "primary", "replica")
         await _ensure_node(session, boa_group, "boa-node-3", "boa-node-3.internal", 1433, "primary", "replica")
         await _ensure_node(session, boa_group, "boa-node-4", "boa-node-4.dr.internal", 1433, "disaster", "replica")
+
+        boa_test_group = await _get_or_create_group(
+            session,
+            boa,
+            "boa-sqlserver-test",
+            engine="sqlserver",
+            topology="standalone",
+            notes="Tek düğüm test ortamı.",
+            environment="test",
+        )
+        await _ensure_node(
+            session, boa_test_group, "boa-test-node-1", "boa-test-node-1.internal", 1433, "primary", "unknown"
+        )
 
         aapara = await _get_or_create_application(
             session, customer, "aapara", "PostgreSQL Patroni — 3 düğüm (2 ana DC + 1 disaster site)"
@@ -124,6 +149,7 @@ async def seed() -> None:
             engine="postgresql",
             topology="patroni",
             notes="3 düğüm Patroni cluster, düğüm 3 disaster site'ta.",
+            environment="prod",
         )
         await _ensure_node(
             session, aapara_group, "aapara-node-1", "aapara-node-1.internal", 5432, "primary", "primary"
@@ -133,6 +159,19 @@ async def seed() -> None:
         )
         await _ensure_node(
             session, aapara_group, "aapara-node-3", "aapara-node-3.dr.internal", 5432, "disaster", "replica"
+        )
+
+        aapara_test_group = await _get_or_create_group(
+            session,
+            aapara,
+            "aapara-postgres-test",
+            engine="postgresql",
+            topology="standalone",
+            notes="Tek düğüm test ortamı.",
+            environment="test",
+        )
+        await _ensure_node(
+            session, aapara_test_group, "aapara-test-node-1", "aapara-test-node-1.internal", 5432, "primary", "unknown"
         )
 
         await session.commit()

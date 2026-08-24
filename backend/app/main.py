@@ -19,12 +19,14 @@ from app.routers import (
     predictions,
     queries,
 )
-from app.schemas import HealthResponse
+from app.schemas import ConfigOut, HealthResponse
+from app.services.bootstrap import ensure_default_customer
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await init_db()
+    await ensure_default_customer()
     if settings.run_mode in ("worker", "all"):
         start_scheduler()
     yield
@@ -74,6 +76,14 @@ async def health() -> HealthResponse:
         last_collection=last,
     )
 
+
+
+@app.get("/api/config", response_model=ConfigOut)
+async def get_config() -> ConfigOut:
+    return ConfigOut(
+        deployment_mode=settings.deployment_mode,
+        default_customer_name=settings.default_customer_name,
+    )
 
 
 @app.get("/")

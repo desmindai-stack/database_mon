@@ -1,6 +1,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, Application, DatabaseGroup, DbEngine, GroupTopology } from "../api";
+import { api, Application, DatabaseGroup, DbEngine, GroupEnvironment, GroupTopology } from "../api";
+
+const ENV_LABELS: Record<GroupEnvironment, string> = {
+  prod: "Prod",
+  preprod: "Preprod",
+  test: "Test",
+  dev: "Dev",
+};
 
 export default function DatabaseGroupsPage() {
   const { applicationId } = useParams<{ applicationId: string }>();
@@ -11,6 +18,7 @@ export default function DatabaseGroupsPage() {
   const [name, setName] = useState("");
   const [engine, setEngine] = useState<DbEngine>("postgresql");
   const [topology, setTopology] = useState<GroupTopology>("patroni");
+  const [environment, setEnvironment] = useState<GroupEnvironment>("prod");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -28,7 +36,7 @@ export default function DatabaseGroupsPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.createGroup({ application_id: id, name, engine, topology, notes: notes || undefined });
+      await api.createGroup({ application_id: id, name, engine, topology, environment, notes: notes || undefined });
       setName("");
       setNotes("");
       await load();
@@ -66,13 +74,14 @@ export default function DatabaseGroupsPage() {
                 <th>Ad</th>
                 <th>Motor</th>
                 <th>Topoloji</th>
+                <th>Ortam</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {groups.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="empty">Kayıtlı grup yok</td>
+                  <td colSpan={5} className="empty">Kayıtlı grup yok</td>
                 </tr>
               ) : (
                 groups.map((g) => (
@@ -84,6 +93,9 @@ export default function DatabaseGroupsPage() {
                       <span className="engine-badge">{g.engine}</span>
                     </td>
                     <td>{g.topology}</td>
+                    <td>
+                      <span className={`env-badge ${g.environment}`}>{ENV_LABELS[g.environment]}</span>
+                    </td>
                     <td>
                       <button className="btn btn-danger" onClick={() => onDelete(g.id)}>
                         Sil
@@ -117,6 +129,15 @@ export default function DatabaseGroupsPage() {
                 <option value="standalone">Standalone</option>
                 <option value="patroni">Patroni (PostgreSQL cluster)</option>
                 <option value="alwayson">Always On (SQL Server AG)</option>
+              </select>
+            </label>
+            <label>
+              Ortam
+              <select value={environment} onChange={(e) => setEnvironment(e.target.value as GroupEnvironment)}>
+                <option value="prod">Prod</option>
+                <option value="preprod">Preprod</option>
+                <option value="test">Test</option>
+                <option value="dev">Dev</option>
               </select>
             </label>
             <label>

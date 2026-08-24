@@ -139,6 +139,7 @@ export default function GroupDetailPage() {
             <h2>{group?.name ?? "Database Group"}</h2>
             {group && <span className="engine-badge">{group.engine}</span>}
             {group && <span className="tag">{group.topology}</span>}
+            {group && <span className={`env-badge ${group.environment}`}>{group.environment}</span>}
           </div>
           <p className="detail-subtitle">
             {application && <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>}

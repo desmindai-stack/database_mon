@@ -307,8 +307,14 @@ export interface HealthResponse {
   last_collection: string | null;
 }
 
+export interface AppConfig {
+  deployment_mode: "public" | "private";
+  default_customer_name: string | null;
+}
+
 export type CustomerType = "public" | "private";
 export type GroupTopology = "standalone" | "patroni" | "alwayson";
+export type GroupEnvironment = "prod" | "preprod" | "test" | "dev";
 export type NodeSite = "primary" | "disaster";
 export type NodeRoleHint = "primary" | "replica" | "unknown";
 
@@ -344,6 +350,7 @@ export interface DatabaseGroup {
   name: string;
   engine: DbEngine;
   topology: GroupTopology;
+  environment: GroupEnvironment;
   notes: string | null;
   created_at: string;
 }
@@ -353,6 +360,7 @@ export interface DatabaseGroupCreate {
   name: string;
   engine: DbEngine;
   topology: GroupTopology;
+  environment?: GroupEnvironment;
   notes?: string;
 }
 
@@ -552,6 +560,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   getHealth: () => request<HealthResponse>("/api/health"),
+  getConfig: () => request<AppConfig>("/api/config"),
   getSummaries: () => request<InstanceSummary[]>("/api/instances/summary"),
   getInstances: () => request<Instance[]>("/api/instances"),
   getInstance: (id: number) => request<Instance>(`/api/instances/${id}`),

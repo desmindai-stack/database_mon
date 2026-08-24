@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, Customer, CustomerType } from "../api";
 
 export default function CustomersPage() {
+  const navigate = useNavigate();
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [isPrivate, setIsPrivate] = useState(false);
   const [name, setName] = useState("");
   const [type, setType] = useState<CustomerType>("private");
   const [error, setError] = useState<string | null>(null);
@@ -12,7 +14,16 @@ export default function CustomersPage() {
   const load = () => api.getCustomers().then(setCustomers).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
+    api.getConfig().then((cfg) => {
+      if (cfg.deployment_mode === "private") {
+        setIsPrivate(true);
+        api.getCustomers().then((all) => {
+          if (all.length > 0) navigate(`/customers/${all[0].id}/applications`, { replace: true });
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
     load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const onSubmit = async (e: FormEvent) => {
@@ -72,9 +83,11 @@ export default function CustomersPage() {
                       <span className={`tag ${c.type}`}>{c.type}</span>
                     </td>
                     <td>
-                      <button className="btn btn-danger" onClick={() => onDelete(c.id)}>
-                        Sil
-                      </button>
+                      {!isPrivate && (
+                        <button className="btn btn-danger" onClick={() => onDelete(c.id)}>
+                          Sil
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))
@@ -83,27 +96,29 @@ export default function CustomersPage() {
           </table>
         </div>
 
-        <div className="card">
-          <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni müşteri</h3>
-          <form className="form-grid" onSubmit={onSubmit}>
-            <label>
-              Ad
-              <input value={name} onChange={(e) => setName(e.target.value)} required />
-            </label>
-            <label>
-              Tip
-              <select value={type} onChange={(e) => setType(e.target.value as CustomerType)}>
-                <option value="private">Private</option>
-                <option value="public">Public</option>
-              </select>
-            </label>
-            <div className="form-actions">
-              <button type="submit" className="btn btn-primary" disabled={busy}>
-                Ekle
-              </button>
-            </div>
-          </form>
-        </div>
+        {!isPrivate && (
+          <div className="card">
+            <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni müşteri</h3>
+            <form className="form-grid" onSubmit={onSubmit}>
+              <label>
+                Ad
+                <input value={name} onChange={(e) => setName(e.target.value)} required />
+              </label>
+              <label>
+                Tip
+                <select value={type} onChange={(e) => setType(e.target.value as CustomerType)}>
+                  <option value="private">Private</option>
+                  <option value="public">Public</option>
+                </select>
+              </label>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary" disabled={busy}>
+                  Ekle
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </>
   );

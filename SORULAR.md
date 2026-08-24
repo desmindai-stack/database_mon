@@ -3,6 +3,33 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 7 — İŞ 2: deployment mode / environment ayrımı
+
+- `GET /api/config`, `deployment_mode`/`default_customer_name` alanlarını
+  `GET /api/health` ile birebir aynı kaynaktan (`Settings`) döndürüyor —
+  bilerek: istek açıkça ayrı bir endpoint istedi (muhtemelen health-check
+  amaçlı `/api/health`'i uygulama önyükleme/config amaçlı çağırılardan
+  ayırmak için), iki endpoint aynı veriyi taşısa da anlamsal olarak ayrı
+  tutuyorum.
+- Varsayılan müşteri oluşturma (`ensure_default_customer`) `run_mode`'dan
+  bağımsız, `init_db()` gibi her zaman çalışıyor (worker sürecinde de) —
+  `init_db()` de aynı şekilde `run_mode` kontrolünden önce çalıştığı için
+  bu tutarlı bir tercih; worker'ın da müşteri tablosunu görmesi gerekebilir
+  (ör. ileride group-based collection worker'da çalışırsa).
+- "müşteri oluşturma/silme UI'da kapalı olsun" isteğini iki katmanlı
+  uyguladım: private modda `/customers` sayfası otomatik olarak tek
+  müşterinin `/customers/{id}/applications`'ına yönlendiriliyor (normal
+  kullanıcı hiç customers listesini görmüyor), ayrıca create formu ve Sil
+  butonu da `isPrivate` iken render edilmiyor (yönlendirme başarısız olursa
+  veya URL'ye elle gidilirse diye ek güvenlik).
+- Sidebar'daki link private modda "Müşteri Grupları" yerine "Uygulamalar"
+  etiketiyle doğrudan `/customers/{id}/applications`'a gidiyor — tek
+  müşteri olduğundan "müşteri seç" adımı anlamsız.
+- `seed_demo.py`'deki yeni test grupları (`boa-sqlserver-test`,
+  `aapara-postgres-test`) `topology=standalone`, tek düğüm, `role_hint=
+  unknown` — prod'daki tam HA topolojisini tekrarlamak yerine gerçekçi bir
+  "tek düğümlü test ortamı" örneği verdim.
+
 ## ~~Faz 2 — Grup seviyeli alert kalıcılığı~~ (KAPANDI — Faz 6)
 
 ~~`AlertRule`/`AlertEvent` modelleri `instance_id`'ye bağlı...~~

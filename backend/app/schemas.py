@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.domain.engines import DEFAULT_PORTS, DatabaseEngine
-from app.domain.topology import CustomerType, GroupTopology, NodeRoleHint, NodeSite
+from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite
 
 
 class CustomerCreate(BaseModel):
@@ -52,6 +52,7 @@ class DatabaseGroupCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     engine: DatabaseEngine = DatabaseEngine.POSTGRESQL
     topology: GroupTopology = GroupTopology.STANDALONE
+    environment: GroupEnvironment = GroupEnvironment.PROD
     notes: str | None = None
 
 
@@ -59,6 +60,7 @@ class DatabaseGroupUpdate(BaseModel):
     name: str | None = None
     engine: DatabaseEngine | None = None
     topology: GroupTopology | None = None
+    environment: GroupEnvironment | None = None
     notes: str | None = None
 
 
@@ -68,6 +70,7 @@ class DatabaseGroupOut(BaseModel):
     name: str
     engine: str
     topology: str
+    environment: str
     notes: str | None
     created_at: datetime
 
@@ -321,6 +324,11 @@ class HealthResponse(BaseModel):
     default_customer_name: str | None
     instances: int
     last_collection: datetime | None
+
+
+class ConfigOut(BaseModel):
+    deployment_mode: str
+    default_customer_name: str | None
 
 
 class ConnectionTestResult(BaseModel):

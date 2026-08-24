@@ -12,6 +12,13 @@ class GroupTopology(StrEnum):
     ALWAYSON = "alwayson"
 
 
+class GroupEnvironment(StrEnum):
+    PROD = "prod"
+    PREPROD = "preprod"
+    TEST = "test"
+    DEV = "dev"
+
+
 class NodeSite(StrEnum):
     PRIMARY = "primary"
     DISASTER = "disaster"

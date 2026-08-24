@@ -8,6 +8,7 @@ export default function ApplicationsPage() {
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [isPrivate, setIsPrivate] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -16,6 +17,7 @@ export default function ApplicationsPage() {
   const load = () => api.getApplications(id).then(setApplications).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
+    api.getConfig().then((cfg) => setIsPrivate(cfg.deployment_mode === "private")).catch(() => undefined);
     api.getCustomers().then((all) => setCustomer(all.find((c) => c.id === id) ?? null));
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -48,9 +50,11 @@ export default function ApplicationsPage() {
       <header className="page-header">
         <div>
           <h2>Uygulamalar {customer && <span className="detail-meta">— {customer.name}</span>}</h2>
-          <p>
-            <Link to="/customers">← Müşteriler</Link>
-          </p>
+          {!isPrivate && (
+            <p>
+              <Link to="/customers">← Müşteriler</Link>
+            </p>
+          )}
         </div>
       </header>
 

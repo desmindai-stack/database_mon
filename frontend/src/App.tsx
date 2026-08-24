@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
-import { api, InstanceSummary } from "./api";
+import { api, Customer, InstanceSummary } from "./api";
 import AlertsPage from "./pages/AlertsPage";
 import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
@@ -151,6 +151,23 @@ function CustomerTree() {
 }
 
 export default function App() {
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [privateCustomerId, setPrivateCustomerId] = useState<number | null>(null);
+
+  useEffect(() => {
+    api.getConfig().then((cfg) => {
+      setIsPrivate(cfg.deployment_mode === "private");
+      if (cfg.deployment_mode === "private") {
+        api.getCustomers().then((all: Customer[]) => {
+          if (all.length > 0) setPrivateCustomerId(all[0].id);
+        }).catch(() => undefined);
+      }
+    }).catch(() => undefined);
+  }, []);
+
+  const groupsHref = isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers";
+  const groupsLabel = isPrivate ? "Uygulamalar" : "Müşteri Grupları";
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -165,8 +182,8 @@ export default function App() {
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Dashboard
           </NavLink>
-          <NavLink to="/customers" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            Müşteri Grupları
+          <NavLink to={groupsHref} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+            {groupsLabel}
           </NavLink>
           <CustomerTree />
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
