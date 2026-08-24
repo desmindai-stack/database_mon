@@ -74,6 +74,21 @@ Grupları" linki eklendi (mevcut `Instance`-tabanlı "Müşteriler" ağacından
 bilerek ayrı tutuldu — SORULAR.md). Dashboard/Instances/Alerts/Predictions
 sayfaları değişmedi.
 
+**Faz 6 — Node credential şifreleme + grup alarmlarının kalıcılığı.**
+`services/credentials.py`'e `encrypt_node_options`/`decrypt_node_options`/
+`redact_node_options` eklendi; `node.options.db_password` artık
+`Instance.password` ile aynı Fernet mekanizmasıyla şifreleniyor. Node
+router'ları (`create`/`get`/`update`/`list_group_nodes`) şifre yazarken
+şifreliyor, hiçbir API yanıtında `"***"`'den başka bir şey döndürmüyor;
+`parameter_audit.py`/`alwayson_health.py` bağlanmadan önce çözüyor.
+`AlertRule`/`AlertEvent`'e nullable `group_id` eklendi (`AlertEvent.
+instance_id` de nullable oldu); `alert_engine.ensure_group_alert_rules()`/
+`evaluate_group_alerts()` `GET /api/groups/{id}/health`'e wire edildi —
+her health çağrısı artık `replication_lag_bytes`/`etcd_quorum_lost`/
+`split_brain`/`node_down` flag'lerini kalıcı `AlertEvent` satırlarına
+yazıyor, tekrarlı çağrılarda mükerrer event açmıyor. Alerts sayfası
+`group_id`'yi "Group #id" olarak gösterip grup detayına linkliyor.
+
 ## Nasıl test edilir
 
 ### Backend
@@ -116,13 +131,15 @@ sayfasına gidip düğüm ekleme formunu ve "Sağlığı kontrol et" /
 
 ## Bilinen sınırlar (detay için SORULAR.md)
 
-- Grup seviyeli health flag'leri (`replication_lag_bytes`, `etcd_quorum_lost`,
-  `split_brain`, `node_down`) canlı `GET /api/groups/{id}/health` yanıtında
-  hesaplanıyor ama kalıcı `AlertEvent` satırlarına yazılmıyor (`AlertRule`/
-  `AlertEvent` hâlâ `instance_id`'ye bağlı).
-- `Node`'da kimlik bilgisi kolonu yok; parametre denetimi ve Always On
-  denetimi `node.options.db_username/db_password/db_database`'i okuyor ve
-  bunlar `Instance.password` gibi şifrelenmiyor.
+- Grup seviyeli alarmlar artık kalıcı (Faz 6) — ama bu, `AlertRule`/
+  `AlertEvent` şemasına `group_id` eklemeyi gerektirdi. Var olan bir
+  `data/dbace.db` dosyanız varsa **silin**: SQLite `ALTER COLUMN ... DROP
+  NOT NULL` desteklemediğinden `alert_events.instance_id`'nin eski NOT
+  NULL kısıtı otomatik migration'la kaldırılamıyor; dosya silinip
+  yeniden oluşturulduğunda (veya Supabase'de migration çalıştırıldığında)
+  düzeliyor.
+- `Node.agent_token` hâlâ düz metin (host-agent paylaşımlı sırrı — DB
+  kimlik bilgisi değil, bu istekte kapsam dışı bırakıldı).
 - Faz 4 gerçek bir SQL Server'a karşı test edilemedi (ortamda yok) — DMV
   sorguları standart Microsoft dokümantasyon örneklerine dayanıyor, bağlantı
   hataları temiz şekilde 502/400 olarak raporlanıyor (doğrulandı).
