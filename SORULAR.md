@@ -51,3 +51,15 @@ mesajı döner (`Node '{name}' için node.options.db_username tanımlı değil`)
 gerçek şifreler burada plaintext saklanmamalı; bu, Node'a da `Instance`
 tarzı şifreli bir credential deposu eklemeyi gerektiren ayrı bir iş —
 kapsam dışı bıraktım ama not ediyorum.
+
+## Faz 4 — Always On denetimi de aynı Node credential varsayımını kullanıyor
+
+`services/alwayson_health.py`, `node.options.db_username/db_password/
+db_database` alanlarını Faz 3'teki parametre denetimiyle aynı şekilde
+okuyor (aynı varsayım, tekrar yazmadım). AG DMV'lerini gruptaki
+`role_hint == "primary"` düğümünden (yoksa ilk düğümden) sorguluyor;
+`sys.dm_hadr_availability_replica_states.replica_server_name` alanını
+`Node.name` veya `Node.host` ile eşleştirerek `site`/`node_id` bilgisini
+ekliyor. Gerçek bir Always On cluster'a erişimim olmadığından bu eşleştirme
+mantığı canlı DMV çıktısıyla doğrulanamadı; SQL sözdizimi standart
+Microsoft dokümantasyon örneklerine dayanıyor.

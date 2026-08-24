@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Application, DatabaseGroup, Node
 from app.schemas import (
+    AlwaysOnHealthOut,
     DatabaseGroupCreate,
     DatabaseGroupOut,
     DatabaseGroupUpdate,
@@ -12,6 +13,7 @@ from app.schemas import (
     NodeOut,
     ParameterAuditOut,
 )
+from app.services.alwayson_health import collect_alwayson_health
 from app.services.cluster_health import collect_group_health
 from app.services.parameter_audit import collect_parameter_audit
 
@@ -122,3 +124,20 @@ async def get_group_parameters(group_id: int, db: AsyncSession = Depends(get_db)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Parameter audit failed: {exc}") from exc
     return ParameterAuditOut.model_validate(report)
+
+
+@router.get("/{group_id}/alwayson", response_model=AlwaysOnHealthOut)
+async def get_group_alwayson(group_id: int, db: AsyncSession = Depends(get_db)) -> AlwaysOnHealthOut:
+    group = await db.get(DatabaseGroup, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Database group not found")
+    nodes = list(
+        (await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))).scalars().all()
+    )
+    try:
+        report = await collect_alwayson_health(group, nodes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Always On health failed: {exc}") from exc
+    return AlwaysOnHealthOut.model_validate(report)

@@ -681,3 +681,38 @@ class ParameterAuditOut(BaseModel):
     findings: list[ParameterFindingOut]
     patroni_config: dict[str, Any] | None = None
     summary: ParameterAuditSummaryOut
+
+
+class ReplicaDatabaseOut(BaseModel):
+    database_name: str | None = None
+    synchronization_state: str | None = None
+    sync_health: str | None = None
+    log_send_queue_kb: float | None = None
+    redo_queue_kb: float | None = None
+    last_commit_time: str | None = None
+
+
+class ReplicaHealthOut(BaseModel):
+    node_id: int | None = None
+    node_name: str | None = None
+    replica_server_name: str
+    site: str | None = None
+    role: str | None = None
+    operational_state: str | None = None
+    connected_state: str | None = None
+    sync_health: str | None = None
+    availability_mode: str | None = None
+    failover_mode: str | None = None
+    failover_ready: bool = False
+    databases: list[ReplicaDatabaseOut] = []
+
+
+class AlwaysOnHealthOut(BaseModel):
+    group_id: int
+    group_name: str
+    ag_name: str | None = None
+    primary_replica: str | None = None
+    ag_sync_health: str | None = None
+    overall: str
+    checked_at: str
+    replicas: list[ReplicaHealthOut]

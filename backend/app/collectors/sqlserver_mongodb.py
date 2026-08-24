@@ -1,18 +1,88 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from app.collectors.base import BaseCollector, ConnectionTarget
 
 logger = logging.getLogger(__name__)
 
+_PERF_COUNTER_QUERY = """
+SELECT RTRIM(counter_name), cntr_value
+FROM sys.dm_os_performance_counters
+WHERE counter_name IN ('Batch Requests/sec', 'Buffer cache hit ratio',
+                        'Buffer cache hit ratio base', 'Number of Deadlocks/sec')
+"""
+
+_SLOW_QUERY_SQL = """
+SELECT TOP ({limit})
+    CONVERT(VARCHAR(64), qs.query_hash, 1) AS queryid,
+    SUBSTRING(
+        st.text,
+        (qs.statement_start_offset / 2) + 1,
+        ((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(st.text) ELSE qs.statement_end_offset END
+            - qs.statement_start_offset) / 2) + 1
+    ) AS query,
+    qs.execution_count AS calls,
+    qs.total_worker_time / 1000.0 AS total_time_ms,
+    (qs.total_worker_time / 1000.0) / NULLIF(qs.execution_count, 0) AS mean_time_ms,
+    qs.total_rows AS rows
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+ORDER BY qs.total_worker_time DESC
+"""
+
+_ACTIVITY_SQL = """
+SELECT TOP ({limit})
+    s.session_id,
+    s.login_name,
+    DB_NAME(s.database_id) AS datname,
+    s.program_name,
+    c.client_net_address,
+    s.status,
+    r.wait_type,
+    r.start_time,
+    s.last_request_end_time,
+    r.blocking_session_id,
+    st.text AS query_text,
+    s.open_transaction_count
+FROM sys.dm_exec_sessions s
+LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id
+LEFT JOIN sys.dm_exec_connections c ON c.session_id = s.session_id
+OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) st
+WHERE s.is_user_process = 1
+ORDER BY r.start_time DESC
+"""
+
+
+def build_odbc_connection_string(target: ConnectionTarget) -> str:
+    opts = target.options or {}
+    driver = opts.get("odbc_driver", "ODBC Driver 18 for SQL Server")
+    encrypt = "yes" if opts.get("encrypt", True) else "no"
+    trust_cert = "yes" if opts.get("trust_server_certificate", True) else "no"
+    return (
+        f"DRIVER={{{driver}}};SERVER={target.host},{target.port};"
+        f"DATABASE={target.database};UID={target.username};PWD={target.password};"
+        f"Encrypt={encrypt};TrustServerCertificate={trust_cert};Connection Timeout=10"
+    )
+
 
 class SqlServerCollector(BaseCollector):
-    """SQL Server collector — implement with pyodbc/aioodbc in production worker."""
+    """DMV tabanlı SQL Server collector (aioodbc + bir ODBC sürücüsü gerektirir)."""
 
     def __init__(self, target: ConnectionTarget) -> None:
         self.target = target
+
+    async def _connect(self):
+        try:
+            import aioodbc
+        except ImportError as exc:
+            raise RuntimeError(
+                "SQL Server collector requires aioodbc + an ODBC driver "
+                "(e.g. 'ODBC Driver 18 for SQL Server') on the worker image."
+            ) from exc
+        return await aioodbc.connect(dsn=build_odbc_connection_string(self.target), timeout=10, autocommit=True)
 
     async def test_connection(self) -> tuple[bool, str, dict[str, Any]]:
         try:
@@ -20,13 +90,186 @@ class SqlServerCollector(BaseCollector):
         except ImportError:
             return (
                 False,
-                "SQL Server collector requires aioodbc on the worker image (henüz tam bağlantı yok).",
+                "SQL Server collector requires aioodbc + an ODBC driver on the worker image.",
                 {"engine": "sqlserver", "status": "stub"},
             )
-        return False, "SQL Server collector implementation in progress", {"engine": "sqlserver"}
+        try:
+            conn = await self._connect()
+        except Exception as exc:
+            logger.exception("SQL Server connection test failed")
+            return False, str(exc), {"engine": "sqlserver"}
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT @@VERSION")
+                row = await cur.fetchone()
+            return True, "Connection successful", {"engine": "sqlserver", "version": row[0] if row else None}
+        except Exception as exc:
+            logger.exception("SQL Server connection test query failed")
+            return False, str(exc), {"engine": "sqlserver"}
+        finally:
+            await conn.close()
 
     async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
-        raise NotImplementedError("SQL Server metrics collection not yet implemented")
+        conn = await self._connect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1")
+                active_connections = int((await cur.fetchone())[0] or 0)
+
+                await cur.execute(
+                    "SELECT CAST(value_in_use AS INT) FROM sys.configurations WHERE name = 'user connections'"
+                )
+                row = await cur.fetchone()
+                # user connections = 0 means "no limit"; use SQL Server's hard ceiling instead.
+                max_connections = int(row[0]) if row and row[0] else 32767
+
+                await cur.execute("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id <> 0")
+                blocked_sessions = int((await cur.fetchone())[0] or 0)
+
+                await cur.execute(_PERF_COUNTER_QUERY)
+                counters = {name: float(value) for name, value in await cur.fetchall()}
+
+                await cur.execute("SELECT SUM(CAST(size AS BIGINT)) * 8.0 * 1024 FROM sys.database_files")
+                db_size = float((await cur.fetchone())[0] or 0)
+
+                # tempdb file size as a proxy for temp space usage — the exact
+                # "used" figure needs sys.dm_db_file_space_usage, which is only
+                # queryable from within tempdb itself.
+                await cur.execute("SELECT SUM(CAST(size AS BIGINT)) * 8.0 * 1024 FROM tempdb.sys.database_files")
+                temp_bytes = float((await cur.fetchone())[0] or 0)
+        finally:
+            await conn.close()
+
+        batch_requests_cum = counters.get("Batch Requests/sec", 0.0)
+        transactions_per_sec = 0.0
+        if previous and "batch_requests_cum" in previous:
+            delta = batch_requests_cum - previous["batch_requests_cum"]
+            delta_time = previous.get("delta_time", 15)
+            transactions_per_sec = max(delta / delta_time, 0)
+
+        hit = counters.get("Buffer cache hit ratio", 0.0)
+        base = counters.get("Buffer cache hit ratio base", 0.0)
+        cache_hit_ratio = (hit / base * 100) if base else 100.0
+
+        return {
+            "active_connections": active_connections,
+            "max_connections": max_connections,
+            # SQL Server'da Postgres tarzı "transaction/sec" yok; canonical
+            # transactions_per_sec slotunu Batch Requests/sec ile dolduruyoruz.
+            "transactions_per_sec": round(transactions_per_sec, 2),
+            "cache_hit_ratio": round(cache_hit_ratio, 2),
+            "replication_lag_bytes": None,
+            "database_size_bytes": db_size,
+            "deadlocks": int(counters.get("Number of Deadlocks/sec", 0)),
+            "temp_bytes": temp_bytes,
+            "blocked_sessions": blocked_sessions,
+            "_state": {"batch_requests_cum": batch_requests_cum},
+        }
+
+    async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
+        conn = await self._connect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(_SLOW_QUERY_SQL.format(limit=int(limit)))
+                columns = [c[0] for c in cur.description]
+                rows = await cur.fetchall()
+            return [dict(zip(columns, row)) for row in rows]
+        finally:
+            await conn.close()
+
+    async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
+        conn = await self._connect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(_ACTIVITY_SQL.format(limit=int(limit)))
+                columns = [c[0] for c in cur.description]
+                rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
+        finally:
+            await conn.close()
+
+        sessions: list[dict[str, Any]] = []
+        wait_counts: dict[str, int] = {}
+        state_counts: dict[str, int] = {}
+        blocking: list[dict[str, Any]] = []
+
+        for row in rows:
+            status = (row.get("status") or "").strip().lower()
+            wait_type = row.get("wait_type")
+            blocking_session_id = row.get("blocking_session_id") or 0
+            blocked = blocking_session_id != 0
+            start_time = row.get("start_time")
+            query_duration_sec = 0.0
+            if start_time is not None:
+                now = datetime.now(UTC)
+                started = start_time if start_time.tzinfo else start_time.replace(tzinfo=UTC)
+                query_duration_sec = max((now - started).total_seconds(), 0.0)
+
+            if status == "running":
+                state = "waiting" if blocked or wait_type else "active"
+            elif status == "sleeping":
+                state = "idle in transaction" if row.get("open_transaction_count") else "idle"
+            else:
+                state = status or "unknown"
+            state_counts[state] = state_counts.get(state, 0) + 1
+
+            if wait_type:
+                wait_counts[wait_type] = wait_counts.get(wait_type, 0) + 1
+
+            sessions.append(
+                {
+                    "pid": row["session_id"],
+                    "usename": row.get("login_name"),
+                    "datname": row.get("datname"),
+                    "application_name": row.get("program_name") or "",
+                    "client_addr": row.get("client_net_address"),
+                    "state": state,
+                    "wait_event_type": None,
+                    "wait_event": wait_type,
+                    "backend_type": None,
+                    "query_start": start_time.isoformat() if start_time else None,
+                    "state_change": row["last_request_end_time"].isoformat()
+                    if row.get("last_request_end_time")
+                    else None,
+                    "xact_start": None,
+                    "query_duration_sec": round(query_duration_sec, 2),
+                    "xact_duration_sec": None,
+                    "query": row.get("query_text") or "",
+                    "blocking_pids": [blocking_session_id] if blocked else [],
+                    "blocked": blocked,
+                }
+            )
+
+            if blocked:
+                blocking.append(
+                    {
+                        "blocked_pid": row["session_id"],
+                        "blocking_pid": blocking_session_id,
+                        "blocked_query": row.get("query_text") or "",
+                        "wait_event_type": None,
+                        "wait_event": wait_type,
+                        "duration_sec": round(query_duration_sec, 2),
+                    }
+                )
+
+        totals = {
+            "total": len(sessions),
+            "active": state_counts.get("active", 0),
+            "idle": state_counts.get("idle", 0),
+            "idle_in_transaction": state_counts.get("idle in transaction", 0),
+            "waiting": state_counts.get("waiting", 0),
+            "blocked": sum(1 for s in sessions if s["blocked"]),
+        }
+
+        return {
+            "sessions": sessions,
+            "wait_events": [
+                {"wait_event_type": "sqlserver", "wait_event": name, "count": count}
+                for name, count in sorted(wait_counts.items(), key=lambda kv: kv[1], reverse=True)
+            ],
+            "state_summary": [{"state": state, "count": count} for state, count in state_counts.items()],
+            "blocking": blocking,
+            "totals": totals,
+        }
 
 
 class MongoDBCollector(BaseCollector):
