@@ -2,7 +2,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
 import { api, InstanceSummary } from "./api";
 import AlertsPage from "./pages/AlertsPage";
+import ApplicationsPage from "./pages/ApplicationsPage";
+import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
+import DatabaseGroupsPage from "./pages/DatabaseGroupsPage";
+import GroupDetailPage from "./pages/GroupDetailPage";
 import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import PredictionsPage from "./pages/PredictionsPage";
@@ -161,6 +165,9 @@ export default function App() {
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Dashboard
           </NavLink>
+          <NavLink to="/customers" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+            Müşteri Grupları
+          </NavLink>
           <CustomerTree />
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances
@@ -180,6 +187,10 @@ export default function App() {
           <Route path="/instances/:id" element={<InstanceDetailPage />} />
           <Route path="/predictions" element={<PredictionsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/customers" element={<CustomersPage />} />
+          <Route path="/customers/:customerId/applications" element={<ApplicationsPage />} />
+          <Route path="/applications/:applicationId/groups" element={<DatabaseGroupsPage />} />
+          <Route path="/groups/:groupId" element={<GroupDetailPage />} />
         </Routes>
       </main>
     </div>

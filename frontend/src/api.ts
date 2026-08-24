@@ -305,6 +305,177 @@ export interface HealthResponse {
   last_collection: string | null;
 }
 
+export type CustomerType = "public" | "private";
+export type GroupTopology = "standalone" | "patroni" | "alwayson";
+export type NodeSite = "primary" | "disaster";
+export type NodeRoleHint = "primary" | "replica" | "unknown";
+
+export interface Customer {
+  id: number;
+  name: string;
+  type: CustomerType;
+  created_at: string;
+}
+
+export interface CustomerCreate {
+  name: string;
+  type: CustomerType;
+}
+
+export interface Application {
+  id: number;
+  customer_id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+}
+
+export interface ApplicationCreate {
+  customer_id: number;
+  name: string;
+  description?: string;
+}
+
+export interface DatabaseGroup {
+  id: number;
+  application_id: number;
+  name: string;
+  engine: DbEngine;
+  topology: GroupTopology;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface DatabaseGroupCreate {
+  application_id: number;
+  name: string;
+  engine: DbEngine;
+  topology: GroupTopology;
+  notes?: string;
+}
+
+export interface DbNode {
+  id: number;
+  group_id: number;
+  name: string;
+  host: string;
+  port: number;
+  site: NodeSite;
+  role_hint: NodeRoleHint;
+  agent_url: string | null;
+  agent_token: string | null;
+  options: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface NodeCreate {
+  group_id: number;
+  name: string;
+  host: string;
+  port: number;
+  site: NodeSite;
+  role_hint: NodeRoleHint;
+  agent_url?: string;
+  agent_token?: string;
+  options?: Record<string, unknown>;
+}
+
+export interface NodeServiceStatus {
+  service: string;
+  status: string;
+  latency_ms: number | null;
+  detail: string;
+  source: string;
+  role?: string | null;
+  state?: string | null;
+  vip_owner_local?: boolean | null;
+}
+
+export interface NodeHealth {
+  node_id: number;
+  node_name: string;
+  site: NodeSite;
+  role_hint: NodeRoleHint;
+  services: NodeServiceStatus[];
+  agent: { configured: boolean; reachable: boolean; url: string | null };
+}
+
+export interface GroupHealth {
+  group_id: number;
+  group_name: string;
+  topology: GroupTopology;
+  overall: string;
+  checked_at: string;
+  nodes: NodeHealth[];
+  cluster: {
+    leader: string | null;
+    members: { name: string | null; role: string | null; state: string | null; host: string | null; lag: number | null }[];
+    member_count: number;
+    has_leader: boolean;
+  } | null;
+  etcd_quorum: { total: number; up: number; quorum_size: number; has_quorum: boolean };
+  split_brain: boolean;
+  split_brain_nodes: string[];
+  down_nodes: { node_name: string; site: string }[];
+  totals: { up: number; down: number; unknown: number; skipped: number };
+}
+
+export interface ParameterFinding {
+  name: string;
+  category: string;
+  current_value: string | null;
+  unit: string | null;
+  severity: string;
+  recommendation: string;
+  detail: string;
+}
+
+export interface ParameterAudit {
+  group_id: number;
+  group_name: string;
+  node_id: number;
+  node_name: string;
+  checked_at: string;
+  findings: ParameterFinding[];
+  patroni_config: Record<string, unknown> | null;
+  summary: Record<string, number>;
+}
+
+export interface ReplicaDatabase {
+  database_name: string | null;
+  synchronization_state: string | null;
+  sync_health: string | null;
+  log_send_queue_kb: number | null;
+  redo_queue_kb: number | null;
+  last_commit_time: string | null;
+}
+
+export interface ReplicaHealth {
+  node_id: number | null;
+  node_name: string | null;
+  replica_server_name: string;
+  site: string | null;
+  role: string | null;
+  operational_state: string | null;
+  connected_state: string | null;
+  sync_health: string | null;
+  availability_mode: string | null;
+  failover_mode: string | null;
+  failover_ready: boolean;
+  databases: ReplicaDatabase[];
+}
+
+export interface AlwaysOnHealth {
+  group_id: number;
+  group_name: string;
+  ag_name: string | null;
+  primary_replica: string | null;
+  ag_sync_health: string | null;
+  overall: string;
+  checked_at: string;
+  replicas: ReplicaHealth[];
+}
+
 export interface InstanceCreate {
   name: string;
   engine: DbEngine;
@@ -429,6 +600,34 @@ export const api = {
   getPredictions: () => request<Prediction[]>("/api/predictions"),
   ackPrediction: (id: number) =>
     request<Prediction>(`/api/predictions/${id}/ack`, { method: "POST" }),
+
+  getCustomers: () => request<Customer[]>("/api/customers"),
+  createCustomer: (data: CustomerCreate) =>
+    request<Customer>("/api/customers", { method: "POST", body: JSON.stringify(data) }),
+  deleteCustomer: (id: number) => request<void>(`/api/customers/${id}`, { method: "DELETE" }),
+
+  getApplications: (customerId?: number) =>
+    request<Application[]>(`/api/applications${customerId ? `?customer_id=${customerId}` : ""}`),
+  getApplication: (id: number) => request<Application>(`/api/applications/${id}`),
+  createApplication: (data: ApplicationCreate) =>
+    request<Application>("/api/applications", { method: "POST", body: JSON.stringify(data) }),
+  deleteApplication: (id: number) => request<void>(`/api/applications/${id}`, { method: "DELETE" }),
+
+  getGroups: (applicationId?: number) =>
+    request<DatabaseGroup[]>(`/api/groups${applicationId ? `?application_id=${applicationId}` : ""}`),
+  getGroup: (id: number) => request<DatabaseGroup>(`/api/groups/${id}`),
+  createGroup: (data: DatabaseGroupCreate) =>
+    request<DatabaseGroup>("/api/groups", { method: "POST", body: JSON.stringify(data) }),
+  deleteGroup: (id: number) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
+
+  getGroupNodes: (groupId: number) => request<DbNode[]>(`/api/groups/${groupId}/nodes`),
+  createNode: (data: NodeCreate) =>
+    request<DbNode>("/api/nodes", { method: "POST", body: JSON.stringify(data) }),
+  deleteNode: (id: number) => request<void>(`/api/nodes/${id}`, { method: "DELETE" }),
+
+  getGroupHealth: (groupId: number) => request<GroupHealth>(`/api/groups/${groupId}/health`),
+  getGroupParameters: (groupId: number) => request<ParameterAudit>(`/api/groups/${groupId}/parameters`),
+  getGroupAlwaysOn: (groupId: number) => request<AlwaysOnHealth>(`/api/groups/${groupId}/alwayson`),
 };
 
 export function formatBytes(bytes: number): string {

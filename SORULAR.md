@@ -63,3 +63,26 @@ okuyor (aynı varsayım, tekrar yazmadım). AG DMV'lerini gruptaki
 ekliyor. Gerçek bir Always On cluster'a erişimim olmadığından bu eşleştirme
 mantığı canlı DMV çıktısıyla doğrulanamadı; SQL sözdizimi standart
 Microsoft dokümantasyon örneklerine dayanıyor.
+
+## Faz 5 — Sol menüde iki ayrı "Müşteriler" kavramı
+
+Mevcut sidebar'da `Instance.customer_name`/`application` string alanlarından
+türetilen bir "Müşteriler" ağacı zaten vardı (App.tsx'teki `CustomerTree`).
+Yeni Customer/Application/DatabaseGroup/Node modeli bundan tamamen ayrı bir
+tablo hiyerarşisi. İkisini aynı "Müşteriler" etiketiyle yan yana koymak
+kafa karıştırıcı olacağından yeni giriş noktasını **"Müşteri Grupları"**
+olarak adlandırdım (`/customers` rotası). Eski ağaç ve `/instances` akışı
+olduğu gibi çalışmaya devam ediyor; iki sistem şu an bilerek bağlanmadı
+(bir Instance'ı bir Node'a otomatik eşlemiyorum) — bu, mevcut API'yi
+kırmadan geriye dönük uyumluluğu korumak için Faz 1'den beri süregelen
+tercih.
+
+**Doğrulama notu:** Bu ortamda tarayıcı otomasyon aracı yoktu (claude-in-chrome
+skill'i bu oturumda kullanılamadı). Bunun yerine: `tsc -b && vite build`
+hatasız geçti, backend+frontend dev sunucularını gerçekten ayağa kaldırıp
+`curl` ile customers→applications→groups→nodes→health uçlarını uçtan uca
+çağırarak JSON şekillerini TypeScript tipleriyle birebir karşılaştırdım
+(hepsi eşleşti), ve customer silme gibi bir yazma işlemini de canlı olarak
+test ettim. Sayfaları gerçek bir tarayıcıda tıklayarak görsel/etkileşim
+doğrulaması yapılmadı — kullanıcı fırsat bulduğunda `npm run dev` ile
+kontrol etmeli.
