@@ -651,3 +651,33 @@ class GroupHealthOut(BaseModel):
     split_brain_nodes: list[str] = []
     down_nodes: list[DownNodeOut] = []
     totals: ClusterTotalsOut
+
+
+class ParameterFindingOut(BaseModel):
+    name: str
+    category: str
+    current_value: str | None
+    unit: str | None
+    severity: str
+    recommendation: str
+    detail: str
+
+
+class ParameterAuditSummaryOut(BaseModel):
+    critical: int = 0
+    high: int = 0
+    medium: int = 0
+    low: int = 0
+    ok: int = 0
+    unknown: int = 0
+
+
+class ParameterAuditOut(BaseModel):
+    group_id: int
+    group_name: str
+    node_id: int
+    node_name: str
+    checked_at: str
+    findings: list[ParameterFindingOut]
+    patroni_config: dict[str, Any] | None = None
+    summary: ParameterAuditSummaryOut

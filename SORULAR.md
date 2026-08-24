@@ -32,3 +32,22 @@ yığınını (`etcd, patroni, postgresql, keepalived, haproxy`), değilse
 `postgresql` servis adı yalnızca "veritabanı portu açık mı" testidir,
 motor adı değil — Faz 4'teki `alwayson_health.py` asıl AG sağlığını
 DMV'lerle ayrı bir endpoint'te verecek.
+
+## Faz 3 — Node'da veritabanı kimlik bilgisi yok
+
+Kullanıcının verdiği `Node` şeması (id, group_id, name, host, port, site,
+role_hint, agent_url, agent_token, options) veritabanına bağlanmak için
+username/password içermiyor — `Instance` modelinin aksine. Ama parametre
+denetimi (`pg_settings` okumak) gerçek bir SQL bağlantısı gerektiriyor.
+
+**Varsayım:** `node.options` JSON'ına üç opsiyonel anahtar ekledim:
+`db_username`, `db_password`, `db_database` (yoksa `db_database` varsayılan
+`"postgres"`). `db_username` tanımlı değilse endpoint 400 ile açık bir hata
+mesajı döner (`Node '{name}' için node.options.db_username tanımlı değil`).
+
+**Bilinen sınır:** Bu değerler `Instance.password` gibi
+`credentials.encrypt_secret` ile şifrelenmiyor — `options` JSON'ı zaten
+şifrelenmeden saklanıyor (`Node.agent_token` de aynı durumda). Üretimde
+gerçek şifreler burada plaintext saklanmamalı; bu, Node'a da `Instance`
+tarzı şifreli bir credential deposu eklemeyi gerektiren ayrı bir iş —
+kapsam dışı bıraktım ama not ediyorum.

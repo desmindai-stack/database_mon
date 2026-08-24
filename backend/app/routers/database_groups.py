@@ -4,8 +4,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Application, DatabaseGroup, Node
-from app.schemas import DatabaseGroupCreate, DatabaseGroupOut, DatabaseGroupUpdate, GroupHealthOut, NodeOut
+from app.schemas import (
+    DatabaseGroupCreate,
+    DatabaseGroupOut,
+    DatabaseGroupUpdate,
+    GroupHealthOut,
+    NodeOut,
+    ParameterAuditOut,
+)
 from app.services.cluster_health import collect_group_health
+from app.services.parameter_audit import collect_parameter_audit
 
 router = APIRouter(prefix="/groups", tags=["database-groups"])
 
@@ -97,3 +105,20 @@ async def get_group_health(group_id: int, db: AsyncSession = Depends(get_db)) ->
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Group health failed: {exc}") from exc
     return GroupHealthOut.model_validate(report)
+
+
+@router.get("/{group_id}/parameters", response_model=ParameterAuditOut)
+async def get_group_parameters(group_id: int, db: AsyncSession = Depends(get_db)) -> ParameterAuditOut:
+    group = await db.get(DatabaseGroup, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Database group not found")
+    nodes = list(
+        (await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))).scalars().all()
+    )
+    try:
+        report = await collect_parameter_audit(group, nodes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Parameter audit failed: {exc}") from exc
+    return ParameterAuditOut.model_validate(report)
