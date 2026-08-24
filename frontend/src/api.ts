@@ -543,6 +543,44 @@ export interface ClusterLogs {
   error: string | null;
 }
 
+export interface DashboardTotals {
+  customers: number;
+  applications: number;
+  groups: number;
+  nodes: number;
+}
+
+export interface DashboardHealth {
+  critical: number;
+  warning: number;
+  healthy: number;
+  unknown: number;
+}
+
+export interface DashboardIssue {
+  severity: string;
+  customer: string;
+  application: string;
+  group: string;
+  environment: GroupEnvironment;
+  message: string;
+  link_hint: string;
+}
+
+export interface DashboardRecommendation {
+  severity: string;
+  source: string;
+  group: string;
+  message: string;
+}
+
+export interface DashboardSummary {
+  totals: DashboardTotals;
+  health: DashboardHealth;
+  top_issues: DashboardIssue[];
+  recommendations: DashboardRecommendation[];
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -635,6 +673,8 @@ export const api = {
   createNode: (data: NodeCreate) =>
     request<DbNode>("/api/nodes", { method: "POST", body: JSON.stringify(data) }),
   deleteNode: (id: number) => request<void>(`/api/nodes/${id}`, { method: "DELETE" }),
+
+  getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
 
   getGroupHealth: (groupId: number) => request<GroupHealth>(`/api/groups/${groupId}/health`),
   getGroupParameters: (groupId: number) => request<ParameterAudit>(`/api/groups/${groupId}/parameters`),

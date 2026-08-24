@@ -30,6 +30,42 @@ makul bir varsayımla devam ettim.
   unknown` — prod'daki tam HA topolojisini tekrarlamak yerine gerçekçi bir
   "tek düğümlü test ortamı" örneği verdim.
 
+## Faz 7 — İŞ 3: Dashboard özet endpoint'i
+
+- **Canlı prob, cache yok:** `GET /api/dashboard/summary` her çağrıda tüm
+  gruplar için `collect_group_health` + (postgresql gruplarda)
+  `collect_parameter_audit`'i paralel (asyncio.gather) çalıştırıyor —
+  Faz 2-4'te kurulan "on-demand, cache'siz" mimariyle tutarlı ama demo'daki
+  4 grup (tamamı erişilemez host) için ölçtüğümde ~6 saniye sürdü. Gerçek
+  altyapıda erişilebilir host'lar çok daha hızlı yanıt verir/hızlı
+  reddeder; DNS çözümlemesi başarısız olan demo host'ları timeout'a kadar
+  bekliyor. Çok sayıda grup olan kurulumlarda bu endpoint yavaş
+  hissedilebilir — periyodik arka plan toplama + cache katmanı ayrı bir iş.
+- **`index_advisor` ve `performance_insights` kaynakları `Instance.
+  group_id` bağlantısına muhtaç:** Bu iki servis `Instance`/`MetricSample`/
+  `SlowQuerySample` üzerinden çalışıyor (Node üzerinden değil). Bir gruba
+  `group_id` ile bağlı `Instance` yoksa (ki seed_demo.py hiç Instance
+  oluşturmuyor, sadece Node) bu iki kaynak o grup için sessizce boş kalır.
+  `parameter_audit` (Node tabanlı) her zaman denenir. Bu üç kaynağın hepsi
+  best-effort: herhangi biri hata verirse (ör. `db_username` tanımsız,
+  bağlantı reddi) o grup için sessizce atlanır, endpoint hiçbir zaman
+  bundan dolayı patlamaz.
+- **`top_issues` granülerliği:** Spec "en kritik 10 sorun" dedi, "grup
+  başına 1 sorun" demedi — ben grup health raporundaki her somut problemi
+  (split-brain, etcd quorum kaybı, düğüm down, no-leader) ayrı bir "sorun"
+  olarak ürettim; aynı gruptan birden fazla sorun çıkabiliyor. `prod`
+  ortamdakiler her zaman `preprod/test/dev`'den önce sıralanıyor
+  (`environment` sonra `severity`), sonra ilk 10'a kesiliyor.
+- **Recommendations'da link yok:** Spec şeması `{severity, source, group,
+  message}` — `link_hint` içermiyor (issues'daki gibi). Grup adı var ama
+  id yok, UI'da bu yüzden tıklanabilir link değil, düz metin olarak
+  gösteriliyor.
+- **Private modda backend filtrelemiyor, UI gizliyor:** "customer alanı
+  gizlenebilir" ifadesini UI katmanında yorumladım — private modda zaten
+  tek müşteri var (backend'ce garanti), bu yüzden sunucu tarafında ayrıca
+  bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
+  sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
+
 ## ~~Faz 2 — Grup seviyeli alert kalıcılığı~~ (KAPANDI — Faz 6)
 
 ~~`AlertRule`/`AlertEvent` modelleri `instance_id`'ye bağlı...~~

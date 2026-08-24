@@ -89,6 +89,36 @@ her health çağrısı artık `replication_lag_bytes`/`etcd_quorum_lost`/
 yazıyor, tekrarlı çağrılarda mükerrer event açmıyor. Alerts sayfası
 `group_id`'yi "Group #id" olarak gösterip grup detayına linkliyor.
 
+**Faz 7 — İŞ 2: deployment mode + environment ayrımı.** `GET /api/config`
+(`deployment_mode`, `default_customer_name`). Private modda backend açılışta
+(`services/bootstrap.ensure_default_customer`) hiç müşteri yoksa
+`DEFAULT_CUSTOMER_NAME` ile tek müşteriyi otomatik oluşturuyor —
+idempotent. Frontend private modda sidebar'ı doğrudan o müşterinin
+Applications listesine yönlendiriyor ("Uygulamalar" etiketiyle),
+`/customers` sayfası kendini otomatik `/customers/{id}/applications`'a
+yönlendiriyor, müşteri oluşturma/silme UI'ı gizleniyor; public modda hiçbir
+şey değişmedi. `DatabaseGroup.environment` (`prod|preprod|test|dev`,
+varsayılan `prod`) eklendi — migration, şemalar, CRUD, `seed_demo.py`
+(boa ve aapara için birer prod + birer test grubu). Grup listesinde ve
+Group Detail'de `.env-badge` rozeti; prod kırmızı/danger renkte görsel
+olarak ayrışıyor.
+
+**Faz 7 — İŞ 3: Dashboard özet endpoint'i.** `GET /api/dashboard/summary`
+(`services/dashboard.py`): tüm gruplar için paralel canlı health probe +
+(postgresql gruplarda) parametre denetimi + (gruba `group_id` ile bağlı
+`Instance`'lar varsa) `performance_insights`/`index_advisor` çalıştırıp
+`{totals, health, top_issues, recommendations}` derliyor. `top_issues`
+split-brain/etcd-quorum-kaybı/düğüm-down/no-leader gibi somut problemleri
+`prod` önce, sonra severity'ye göre sıralayıp ilk 10'u döndürüyor.
+Recommendations üç kaynaktan (parameter_audit, performance_insights,
+index_advisor) best-effort derleniyor — biri hata verirse sessizce
+atlanıyor, endpoint asla patlamıyor. DashboardPage yeniden kuruldu: üstte
+grup bazlı sağlık sayaçları (Kritik/Uyarı/Sağlıklı/Bilinmiyor), altında
+tıklanabilir "En kritik sorunlar" listesi (Group Detail'e linkli) ve
+"Öneriler" paneli; hiç grup yoksa "İzlenecek grup ekleyin" boş-durum kartı.
+Eski Instance-bazlı özet (stat kartları + filtreli tablo) "Instance bazlı
+görünüm" başlığı altında altta kalmaya devam ediyor.
+
 ## Nasıl test edilir
 
 ### Backend
@@ -117,6 +147,13 @@ Sonra:
   işletim sisteminde "ODBC Driver 18 for SQL Server") net bir hata mesajıyla
   döner.
 - Mevcut uçlar (`/api/instances/...`) hiç değişmeden çalışmalı.
+- `GET /api/config` — `deployment_mode`/`default_customer_name` döner.
+  `DEPLOYMENT_MODE=private DEFAULT_CUSTOMER_NAME="X Bank" uvicorn ...` ile
+  başlatırsanız (temiz bir DB'de) açılışta otomatik bir müşteri oluşur.
+- `GET /api/dashboard/summary` — X Bank demo verisiyle (tüm host'lar
+  erişilemez) `health.critical: 4`, `top_issues` 10 kayıt, hepsi
+  `environment: "prod"` önce sıralı. Boş bir DB'de hepsi `0`/`[]` döner,
+  yavaşlamadan (probe edilecek grup yoksa network çağrısı yapılmaz).
 
 ### Frontend
 ```bash
@@ -143,10 +180,16 @@ sayfasına gidip düğüm ekleme formunu ve "Sağlığı kontrol et" /
 - Faz 4 gerçek bir SQL Server'a karşı test edilemedi (ortamda yok) — DMV
   sorguları standart Microsoft dokümantasyon örneklerine dayanıyor, bağlantı
   hataları temiz şekilde 502/400 olarak raporlanıyor (doğrulandı).
-- Faz 5'teki sayfalar gerçek bir tarayıcıda tıklanarak doğrulanmadı (bu
+- Faz 5/7'deki sayfalar gerçek bir tarayıcıda tıklanarak doğrulanmadı (bu
   ortamda tarayıcı otomasyon aracı yoktu); bunun yerine `tsc -b && vite build`
   ve backend+frontend'i gerçekten ayağa kaldırıp `curl` ile uçtan uca API
   şekli karşılaştırması yapıldı.
+- `GET /api/dashboard/summary` canlı prob yapıyor, cache'lemiyor — çok
+  sayıda grup / yavaş host'lu kurulumlarda yavaş hissedilebilir (demo'da
+  4 erişilemez grup için ~6sn). `index_advisor`/`performance_insights`
+  önerileri yalnızca `Instance.group_id` ile bir gruba bağlanmış
+  instance'lar için üretiliyor — `seed_demo.py` hiç Instance oluşturmadığı
+  için demo'da bu iki kaynak boş kalır (beklenen davranış).
 
 ## API uyumluluğu
 

@@ -1,6 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, formatBytes, HealthResponse, InstanceSummary } from "../api";
+import { api, AppConfig, DashboardSummary, formatBytes, HealthResponse, InstanceSummary } from "../api";
+
+const SEVERITY_COLOR: Record<string, string> = {
+  critical: "var(--danger)",
+  high: "var(--danger)",
+  warning: "var(--warning)",
+  medium: "var(--warning)",
+  low: "var(--success)",
+  info: "var(--success)",
+};
 
 type StatusFilter = "all" | "healthy" | "warning" | "alerting" | "pending" | "disabled";
 type EnvFilter = "all" | "public" | "private";
@@ -34,12 +43,25 @@ export default function DashboardPage() {
   const customerFilter = searchParams.get("customer");
   const appFilter = searchParams.get("app");
 
+  const [groupSummary, setGroupSummary] = useState<DashboardSummary | null>(null);
+  const [groupSummaryError, setGroupSummaryError] = useState<string | null>(null);
+  const [groupSummaryLoading, setGroupSummaryLoading] = useState(true);
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+
   useEffect(() => {
     api.getSummaries()
       .then(setSummaries)
       .catch((err) => setError(String(err.message || err)));
     api.getHealth().then(setConfig).catch(() => undefined);
+    api.getConfig().then(setAppConfig).catch(() => undefined);
+    setGroupSummaryLoading(true);
+    api.getDashboardSummary()
+      .then(setGroupSummary)
+      .catch((err) => setGroupSummaryError(String(err.message || err)))
+      .finally(() => setGroupSummaryLoading(false));
   }, []);
+
+  const isPrivateGroups = appConfig?.deployment_mode === "private";
 
   const totalConnections = summaries.reduce(
     (sum, s) => sum + (s.latest_metrics?.active_connections ?? 0),
@@ -146,6 +168,90 @@ export default function DashboardPage() {
           <Link to="/instances" className="btn btn-primary">+ Yeni instance</Link>
         </div>
       </header>
+
+      {groupSummaryError && <div className="error">{groupSummaryError}</div>}
+
+      {!groupSummaryLoading && groupSummary && groupSummary.totals.groups === 0 ? (
+        <div className="card empty-card" style={{ marginBottom: "1.5rem" }}>
+          <p style={{ color: "var(--muted)" }}>
+            Henüz izlenen bir database group yok. <Link to="/customers">İzlenecek grup ekleyin</Link>.
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="stats-grid">
+            <StatCard
+              label="Kritik"
+              value={groupSummary?.health.critical ?? 0}
+              color="var(--danger)"
+              sub="grup bazında"
+            />
+            <StatCard label="Uyarı" value={groupSummary?.health.warning ?? 0} color="var(--warning)" sub="grup bazında" />
+            <StatCard label="Sağlıklı" value={groupSummary?.health.healthy ?? 0} color="var(--success)" sub="grup bazında" />
+            <StatCard label="Bilinmiyor" value={groupSummary?.health.unknown ?? 0} color="var(--muted)" sub="veri yok / düğümsüz" />
+            <StatCard
+              label="Database groups"
+              value={groupSummary?.totals.groups ?? 0}
+              color="var(--accent)"
+              sub={`${groupSummary?.totals.nodes ?? 0} düğüm`}
+            />
+            {!isPrivateGroups && (
+              <StatCard label="Müşteriler" value={groupSummary?.totals.customers ?? 0} color="#a78bfa" />
+            )}
+          </div>
+
+          <div className="grid grid-2" style={{ marginBottom: "1.5rem" }}>
+            <div className="card">
+              <h3 className="chart-title">En kritik sorunlar</h3>
+              {groupSummaryLoading ? (
+                <p className="muted-note">Yükleniyor…</p>
+              ) : !groupSummary || groupSummary.top_issues.length === 0 ? (
+                <p className="muted-note">Şu anda açık bir sorun yok.</p>
+              ) : (
+                <ul className="event-list">
+                  {groupSummary.top_issues.map((issue, idx) => (
+                    <li key={idx}>
+                      <span
+                        className="event-dot"
+                        style={{ background: SEVERITY_COLOR[issue.severity] || "var(--muted)" }}
+                      />
+                      <div>
+                        <Link to={issue.link_hint}>{issue.group}</Link>
+                        {!isPrivateGroups && <span className="muted-note"> · {issue.customer}</span>}{" "}
+                        <span className={`env-badge ${issue.environment}`}>{issue.environment}</span>
+                        <div className="muted-note">{issue.message}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="card">
+              <h3 className="chart-title">Öneriler</h3>
+              {groupSummaryLoading ? (
+                <p className="muted-note">Yükleniyor…</p>
+              ) : !groupSummary || groupSummary.recommendations.length === 0 ? (
+                <p className="muted-note">Şu anda öneri yok.</p>
+              ) : (
+                <ul className="event-list">
+                  {groupSummary.recommendations.map((rec, idx) => (
+                    <li key={idx}>
+                      <span className={`insight-severity ${rec.severity}`}>{rec.severity}</span>
+                      <div>
+                        <strong>{rec.group}</strong> <span className="muted-note">({rec.source})</span>
+                        <div className="muted-note">{rec.message}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+
+      <h3 className="chart-title">Instance bazlı görünüm</h3>
 
       {error && <div className="error">{error}</div>}
 

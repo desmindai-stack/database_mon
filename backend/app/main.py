@@ -12,6 +12,7 @@ from app.routers import (
     alerts,
     applications,
     customers,
+    dashboard,
     database_groups,
     instances,
     metrics,
@@ -56,6 +57,7 @@ app.include_router(customers.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(database_groups.router, prefix="/api")
 app.include_router(nodes.router, prefix="/api")
+app.include_router(dashboard.router, prefix="/api")
 
 
 @app.get("/api/health", response_model=HealthResponse)

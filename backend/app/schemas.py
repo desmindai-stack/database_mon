@@ -331,6 +331,44 @@ class ConfigOut(BaseModel):
     default_customer_name: str | None
 
 
+class DashboardTotalsOut(BaseModel):
+    customers: int = 0
+    applications: int = 0
+    groups: int = 0
+    nodes: int = 0
+
+
+class DashboardHealthOut(BaseModel):
+    critical: int = 0
+    warning: int = 0
+    healthy: int = 0
+    unknown: int = 0
+
+
+class DashboardIssueOut(BaseModel):
+    severity: str
+    customer: str
+    application: str
+    group: str
+    environment: str
+    message: str
+    link_hint: str
+
+
+class DashboardRecommendationOut(BaseModel):
+    severity: str
+    source: str
+    group: str
+    message: str
+
+
+class DashboardSummaryOut(BaseModel):
+    totals: DashboardTotalsOut
+    health: DashboardHealthOut
+    top_issues: list[DashboardIssueOut]
+    recommendations: list[DashboardRecommendationOut]
+
+
 class ConnectionTestResult(BaseModel):
     ok: bool
     message: str
