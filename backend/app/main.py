@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
-from app.collector.scheduler import start_scheduler, stop_scheduler
+from app.collectors.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample

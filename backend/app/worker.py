@@ -6,7 +6,7 @@ import asyncio
 import logging
 import signal
 
-from app.collector.scheduler import start_scheduler, stop_scheduler
+from app.collectors.scheduler import start_scheduler, stop_scheduler
 from app.config import settings
 from app.database import init_db
 
