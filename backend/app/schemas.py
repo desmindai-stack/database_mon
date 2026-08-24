@@ -576,6 +576,7 @@ class ClusterMemberOut(BaseModel):
     role: str | None = None
     state: str | None = None
     host: str | None = None
+    lag: float | None = None
 
 
 class ClusterSummaryOut(BaseModel):
@@ -614,3 +615,39 @@ class ClusterLogsOut(BaseModel):
     unit: str | None = None
     lines: list[str] = []
     error: str | None = None
+
+
+class NodeHealthOut(BaseModel):
+    node_id: int
+    node_name: str
+    site: str
+    role_hint: str
+    services: list[ClusterServiceStatusOut]
+    agent: ClusterAgentInfoOut
+
+
+class EtcdQuorumOut(BaseModel):
+    total: int = 0
+    up: int = 0
+    quorum_size: int = 0
+    has_quorum: bool = True
+
+
+class DownNodeOut(BaseModel):
+    node_name: str
+    site: str
+
+
+class GroupHealthOut(BaseModel):
+    group_id: int
+    group_name: str
+    topology: str
+    overall: str
+    checked_at: str
+    nodes: list[NodeHealthOut]
+    cluster: ClusterSummaryOut | None = None
+    etcd_quorum: EtcdQuorumOut
+    split_brain: bool
+    split_brain_nodes: list[str] = []
+    down_nodes: list[DownNodeOut] = []
+    totals: ClusterTotalsOut

@@ -14,6 +14,19 @@ CLUSTER_RULE_SPECS = [
     ("Cluster services down", "cluster_services_down", ">", 0),
 ]
 
+# Group-level (multi-node) health flags — produced by
+# services.cluster_health.group_health_metric_flags() for GET /api/groups/{id}/health.
+# Not yet wired to persisted AlertRule/AlertEvent rows: those models key off
+# instance_id, and a DatabaseGroup has no single representative Instance. Kept
+# here as the shared metric-name catalog so a future group-scoped alert table
+# can reuse the same names without inventing new ones. See SORULAR.md.
+GROUP_RULE_SPECS = [
+    ("Replication lag high", "replication_lag_bytes", ">", 50_000_000),
+    ("etcd quorum lost", "etcd_quorum_lost", ">", 0),
+    ("Split-brain detected", "split_brain", ">", 0),
+    ("Node down", "node_down", ">", 0),
+]
+
 
 def _compare(value: float, operator: str, threshold: float) -> bool:
     if operator == ">":

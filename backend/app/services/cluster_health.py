@@ -10,7 +10,7 @@ from urllib.parse import urljoin
 
 import httpx
 
-from app.models import Instance
+from app.models import DatabaseGroup, Instance, Node
 
 logger = logging.getLogger(__name__)
 
@@ -118,17 +118,23 @@ async def _tcp_reachable(host: str, port: int, timeout: float) -> tuple[bool, fl
         return False, (time.perf_counter() - started) * 1000, str(exc)
 
 
-async def probe_postgresql(instance: Instance, timeout: float) -> dict[str, Any]:
-    ok, latency, err = await _tcp_reachable(instance.host, instance.port, timeout)
+async def probe_postgresql_host(host: str, port: int, timeout: float) -> dict[str, Any]:
+    ok, latency, err = await _tcp_reachable(host, port, timeout)
     if ok:
-        return _result("postgresql", "up", latency_ms=latency, detail=f"TCP {instance.host}:{instance.port} open")
+        return _result("postgresql", "up", latency_ms=latency, detail=f"TCP {host}:{port} open")
     return _result("postgresql", "down", latency_ms=latency, detail=err or "unreachable")
 
 
-async def probe_patroni(instance: Instance, opts: dict[str, Any], timeout: float) -> tuple[dict[str, Any], dict[str, Any] | None]:
+async def probe_postgresql(instance: Instance, timeout: float) -> dict[str, Any]:
+    return await probe_postgresql_host(instance.host, instance.port, timeout)
+
+
+async def probe_patroni_host(
+    host: str, opts: dict[str, Any], timeout: float
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     port = int(opts.get("patroni_port") or 8008)
     scheme = "https" if opts.get("patroni_tls") else "http"
-    base = f"{scheme}://{instance.host}:{port}"
+    base = f"{scheme}://{host}:{port}"
     status_code, body, latency, err = await _http_get(f"{base}/patroni", timeout=timeout)
     cluster_summary = None
 
@@ -180,7 +186,10 @@ async def probe_patroni(instance: Instance, opts: dict[str, Any], timeout: float
             m_role = m.get("role")
             m_state = m.get("state")
             m_host = m.get("host")
-            member_rows.append({"name": name, "role": m_role, "state": m_state, "host": m_host})
+            m_lag = m.get("lag") if isinstance(m.get("lag"), (int, float)) else None
+            member_rows.append(
+                {"name": name, "role": m_role, "state": m_state, "host": m_host, "lag": m_lag}
+            )
             if m_role in {"leader", "master", "primary"}:
                 leader = name
         cluster_summary = {
@@ -192,9 +201,15 @@ async def probe_patroni(instance: Instance, opts: dict[str, Any], timeout: float
     return result, cluster_summary
 
 
-async def probe_etcd(instance: Instance, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
+async def probe_patroni(
+    instance: Instance, opts: dict[str, Any], timeout: float
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    return await probe_patroni_host(instance.host, opts, timeout)
+
+
+async def probe_etcd_host(host: str, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
     port = int(opts.get("etcd_port") or 2379)
-    url = f"http://{instance.host}:{port}/health"
+    url = f"http://{host}:{port}/health"
     status_code, body, latency, err = await _http_get(url, timeout=timeout)
     if err or status_code is None:
         return _result("etcd", "down", latency_ms=latency, detail=err or "unreachable")
@@ -208,12 +223,16 @@ async def probe_etcd(instance: Instance, opts: dict[str, Any], timeout: float) -
     return _result("etcd", "down", latency_ms=latency, detail=f"HTTP {status_code}; body={body!r}"[:240])
 
 
-async def probe_haproxy(instance: Instance, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
+async def probe_etcd(instance: Instance, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
+    return await probe_etcd_host(instance.host, opts, timeout)
+
+
+async def probe_haproxy_host(host: str, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
     port = int(opts.get("haproxy_stats_port") or 8404)
     path = str(opts.get("haproxy_stats_path") or "/stats;csv")
     if not path.startswith("/"):
         path = "/" + path
-    url = f"http://{instance.host}:{port}{path}"
+    url = f"http://{host}:{port}{path}"
     status_code, body, latency, err = await _http_get(url, timeout=timeout)
     if err or status_code is None:
         return _result("haproxy", "down", latency_ms=latency, detail=err or "unreachable")
@@ -257,18 +276,21 @@ def line_is_csv_header(line: str) -> bool:
     return line.lower().startswith("#") or "pxname" in line.lower()
 
 
-async def probe_keepalived(instance: Instance, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
-    vip = opts.get("keepalived_vip")
+async def probe_haproxy(instance: Instance, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
+    return await probe_haproxy_host(instance.host, opts, timeout)
+
+
+async def probe_keepalived_host(vip: str | None, port: int, timeout: float) -> dict[str, Any]:
     if not vip:
         return _result("keepalived", "unknown", detail="keepalived_vip tanımlı değil")
-    # Prefer TCP to Postgres port on VIP; also try patroni port as secondary signal.
-    ok, latency, err = await _tcp_reachable(str(vip), instance.port, timeout)
+    # Prefer TCP to the database port on the VIP; also try patroni port as secondary signal.
+    ok, latency, err = await _tcp_reachable(str(vip), port, timeout)
     if ok:
         return _result(
             "keepalived",
             "up",
             latency_ms=latency,
-            detail=f"VIP {vip}:{instance.port} reachable",
+            detail=f"VIP {vip}:{port} reachable",
             extras={"vip": vip, "vip_owner_local": None},
         )
     # Fallback: DNS/socket resolution only
@@ -283,6 +305,10 @@ async def probe_keepalived(instance: Instance, opts: dict[str, Any], timeout: fl
         )
     except Exception:
         return _result("keepalived", "down", latency_ms=latency, detail=err or "VIP unreachable", extras={"vip": vip})
+
+
+async def probe_keepalived(instance: Instance, opts: dict[str, Any], timeout: float) -> dict[str, Any]:
+    return await probe_keepalived_host(opts.get("keepalived_vip"), instance.port, timeout)
 
 
 async def fetch_agent_snapshot(opts: dict[str, Any], timeout: float) -> dict[str, Any] | None:
@@ -496,4 +522,162 @@ def compact_cluster_snapshot(report: dict[str, Any]) -> dict[str, Any]:
             for s in report.get("services") or []
         ],
         "agent_reachable": bool((report.get("agent") or {}).get("reachable")),
+    }
+
+
+def _node_opts(node: Node) -> dict[str, Any]:
+    raw = dict(DEFAULT_OPTIONS)
+    raw.update(node.options or {})
+    return raw
+
+
+def _node_services(group: DatabaseGroup, node: Node) -> set[str]:
+    raw = node.options or {}
+    override = raw.get("services")
+    if override:
+        return set(override)
+    if group.topology == "patroni":
+        return {"etcd", "patroni", "postgresql", "keepalived", "haproxy"}
+    # standalone / alwayson: just confirm the database port itself is reachable.
+    return {"postgresql"}
+
+
+async def probe_node(group: DatabaseGroup, node: Node, timeout_default: float) -> dict[str, Any]:
+    """Probe every enabled service for one Node, plus its optional host-agent snapshot."""
+    opts = _node_opts(node)
+    timeout = float(opts.get("probe_timeout_sec") or timeout_default)
+    enabled = _node_services(group, node)
+
+    tasks: dict[str, Any] = {}
+    if "postgresql" in enabled:
+        tasks["postgresql"] = asyncio.create_task(probe_postgresql_host(node.host, node.port, timeout))
+    if "patroni" in enabled:
+        tasks["patroni"] = asyncio.create_task(probe_patroni_host(node.host, opts, timeout))
+    if "etcd" in enabled:
+        tasks["etcd"] = asyncio.create_task(probe_etcd_host(node.host, opts, timeout))
+    if "haproxy" in enabled:
+        tasks["haproxy"] = asyncio.create_task(probe_haproxy_host(node.host, opts, timeout))
+    if "keepalived" in enabled:
+        tasks["keepalived"] = asyncio.create_task(
+            probe_keepalived_host(opts.get("keepalived_vip"), node.port, timeout)
+        )
+
+    agent_opts = {"agent_url": node.agent_url, "agent_token": node.agent_token}
+    agent_task = asyncio.create_task(fetch_agent_snapshot(agent_opts, timeout))
+
+    results: list[dict[str, Any]] = []
+    cluster_summary: dict[str, Any] | None = None
+    for name, task in tasks.items():
+        try:
+            value = await task
+            if name == "patroni":
+                result, cluster_summary = value
+                results.append(result)
+            else:
+                results.append(value)
+        except Exception as exc:
+            results.append(_result(name, "unknown", detail=str(exc)))
+
+    order = {"patroni": 0, "etcd": 1, "postgresql": 2, "keepalived": 3, "haproxy": 4}
+    results.sort(key=lambda r: order.get(r["service"], 99))
+
+    agent = None
+    try:
+        agent = await agent_task
+    except Exception as exc:
+        logger.debug("agent snapshot error for node %s: %s", node.id, exc)
+    results = merge_agent_into_services(results, agent)
+
+    return {
+        "node_id": node.id,
+        "node_name": node.name,
+        "site": node.site,
+        "role_hint": node.role_hint,
+        "services": results,
+        "cluster_summary": cluster_summary,
+        "agent": {
+            "configured": bool(node.agent_url),
+            "reachable": bool(agent and agent.get("agent_ok")),
+            "url": node.agent_url,
+        },
+    }
+
+
+async def collect_group_health(group: DatabaseGroup, nodes: list[Node]) -> dict[str, Any]:
+    """Multi-node health for a DatabaseGroup: per-node probes + etcd quorum + split-brain detection."""
+    timeout_default = 3.0
+    node_reports = list(await asyncio.gather(*(probe_node(group, node, timeout_default) for node in nodes)))
+
+    cluster_summary = next((r["cluster_summary"] for r in node_reports if r.get("cluster_summary")), None)
+    for r in node_reports:
+        r.pop("cluster_summary", None)
+
+    etcd_statuses = [s for r in node_reports for s in r["services"] if s["service"] == "etcd"]
+    etcd_total = len(etcd_statuses)
+    etcd_up = sum(1 for s in etcd_statuses if s["status"] == "up")
+    quorum_size = etcd_total // 2 + 1 if etcd_total else 0
+    etcd_quorum = {
+        "total": etcd_total,
+        "up": etcd_up,
+        "quorum_size": quorum_size,
+        "has_quorum": (etcd_up >= quorum_size) if etcd_total else True,
+    }
+
+    vip_owner_nodes = [
+        r["node_name"]
+        for r in node_reports
+        for s in r["services"]
+        if s["service"] == "keepalived" and s.get("vip_owner_local") is True
+    ]
+    split_brain = len(vip_owner_nodes) > 1
+
+    down_nodes = [
+        {"node_name": r["node_name"], "site": r["site"]}
+        for r in node_reports
+        if any(s["service"] == "postgresql" and s["status"] == "down" for s in r["services"])
+    ]
+
+    up = sum(1 for r in node_reports for s in r["services"] if s["status"] == "up")
+    down = sum(1 for r in node_reports for s in r["services"] if s["status"] == "down")
+    unknown = sum(1 for r in node_reports for s in r["services"] if s["status"] == "unknown")
+    skipped = sum(1 for r in node_reports for s in r["services"] if s["status"] == "skipped")
+
+    overall = "healthy"
+    if unknown:
+        overall = "warning"
+    if down_nodes or split_brain or not etcd_quorum["has_quorum"]:
+        overall = "critical"
+    if cluster_summary is not None and not cluster_summary.get("has_leader"):
+        overall = "critical"
+
+    return {
+        "group_id": group.id,
+        "group_name": group.name,
+        "topology": group.topology,
+        "overall": overall,
+        "checked_at": _now_iso(),
+        "nodes": node_reports,
+        "cluster": cluster_summary,
+        "etcd_quorum": etcd_quorum,
+        "split_brain": split_brain,
+        "split_brain_nodes": vip_owner_nodes,
+        "down_nodes": down_nodes,
+        "totals": {"up": up, "down": down, "unknown": unknown, "skipped": skipped},
+    }
+
+
+def group_health_metric_flags(report: dict[str, Any]) -> dict[str, float]:
+    """Numeric flags for alert_engine — group-level counterpart of cluster_health_metric_flags."""
+    max_lag = 0.0
+    cluster = report.get("cluster") or {}
+    for member in cluster.get("members") or []:
+        lag = member.get("lag")
+        if isinstance(lag, (int, float)):
+            max_lag = max(max_lag, float(lag))
+
+    return {
+        "replication_lag_bytes": max_lag,
+        "etcd_quorum_lost": 0.0 if (report.get("etcd_quorum") or {}).get("has_quorum", True) else 1.0,
+        "split_brain": 1.0 if report.get("split_brain") else 0.0,
+        "node_down": float(len(report.get("down_nodes") or [])),
     }

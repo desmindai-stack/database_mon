@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Application, DatabaseGroup, Node
-from app.schemas import DatabaseGroupCreate, DatabaseGroupOut, DatabaseGroupUpdate, NodeOut
+from app.schemas import DatabaseGroupCreate, DatabaseGroupOut, DatabaseGroupUpdate, GroupHealthOut, NodeOut
+from app.services.cluster_health import collect_group_health
 
 router = APIRouter(prefix="/groups", tags=["database-groups"])
 
@@ -79,3 +80,20 @@ async def list_group_nodes(group_id: int, db: AsyncSession = Depends(get_db)) ->
         raise HTTPException(status_code=404, detail="Database group not found")
     result = await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))
     return list(result.scalars().all())
+
+
+@router.get("/{group_id}/health", response_model=GroupHealthOut)
+async def get_group_health(group_id: int, db: AsyncSession = Depends(get_db)) -> GroupHealthOut:
+    group = await db.get(DatabaseGroup, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Database group not found")
+    nodes = list(
+        (await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))).scalars().all()
+    )
+    if not nodes:
+        raise HTTPException(status_code=400, detail="Group has no nodes to probe")
+    try:
+        report = await collect_group_health(group, nodes)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Group health failed: {exc}") from exc
+    return GroupHealthOut.model_validate(report)
