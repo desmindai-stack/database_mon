@@ -1,4 +1,4 @@
--- pgwatch control plane schema for Supabase (PostgreSQL)
+-- dbace control plane schema for Supabase (PostgreSQL)
 -- Run via Supabase SQL editor or: supabase db push
 
 CREATE TABLE IF NOT EXISTS instances (

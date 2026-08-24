@@ -7,15 +7,15 @@
 # Üretimde çoğu zaman agent'ı container yerine native systemd unit olarak çalıştırmak daha doğrudur
 # (bkz. agents/host-agent/README.md).
 
-name: pgwatch-host-agent
+name: dbace-host-agent
 
 services:
   host-agent:
     build:
       context: ../../agents/host-agent
       dockerfile: Dockerfile
-    image: pgwatch/host-agent:latest
-    container_name: pgwatch-host-agent
+    image: dbace/host-agent:latest
+    container_name: dbace-host-agent
     network_mode: host
     environment:
       AGENT_TOKEN: ${AGENT_TOKEN:?AGENT_TOKEN gerekli}

@@ -8,8 +8,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
-    app_name: str = "pgwatch"
-    database_url: str = f"sqlite+aiosqlite:///{Path(__file__).resolve().parents[2] / 'data' / 'pgwatch.db'}"
+    app_name: str = "dbace"
+    database_url: str = f"sqlite+aiosqlite:///{Path(__file__).resolve().parents[2] / 'data' / 'dbace.db'}"
     collect_interval_seconds: int = 15
     api_host: str = "0.0.0.0"
     api_port: int = 8000

@@ -25,7 +25,7 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-app = FastAPI(title="pgwatch host-agent", version="1.0.0")
+app = FastAPI(title="dbace host-agent", version="1.0.0")
 
 
 def _authorize(token: str | None) -> None:
@@ -58,7 +58,7 @@ def _run(cmd: list[str], timeout: float = 5.0) -> tuple[int, str, str]:
 @app.get("/v1/health")
 async def health(x_agent_token: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(x_agent_token)
-    return {"status": "ok", "service": "pgwatch-host-agent"}
+    return {"status": "ok", "service": "dbace-host-agent"}
 
 
 @app.get("/v1/services")

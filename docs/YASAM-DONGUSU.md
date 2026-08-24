@@ -1,4 +1,4 @@
-# pgwatch — Yaşam döngüsü (geliştirme → on-prem paket)
+# dbace — Yaşam döngüsü (geliştirme → on-prem paket)
 
 Bu doküman **doğru sırayı** tanımlar: önce bulutta geliştirme/test, sonra kapalı ortama **paket** olarak taşıma.
 
@@ -15,8 +15,8 @@ Bu doküman **doğru sırayı** tanımlar: önce bulutta geliştirme/test, sonra
 | Bileşen | Platform | Rol |
 |---------|----------|-----|
 | Uygulama veritabanı | **Supabase** (PostgreSQL) | Instance, metrik, alarm, tahmin tabloları |
-| API | **Railway** servis `pgwatch-api` | REST, bağlantı testi |
-| Worker | **Railway** servis `pgwatch-worker` | 15 sn’de bir metrik toplama |
+| API | **Railway** servis `dbace-api` | REST, bağlantı testi |
+| Worker | **Railway** servis `dbace-worker` | 15 sn’de bir metrik toplama |
 | Dashboard | **Vercel** | Web arayüzü |
 | Sizin PC | Cursor | Kod; isteğe bağlı local test |
 
@@ -42,7 +42,7 @@ cd deploy/onprem/scripts
 ./make-release-package.sh v0.3.0
 ```
 
-Çıktı: `deploy/dist/pgwatch-onprem-v0.3.0/` (Docker imajları + kurulum dosyaları + VERSION).
+Çıktı: `deploy/dist/dbace-onprem-v0.3.0/` (Docker imajları + kurulum dosyaları + VERSION).
 
 ---
 
@@ -63,7 +63,7 @@ Bulut ortamı **zorunlu değil**; sadece geliştirme hızlandırıcı.
 
 | Veri | Faz 1 (Supabase) | Faz 3 (on-prem) |
 |------|------------------|-----------------|
-| Metrik geçmişi | Supabase Postgres | `pgwatch-db` volume |
+| Metrik geçmişi | Supabase Postgres | `dbace-db` volume |
 | Instance şifreleri | Supabase (şifreli) | Yerel Postgres (şifreli) |
 | Kod | GitHub | Paket içindeki imajlar |
 

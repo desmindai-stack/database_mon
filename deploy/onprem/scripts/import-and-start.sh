@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 TAR="${1:-}"
 if [ -z "$TAR" ] || [ ! -f "$TAR" ]; then
-  echo "Kullanım: $0 /yol/pgwatch-images-YYYYMMDD.tar"
+  echo "Kullanım: $0 /yol/dbace-images-YYYYMMDD.tar"
   exit 1
 fi
 
@@ -15,7 +15,7 @@ docker load -i "$TAR"
 if [ ! -f .env ]; then
   cp .env.example .env
   echo ""
-  echo "ÖNEMLİ: .env dosyasını düzenleyin (PGWATCH_DB_PASSWORD, CREDENTIALS_MASTER_KEY)"
+  echo "ÖNEMLİ: .env dosyasını düzenleyin (DBACE_DB_PASSWORD, CREDENTIALS_MASTER_KEY)"
   echo "Sonra tekrar: docker compose up -d"
   exit 0
 fi
@@ -26,4 +26,4 @@ docker compose -f docker-compose.yml up -d
 echo ""
 echo "Web arayüzü: http://$(hostname -I 2>/dev/null | awk '{print $1}'):${HTTP_PORT:-8080}"
 echo "Durum: docker compose -f docker-compose.yml ps"
-echo "Log:  docker compose -f docker-compose.yml logs -f pgwatch-app"
+echo "Log:  docker compose -f docker-compose.yml logs -f dbace-app"

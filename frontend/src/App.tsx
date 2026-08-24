@@ -153,7 +153,7 @@ export default function App() {
         <div className="brand">
           <div className="brand-mark">DB</div>
           <div>
-            <h1>pgwatch</h1>
+            <h1>dbace</h1>
             <p>DBA monitoring platform</p>
           </div>
         </div>

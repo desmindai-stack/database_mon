@@ -6,7 +6,7 @@ Her adımı bitirince `[x]` işaretleyin. Takılırsanız adım numarasını yaz
 
 ## A — Supabase
 
-- [ ] **A.1** Proje oluşturuldu (`pgwatch-dev`), DB şifresi kayıtlı
+- [ ] **A.1** Proje oluşturuldu (`dbace-dev`), DB şifresi kayıtlı
 - [ ] **A.2** SQL Editor’de migration çalıştı → Success
 - [ ] **A.3** Session pooler URI kopyalandı (**Connect** veya Settings → Database)
 - [ ] **A.3b** Railway için asyncpg URI hazır (aşağıdaki dönüşüm)
@@ -46,11 +46,11 @@ Supabase → **Table Editor** → şunlar görünmeli:
 ## C — Railway
 
 - [ ] **C.1** GitHub ile giriş
-- [ ] **C.2** Servis `pgwatch-api` — Dockerfile path doğru, deploy yeşil
+- [ ] **C.2** Servis `dbace-api` — Dockerfile path doğru, deploy yeşil
 - [ ] **C.2** Variables: `DATABASE_URL`, `RUN_MODE=api`, `CREDENTIALS_MASTER_KEY`
 - [ ] **C.2** Public domain üretildi → **API_URL** kayıtlı
 - [ ] **C.2** Tarayıcı: `https://API_URL/api/health` → JSON `"status":"ok"`
-- [ ] **C.3** Servis `pgwatch-worker` — `RUN_MODE=worker`, aynı DB + master key
+- [ ] **C.3** Servis `dbace-worker` — `RUN_MODE=worker`, aynı DB + master key
 - [ ] **C.4** Worker log: `Collector scheduler started`
 
 ---

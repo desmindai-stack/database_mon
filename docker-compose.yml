@@ -24,7 +24,7 @@ services:
       - "8000:8000"
     volumes:
       - ./backend:/app
-      - pgwatch-data:/app/data
+      - dbace-data:/app/data
     environment:
       COLLECT_INTERVAL_SECONDS: 15
       CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
@@ -41,4 +41,4 @@ services:
       - backend
 
 volumes:
-  pgwatch-data:
+  dbace-data:

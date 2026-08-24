@@ -2,7 +2,7 @@
 
 Hybrid model:
 
-1. **Remote probe** — pgwatch worker Patroni `:8008`, etcd `:2379`, HAProxy stats, Keepalived VIP TCP kontrolü yapar.
+1. **Remote probe** — dbace worker Patroni `:8008`, etcd `:2379`, HAProxy stats, Keepalived VIP TCP kontrolü yapar.
 2. **Host agent** — her DB sunucusunda systemd + journalctl + VIP sahipliği okur.
 
 ## Instance options
@@ -41,4 +41,4 @@ Instance için default alert rule’ları otomatik oluşturulur.
 
 Bkz. [agents/host-agent/README.md](../agents/host-agent/README.md) ve [deploy/onprem/docker-compose.host-agent.yml](../deploy/onprem/docker-compose.host-agent.yml).
 
-Firewall: pgwatch worker → agent `:9105`, Patroni `:8008`, etcd `:2379`, HAProxy stats port.
+Firewall: dbace worker → agent `:9105`, Patroni `:8008`, etcd `:2379`, HAProxy stats port.

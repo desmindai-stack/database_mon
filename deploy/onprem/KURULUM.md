@@ -1,9 +1,9 @@
-# pgwatch — On-Prem Kurulum (Tek Linux Sunucu, İnternetsiz)
+# dbace — On-Prem Kurulum (Tek Linux Sunucu, İnternetsiz)
 
 > **Bu doküman Faz 3 içindir.** Önce bulutta geliştirme/test: [YASAM-DONGUSU.md](../../docs/YASAM-DONGUSU.md) ve [BULUT-KURULUM.md](../cloud/BULUT-KURULUM.md).  
 > Paket almak için: `deploy/onprem/scripts/make-release-package.sh v0.x.x`
 
-Bu rehber **DBA** perspektifinden yazıldı. Hedef: **tek bir Linux sunucuda**, **internete kapalı** ortamda pgwatch çalışsın.
+Bu rehber **DBA** perspektifinden yazıldı. Hedef: **tek bir Linux sunucuda**, **internete kapalı** ortamda dbace çalışsın.
 
 ---
 
@@ -11,11 +11,11 @@ Bu rehber **DBA** perspektifinden yazıldı. Hedef: **tek bir Linux sunucuda**, 
 
 | Bileşen | Görev | Sunucuda |
 |---------|--------|----------|
-| **pgwatch-db** | Uygulamanın kendi veritabanı (instance listesi, metrikler, alarmlar) | Docker container |
-| **pgwatch-app** | Metrik toplama + API | Docker container |
-| **pgwatch-web** | Web arayüzü (tarayıcıdan) | Docker container, port **8080** |
+| **dbace-db** | Uygulamanın kendi veritabanı (instance listesi, metrikler, alarmlar) | Docker container |
+| **dbace-app** | Metrik toplama + API | Docker container |
+| **dbace-web** | Web arayüzü (tarayıcıdan) | Docker container, port **8080** |
 
-İzlediğiniz **üretim PostgreSQL / SQL Server / MongoDB** ayrı sunucularda olabilir; pgwatch onlara sadece **iç ağ** üzerinden bağlanır (internet gerekmez).
+İzlediğiniz **üretim PostgreSQL / SQL Server / MongoDB** ayrı sunucularda olabilir; dbace onlara sadece **iç ağ** üzerinden bağlanır (internet gerekmez).
 
 **Not:** Geliştirme önce Supabase/Railway/Vercel ile yapılır; bu kurulum **paket halinde** on-prem’e taşınır ([YASAM-DONGUSU.md](../../docs/YASAM-DONGUSU.md)).
 
@@ -88,11 +88,11 @@ docker compose version
 
 ```bash
 cd /opt
-git clone https://github.com/desmindai-stack/database_mon.git pgwatch
-cd pgwatch/deploy/onprem
+git clone https://github.com/desmindai-stack/database_mon.git dbace
+cd dbace/deploy/onprem
 ```
 
-(Git yoksa ZIP’i `/opt/pgwatch` olarak açın.)
+(Git yoksa ZIP’i `/opt/dbace` olarak açın.)
 
 ### Adım 5.3 — Şifre dosyasını hazırlayın
 
@@ -103,7 +103,7 @@ nano .env   # veya vi
 
 **Mutlaka değiştirin:**
 
-- `PGWATCH_DB_PASSWORD` — pgwatch’ın iç veritabanı şifresi  
+- `DBACE_DB_PASSWORD` — dbace’ın iç veritabanı şifresi  
 - `CREDENTIALS_MASTER_KEY` — en az 32 karakter rastgele (not edin, yedekleyin)
 
 Kaydedin.
@@ -154,28 +154,28 @@ UI’da yeni instance:
 Repoyu alın, `.env` oluşturun (şifreler kapalı ortamda da geçerli olacak — **aynı `.env` dosyasını** kapalı sunucuya götürün).
 
 ```bash
-cd pgwatch/deploy/onprem
+cd dbace/deploy/onprem
 cp .env.example .env
 # .env düzenle
 chmod +x scripts/export-images.sh
 ./scripts/export-images.sh
 ```
 
-Çıktı: `deploy/dist/pgwatch-images-YYYYMMDD.tar` (büyük dosya).
+Çıktı: `deploy/dist/dbace-images-YYYYMMDD.tar` (büyük dosya).
 
 ### Adım 6.2 — Taşıma
 
 USB veya iç dosya sunucusu ile kapalı sunucuya:
 
-- `pgwatch-images-*.tar`
+- `dbace-images-*.tar`
 - Tüm `deploy/onprem/` klasörü (compose + `.env` + scriptler)
 
 ### Adım 6.3 — Kapalı sunucuda
 
 ```bash
-cd /opt/pgwatch/deploy/onprem
+cd /opt/dbace/deploy/onprem
 chmod +x scripts/import-and-start.sh
-./scripts/import-and-start.sh /opt/pgwatch/deploy/dist/pgwatch-images-YYYYMMDD.tar
+./scripts/import-and-start.sh /opt/dbace/deploy/dist/dbace-images-YYYYMMDD.tar
 ```
 
 `.env` yoksa script oluşturur; düzenleyip:
@@ -203,7 +203,7 @@ UI → **Instances** → host = PostgreSQL’in **iç IP**’si, port 5432, kull
 
 ### 7.2 Ağ / firewall
 
-- pgwatch sunucusundan → hedef DB portuna **TCP izni** (5432, 1433, 27017).
+- dbace sunucusundan → hedef DB portuna **TCP izni** (5432, 1433, 27017).
 - İnternet **gerekmez**; sadece iç VLAN.
 
 ### 7.3 SQL Server / MongoDB
@@ -225,13 +225,13 @@ UI → **Instances** → host = PostgreSQL’in **iç IP**’si, port 5432, kull
 ## 9. Günlük operasyon komutları
 
 ```bash
-cd /opt/pgwatch/deploy/onprem
+cd /opt/dbace/deploy/onprem
 
 # Durum
 docker compose ps
 
 # Log (sorun giderme)
-docker compose logs -f pgwatch-app
+docker compose logs -f dbace-app
 
 # Durdur
 docker compose down
@@ -240,7 +240,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-**Yedekleme (önemli):** Docker volume `pgwatch-pgdata` — pgwatch’ın tüm kayıtları burada. IT ile düzenli snapshot alın.
+**Yedekleme (önemli):** Docker volume `dbace-pgdata` — dbace’ın tüm kayıtları burada. IT ile düzenli snapshot alın.
 
 ---
 
@@ -250,7 +250,7 @@ docker compose up -d --build
 |---------|-------------|----------|
 | Sayfa açılmıyor | 8080 kapalı | `firewall-cmd` / security group; `HTTP_PORT` |
 | Instance test fail | Ağ / şifre | Hedef DB’den `telnet IP 5432`; pg_hba.conf |
-| Metrik yok | Worker / bağlantı | `docker compose logs pgwatch-app` |
+| Metrik yok | Worker / bağlantı | `docker compose logs dbace-app` |
 | Şifre hatası | `.env` değişti | `CREDENTIALS_MASTER_KEY` değişirse eski instance şifreleri okunamaz — yeniden ekleyin |
 
 ---
@@ -258,13 +258,13 @@ docker compose up -d --build
 ## 11. Mimari özeti (on-prem)
 
 ```text
-[Kullanıcı PC tarayıcı] --8080--> [pgwatch-web / nginx]
+[Kullanıcı PC tarayıcı] --8080--> [dbace-web / nginx]
                                         |
-                                        +--> /api --> [pgwatch-app]
+                                        +--> /api --> [dbace-app]
                                         |
-                                   [pgwatch-db PostgreSQL]
+                                   [dbace-db PostgreSQL]
 
-[pgwatch-app] --iç ağ--> [Sizin PostgreSQL / MongoDB / SQL Server]
+[dbace-app] --iç ağ--> [Sizin PostgreSQL / MongoDB / SQL Server]
 ```
 
 ---
@@ -276,6 +276,6 @@ docker compose up -d --build
 - [ ] `./scripts/start.sh` veya air-gap import tamam  
 - [ ] `http://IP:8080` açılıyor  
 - [ ] En az bir instance eklendi, metrik geliyor  
-- [ ] (Üretim) pgwatch-pgdata yedek planı  
+- [ ] (Üretim) dbace-pgdata yedek planı  
 
 Takıldığınız adımın numarasını ve ekrandaki hata metnini yazarsanız, bir sonraki mesajda yalnızca o adımı birlikte çözeriz.

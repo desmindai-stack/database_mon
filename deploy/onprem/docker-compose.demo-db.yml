@@ -4,7 +4,7 @@
 services:
   demo-postgres:
     image: postgres:16-alpine
-    container_name: pgwatch-demo-postgres
+    container_name: dbace-demo-postgres
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -20,5 +20,5 @@ services:
     ports:
       - "5433:5432"
     networks:
-      - pgwatch-internal
+      - dbace-internal
     restart: unless-stopped

@@ -1,4 +1,4 @@
-# pgwatch — Faz 1: Bulut geliştirme (Supabase + Railway + Vercel)
+# dbace — Faz 1: Bulut geliştirme (Supabase + Railway + Vercel)
 
 **Hedef kitle:** DBA — adım adım, başlık başlık.  
 **Amaç:** Uygulamayı geliştirip test etmek; on-prem paket **sonra** ([YASAM-DONGUSU.md](../../docs/YASAM-DONGUSU.md)).
@@ -27,7 +27,7 @@
 
 1. Tarayıcı: https://supabase.com → **Start your project** / Giriş  
 2. **New project**  
-3. **Name:** `pgwatch-dev`  
+3. **Name:** `dbace-dev`  
 4. **Database password:** güçlü şifre → **kaydedin**  
 5. **Region:** size yakın (ör. Frankfurt)  
 6. **Create new project** → 2–5 dk bekleyin  
@@ -36,7 +36,7 @@
 
 1. Sol menü → **SQL Editor**  
 2. **New query**  
-3. Bilgisayarınızda repo: `supabase/migrations/20250717120000_pgwatch_core.sql` dosyasının **tamamını** kopyalayın  
+3. Bilgisayarınızda repo: `supabase/migrations/20250717120000_dbace_core.sql` dosyasının **tamamını** kopyalayın  
 4. Supabase editöre yapıştırın → **Run** (veya Ctrl+Enter)  
 5. **Success** — hata varsa metni kaydedin, destek için gönderin  
 
@@ -46,7 +46,7 @@ Supabase arayüzü sık değişir. **“Project Settings → Database” görmü
 
 #### Yol 1 — Üstteki **Connect** (en kolay)
 
-1. Supabase’e giriş → projenizi seçin (`pgwatch-dev`).
+1. Supabase’e giriş → projenizi seçin (`dbace-dev`).
 2. Proje ana sayfasında **üst barda** yeşil / belirgin **Connect** düğmesine tıklayın.  
    (Bazen sağ üstte veya proje adının yanında.)
 3. Açılan panelde bağlantı türlerini görürsünüz:
@@ -130,7 +130,7 @@ Railway = GitHub’daki kodu sürekli çalıştıran bulut. **İki ayrı servis*
 1. **New Project** → **Deploy from GitHub repo**  
 2. `database_mon` (veya fork) seçin  
 3. Oluşan servise tıklayın → **Settings**  
-4. **Service name:** `pgwatch-api`  
+4. **Service name:** `dbace-api`  
 5. **Root Directory:** boş veya `/` (monorepo kökü)  
 6. **Build:**
    - **Dockerfile Path:** `deploy/onprem/Dockerfile.backend`  
@@ -156,13 +156,13 @@ Railway = GitHub’daki kodu sürekli çalıştıran bulut. **İki ayrı servis*
 | `COLLECT_INTERVAL_SECONDS` | `15` |
 | `CORS_ORIGINS` | `["https://SIZIN-VERCEL-URL.vercel.app","http://localhost:5173"]` |
 
-9. **Networking → Generate Domain** → örn. `pgwatch-api-production.up.railway.app`  
+9. **Networking → Generate Domain** → örn. `dbace-api-production.up.railway.app`  
    → **API_URL** olarak kaydedin.
 
 ### C.3 Worker servisi (aynı projede)
 
 1. Railway proje ekranında **+ Create** → **GitHub Repo** → **aynı repo**  
-2. **Service name:** `pgwatch-worker`  
+2. **Service name:** `dbace-worker`  
 3. Aynı Dockerfile ayarları (`deploy/onprem/Dockerfile.backend`, repo kökü)
 4. **Start Command:** boş — sadece `RUN_MODE=worker` yeterli
 
@@ -179,7 +179,7 @@ Railway = GitHub’daki kodu sürekli çalıştıran bulut. **İki ayrı servis*
 
 ### C.4 Worker log kontrolü
 
-**pgwatch-worker → Deployments → View logs**
+**dbace-worker → Deployments → View logs**
 
 - `Collector scheduler started` görmelisiniz.  
 - `Failed collecting` → izlenen DB’ye ağ/şifre sorunu.
@@ -214,15 +214,15 @@ On-prem pakette worker **sizin LAN’ınızda** olacağı için bu sorun kalkar.
 
 | Name | Value |
 |------|--------|
-| `VITE_API_URL` | `https://pgwatch-api-production.up.railway.app` (C.2 domain, **sondaki /** yok) |
+| `VITE_API_URL` | `https://dbace-api-production.up.railway.app` (C.2 domain, **sondaki /** yok) |
 
 ### D.3 Deploy
 
-**Deploy** → bitince URL: `https://pgwatch-xxx.vercel.app`
+**Deploy** → bitince URL: `https://dbace-xxx.vercel.app`
 
 ### D.4 CORS güncellemesi
 
-Railway **pgwatch-api** → Variables → `CORS_ORIGINS` içine Vercel URL’inizi JSON dizisine ekleyin → redeploy.
+Railway **dbace-api** → Variables → `CORS_ORIGINS` içine Vercel URL’inizi JSON dizisine ekleyin → redeploy.
 
 ---
 

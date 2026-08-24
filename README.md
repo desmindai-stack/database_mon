@@ -1,4 +1,4 @@
-# pgwatch
+# dbace
 
 Multi-database DBA monitoring (PostgreSQL, SQL Server, MongoDB) with alerts and trend-based predictions.
 

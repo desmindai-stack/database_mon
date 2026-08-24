@@ -1,4 +1,4 @@
-# pgwatch — Mimari (Supabase + Cloud Worker)
+# dbace — Mimari (Supabase + Cloud Worker)
 
 Bu doküman **Faz 1 (bulut geliştirme/test)** mimarisini anlatır. Kapalı ortam: aynı yazılımın Docker paketi → [YASAM-DONGUSU.md](YASAM-DONGUSU.md), [deploy/onprem/KURULUM.md](../deploy/onprem/KURULUM.md).
 

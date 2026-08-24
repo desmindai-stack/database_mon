@@ -18,11 +18,11 @@ docker pull nginx:1.27-alpine
 IMAGES=(
   postgres:16-alpine
   nginx:1.27-alpine
-  pgwatch/backend:latest
-  pgwatch/web:latest
+  dbace/backend:latest
+  dbace/web:latest
 )
 
-OUT="../dist/pgwatch-images-$(date +%Y%m%d).tar"
+OUT="../dist/dbace-images-$(date +%Y%m%d).tar"
 mkdir -p ../dist
 echo "==> Kaydediliyor: $OUT"
 docker save -o "$OUT" "${IMAGES[@]}"

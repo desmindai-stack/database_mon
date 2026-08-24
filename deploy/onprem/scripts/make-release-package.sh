@@ -10,7 +10,7 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 ONPREM="$ROOT/deploy/onprem"
-DIST="$ROOT/deploy/dist/pgwatch-onprem-${VERSION}"
+DIST="$ROOT/deploy/dist/dbace-onprem-${VERSION}"
 mkdir -p "$DIST"
 
 echo "==> Sürüm: $VERSION"
@@ -27,8 +27,8 @@ echo "==> Docker imajları derleniyor..."
 docker pull postgres:16-alpine
 docker pull nginx:1.27-alpine
 
-IMAGES=(postgres:16-alpine nginx:1.27-alpine pgwatch/backend:latest pgwatch/web:latest)
-IMG_TAR="$DIST/pgwatch-images.tar"
+IMAGES=(postgres:16-alpine nginx:1.27-alpine dbace/backend:latest dbace/web:latest)
+IMG_TAR="$DIST/dbace-images.tar"
 docker save -o "$IMG_TAR" "${IMAGES[@]}"
 
 echo "==> Kurulum dosyaları kopyalanıyor..."
@@ -38,20 +38,20 @@ cp -r "$ONPREM/docker-compose.yml" "$ONPREM/docker-compose.demo-db.yml" \
 
 # README for package recipient
 cat > "$DIST/PAKET-OKU.txt" <<EOF
-pgwatch on-prem paketi — $VERSION
+dbace on-prem paketi — $VERSION
 
 1. Bu klasörü kapalı sunucuya kopyalayın.
 2. cp .env.example .env  → şifreleri düzenleyin.
 3. chmod +x scripts/import-and-start.sh
-4. ./scripts/import-and-start.sh pgwatch-images.tar
+4. ./scripts/import-and-start.sh dbace-images.tar
 5. Tarayıcı: http://SUNUCU_IP:8080
 
 Detay: KURULUM.md
 Bulut geliştirme tamamlandıktan sonra üretilen pakettir.
 EOF
 
-ARCHIVE="$ROOT/deploy/dist/pgwatch-onprem-${VERSION}.tar.gz"
-tar -czf "$ARCHIVE" -C "$ROOT/deploy/dist" "pgwatch-onprem-${VERSION}"
+ARCHIVE="$ROOT/deploy/dist/dbace-onprem-${VERSION}.tar.gz"
+tar -czf "$ARCHIVE" -C "$ROOT/deploy/dist" "dbace-onprem-${VERSION}"
 
 echo ""
 echo "Paket hazır:"

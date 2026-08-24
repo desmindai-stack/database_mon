@@ -244,7 +244,7 @@ class PostgreSQLIndexAdvisor:
             ):
                 return None
 
-        index_name = f"idx_pgwatch_{table_name}_{'_'.join(ordered_cols)[:40]}"
+        index_name = f"idx_dbace_{table_name}_{'_'.join(ordered_cols)[:40]}"
         index_ddl = f"CREATE INDEX {index_name} ON {schema_name}.{table_name} ({', '.join(ordered_cols)});"
 
         reason_parts = [f"{len(ordered_cols)} sütun önerildi: {', '.join(ordered_cols)}"]

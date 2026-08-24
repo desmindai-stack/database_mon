@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import init_db
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("pgwatch.worker")
+logger = logging.getLogger("dbace.worker")
 
 
 async def _run() -> None:
@@ -19,7 +19,7 @@ async def _run() -> None:
         logger.warning("RUN_MODE=%s; worker process expects worker or all", settings.run_mode)
     await init_db()
     start_scheduler()
-    logger.info("pgwatch worker running (interval=%ss)", settings.collect_interval_seconds)
+    logger.info("dbace worker running (interval=%ss)", settings.collect_interval_seconds)
     stop = asyncio.Event()
 
     def _handle_sig(*_: object) -> None:

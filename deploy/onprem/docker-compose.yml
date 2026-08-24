@@ -1,39 +1,39 @@
-# pgwatch — production on-prem (tek sunucu)
+# dbace — production on-prem (tek sunucu)
 # Çalıştırma dizini: deploy/onprem  →  docker compose up -d
 
-name: pgwatch-onprem
+name: dbace-onprem
 
 services:
-  pgwatch-db:
+  dbace-db:
     image: postgres:16-alpine
-    container_name: pgwatch-db
+    container_name: dbace-db
     environment:
-      POSTGRES_USER: pgwatch
-      POSTGRES_PASSWORD: ${PGWATCH_DB_PASSWORD:?PGWATCH_DB_PASSWORD gerekli}
-      POSTGRES_DB: pgwatch
+      POSTGRES_USER: dbace
+      POSTGRES_PASSWORD: ${DBACE_DB_PASSWORD:?DBACE_DB_PASSWORD gerekli}
+      POSTGRES_DB: dbace
     volumes:
-      - pgwatch-pgdata:/var/lib/postgresql/data
-      - ../../supabase/migrations/20250717120000_pgwatch_core.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - dbace-pgdata:/var/lib/postgresql/data
+      - ../../supabase/migrations/20250717120000_dbace_core.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ../../supabase/migrations/20250718180000_add_instance_metadata.sql:/docker-entrypoint-initdb.d/02-metadata.sql:ro
       - ../../supabase/migrations/20250718210000_add_slow_query_io_columns.sql:/docker-entrypoint-initdb.d/03-slow-query-io.sql:ro
       - ../../supabase/migrations/20250719140000_query_history_index.sql:/docker-entrypoint-initdb.d/04-query-history-index.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U pgwatch -d pgwatch"]
+      test: ["CMD-SHELL", "pg_isready -U dbace -d dbace"]
       interval: 5s
       timeout: 5s
       retries: 10
     restart: unless-stopped
     networks:
-      - pgwatch-internal
+      - dbace-internal
 
-  pgwatch-app:
+  dbace-app:
     build:
       context: ../..
       dockerfile: deploy/onprem/Dockerfile.backend
-    image: pgwatch/backend:latest
-    container_name: pgwatch-app
+    image: dbace/backend:latest
+    container_name: dbace-app
     environment:
-      DATABASE_URL: postgresql+asyncpg://pgwatch:${PGWATCH_DB_PASSWORD}@pgwatch-db:5432/pgwatch
+      DATABASE_URL: postgresql+asyncpg://dbace:${DBACE_DB_PASSWORD}@dbace-db:5432/dbace
       RUN_MODE: all
       CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY:?CREDENTIALS_MASTER_KEY gerekli}
       COLLECT_INTERVAL_SECONDS: ${COLLECT_INTERVAL_SECONDS:-15}
@@ -41,29 +41,29 @@ services:
       DEFAULT_CUSTOMER_NAME: ${DEFAULT_CUSTOMER_NAME:-}
       CORS_ORIGINS: '["http://localhost","http://127.0.0.1"]'
     depends_on:
-      pgwatch-db:
+      dbace-db:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - pgwatch-internal
+      - dbace-internal
 
-  pgwatch-web:
+  dbace-web:
     build:
       context: ../..
       dockerfile: deploy/onprem/Dockerfile.web
-    image: pgwatch/web:latest
-    container_name: pgwatch-web
+    image: dbace/web:latest
+    container_name: dbace-web
     ports:
       - "${HTTP_PORT:-8080}:80"
     depends_on:
-      - pgwatch-app
+      - dbace-app
     restart: unless-stopped
     networks:
-      - pgwatch-internal
+      - dbace-internal
 
 networks:
-  pgwatch-internal:
+  dbace-internal:
     driver: bridge
 
 volumes:
-  pgwatch-pgdata:
+  dbace-pgdata:

@@ -1,4 +1,4 @@
-# pgwatch host-agent
+# dbace host-agent
 
 Patroni stack sunucularında `systemctl` + `journalctl` + Keepalived VIP sahipliği okur.
 
@@ -27,12 +27,12 @@ Tüm endpoint'ler `X-Agent-Token` ister.
 ## Host network çalıştırma
 
 ```bash
-docker run -d --name pgwatch-host-agent --network host \
+docker run -d --name dbace-host-agent --network host \
   -e AGENT_TOKEN='strong-secret' \
   -e KEEPALIVED_VIP='10.0.0.50' \
   -v /var/run/dbus/system_bus_socket:/var/run/dbus/system_bus_socket \
   -v /run/systemd:/run/systemd \
-  pgwatch-host-agent
+  dbace-host-agent
 ```
 
 systemd erişimi için host üzerinde binary/systemd unit olarak çalıştırmak genelde daha güvenilir:
@@ -43,7 +43,7 @@ AGENT_TOKEN=strong-secret KEEPALIVED_VIP=10.0.0.50 \
   uvicorn app:app --host 0.0.0.0 --port 9105
 ```
 
-## pgwatch bağlama
+## dbace bağlama
 
 Instance `options`:
 
