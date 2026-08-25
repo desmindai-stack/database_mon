@@ -444,6 +444,9 @@ class DashboardRecommendationOut(BaseModel):
     source: str
     group: str
     message: str
+    # Separate, single-line, copy-pasteable follow-up command — not every recommendation has
+    # one (e.g. prose-only performance_insights findings), so this stays optional.
+    action: str | None = None
 
 
 class DashboardIssueOut(BaseModel):

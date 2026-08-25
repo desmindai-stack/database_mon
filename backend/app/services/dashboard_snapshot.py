@@ -44,10 +44,8 @@ def _connectivity_recommendations(group: DatabaseGroup, report: dict[str, Any] |
             "severity": "high",
             "source": "connectivity",
             "group": group.name,
-            "message": (
-                f"{len(down_nodes)} düğüme erişilemiyor ({names}): servis durumunu ve ağ "
-                f"erişimini kontrol edin — {hint}"
-            ),
+            "message": f"{len(down_nodes)} düğüme erişilemiyor ({names}): servis durumunu ve ağ erişimini kontrol edin.",
+            "action": hint,
         }
     ]
 
@@ -79,6 +77,9 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
                 "source": "parameter_audit",
                 "group": group.name,
                 "message": f"{finding['name']}: {finding['recommendation']}",
+                # A safe, real next step (check the live value) — the exact target value depends
+                # on server sizing dbace doesn't collect, so we don't fabricate an ALTER SYSTEM.
+                "action": f"SHOW {finding['name']};",
             }
         )
     return out
@@ -139,7 +140,10 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                         "severity": insight.severity,
                         "source": "performance_insights",
                         "group": group.name,
-                        "message": f"{snap['name']}: {insight.title}",
+                        # insight.recommendation is prose (no single copy-pasteable command exists
+                        # here) — insight.action is a UI tab hint ("queries"/"metrics"), not a
+                        # command, so it's deliberately not reused as the action field.
+                        "message": f"{snap['name']}: {insight.title} — {insight.recommendation}",
                     }
                 )
 
@@ -161,7 +165,8 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                             "severity": "medium",
                             "source": "index_advisor",
                             "group": group.name,
-                            "message": f"{snap['name']}: {advice.reason} -> {advice.index_ddl}",
+                            "message": f"{snap['name']}: {advice.reason}",
+                            "action": advice.index_ddl,
                         }
                     )
             except Exception:

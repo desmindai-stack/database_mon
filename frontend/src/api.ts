@@ -648,6 +648,7 @@ export interface DashboardRecommendation {
   source: string;
   group: string;
   message: string;
+  action: string | null;
 }
 
 export interface DashboardIssue {

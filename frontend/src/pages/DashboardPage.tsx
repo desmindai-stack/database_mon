@@ -2,6 +2,31 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, AppConfig, DashboardSummary, formatRelativeTime, HealthResponse } from "../api";
 
+// Description ("mesaj") and the concrete follow-up command ("aksiyon") render on separate
+// lines — the command is monospace and one click away from the clipboard, since it's meant to
+// be pasted straight into a terminal/psql session rather than read as prose.
+function CopyableAction({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard API unavailable (permissions/non-secure context) — the command is still
+      // visible and selectable by hand, so this is a silent no-op rather than an error.
+    }
+  };
+  return (
+    <div className="rec-action-row">
+      <code className="rec-action-code">{command}</code>
+      <button type="button" className="btn btn-xs" onClick={onCopy}>
+        {copied ? "Kopyalandı" : "Kopyala"}
+      </button>
+    </div>
+  );
+}
+
 const SEVERITY_COLOR: Record<string, string> = {
   critical: "var(--danger)",
   high: "var(--danger)",
@@ -190,10 +215,13 @@ export default function DashboardPage() {
                         <div className="muted-note">{issue.message}</div>
                         {issue.recommendation && (
                           <div className="insight-recommendation">
-                            <span className={`insight-severity ${issue.recommendation.severity}`}>
-                              öneri
-                            </span>{" "}
-                            {issue.recommendation.message}
+                            <div>
+                              <span className={`insight-severity ${issue.recommendation.severity}`}>
+                                öneri
+                              </span>{" "}
+                              {issue.recommendation.message}
+                            </div>
+                            {issue.recommendation.action && <CopyableAction command={issue.recommendation.action} />}
                           </div>
                         )}
                       </div>
@@ -217,6 +245,7 @@ export default function DashboardPage() {
                       <div>
                         <strong>{rec.group}</strong> <span className="muted-note">({rec.source})</span>
                         <div className="muted-note">{rec.message}</div>
+                        {rec.action && <CopyableAction command={rec.action} />}
                       </div>
                     </li>
                   ))}
