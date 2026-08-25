@@ -66,6 +66,44 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 7 — Sol menü: tek gezinme ağacı (test turu revizyonu)
+
+İlk İŞ 2 denemesi (bkz. aşağıdaki "test turu düzeltmeleri" bölümü) sadece
+etiketleri değiştirmişti; asıl istenen tek bir gerçek Customer →
+Application → DatabaseGroup ağacıydı. Bu revizyonda:
+
+- **Müşteri/uygulama satırları link değil, sadece toggle:** "müşteriye
+  tıklayınca altında Uygulamalar açılsın" ifadesini birebir uyguladım —
+  ara düğümler (`NavTreeBranch`, `href` yoksa) tıklanınca sadece
+  genişliyor/daralıyor, herhangi bir sayfaya gitmiyor. Sadece yaprak
+  (grup) `Link` ile `/groups/{id}`'e gidiyor.
+- **Bu yüzden CRUD sayfalarına (yeni müşteri/uygulama/grup ekleme
+  formları) ağaçtan doğrudan erişim kayboluyordu** — eskiden düz link
+  doğrudan o sayfaya götürüyordu. Regresyonu önlemek için: bir dal boş
+  children döndürürse ("Kayıt yok" yerine) ilgili create sayfasına giden
+  küçük bir "+ X ekle" linki gösteriyorum (`emptyHref`/`emptyLabel`).
+  Dolu bir müşteri/uygulamanın CRUD sayfasına ulaşmak hâlâ sadece
+  breadcrumb üzerinden oluyor (Group Detail → "← Uygulama" →
+  "← Müşteriler"); bunu da eklemek istenirse ayrı bir istekte
+  netleştirilmeli.
+- **Ağaç lazy-load:** Her seviye ilk açıldığında ilgili API'yi
+  (`getCustomers`/`getApplications`/`getGroups`) çağırıp cache'liyor
+  (tekrar kapat/aç API'yi tekrar çağırmıyor). Şu anki demo verisi küçük
+  olduğu için performans sorunu yaratmıyor ama büyük kurulumlarda bu
+  önbelleğin route değişince (ör. bir grup silindiğinde) bayat kalma
+  riski var — sayfa yenilenene kadar. Kapsam dışı bıraktım.
+- **Deep-link otomatik genişletme yok:** Kullanıcı doğrudan
+  `/groups/42`'ye giderse ağaç bunu otomatik açıp o düğümü
+  vurgulamıyor (sadece zaten açıksa `active` sınıfı uyguluyor). Eski
+  `CustomerTree`'nin de query-param'a bağlı kısmi bir versiyonu vardı;
+  yeni ağaç için tam ata-zincirini yükleyip açmak ek karmaşıklık
+  getireceğinden bilinçli olarak atladım.
+- **Eski Instance-tabanlı ağaç artık her iki modda da görünüyor** (önceki
+  turda sadece public modda gösteriyordum) — adı "Instance Gezgini",
+  konumu nav'ın en altında, ayrı bir bağlantı. Artık yeni ağaçla aynı
+  "Müşteriler" ismini paylaşmadığı için private modda gizlemeye gerek
+  kalmadı.
+
 ## Faz 7 — Test turu düzeltmeleri (dashboard performansı, sol menü, cluster tekilleştirme)
 
 - **`last_checked` = en eski snapshot:** Özet birden çok grubun

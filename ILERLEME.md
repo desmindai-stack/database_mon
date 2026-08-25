@@ -130,12 +130,21 @@ görünüm" başlığı altında altta kalmaya devam ediyor.
   çalıştırma anında) ve yeni `POST /api/dashboard/refresh` ile manuel
   tetiklenebiliyor. Yanıt artık `last_checked` taşıyor; DashboardPage'de
   "Son güncelleme: X önce" + Yenile butonu eklendi.
-- **İŞ 2 — Sol menü.** Private modda eski Instance-tabanlı ağaç
-  ("Müşteriler") ile yeni nav linki ("Uygulamalar") aynı anda görünüp iki
-  ayrı "müşteri" girişi gibi duruyordu. Eski ağaç artık sadece public
-  modda görünüyor ve adı "Instance Gezgini" oldu (yeni akışla aynı ismi
-  paylaşmasın diye); public moddaki üst nav linki "Müşteri Grupları"
-  yerine "Müşteriler" oldu.
+- **İŞ 2 — Sol menü (revize edildi).** İlk deneme sadece etiketleri
+  değiştirmişti; test turunda "sorun adlandırma değil, yapı" geri
+  bildirimi geldi. Son hâli: `App.tsx`'te tek bir gerçek gezinme ağacı
+  (`MainNavTree`) — public modda Müşteriler → Uygulamalar → Gruplar,
+  private modda kök seviye doğrudan Uygulamalar → Gruplar (müşteri
+  seviyesi atlanıyor). Ara düğümler (müşteri/uygulama) tıklanınca sadece
+  genişliyor/daralıyor; sadece yaprak (grup) `Link` ile Group Detail'e
+  gidiyor. Veriler her dal ilk açıldığında lazy-load ediliyor
+  (`api.getCustomers/getApplications/getGroups`). Eski Instance-tabanlı
+  ağaç ("Instance Gezgini") artık nav'ın en altında, ayrı bir bağlantı
+  olarak her iki modda da duruyor — yeni ağaçla aynı ismi paylaşmadığı
+  için private modda gizlemeye gerek kalmadı. Boş bir dal (hiç uygulaması
+  olmayan müşteri, hiç grubu olmayan uygulama) "Kayıt yok" yerine ilgili
+  create sayfasına giden bir "+ X ekle" linki gösteriyor — aksi halde
+  CRUD sayfalarına ağaçtan erişim tamamen kaybolurdu (bkz. SORULAR.md).
 - **İŞ 3 — Cluster'lar tek satır.** `DatabaseGroup`'a `access_name`
   (listener/VIP adı) eklendi. Grup listesi ve Group Detail zaten grup
   bazında tek satırdı (düğümler sadece Group Detail'de listeleniyor) —
@@ -196,9 +205,13 @@ npm install
 npm run build   # tsc -b && vite build, hatasız geçmeli
 npm run dev
 ```
-`http://localhost:5173/customers` → X Bank → boa/aapara → grup detay
-sayfasına gidip düğüm ekleme formunu ve "Sağlığı kontrol et" /
-"Parametreleri denetle" / "Always On durumunu getir" butonlarını deneyin.
+`http://localhost:5173/` açılınca sol menüde "Müşteriler" (public) /
+"Uygulamalar" (private) başlığına tıklayın — ağaç açılır, "X Bank"a
+tıklayın (public'te) → altında "boa"/"aapara" görünür → birine tıklayın
+→ altında grup adları (veya cluster gruplarda `access_name`) görünür →
+bir gruba tıklayınca Group Detail açılır, orada düğüm ekleme formunu ve
+"Sağlığı kontrol et" / "Parametreleri denetle" / "Always On durumunu
+getir" butonlarını deneyin.
 
 ## Bilinen sınırlar (detay için SORULAR.md)
 

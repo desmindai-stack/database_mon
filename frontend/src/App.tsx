@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Route, Routes, useSearchParams } from "react-router-dom";
-import { api, Customer, InstanceSummary } from "./api";
+import { Link, NavLink, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
+import { api, Application, Customer, DatabaseGroup, InstanceSummary } from "./api";
 import AlertsPage from "./pages/AlertsPage";
 import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
@@ -11,17 +11,20 @@ import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import PredictionsPage from "./pages/PredictionsPage";
 
-type AppNode = {
+// --- Legacy Instance-based nav (Instance.customer_name/application/cluster_name strings).
+// Kept as a standalone bottom link, separate from the real Customer/Application/DatabaseGroup
+// tree below — the two used to sit side by side and both looked like a "customer" entry.
+type LegacyAppNode = {
   name: string;
   instances: { id: number; name: string; cluster_name: string | null }[];
 };
 
-type CustomerNode = {
+type LegacyCustomerNode = {
   name: string;
-  apps: AppNode[];
+  apps: LegacyAppNode[];
 };
 
-function CustomerTree() {
+function LegacyInstanceTree() {
   const [summaries, setSummaries] = useState<InstanceSummary[]>([]);
   const [openCustomers, setOpenCustomers] = useState<Set<string>>(new Set());
   const [openApps, setOpenApps] = useState<Set<string>>(new Set());
@@ -34,8 +37,8 @@ function CustomerTree() {
     api.getSummaries().then(setSummaries).catch(() => undefined);
   }, []);
 
-  const tree = useMemo<CustomerNode[]>(() => {
-    const customerMap = new Map<string, Map<string, AppNode>>();
+  const tree = useMemo<LegacyCustomerNode[]>(() => {
+    const customerMap = new Map<string, Map<string, LegacyAppNode>>();
     for (const s of summaries) {
       const customer = s.instance.customer_name || "Bilinmeyen Müşteri";
       const app = s.instance.application || "Uygulamasız";
@@ -50,7 +53,7 @@ function CustomerTree() {
         cluster_name: s.instance.cluster_name,
       });
     }
-    const result: CustomerNode[] = [];
+    const result: LegacyCustomerNode[] = [];
     for (const [customer, apps] of customerMap.entries()) {
       const appList = Array.from(apps.values()).sort((a, b) => a.name.localeCompare(b.name));
       appList.forEach((app) => {
@@ -150,6 +153,170 @@ function CustomerTree() {
   );
 }
 
+// --- Real navigation tree: Customer → Application → DatabaseGroup (public mode) or
+// Application → DatabaseGroup (private mode, customer level skipped since there's only one).
+// Only the leaf (a group) navigates on click; customer/application rows just expand/collapse.
+type NavTreeNode = {
+  id: string;
+  name: string;
+  href?: string;
+  meta?: string;
+  loadChildren?: () => Promise<NavTreeNode[]>;
+  // Shown instead of "Kayıt yok" when loadChildren resolves empty, so an empty branch
+  // doesn't become a dead end for reaching the create form.
+  emptyHref?: string;
+  emptyLabel?: string;
+};
+
+function groupNode(g: DatabaseGroup): NavTreeNode {
+  const isCluster = g.topology !== "standalone";
+  return {
+    id: `group-${g.id}`,
+    name: isCluster && g.access_name ? g.access_name : g.name,
+    href: `/groups/${g.id}`,
+    meta: isCluster ? g.topology : undefined,
+  };
+}
+
+function applicationNode(a: Application): NavTreeNode {
+  return {
+    id: `app-${a.id}`,
+    name: a.name,
+    loadChildren: () => api.getGroups(a.id).then((groups) => groups.map(groupNode)),
+    emptyHref: `/applications/${a.id}/groups`,
+    emptyLabel: "+ Grup ekle",
+  };
+}
+
+function customerNode(c: Customer): NavTreeNode {
+  return {
+    id: `customer-${c.id}`,
+    name: c.name,
+    loadChildren: () => api.getApplications(c.id).then((apps) => apps.map(applicationNode)),
+    emptyHref: `/customers/${c.id}/applications`,
+    emptyLabel: "+ Uygulama ekle",
+  };
+}
+
+function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: string }) {
+  const [open, setOpen] = useState(false);
+  const [children, setChildren] = useState<NavTreeNode[] | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  if (node.href) {
+    const isActive = activePath === node.href;
+    return (
+      <Link to={node.href} className={`nav-tree-instance${isActive ? " active" : ""}`}>
+        {node.name}
+        {node.meta && <span className="nav-tree-cluster">{node.meta}</span>}
+      </Link>
+    );
+  }
+
+  const toggle = async () => {
+    if (!open && children === null && node.loadChildren) {
+      setLoading(true);
+      try {
+        setChildren(await node.loadChildren());
+      } finally {
+        setLoading(false);
+      }
+    }
+    setOpen((v) => !v);
+  };
+
+  return (
+    <div className="nav-tree-section">
+      <button className="nav-tree-customer" onClick={toggle}>
+        <span className={`nav-tree-arrow${open ? " open" : ""}`}>▶</span>
+        {node.name}
+      </button>
+      {open && (
+        <div className="nav-tree-apps">
+          {loading && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
+          {!loading && children?.length === 0 && (
+            node.emptyHref ? (
+              <Link to={node.emptyHref} className="nav-tree-instance">{node.emptyLabel ?? "Ekle"}</Link>
+            ) : (
+              <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Kayıt yok</span>
+            )
+          )}
+          {children?.map((child) => (
+            <NavTreeBranch key={child.id} node={child} activePath={activePath} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; privateCustomerId: number | null }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [roots, setRoots] = useState<NavTreeNode[] | null>(null);
+  const [loadingRoots, setLoadingRoots] = useState(false);
+  const location = useLocation();
+  const activePath = location.pathname;
+
+  useEffect(() => {
+    setRoots(null);
+    setIsOpen(false);
+  }, [isPrivate, privateCustomerId]);
+
+  const label = isPrivate ? "Uygulamalar" : "Müşteriler";
+  const isActiveRoot =
+    activePath.startsWith("/customers") || activePath.startsWith("/applications") || activePath.startsWith("/groups");
+
+  const toggleRoot = async () => {
+    if (!isOpen && roots === null) {
+      setLoadingRoots(true);
+      try {
+        if (isPrivate) {
+          if (privateCustomerId == null) {
+            setRoots([]);
+          } else {
+            const apps = await api.getApplications(privateCustomerId);
+            setRoots(apps.map(applicationNode));
+          }
+        } else {
+          const customers = await api.getCustomers();
+          setRoots(customers.map(customerNode));
+        }
+      } finally {
+        setLoadingRoots(false);
+      }
+    }
+    setIsOpen((v) => !v);
+  };
+
+  return (
+    <div className="nav-group">
+      <button
+        className={`nav-link nav-tree-root${isActiveRoot ? " active" : ""}${isOpen ? " open" : ""}`}
+        onClick={toggleRoot}
+      >
+        <span>{label}</span>
+        <span className="nav-tree-chevron">{isOpen ? "▾" : "▸"}</span>
+      </button>
+      {isOpen && (
+        <div className="nav-tree">
+          {loadingRoots && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
+          {!loadingRoots && roots?.length === 0 && (
+            <Link
+              to={isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers"}
+              className="nav-tree-instance"
+            >
+              {isPrivate ? "+ Uygulama ekle" : "+ Müşteri ekle"}
+            </Link>
+          )}
+          {roots?.map((node) => (
+            <NavTreeBranch key={node.id} node={node} activePath={activePath} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [isPrivate, setIsPrivate] = useState(false);
   const [privateCustomerId, setPrivateCustomerId] = useState<number | null>(null);
@@ -165,9 +332,6 @@ export default function App() {
     }).catch(() => undefined);
   }, []);
 
-  const groupsHref = isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers";
-  const groupsLabel = isPrivate ? "Uygulamalar" : "Müşteriler";
-
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -182,10 +346,7 @@ export default function App() {
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Dashboard
           </NavLink>
-          <NavLink to={groupsHref} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            {groupsLabel}
-          </NavLink>
-          {!isPrivate && <CustomerTree />}
+          <MainNavTree isPrivate={isPrivate} privateCustomerId={privateCustomerId} />
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances
           </NavLink>
@@ -195,6 +356,7 @@ export default function App() {
           <NavLink to="/alerts" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Alerts
           </NavLink>
+          <LegacyInstanceTree />
         </nav>
       </aside>
       <main className="main">
