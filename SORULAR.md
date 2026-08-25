@@ -3,6 +3,47 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 9 — İŞ 5: Dashboard öneri alanları
+
+**Teşhis:** Kullanıcının şüphesi kısmen doğruydu ama tam isabetli değildi
+— öneriler instance BAĞLANTISI olmadığı için değil (Faz 8 İŞ 1 zaten bunu
+çözmüştü, her düğümün bir Instance'ı var), instance'lara gerçekten
+ULAŞILAMADIĞI için boştu:
+- `parameter_audit` canlı bir PostgreSQL bağlantısı gerektiriyor — demo
+  host'ları (`*.internal`) DNS'te yok, her zaman bağlantı hatası veriyor.
+- `performance_insights` sadece zaten TOPLANMIŞ `MetricSample`'lardan
+  çalışıyor — ama collector (`collect_all_instances`) da aynı erişilemez
+  host'lara bağlanmaya çalıştığından hiçbir metrik satırı hiç
+  toplanamıyor (`metrics_json` hep None kalıyor).
+- `index_advisor` hem toplanmış bir yavaş sorgu KAYDI hem de canlı bir
+  bağlantı gerektiriyor — ikisi de yok.
+
+Üçü de mimari olarak "gerçek, erişilebilir bir veritabanına ihtiyaç
+duyuyor" — demo verisi (bilinçli olarak sahte `.internal` hostname'ler
+kullanıyor, bkz. Faz 1-2 notları) bunu hiçbir zaman sağlayamayacak. Kod
+düzeltmesiyle bu üçünü demo'da "doldurmak" mümkün değildi.
+
+**Çözüm:** Bu üçüne bağımlı olmayan, dördüncü bir öneri kaynağı eklendi
+— `_connectivity_recommendations()`: bir grubun `down_nodes` listesi
+doluysa (yani zaten prob edilmiş, gerçek health raporundan geliyor —
+ekstra bağlantı gerektirmiyor) engine'e uygun bir log komutu öneren bir
+kayıt üretiyor (`journalctl -u patroni` / PostgreSQL, `Get-EventLog
+... MSSQLSERVER` / SQL Server, `journalctl -u mongod` / MongoDB). Bu
+kaynak asla bir canlı bağlantıya ihtiyaç duymadığı için erişilemez
+demo'da bile HER ZAMAN dolu — doğrulandı: 5 demo grubunun 5'i de artık
+"Öneriler" panelinde ve kendi `top_issues` satırının altında bir öneri
+gösteriyor.
+
+- **Severity sabit "high":** Gerçek bir down-node durumunun önerisi
+  olduğu için sabit `high` verdim (parameter_audit/performance_insights
+  bulgularının aksine, burada "ne kadar kötü" diye ölçülebilir bir
+  eşik yok — ya erişilemiyor ya erişiliyor).
+- **Gerçek altyapıda bu kaynak sessiz kalır:** `down_nodes` boşsa hiç
+  üretmiyor — erişilebilir bir kurulumda parameter_audit/performance_
+  insights/index_advisor zaten normal şekilde çalışıp asıl ayrıntılı
+  önerileri üretecek, `connectivity` kaynağı sadece "erişilemiyor"
+  durumunun boş bırakılmaması için bir güvenlik ağı.
+
 ## Faz 9 — İŞ 4: CRUD erişimi
 
 - **DatabaseGroup düzenlemede engine/topology hariç tutuldu:** Grup

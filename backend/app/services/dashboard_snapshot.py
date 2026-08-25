@@ -19,6 +19,38 @@ from app.services.performance_insights import analyze_metrics
 
 logger = logging.getLogger(__name__)
 
+# Engine-appropriate "go look here" hint for an unreachable node — this is the one
+# recommendation source that never depends on a live connection succeeding, so it's the one
+# guaranteed to say something even when every other source (parameter_audit, index_advisor,
+# performance_insights all need to actually reach/have collected from the database) comes up
+# empty because the target genuinely can't be reached.
+_LOG_HINTS = {
+    "postgresql": "journalctl -u patroni -n 100 (veya systemctl status postgresql patroni)",
+    "sqlserver": "Get-EventLog -LogName Application -Source MSSQLSERVER -Newest 50 (veya sc query MSSQLSERVER)",
+    "mongodb": "journalctl -u mongod -n 100 (veya systemctl status mongod)",
+}
+
+
+def _connectivity_recommendations(group: DatabaseGroup, report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    down_nodes = report.get("down_nodes") or []
+    if not down_nodes:
+        return []
+    names = ", ".join(f"{d['node_name']} ({d['site']})" for d in down_nodes)
+    hint = _LOG_HINTS.get(group.engine, "sistem/servis loglarını kontrol edin")
+    return [
+        {
+            "severity": "high",
+            "source": "connectivity",
+            "group": group.name,
+            "message": (
+                f"{len(down_nodes)} düğüme erişilemiyor ({names}): servis durumunu ve ağ "
+                f"erişimini kontrol edin — {hint}"
+            ),
+        }
+    ]
+
 
 async def _probe_group_health(group: DatabaseGroup, nodes: list[Node]) -> dict[str, Any] | None:
     if not nodes:
@@ -167,7 +199,8 @@ async def refresh_all_group_snapshots(session: AsyncSession) -> int:
             _parameter_recommendations(group, nodes),
             _instance_recommendations(group, snapshots_by_group[group.id]),
         )
-        return group.id, report, [*param_recs, *instance_recs]
+        connectivity_recs = _connectivity_recommendations(group, report)
+        return group.id, report, [*param_recs, *instance_recs, *connectivity_recs]
 
     results = await asyncio.gather(*(handle_group(group) for group in groups))
 

@@ -307,6 +307,21 @@ liste sayfası + Ekle butonu, sol menü ağacındaki + düğmesi). Private
 modda müşteri ekleme/silme hâlâ kapalı (CustomersPage `!isPrivate`
 kontrolü değişmedi).
 
+**Faz 9 — İŞ 5: Dashboard öneri alanları dolduruldu.** Teşhis: öneriler
+instance bağlantısı eksikliğinden değil (Faz 8 İŞ 1 zaten çözmüştü),
+instance'lara gerçekten ulaşılamadığından boştu — `parameter_audit`/
+`performance_insights`/`index_advisor` üçü de canlı bağlantı veya
+toplanmış metrik/yavaş sorgu verisi gerektiriyor, demo host'ları
+(`*.internal`, DNS'te yok) bunların hiçbirini sağlayamıyor (detay
+SORULAR.md'de). Çözüm: `services/dashboard_snapshot.py`'ye dördüncü bir
+öneri kaynağı eklendi — `_connectivity_recommendations()`, zaten
+yapılmış health prob'undaki `down_nodes`'a bakıp engine'e uygun bir log
+komutu (`journalctl -u patroni` / PostgreSQL, `Get-EventLog ...
+MSSQLSERVER` / SQL Server) öneriyor; hiçbir canlı bağlantıya ihtiyaç
+duymadığı için erişilemez demo'da bile her zaman dolu. Doğrulandı: 5
+demo grubunun 5'i de artık hem "Öneriler" panelinde hem kendi
+`top_issues` satırının altında bir öneri gösteriyor.
+
 ## Nasıl test edilir
 
 ### Backend
