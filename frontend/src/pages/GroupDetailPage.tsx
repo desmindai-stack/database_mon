@@ -75,6 +75,18 @@ export default function GroupDetailPage() {
   const [editRoleHint, setEditRoleHint] = useState<NodeRoleHint>("unknown");
   const [editServerId, setEditServerId] = useState(0);
 
+  const [connectingNodeId, setConnectingNodeId] = useState<number | null>(null);
+  const [connMode, setConnMode] = useState<"new" | "existing">("new");
+  const [connUsername, setConnUsername] = useState("");
+  const [connPassword, setConnPassword] = useState("");
+  const [connDatabase, setConnDatabase] = useState("");
+  const [connPort, setConnPort] = useState(5432);
+  const [connInstanceId, setConnInstanceId] = useState<number | "">("");
+  const [connTestResult, setConnTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [connTesting, setConnTesting] = useState(false);
+  const [connBusy, setConnBusy] = useState(false);
+  const [connError, setConnError] = useState<string | null>(null);
+
   const loadNodes = () => api.getGroupNodes(id).then(setNodes).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
@@ -147,6 +159,88 @@ export default function GroupDetailPage() {
       await loadNodes();
     } catch (err) {
       setError(String((err as Error).message));
+    }
+  };
+
+  const startConnect = (node: DbNode) => {
+    setConnectingNodeId(node.id);
+    setConnMode("existing");
+    setConnUsername("");
+    setConnPassword("");
+    setConnDatabase("");
+    setConnPort(node.port);
+    setConnInstanceId("");
+    setConnTestResult(null);
+    setConnError(null);
+  };
+
+  const defaultDatabase = () =>
+    group?.engine === "sqlserver" ? "master" : group?.engine === "mongodb" ? "admin" : "postgres";
+
+  const onTestConnection = async (node: DbNode) => {
+    setConnTesting(true);
+    setConnTestResult(null);
+    setConnError(null);
+    try {
+      if (connMode === "existing") {
+        if (!connInstanceId) {
+          setConnError("Önce bir instance seçin");
+          return;
+        }
+        const result = await api.testExistingInstance(connInstanceId);
+        setConnTestResult({ ok: result.ok, message: result.message });
+      } else {
+        if (!group || !node.host) {
+          setConnError("Sunucu bilgisi eksik — önce düğümün sunucusunu kontrol edin");
+          return;
+        }
+        const result = await api.testConnection({
+          name: `${group.name}-${node.name}-test`,
+          engine: group.engine,
+          host: node.host,
+          port: connPort,
+          database: connDatabase || defaultDatabase(),
+          username: connUsername,
+          password: connPassword,
+        });
+        setConnTestResult({ ok: result.ok, message: result.message });
+      }
+    } catch (err) {
+      setConnError(String((err as Error).message));
+    } finally {
+      setConnTesting(false);
+    }
+  };
+
+  const onSaveConnection = async (node: DbNode) => {
+    setConnBusy(true);
+    setConnError(null);
+    try {
+      if (connMode === "existing") {
+        if (!connInstanceId) {
+          setConnError("Önce bir instance seçin");
+          return;
+        }
+        await api.updateNode(node.id, { instance_id: connInstanceId });
+      } else {
+        if (!connUsername) {
+          setConnError("Kullanıcı adı zorunlu");
+          return;
+        }
+        await api.updateNode(node.id, {
+          port: connPort,
+          db_username: connUsername,
+          db_password: connPassword || undefined,
+          db_database: connDatabase || undefined,
+        });
+      }
+      setConnectingNodeId(null);
+      await loadNodes();
+      await api.getInstances().then(setExistingInstances);
+    } catch (err) {
+      setConnError(String((err as Error).message));
+    } finally {
+      setConnBusy(false);
     }
   };
 
@@ -457,8 +551,86 @@ export default function GroupDetailPage() {
                           Instance detayı (metrikler, yavaş sorgular, index önerileri, explain)
                         </Link>
                       </p>
+                    ) : connectingNodeId === node.id ? (
+                      <div className="conn-form">
+                        <label>
+                          Bağlantı
+                          <select
+                            value={connMode}
+                            onChange={(e) => {
+                              setConnMode(e.target.value as "new" | "existing");
+                              setConnTestResult(null);
+                            }}
+                          >
+                            <option value="new">Yeni bağlantı bilgisi gir</option>
+                            <option value="existing">Mevcut instance'a bağla</option>
+                          </select>
+                        </label>
+                        {connMode === "new" ? (
+                          <>
+                            <label>
+                              Kullanıcı adı
+                              <input value={connUsername} onChange={(e) => setConnUsername(e.target.value)} required />
+                            </label>
+                            <label>
+                              Parola
+                              <input type="password" value={connPassword} onChange={(e) => setConnPassword(e.target.value)} />
+                            </label>
+                            <label>
+                              Veritabanı adı
+                              <input
+                                value={connDatabase}
+                                onChange={(e) => setConnDatabase(e.target.value)}
+                                placeholder={defaultDatabase()}
+                              />
+                            </label>
+                            <label>
+                              Port
+                              <input type="number" value={connPort} onChange={(e) => setConnPort(Number(e.target.value))} />
+                            </label>
+                          </>
+                        ) : (
+                          <label>
+                            Instance
+                            <select
+                              value={connInstanceId}
+                              onChange={(e) => setConnInstanceId(e.target.value ? Number(e.target.value) : "")}
+                            >
+                              <option value="">— seçin —</option>
+                              {existingInstances.map((i) => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        {connError && <div className="error">{connError}</div>}
+                        {connTestResult && (
+                          <div className={connTestResult.ok ? "ok-text" : "warn-text"}>{connTestResult.message}</div>
+                        )}
+                        <div className="form-actions">
+                          <button type="button" className="btn" disabled={connTesting} onClick={() => onTestConnection(node)}>
+                            {connTesting ? "Test ediliyor…" : "Bağlantıyı test et"}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={connBusy}
+                            onClick={() => onSaveConnection(node)}
+                          >
+                            Kaydet
+                          </button>
+                          <button type="button" className="btn" onClick={() => setConnectingNodeId(null)}>
+                            Vazgeç
+                          </button>
+                        </div>
+                      </div>
                     ) : (
-                      <p className="muted-note">Bağlı instance yok — kimlik bilgisi girilmedi.</p>
+                      <p className="muted-note">
+                        Bağlı instance yok — kimlik bilgisi girilmedi.{" "}
+                        <button type="button" className="btn btn-xs" onClick={() => startConnect(node)}>
+                          Bağlantı bilgisi gir
+                        </button>
+                      </p>
                     )}
                     {nodeHealth ? (
                       <div className="cluster-service-meta" style={{ flexDirection: "column", alignItems: "flex-start", gap: "0.3rem" }}>

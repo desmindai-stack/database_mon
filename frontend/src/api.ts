@@ -706,6 +706,11 @@ export const api = {
       "/api/instances/test",
       { method: "POST", body: JSON.stringify(data) },
     ),
+  testExistingInstance: (id: number) =>
+    request<{ ok: boolean; message: string; details: Record<string, unknown> }>(
+      `/api/instances/${id}/test`,
+      { method: "POST" },
+    ),
   getMetrics: (id: number, hours = 1) =>
     request<MetricSample[]>(`/api/metrics/${id}?hours=${hours}`),
   getLatestMetrics: (id: number) =>

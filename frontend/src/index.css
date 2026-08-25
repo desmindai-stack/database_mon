@@ -446,6 +446,38 @@ td code,
   margin-top: 0.5rem;
 }
 
+.conn-form {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(26, 36, 56, 0.4);
+}
+
+.conn-form label {
+  display: grid;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.conn-form input,
+.conn-form select {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 0.5rem 0.65rem;
+}
+
+.btn-xs {
+  padding: 0.2rem 0.55rem;
+  font-size: 0.78rem;
+  border-radius: 8px;
+}
+
 .empty {
   color: var(--muted);
   padding: 2rem;
