@@ -270,6 +270,17 @@ artık `services=['alwayson','windows_cluster','sqlserver']` döndürüyor ve
 4 düğümü de doğru şekilde down olarak işaretliyor (demo host'ları
 erişilemez); `aapara-patroni` değişmeden tam Patroni yığınını koruyor.
 
+**Faz 9 — İŞ 2: Node ↔ Instance eşleşmesi doğrulandı.** Uçtan uca test
+edildi (API seviyesinde — tarayıcı otomasyonu bu ortamda yok): taze bir
+`seed_demo.py` çalıştırması sonrası her düğümün `instance_id`'si dolu,
+sol menü ağacı bunu kullanarak Instance detay sayfasına linkliyor, Group
+Detail'deki düğüm kartı da aynı linke sahip, InstanceDetailPage'in ilk
+yüklemede çağırdığı tüm uçlar (metrics/queries/summary/alerts/
+predictions/insights) taze/hiç toplanmamış bir instance için bile hatasız
+200 dönüyor. Mekanizma zaten doğru kodlanmıştı — kök neden kesin tespit
+edilemedi (muhtemelen eski bir `data/dbace.db` dosyası), detay ve
+kurtarma adımı SORULAR.md'de.
+
 ## Nasıl test edilir
 
 ### Backend

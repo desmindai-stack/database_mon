@@ -3,6 +3,36 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 9 — İŞ 2: Node ↔ Instance eşleşmesi doğrulaması
+
+Teşhis: `seed_demo.py` her düğüm için gerçekten bir Instance oluşturup
+bağlıyordu ve UI (sol menü ağacı + Group Detail düğüm kartı) bunu zaten
+`node.instance_id`'ye bakarak doğru gösteriyordu — kod seviyesinde İŞ 1
+öncesi de bu mekanizma vardı. Rapor edilen kırıklık muhtemelen ya (a) bu
+oturumun İŞ 1'i başlamadan önceki ara bir commit'te geçici olarak
+bozulmuş bir ara durumdu, ya da (b) tarayıcıda eski bir `data/dbace.db`
+dosyası (birçok şema değişikliğinden önce oluşturulmuş, `nodes.
+instance_id` sütunu hâlâ NULL kalmış satırlar içeren) kullanılıyordu —
+bu ortamda kesin olarak hangisi olduğunu geriye dönük tespit edemedim
+(pre-İŞ1 kod artık üzerine yazıldı), ama İŞ 1'in Server/Node yeniden
+yazımından SONRA mekanizmayı uçtan uca (API seviyesinde, tarayıcı
+otomasyonu bu ortamda yok — bkz. Faz 5 doğrulama notu) test ettim ve
+tamamen çalışır durumda:
+- Taze bir DB'de `seed_demo.py` çalıştırıldıktan sonra her düğümün
+  `instance_id`'si dolu (`GET /api/groups/{id}/nodes` ile doğrulandı).
+- Sol menü ağacındaki `nodeLeaf()` bu `instance_id`'yi kullanarak
+  `/instances/{id}`'ye linkliyor (App.tsx, değişmedi — zaten doğruydu).
+- `GET /api/instances/{id}` ve InstanceDetailPage'in Overview sekmesinin
+  ilk yüklemede çağırdığı tüm uçlar (`/metrics`, `/queries`, `/summary`,
+  `/alerts/rules`, `/alerts/events`, `/predictions`, `/insights`) taze,
+  hiç toplanmamış bir instance için bile 200 dönüyor (boş dizi/rapor,
+  hata değil) — sayfa çökmeden açılıyor.
+- **Eski bir `data/dbace.db` dosyanız varsa ve düğümlerin instance
+  bağlantısı hâlâ boş görünüyorsa:** dosyayı silip yeniden oluşturun
+  (bu, Faz 6/8/9'da tekrarlanan bir SQLite ALTER TABLE kısıtı deseni —
+  bu kez engelleyici değildi ama eski bir dosyada birikmiş tutarsız ara
+  durumlar olabilir).
+
 ## Faz 9 — İŞ 1: Server modeli (+ İŞ 3'ün engine-aware probe düzeltmesi)
 
 İŞ 1 ve İŞ 3 aynı dosyada (`cluster_health.py`) kesişiyordu — `probe_node()`
