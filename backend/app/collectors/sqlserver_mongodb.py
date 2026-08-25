@@ -8,6 +8,11 @@ from app.collectors.base import BaseCollector, ConnectionTarget, classify_connec
 
 logger = logging.getLogger(__name__)
 
+# ProductMajorVersion (SERVERPROPERTY) -> release: 2016=13, 2017=14, 2019=15, 2022=16.
+# dbace targets SQL Server 2016+; below that is best-effort (a warning is logged, the
+# collector still tries — DMV shapes are far more stable than exact SP/CU column additions).
+SQLSERVER_MIN_SUPPORTED_MAJOR = 13
+
 _PERF_COUNTER_QUERY = """
 SELECT RTRIM(counter_name), cntr_value
 FROM sys.dm_os_performance_counters
@@ -15,6 +20,11 @@ WHERE counter_name IN ('Batch Requests/sec', 'Buffer cache hit ratio',
                         'Buffer cache hit ratio base', 'Number of Deadlocks/sec')
 """
 
+# sys.dm_exec_query_stats.total_rows/min_rows/max_rows/last_rows were added by a specific
+# SP/CU rather than cleanly at a major-version boundary (unlike PostgreSQL's catalog, which
+# changes atomically at major-version release) — so this is handled with a try-then-retry
+# fallback (see collect_slow_queries) instead of a version-number gate, which would risk being
+# wrong for a specific SP level we can't verify without a live server of every combination.
 _SLOW_QUERY_SQL = """
 SELECT TOP ({limit})
     CONVERT(VARCHAR(64), qs.query_hash, 1) AS queryid,
@@ -28,6 +38,24 @@ SELECT TOP ({limit})
     qs.total_worker_time / 1000.0 AS total_time_ms,
     (qs.total_worker_time / 1000.0) / NULLIF(qs.execution_count, 0) AS mean_time_ms,
     qs.total_rows AS rows
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+ORDER BY qs.total_worker_time DESC
+"""
+
+_SLOW_QUERY_SQL_NO_ROWS = """
+SELECT TOP ({limit})
+    CONVERT(VARCHAR(64), qs.query_hash, 1) AS queryid,
+    SUBSTRING(
+        st.text,
+        (qs.statement_start_offset / 2) + 1,
+        ((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(st.text) ELSE qs.statement_end_offset END
+            - qs.statement_start_offset) / 2) + 1
+    ) AS query,
+    qs.execution_count AS calls,
+    qs.total_worker_time / 1000.0 AS total_time_ms,
+    (qs.total_worker_time / 1000.0) / NULLIF(qs.execution_count, 0) AS mean_time_ms,
+    NULL AS rows
 FROM sys.dm_exec_query_stats qs
 CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
 ORDER BY qs.total_worker_time DESC
@@ -84,6 +112,21 @@ class SqlServerCollector(BaseCollector):
             ) from exc
         return await aioodbc.connect(dsn=build_odbc_connection_string(self.target), timeout=10, autocommit=True)
 
+    async def _detect_version(self, conn) -> tuple[int, str]:
+        """Returns (ProductMajorVersion, @@VERSION text). 2016=13, 2017=14, 2019=15, 2022=16."""
+        async with conn.cursor() as cur:
+            await cur.execute("SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS INT), @@VERSION")
+            row = await cur.fetchone()
+        major = int(row[0]) if row and row[0] is not None else 0
+        version_string = row[1] if row and row[1] else "unknown"
+        if major and major < SQLSERVER_MIN_SUPPORTED_MAJOR:
+            logger.warning(
+                "SQL Server ProductMajorVersion=%s desteklenen minimumun (2016, major=13) "
+                "altında — yine de en yakın davranışla devam ediliyor",
+                major,
+            )
+        return major, version_string
+
     async def test_connection(self) -> tuple[bool, str, dict[str, Any]]:
         try:
             import aioodbc  # noqa: F401
@@ -99,10 +142,12 @@ class SqlServerCollector(BaseCollector):
             logger.exception("SQL Server connection test failed")
             return False, classify_connection_error(exc), {"engine": "sqlserver"}
         try:
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT @@VERSION")
-                row = await cur.fetchone()
-            return True, "Connection successful", {"engine": "sqlserver", "version": row[0] if row else None}
+            major, version_string = await self._detect_version(conn)
+            return True, "Connection successful", {
+                "engine": "sqlserver",
+                "version": version_string,
+                "server_version_major": major,
+            }
         except Exception as exc:
             logger.exception("SQL Server connection test query failed")
             return False, classify_connection_error(exc), {"engine": "sqlserver"}
@@ -111,7 +156,16 @@ class SqlServerCollector(BaseCollector):
 
     async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
         conn = await self._connect()
+        # metric_key -> Turkish reason it couldn't be collected this cycle — same channel as
+        # PostgreSQLCollector, surfaced via Instance.unsupported_metrics.
+        unsupported: dict[str, str] = {}
         try:
+            version_major, version_string = await self._detect_version(conn)
+
+            # Core session counts — stable DMVs since SQL Server 2005, not individually guarded
+            # (if these fail, the connection itself is broken; classify_connection_error already
+            # covers that at the test_connection level, and collect_all_instances logs+skips a
+            # collector that raises here).
             async with conn.cursor() as cur:
                 await cur.execute("SELECT COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1")
                 active_connections = int((await cur.fetchone())[0] or 0)
@@ -126,17 +180,40 @@ class SqlServerCollector(BaseCollector):
                 await cur.execute("SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id <> 0")
                 blocked_sessions = int((await cur.fetchone())[0] or 0)
 
-                await cur.execute(_PERF_COUNTER_QUERY)
-                counters = {name: float(value) for name, value in await cur.fetchall()}
+            # Perf counters vary more by edition/config than by version proper — e.g. Azure SQL
+            # Database doesn't expose "Buffer cache hit ratio" the same way a standalone/AG
+            # instance does — so this is guarded independently rather than assumed always present.
+            counters: dict[str, float] = {}
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(_PERF_COUNTER_QUERY)
+                    counters = {name: float(value) for name, value in await cur.fetchall()}
+            except Exception as exc:
+                logger.warning("SQL Server perf counter query failed (major=%s): %s", version_major, exc)
+                for key in ("transactions_per_sec", "cache_hit_ratio", "deadlocks"):
+                    unsupported[key] = f"Toplama hatası: {exc}"
 
-                await cur.execute("SELECT SUM(CAST(size AS BIGINT)) * 8.0 * 1024 FROM sys.database_files")
-                db_size = float((await cur.fetchone())[0] or 0)
+            db_size = 0.0
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT SUM(CAST(size AS BIGINT)) * 8.0 * 1024 FROM sys.database_files")
+                    db_size = float((await cur.fetchone())[0] or 0)
+            except Exception as exc:
+                logger.warning("SQL Server database size query failed: %s", exc)
+                unsupported["database_size_bytes"] = f"Toplama hatası: {exc}"
 
-                # tempdb file size as a proxy for temp space usage — the exact
-                # "used" figure needs sys.dm_db_file_space_usage, which is only
-                # queryable from within tempdb itself.
-                await cur.execute("SELECT SUM(CAST(size AS BIGINT)) * 8.0 * 1024 FROM tempdb.sys.database_files")
-                temp_bytes = float((await cur.fetchone())[0] or 0)
+            # tempdb file size as a proxy for temp space usage — the exact "used" figure needs
+            # sys.dm_db_file_space_usage, which is only queryable from within tempdb itself.
+            # Guarded separately since it needs cross-database visibility some restricted
+            # logins won't have.
+            temp_bytes = 0.0
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute("SELECT SUM(CAST(size AS BIGINT)) * 8.0 * 1024 FROM tempdb.sys.database_files")
+                    temp_bytes = float((await cur.fetchone())[0] or 0)
+            except Exception as exc:
+                logger.warning("SQL Server tempdb size query failed (permissions?): %s", exc)
+                unsupported["temp_bytes"] = f"Toplama hatası: {exc}"
         finally:
             await conn.close()
 
@@ -151,28 +228,52 @@ class SqlServerCollector(BaseCollector):
         base = counters.get("Buffer cache hit ratio base", 0.0)
         cache_hit_ratio = (hit / base * 100) if base else 100.0
 
-        return {
+        metrics: dict[str, Any] = {
             "active_connections": active_connections,
             "max_connections": max_connections,
-            # SQL Server'da Postgres tarzı "transaction/sec" yok; canonical
-            # transactions_per_sec slotunu Batch Requests/sec ile dolduruyoruz.
-            "transactions_per_sec": round(transactions_per_sec, 2),
-            "cache_hit_ratio": round(cache_hit_ratio, 2),
             "replication_lag_bytes": None,
-            "database_size_bytes": db_size,
-            "deadlocks": int(counters.get("Number of Deadlocks/sec", 0)),
-            "temp_bytes": temp_bytes,
             "blocked_sessions": blocked_sessions,
             "_state": {"batch_requests_cum": batch_requests_cum},
+            "_server_version": version_string,
+            "_server_version_num": version_major,
+            "_unsupported_metrics": unsupported,
         }
+        # SQL Server'da Postgres tarzı "transaction/sec" yok; canonical transactions_per_sec
+        # slotunu Batch Requests/sec ile dolduruyoruz — perf counter query başarısız olduysa
+        # bu üçü de yukarıda unsupported'a düştü, metrics'te hiç görünmüyorlar (0 değil, yok).
+        if "transactions_per_sec" not in unsupported:
+            metrics["transactions_per_sec"] = round(transactions_per_sec, 2)
+        if "cache_hit_ratio" not in unsupported:
+            metrics["cache_hit_ratio"] = round(cache_hit_ratio, 2)
+        if "deadlocks" not in unsupported:
+            metrics["deadlocks"] = int(counters.get("Number of Deadlocks/sec", 0))
+        if "database_size_bytes" not in unsupported:
+            metrics["database_size_bytes"] = db_size
+        if "temp_bytes" not in unsupported:
+            metrics["temp_bytes"] = temp_bytes
+
+        return metrics
 
     async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
         conn = await self._connect()
         try:
-            async with conn.cursor() as cur:
-                await cur.execute(_SLOW_QUERY_SQL.format(limit=int(limit)))
-                columns = [c[0] for c in cur.description]
-                rows = await cur.fetchall()
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(_SLOW_QUERY_SQL.format(limit=int(limit)))
+                    columns = [c[0] for c in cur.description]
+                    rows = await cur.fetchall()
+            except Exception as exc:
+                # sys.dm_exec_query_stats.total_rows was added by a specific SP/CU, not
+                # cleanly by major version — on a server that doesn't have it, retry once
+                # without that column rather than losing slow-query data entirely.
+                logger.warning(
+                    "sys.dm_exec_query_stats.total_rows sorgusu başarısız (muhtemelen bu SQL "
+                    "Server sürümü/SP'sinde yok), rows olmadan yeniden deneniyor: %s", exc
+                )
+                async with conn.cursor() as cur:
+                    await cur.execute(_SLOW_QUERY_SQL_NO_ROWS.format(limit=int(limit)))
+                    columns = [c[0] for c in cur.description]
+                    rows = await cur.fetchall()
             return [dict(zip(columns, row)) for row in rows]
         finally:
             await conn.close()

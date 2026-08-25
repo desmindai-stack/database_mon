@@ -562,6 +562,34 @@ döndüğü doğrulandı (`server_version`/`unsupported_metrics` — henüz
 toplama yapılmamış taze bir instance'da ikisi de `null`, ilk
 `collect_metrics()` sonrası dolar).
 
+**Faz 11 — SQL Server collector'ı da sürüm-uyumlu hale getirildi.**
+`collectors/sqlserver_mongodb.py`'ye `_detect_version()` eklendi
+(`SERVERPROPERTY('ProductMajorVersion')` + `@@VERSION` — 2016=13,
+2017=14, 2019=15, 2022=16, minimum desteklenen 13). PostgreSQL'in
+aksine SQL Server'da DMV kolon farklılıkları temiz bir major-version
+sınırına oturmuyor (SP/CU'ya bağlı) — bu yüzden version-number gate
+yerine dene/hata-al/geri-çekil deseni kullanıldı:
+`sys.dm_exec_query_stats.total_rows` sorgusu başarısız olursa
+(`collect_slow_queries`) `NULL AS rows` ile otomatik yeniden deneniyor,
+tüm yavaş sorgu verisi kaybolmuyor. `collect_metrics`'teki perf counter
+(Buffer cache hit ratio/Deadlocks — Azure SQL Database gibi edition'larda
+farklı davranabiliyor), veritabanı boyutu ve tempdb boyutu sorguları
+artık bağımsız try/except'lerle korunuyor — biri başarısız olursa sadece
+o metrikler `unsupported_metrics`'e düşüyor (nedeniyle birlikte,
+loglanarak), geri kalan metrikler toplanmaya devam ediyor. Aynı
+`Instance.server_version`/`unsupported_metrics` alanları (PostgreSQL'le
+paylaşılan, engine-agnostik) burada da doluyor.
+
+**Test:** `backend/tests/test_sqlserver_version_adapt.py`'de sahte bir
+aioodbc-tarzı connection/cursor ile (4 test, gerçek ODBC sürücüsü/ağ
+gerekmez) kanıtlandı: sürüm doğru tespit ediliyor ve tam metrik seti
+toplanıyor; perf counter sorgusu patlarsa ilgili 3 metrik `unsupported`a
+düşüyor ama `active_connections` gibi bağımsız metrikler etkilenmiyor;
+tempdb sorgusu patlarsa sadece `temp_bytes` etkileniyor; `total_rows`
+kolonu yoksa yavaş sorgu toplama `NULL AS rows` ile otomatik geri
+çekiliyor ve sonuç kaybolmuyor. Toplam 11 test (7 PostgreSQL + 4 SQL
+Server) `python -m pytest` ile yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

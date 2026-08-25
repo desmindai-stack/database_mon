@@ -43,7 +43,35 @@ sözlükte ama farklı önekle ayırt edilebiliyor; UI bunu tek bir liste
 olarak gösterebilir, ayrım isteyen bir DBA metne bakarak anlayabilir.
 
 **SQL Server tarafında version-number gating yerine hata-güdümlü
-fallback tercih edildi (bkz. Faz 11 — SQL Server bölümü, ayrı not).**
+fallback tercih edildi.** PostgreSQL'de major version'a göre sistem
+kataloğu atomik olarak değişiyor (17.0'da pg_stat_checkpointer her
+zaman var, 16.x'te hiçbir zaman yok) — version-number gate güvenilir.
+SQL Server'da `sys.dm_exec_query_stats.total_rows`/`min_rows`/
+`max_rows`/`last_rows` kolonları belli bir SP/CU ile eklendi, temiz bir
+major-version sınırı yok ve bunu güvenilir şekilde ezbere bilmiyorum
+(ve bu ortamda doğrulayacak bir SQL Server erişimi de yok). Yanlış bir
+version eşiği yazmak "13.0.6300'de var, 13.0.4001'de yok" gibi ince
+farkları kaçırıp yanlış dallanmaya yol açardı — bunun yerine sorguyu
+`total_rows` ile dene, hata alırsan (kolon yoksa) `NULL AS rows` ile
+yeniden dene deseni seçildi: sonuç her zaman doğru (gerçekten var olan
+davranışa göre dallanıyor), sadece başarısız denemede bir ekstra
+round-trip maliyeti var. `collect_metrics`'teki diğer DMV/perf-counter
+sorguları da (Buffer cache hit ratio, tempdb boyutu) aynı gerekçeyle
+version numarasına göre değil, deneme/hata ile korunuyor — bunlar
+sürümden çok edition (ör. Azure SQL Database) veya yetki (ör. VIEW
+SERVER STATE olmadan tempdb'ye erişim) bağımlı, "SQL Server 2016+" gibi
+bir aralık ifadesiyle temiz şekilde modellenemiyor.
+
+**collect_metrics'te "eksik" davranışı: anahtar dict'te hiç yok, `None`
+veya `0` değil.** PostgreSQL'deki kararla simetrik: `unsupported`'a
+düşen bir metrik `metrics` dict'inde hiç görünmüyor (ör.
+`cache_hit_ratio` perf counter sorgusu patladıysa `metrics` içinde
+`"cache_hit_ratio"` anahtarı yok, `0` ya da `None` değil). Bu, frontend
+tarafında "0 = gerçekten sıfır" ile "0 = toplanamadı" karışmasını önlüyor
+— `MetricSample`'daki flat kolonlar (`transactions_per_sec` vb.) yine de
+`.get(key) or 0` ile dolduruluyor (o kolonlar zaten NOT NULL), ama
+`metrics_json`'da (grafiklerin okuduğu asıl kaynak) anahtar gerçekten
+yok.
 
 ## Faz 10 — SONRA: Ekleme akışlarının eksiklerini tamamlama
 
