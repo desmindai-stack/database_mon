@@ -20,6 +20,8 @@ export default function DatabaseGroupsPage() {
   const [topology, setTopology] = useState<GroupTopology>("patroni");
   const [environment, setEnvironment] = useState<GroupEnvironment>("prod");
   const [accessName, setAccessName] = useState("");
+  const [clusterName, setClusterName] = useState("");
+  const [vipAddress, setVipAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -44,10 +46,14 @@ export default function DatabaseGroupsPage() {
         topology,
         environment,
         access_name: accessName || undefined,
+        cluster_name: clusterName || undefined,
+        vip_address: vipAddress || undefined,
         notes: notes || undefined,
       });
       setName("");
       setAccessName("");
+      setClusterName("");
+      setVipAddress("");
       setNotes("");
       await load();
     } catch (err) {
@@ -173,14 +179,32 @@ export default function DatabaseGroupsPage() {
               </select>
             </label>
             {topology !== "standalone" && (
-              <label>
-                Erişim adı (listener / VIP)
-                <input
-                  value={accessName}
-                  onChange={(e) => setAccessName(e.target.value)}
-                  placeholder="boa-ag-listener.internal"
-                />
-              </label>
+              <>
+                <label>
+                  Erişim adı (listener / VIP)
+                  <input
+                    value={accessName}
+                    onChange={(e) => setAccessName(e.target.value)}
+                    placeholder="boa-ag-listener.internal"
+                  />
+                </label>
+                <label>
+                  Cluster adı
+                  <input
+                    value={clusterName}
+                    onChange={(e) => setClusterName(e.target.value)}
+                    placeholder="boa-ag"
+                  />
+                </label>
+                <label>
+                  VIP / IP
+                  <input
+                    value={vipAddress}
+                    onChange={(e) => setVipAddress(e.target.value)}
+                    placeholder="10.0.0.50"
+                  />
+                </label>
+              </>
             )}
             <label>
               Notlar

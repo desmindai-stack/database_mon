@@ -4,6 +4,7 @@ import {
   AlwaysOnHealth,
   api,
   Application,
+  ClusterConversionRequest,
   DatabaseGroup,
   DbNode,
   GroupHealth,
@@ -58,12 +59,23 @@ export default function GroupDetailPage() {
   const [alwaysOnError, setAlwaysOnError] = useState<string | null>(null);
   const [alwaysOnLoading, setAlwaysOnLoading] = useState(false);
 
+  const [showConvertForm, setShowConvertForm] = useState(false);
+  const [convertForm, setConvertForm] = useState<ClusterConversionRequest>({
+    topology: "patroni",
+    access_name: "",
+    cluster_name: "",
+    vip_address: "",
+  });
+  const [convertBusy, setConvertBusy] = useState(false);
+  const [convertError, setConvertError] = useState<string | null>(null);
+
   const loadNodes = () => api.getGroupNodes(id).then(setNodes).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
     api.getGroup(id).then((g) => {
       setGroup(g);
       setNodeForm((prev) => ({ ...prev, port: g.engine === "sqlserver" ? 1433 : g.engine === "mongodb" ? 27017 : 5432 }));
+      setConvertForm((prev) => ({ ...prev, topology: g.engine === "sqlserver" ? "alwayson" : "patroni" }));
       api.getApplication(g.application_id).then(setApplication).catch(() => undefined);
     }).catch((e) => setError(String(e.message || e)));
     loadNodes();
@@ -100,6 +112,24 @@ export default function GroupDetailPage() {
     if (!confirm("Düğüm silinsin mi?")) return;
     await api.deleteNode(nodeId);
     await loadNodes();
+  };
+
+  const onConvertToCluster = async (e: FormEvent) => {
+    e.preventDefault();
+    setConvertBusy(true);
+    setConvertError(null);
+    try {
+      const updated = await api.convertGroupToCluster(id, {
+        ...convertForm,
+        vip_address: convertForm.vip_address || undefined,
+      });
+      setGroup(updated);
+      setShowConvertForm(false);
+    } catch (err) {
+      setConvertError(String((err as Error).message));
+    } finally {
+      setConvertBusy(false);
+    }
   };
 
   const loadHealth = async () => {
@@ -156,6 +186,7 @@ export default function GroupDetailPage() {
           <p className="detail-subtitle">
             {application && <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>}
             {group?.access_name && <span className="detail-meta"> · Erişim: {group.access_name}</span>}
+            {group?.vip_address && <span className="detail-meta"> · VIP: {group.vip_address}</span>}
           </p>
         </div>
       </header>
@@ -177,6 +208,66 @@ export default function GroupDetailPage() {
           </button>
         )}
       </div>
+
+      {tab === "nodes" && group?.topology === "standalone" && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div className="activity-toolbar">
+            <h3 className="chart-title" style={{ margin: 0 }}>Cluster'a dönüştür</h3>
+            <button className="btn" onClick={() => setShowConvertForm((v) => !v)}>
+              {showConvertForm ? "Vazgeç" : "Cluster'a dönüştür"}
+            </button>
+          </div>
+          <p className="muted-note">
+            Mevcut düğüm ilk düğüm olarak korunur; dönüştürdükten sonra "Yeni düğüm" formuyla diğer düğümleri ekleyin.
+          </p>
+          {convertError && <div className="error">{convertError}</div>}
+          {showConvertForm && (
+            <form className="form-grid" onSubmit={onConvertToCluster}>
+              <label>
+                Topoloji
+                <select
+                  value={convertForm.topology}
+                  onChange={(e) => setConvertForm({ ...convertForm, topology: e.target.value as "alwayson" | "patroni" })}
+                >
+                  <option value="patroni">Patroni (PostgreSQL cluster)</option>
+                  <option value="alwayson">Always On (SQL Server AG)</option>
+                </select>
+              </label>
+              <label>
+                Erişim adı (listener / VIP)
+                <input
+                  value={convertForm.access_name}
+                  onChange={(e) => setConvertForm({ ...convertForm, access_name: e.target.value })}
+                  placeholder="boa-ag-listener.internal"
+                  required
+                />
+              </label>
+              <label>
+                Cluster adı
+                <input
+                  value={convertForm.cluster_name}
+                  onChange={(e) => setConvertForm({ ...convertForm, cluster_name: e.target.value })}
+                  placeholder="boa-ag"
+                  required
+                />
+              </label>
+              <label>
+                VIP / IP (opsiyonel)
+                <input
+                  value={convertForm.vip_address}
+                  onChange={(e) => setConvertForm({ ...convertForm, vip_address: e.target.value })}
+                  placeholder="10.0.0.50"
+                />
+              </label>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary" disabled={convertBusy}>
+                  {convertBusy ? "Dönüştürülüyor…" : "Dönüştür"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
 
       {tab === "nodes" && (
         <div className="cluster-layout">

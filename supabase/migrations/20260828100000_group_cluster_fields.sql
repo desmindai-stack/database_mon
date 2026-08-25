@@ -1,0 +1,2 @@
+ALTER TABLE database_groups ADD COLUMN IF NOT EXISTS cluster_name VARCHAR(128);
+ALTER TABLE database_groups ADD COLUMN IF NOT EXISTS vip_address VARCHAR(128);

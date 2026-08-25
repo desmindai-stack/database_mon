@@ -7,8 +7,10 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Application, DatabaseGroup, Node
+from app.domain.topology import GroupTopology
 from app.schemas import (
     AlwaysOnHealthOut,
+    ClusterConversionRequest,
     DatabaseGroupCreate,
     DatabaseGroupOut,
     DatabaseGroupUpdate,
@@ -89,6 +91,32 @@ async def update_group(
     await db.commit()
     await db.refresh(group)
     return group
+
+
+@router.post("/{group_id}/convert-to-cluster", response_model=DatabaseGroupOut)
+async def convert_to_cluster(
+    group_id: int, payload: ClusterConversionRequest, db: AsyncSession = Depends(get_db)
+) -> DatabaseGroupOut:
+    """Standalone -> Always On/Patroni dönüşümü: mevcut düğüme dokunulmaz (ilk düğüm olarak
+    kalır), yeni düğümler ayrıca POST /api/nodes ile eklenir."""
+    group = await db.get(DatabaseGroup, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Database group not found")
+    if group.topology != GroupTopology.STANDALONE:
+        raise HTTPException(status_code=400, detail=f"Grup zaten cluster topolojisinde ({group.topology})")
+    if payload.topology == GroupTopology.STANDALONE:
+        raise HTTPException(status_code=400, detail="Hedef topoloji alwayson veya patroni olmalı")
+
+    group.topology = payload.topology.value
+    group.access_name = payload.access_name
+    group.cluster_name = payload.cluster_name
+    group.vip_address = payload.vip_address
+    await db.commit()
+    await db.refresh(group)
+
+    statuses = await group_status_summaries(db, [group_id])
+    status_summary = GroupStatusSummaryOut(**statuses[group_id]) if group_id in statuses else None
+    return DatabaseGroupOut.model_validate(group).model_copy(update={"status": status_summary})
 
 
 @router.delete("/{group_id}", status_code=status.HTTP_204_NO_CONTENT)

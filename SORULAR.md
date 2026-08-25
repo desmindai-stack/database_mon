@@ -66,6 +66,32 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 8 — İŞ 2: Cluster'a dönüşüm akışı
+
+- **Engine/topology uyumu denetlenmiyor:** `convert-to-cluster` teorik
+  olarak bir `postgresql` grubunu `alwayson`'a veya `sqlserver` grubunu
+  `patroni`'ye "dönüştürmeye" izin veriyor (400 dönmüyor) — UI'da
+  öntanımlı seçim engine'e göre doğru geliyor ama kullanıcı elle
+  değiştirebilir. Mevcut `DatabaseGroupCreate`/`Update` şemaları da bu
+  ikisini hiç çapraz doğrulamıyordu, tutarlı bir tercih olarak aynı
+  gevşekliği koruyorum; istenirse ayrı bir doğrulama eklenebilir.
+- **`access_name` vs `cluster_name` ayrımı:** `access_name` dışa dönük
+  bağlantı adresi (DBA'nın bağlanacağı listener/VIP hostname — sol
+  menüde ve grup listesinde görünen budur), `cluster_name` ise dahili/
+  betimsel cluster kimliği (ör. Always On AG adı, Patroni cluster_name
+  parametresi). İkisi genelde aynı değeri taşıyabilir ama zorunlu tutmadım
+  — kullanıcı isterse farklı iki değer girebilir.
+- **Dönüşüm, var olan düğümün `options`'ını güncellemiyor:** Standalone'dan
+  Patroni'ye dönüşünce mevcut düğüm hâlâ `services` override'ı olmayan
+  (veya standalone'dayken ayarlanmış) `options` ile kalıyor —
+  `_node_services()` zaten `group.topology == "patroni"` kontrolüyle
+  düğümün servis setini otomatik genişletiyor (bkz. `cluster_health.py`),
+  bu yüzden ekstra bir migrasyon gerekmedi; ama `keepalived_vip`,
+  `patroni_port` gibi düğüm-seviyesi prob ayarları hâlâ kullanıcı
+  tarafından elle girilmeli (yeni "VIP / IP" alanı sadece `DatabaseGroup.
+  vip_address`'e yazıyor, `node.options.keepalived_vip`'e otomatik
+  yansımıyor — istenirse ayrı bir iyileştirme).
+
 ## Faz 8 — İŞ 1: Node/Instance birleştirme
 
 - **Node silme, bağlı Instance'ı silmiyor:** Bir düğüm silindiğinde

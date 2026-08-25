@@ -179,6 +179,19 @@ bağlama) eklendi. Sol menü ağacı bir seviye büyüdü (Grup → Düğüm, d�
 Instance'a bağlıysa tıklanabilir); eski "Instance Gezgini" ağacı tamamen
 kaldırıldı — artık tüm instance erişimi bu tek ağacın içinden.
 
+**Faz 8 — İŞ 2: Cluster'a dönüşüm akışı.** `DatabaseGroup`'a `cluster_name`
++ `vip_address` eklendi (migration + şema + CRUD). Yeni endpoint
+`POST /api/groups/{id}/convert-to-cluster` — sadece `topology=standalone`
+olan bir grupta çalışır (aksi halde 400), hedef topoloji `alwayson`/
+`patroni` olmalı; grup güncellenir, mevcut düğüme dokunulmaz (zaten
+node tablosu grup topolojisinden bağımsız). Yeni grup oluşturma formu
+zaten topoloji seçimi sunuyordu (Faz 7); artık cluster topolojisi
+seçilince `cluster_name`/`vip_address` alanları da beliriyor. Group
+Detail'de standalone bir grupta "Cluster'a dönüştür" kartı — topoloji
+(engine'e göre öntanımlı: postgresql→patroni, sqlserver→alwayson),
+erişim adı, cluster adı, VIP formu; dönüşümden sonra kart kayboluyor,
+kullanıcı "Yeni düğüm" formuyla diğer düğümleri ekleyebiliyor.
+
 ## Nasıl test edilir
 
 ### Backend

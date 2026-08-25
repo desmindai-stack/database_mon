@@ -54,6 +54,8 @@ class DatabaseGroupCreate(BaseModel):
     topology: GroupTopology = GroupTopology.STANDALONE
     environment: GroupEnvironment = GroupEnvironment.PROD
     access_name: str | None = None
+    cluster_name: str | None = None
+    vip_address: str | None = None
     notes: str | None = None
 
 
@@ -63,7 +65,16 @@ class DatabaseGroupUpdate(BaseModel):
     topology: GroupTopology | None = None
     environment: GroupEnvironment | None = None
     access_name: str | None = None
+    cluster_name: str | None = None
+    vip_address: str | None = None
     notes: str | None = None
+
+
+class ClusterConversionRequest(BaseModel):
+    topology: GroupTopology
+    access_name: str = Field(min_length=1, max_length=255)
+    cluster_name: str = Field(min_length=1, max_length=128)
+    vip_address: str | None = None
 
 
 class GroupStatusSummaryOut(BaseModel):
@@ -83,6 +94,8 @@ class DatabaseGroupOut(BaseModel):
     topology: str
     environment: str
     access_name: str | None
+    cluster_name: str | None
+    vip_address: str | None
     notes: str | None
     created_at: datetime
     status: GroupStatusSummaryOut | None = None

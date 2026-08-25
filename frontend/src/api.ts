@@ -361,6 +361,8 @@ export interface DatabaseGroup {
   topology: GroupTopology;
   environment: GroupEnvironment;
   access_name: string | null;
+  cluster_name: string | null;
+  vip_address: string | null;
   notes: string | null;
   created_at: string;
   status: GroupStatusSummary | null;
@@ -373,7 +375,16 @@ export interface DatabaseGroupCreate {
   topology: GroupTopology;
   environment?: GroupEnvironment;
   access_name?: string;
+  cluster_name?: string;
+  vip_address?: string;
   notes?: string;
+}
+
+export interface ClusterConversionRequest {
+  topology: "alwayson" | "patroni";
+  access_name: string;
+  cluster_name: string;
+  vip_address?: string;
 }
 
 export interface DbNode {
@@ -686,6 +697,8 @@ export const api = {
   createGroup: (data: DatabaseGroupCreate) =>
     request<DatabaseGroup>("/api/groups", { method: "POST", body: JSON.stringify(data) }),
   deleteGroup: (id: number) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
+  convertGroupToCluster: (id: number, data: ClusterConversionRequest) =>
+    request<DatabaseGroup>(`/api/groups/${id}/convert-to-cluster`, { method: "POST", body: JSON.stringify(data) }),
 
   getGroupNodes: (groupId: number) => request<DbNode[]>(`/api/groups/${groupId}/nodes`),
   createNode: (data: NodeCreate) =>
