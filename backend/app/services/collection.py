@@ -60,6 +60,15 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     state["collected_at"] = datetime.now(UTC)
     _previous_state[instance.id] = state
 
+    # Collector-derived version/capability info (see collectors/postgresql.py,
+    # collectors/sqlserver_mongodb.py) — persisted on Instance itself (not per-sample) since
+    # it's a property of the server, refreshed on every successful collection.
+    server_version = metrics.pop("_server_version", None)
+    if server_version:
+        instance.server_version = server_version
+    instance.unsupported_metrics = metrics.pop("_unsupported_metrics", None) or None
+    metrics.pop("_server_version_num", None)
+
     sample = MetricSample(instance_id=instance.id)
     _apply_metrics_to_sample(sample, metrics)
     session.add(sample)

@@ -132,6 +132,14 @@ class Instance(Base):
     password: Mapped[str] = mapped_column(String(512), nullable=False)
     options: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
+    # Collector-derived, read-only — refreshed on every successful collect_metrics() run
+    # (services/collection.py). server_version is a human-readable label (e.g. "PostgreSQL
+    # 17.0 ..." / "SQL Server 2022 (16.0...)"); unsupported_metrics maps a metric key to a
+    # short Turkish reason when this server's version doesn't support it (see
+    # collectors/postgresql.py, collectors/sqlserver_mongodb.py).
+    server_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    unsupported_metrics: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+
     customer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     environment: Mapped[str] = mapped_column(String(32), default="public", nullable=False)
     application: Mapped[str | None] = mapped_column(String(128), nullable=True)

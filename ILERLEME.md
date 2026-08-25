@@ -496,6 +496,61 @@ düğüm/sunucu oluşturma girişimi temiz `404` ile reddediliyor (backend
 seviyesinde savunma — frontend'deki `required` alanlar zaten bu durumu
 normalde engelliyor).
 
+**Faz 11 — PostgreSQL sürüm-uyumlu collector (raporlanan hata: PG17'de
+"column checkpoints_timed does not exist").** Kök neden: PostgreSQL 17
+checkpoint istatistiklerini `pg_stat_bgwriter`'dan yeni bir
+`pg_stat_checkpointer` view'ına taşıdı (`checkpoints_timed` →
+`num_timed`, `checkpoints_req` → `num_requested`,
+`checkpoint_write_time` → `write_time`, `checkpoint_sync_time` →
+`sync_time`, `buffers_checkpoint` → `buffers_written`) ve
+`buffers_backend`/`buffers_backend_fsync`'i tamamen kaldırdı (yeniden
+adlandırma değil, gerçek kaldırma — doğrudan bir karşılığı yok).
+`collectors/postgresql.py`'ye `_detect_version()` eklendi
+(`current_setting('server_version_num')` + `version()`, tek round-trip);
+`collect_metrics()` artık `server_version_num >= 170000` ise
+`pg_stat_checkpointer` + trimmed `pg_stat_bgwriter` (sadece
+`buffers_clean`/`buffers_alloc`), altındaysa eski tam `pg_stat_bgwriter`
+sorgusunu kullanıyor. `buffers_backend_per_sec`/`buffers_backend_fsync_per_sec`
+PG17+'de metriklerden tamamen çıkarılıyor (null değil, yok) ve
+`Instance.unsupported_metrics`'e nedeniyle birlikte yazılıyor. Aynı
+prensip `pg_stat_io`'ya da uygulandı (16+ gerekiyor — önceden sessiz bir
+try/except'ti, artık açık bir sürüm kontrolü + loglanan bir "desteklenmiyor"
+nedeni). `collect_slow_queries()` artık `pg_stat_statements`'ın PG13'te
+`total_time`/`mean_time`'dan `total_exec_time`/`mean_exec_time`'a
+yeniden adlandırılmasını da sürüme göre seçiyor (12.x hâlâ eski adları
+kullanıyor). Checkpoint/bgwriter sorgusu beklenmedik bir hatayla
+başarısız olursa (ör. yetki reddi) tüm collect_metrics çökmüyor — sadece
+o metrik grubu `unsupported_metrics`'e düşüyor, geri kalanı toplanmaya
+devam ediyor (doğrulandı: birim testte). `pg_stat_activity`/
+`pg_stat_replication` de tarandı — dbace'nin kullandığı kolonlar
+(`pid`, `usename`, `state`, `wait_event_type/event`, `backend_type`,
+`query_start` vb.; replikasyon lag'i `pg_last_wal_receive_lsn`/
+`pg_last_wal_replay_lsn` fonksiyonlarından, view'dan değil) PG12-17
+arası stabil — kod değişikliği gerekmedi (bkz. SORULAR.md).
+
+Yeni `Instance.server_version` (insan-okunabilir sürüm metni) ve
+`Instance.unsupported_metrics` (metrik adı → Türkçe neden) alanları
+her başarılı toplama döngüsünde `services/collection.py` tarafından
+güncelleniyor; `InstanceOut`'a eklendi.
+
+**Test:** Bu ortamda gerçek bir PostgreSQL 17 (Supabase veya başka)
+erişilebilir değildi, bu yüzden sürüm tespiti/dallanma/nazik bozulma
+mantığı `backend/tests/test_postgresql_version_adapt.py`'de gerçek bir
+ağ bağlantısı kurmayan sahte bir `asyncpg.Connection` ile (7 test)
+kanıtlandı: PG17 → checkpointer view kullanılıyor ve
+`buffers_backend_per_sec` doğru şekilde "desteklenmiyor" işaretleniyor;
+PG16 → eski bgwriter + pg_stat_io hâlâ destekleniyor; PG12 → bgwriter
+fallback çalışıyor ve pg_stat_io sorgusu hiç denenmiyor (sürüm koşulu
+sorgudan önce); checkpoint sorgusu hata fırlatınca `collect_metrics`
+çökmeden devam ediyor; `collect_slow_queries` sürüme göre doğru
+`pg_stat_statements` kolon adını kullanıyor (12/13/17 parametrize).
+Ayrıca `services/collection.py` → SQLite üzerinden uçtan uca da
+doğrulandı: sahte bir PG17 collector'ıyla `collect_instance()`
+çalıştırılıp `Instance.server_version`/`unsupported_metrics`'in gerçekten
+veritabanına yazıldığı teyit edildi. `backend/requirements-dev.txt` +
+`pytest.ini` eklendi (`pytest`/`pytest-asyncio` — prod
+`requirements.txt`'e dokunulmadı, deploy image'larını etkilemiyor).
+
 ## Nasıl test edilir
 
 ### Backend

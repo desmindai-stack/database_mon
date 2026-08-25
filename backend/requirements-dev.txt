@@ -1,0 +1,5 @@
+# Test-only dependencies — not needed in production images (deploy/, railway.toml,
+# Dockerfiles install from requirements.txt only; this file is for local/dev testing).
+-r requirements.txt
+pytest>=8.0.0
+pytest-asyncio>=0.24.0

@@ -3,6 +3,48 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 11 — PostgreSQL sürüm-uyumlu collector
+
+**pg_stat_activity / pg_stat_replication taraması sonucu: kod değişikliği
+gerekmedi.** Görev tarif metninde bu ikisi de "tespit edilecek" adaylar
+olarak sayılmıştı, ama gerçek bir PG17 kaynağına (release notes,
+bildiğim şema geçmişi) göre inceledikten sonra: `collect_activity()`'nin
+kullandığı `pg_stat_activity` kolonları (`pid`, `usename`, `datname`,
+`application_name`, `client_addr`, `state`, `wait_event_type`,
+`wait_event`, `backend_type`, `query_start`, `state_change`,
+`xact_start`, `pg_blocking_pids()`) PostgreSQL 10'dan beri stabil —
+12-17 arasında hiçbiri kaldırılmadı/yeniden adlandırılmadı. dbace
+`pg_stat_replication` view'ını hiç sorgulamıyor zaten (replikasyon
+lag'i `pg_last_wal_receive_lsn()`/`pg_last_wal_replay_lsn()`
+fonksiyonlarından hesaplanıyor, bunlar da PG10+'ta stabil). Bu yüzden
+"tara ve uyarla" görevi burada **negatif sonuçla** kapandı — bilinçli
+bir "değişiklik gerekmiyor" kararı, atlanmış bir adım değil.
+
+**PG17'nin ötesi (PG18+) için strateji: açık üst sınır yok, `>=` ile
+açık uçlu.** `PG_VERSION_CHECKPOINTER = 170_000` eşiği `version_num >=
+170_000` ile kontrol ediliyor, `< 180_000` gibi bir üst sınır YOK —
+yani gelecekteki bir PG18 de otomatik olarak checkpointer branch'ini
+kullanacak. Gerekçe: PG17'nin şema değişikliği additive/kalıcı bir
+mimari karar (checkpointer'ın bgwriter'dan ayrılması), geri
+alınması beklenmiyor; version bandını kapalı aralık yapmak (ör. `17 <=
+v < 18`) PG18 çıktığında sessizce YANLIŞ (eski/PG16 tarzı) sorguyu
+kullanmaya başlardı — bu, açık uçlu bırakmaktan daha kötü bir
+başarısızlık modu. `_detect_version()` sadece `PG_MIN_SUPPORTED_VERSION`
+(12) altını logluyor, üst sınır için hiç uyarmıyor.
+
+**"Unsupported" ile "hata" arasındaki fark bilinçli olarak ayrıldı.**
+`unsupported_metrics` sözlüğüne iki farklı kaynaktan giriş düşüyor: (1)
+sürüme göre GERÇEKTEN var olmayan bir şey (`buffers_backend_per_sec`
+PG17+'de, `io_reads_per_sec` PG16 öncesinde) — bunlar için sorgu hiç
+denenmiyor, mesaj net ("PostgreSQL 17+ gerektirir" gibi); (2) beklenmedik
+bir toplama hatası (ör. yetki reddi) — bunlar için mesaj `"Toplama
+hatası: {exc}"` öneki taşıyor, ham istisna metnini koruyor. İkisi aynı
+sözlükte ama farklı önekle ayırt edilebiliyor; UI bunu tek bir liste
+olarak gösterebilir, ayrım isteyen bir DBA metne bakarak anlayabilir.
+
+**SQL Server tarafında version-number gating yerine hata-güdümlü
+fallback tercih edildi (bkz. Faz 11 — SQL Server bölümü, ayrı not).**
+
 ## Faz 10 — SONRA: Ekleme akışlarının eksiklerini tamamlama
 
 Dört senaryoyu (a: PostgreSQL standalone, b: PostgreSQL Patroni, c: SQL

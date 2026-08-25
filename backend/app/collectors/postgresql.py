@@ -9,6 +9,15 @@ from app.collectors.base import BaseCollector, ConnectionTarget, classify_connec
 
 logger = logging.getLogger(__name__)
 
+# server_version_num style thresholds (MMmmpp, e.g. 170000 == 17.0). dbace targets PostgreSQL
+# 12-17; a server outside that range still gets a best-effort attempt (the closest branch below
+# is used, a warning is logged) rather than an outright refusal — most system-catalog changes
+# are additive and forward-compatible in practice.
+PG_VERSION_STAT_STATEMENTS_EXEC_TIME = 130_000  # 13+: pg_stat_statements.total_exec_time/mean_exec_time
+PG_VERSION_STAT_IO = 160_000  # 16+: pg_stat_io view exists
+PG_VERSION_CHECKPOINTER = 170_000  # 17+: pg_stat_checkpointer split out of pg_stat_bgwriter
+PG_MIN_SUPPORTED_VERSION = 120_000
+
 
 class PostgreSQLCollector(BaseCollector):
     def __init__(self, target: ConnectionTarget) -> None:
@@ -24,17 +33,32 @@ class PostgreSQLCollector(BaseCollector):
             timeout=10,
         )
 
+    async def _detect_version(self, conn: asyncpg.Connection) -> tuple[int, str]:
+        """Returns (server_version_num, human-readable version string). Called once per
+        collector method (each opens its own connection) — a single lightweight round trip,
+        same cost class as the existing `SHOW max_connections` call in collect_metrics."""
+        row = await conn.fetchrow("SELECT current_setting('server_version_num')::int AS num, version() AS txt")
+        version_num = int(row["num"])
+        if version_num < PG_MIN_SUPPORTED_VERSION:
+            logger.warning(
+                "PostgreSQL server_version_num=%s desteklenen minimumun (12, 120000) altında — "
+                "PostgreSQL 12 davranışıyla devam ediliyor, bazı sorgular başarısız olabilir",
+                version_num,
+            )
+        return version_num, row["txt"]
+
     async def test_connection(self) -> tuple[bool, str, dict[str, Any]]:
         try:
             conn = await self._connect()
             try:
-                version = await conn.fetchval("SELECT version()")
+                version_num, version = await self._detect_version(conn)
                 pg_stat = await conn.fetchval(
                     "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')"
                 )
                 return True, "Connection successful", {
                     "engine": "postgresql",
                     "version": version,
+                    "server_version_num": version_num,
                     "pg_stat_statements": bool(pg_stat),
                 }
             finally:
@@ -46,6 +70,12 @@ class PostgreSQLCollector(BaseCollector):
     async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
         conn = await self._connect()
         try:
+            version_num, version_string = await self._detect_version(conn)
+            # metric_key -> Turkish reason it couldn't be collected on this server version —
+            # populated by the version-gated blocks below, surfaced to the UI via
+            # Instance.unsupported_metrics (see services/collection.py).
+            unsupported: dict[str, str] = {}
+
             db_stats = await conn.fetchrow(
                 """
                 SELECT
@@ -139,73 +169,131 @@ class PostgreSQLCollector(BaseCollector):
                 "conflicts": int(db_stats["conflicts"] or 0),
             }
 
-            # Background writer / checkpoint stats
-            try:
-                bgwriter = await conn.fetchrow(
-                    """
-                    SELECT
-                        checkpoints_timed,
-                        checkpoints_req,
-                        checkpoint_write_time,
-                        checkpoint_sync_time,
-                        buffers_checkpoint,
-                        buffers_clean,
-                        buffers_backend,
-                        buffers_backend_fsync,
-                        buffers_alloc
-                    FROM pg_stat_bgwriter
-                    """
-                )
-                if bgwriter:
-                    metrics.update({
-                        "checkpoints_timed": int(bgwriter["checkpoints_timed"] or 0),
-                        "checkpoints_req": int(bgwriter["checkpoints_req"] or 0),
-                        "checkpoint_write_time_ms": float(bgwriter["checkpoint_write_time"] or 0),
-                        "checkpoint_sync_time_ms": float(bgwriter["checkpoint_sync_time"] or 0),
-                        "buffers_checkpoint_per_sec": round(
-                            max((int(bgwriter["buffers_checkpoint"] or 0) - (previous.get("buffers_checkpoint", 0) if previous else 0)) / delta_time, 0), 2
-                        ) if previous else 0.0,
-                        "buffers_clean_per_sec": round(
-                            max((int(bgwriter["buffers_clean"] or 0) - (previous.get("buffers_clean", 0) if previous else 0)) / delta_time, 0), 2
-                        ) if previous else 0.0,
-                        "buffers_backend_per_sec": round(
-                            max((int(bgwriter["buffers_backend"] or 0) - (previous.get("buffers_backend", 0) if previous else 0)) / delta_time, 0), 2
-                        ) if previous else 0.0,
-                        "buffers_alloc_per_sec": round(
-                            max((int(bgwriter["buffers_alloc"] or 0) - (previous.get("buffers_alloc", 0) if previous else 0)) / delta_time, 0), 2
-                        ) if previous else 0.0,
-                    })
-            except Exception as exc:
-                logger.debug("bgwriter collection failed: %s", exc)
+            def _rate(current: int, prev_key: str) -> float:
+                if not previous:
+                    return 0.0
+                return round(max((current - previous.get(prev_key, 0)) / delta_time, 0), 2)
 
-            # pg_stat_io (PostgreSQL 16+)
+            # Checkpoint / background-writer stats. PostgreSQL 17 split checkpointer-related
+            # columns out of pg_stat_bgwriter into a new pg_stat_checkpointer view (renamed:
+            # checkpoints_timed -> num_timed, checkpoints_req -> num_requested,
+            # checkpoint_write_time -> write_time, checkpoint_sync_time -> sync_time,
+            # buffers_checkpoint -> buffers_written) and DROPPED buffers_backend/
+            # buffers_backend_fsync entirely (no longer tracked anywhere as a direct
+            # equivalent) — this is the reported bug. buffers_clean/buffers_alloc stayed on
+            # pg_stat_bgwriter in both cases.
+            buffers_checkpoint = buffers_clean = buffers_backend = buffers_alloc = 0
             try:
-                io_stats = await conn.fetchrow(
-                    """
-                    SELECT
-                        COALESCE(SUM(reads), 0) AS reads,
-                        COALESCE(SUM(writes), 0) AS writes,
-                        COALESCE(SUM(extends), 0) AS extends,
-                        COALESCE(MAX(op_bytes), 0) AS op_bytes
-                    FROM pg_stat_io
-                    WHERE context = 'normal' AND object = 'relation'
-                    """
-                )
-                if io_stats:
-                    reads = int(io_stats["reads"] or 0)
-                    writes = int(io_stats["writes"] or 0)
-                    extends = int(io_stats["extends"] or 0)
-                    metrics.update({
-                        "io_reads_per_sec": round(max((reads - (previous.get("io_reads", 0) if previous else 0)) / delta_time, 0), 2) if previous else 0.0,
-                        "io_writes_per_sec": round(max((writes - (previous.get("io_writes", 0) if previous else 0)) / delta_time, 0), 2) if previous else 0.0,
-                        "io_extends_per_sec": round(max((extends - (previous.get("io_extends", 0) if previous else 0)) / delta_time, 0), 2) if previous else 0.0,
-                        "io_op_bytes": int(io_stats["op_bytes"] or 0),
-                    })
-                    metrics["_io_reads"] = reads
-                    metrics["_io_writes"] = writes
-                    metrics["_io_extends"] = extends
+                if version_num >= PG_VERSION_CHECKPOINTER:
+                    checkpointer = await conn.fetchrow(
+                        """
+                        SELECT num_timed, num_requested, write_time, sync_time, buffers_written
+                        FROM pg_stat_checkpointer
+                        """
+                    )
+                    bgwriter = await conn.fetchrow("SELECT buffers_clean, buffers_alloc FROM pg_stat_bgwriter")
+                    if checkpointer:
+                        buffers_checkpoint = int(checkpointer["buffers_written"] or 0)
+                        metrics.update({
+                            "checkpoints_timed": int(checkpointer["num_timed"] or 0),
+                            "checkpoints_req": int(checkpointer["num_requested"] or 0),
+                            "checkpoint_write_time_ms": float(checkpointer["write_time"] or 0),
+                            "checkpoint_sync_time_ms": float(checkpointer["sync_time"] or 0),
+                            "buffers_checkpoint_per_sec": _rate(buffers_checkpoint, "buffers_checkpoint"),
+                        })
+                    if bgwriter:
+                        buffers_clean = int(bgwriter["buffers_clean"] or 0)
+                        buffers_alloc = int(bgwriter["buffers_alloc"] or 0)
+                        metrics.update({
+                            "buffers_clean_per_sec": _rate(buffers_clean, "buffers_clean"),
+                            "buffers_alloc_per_sec": _rate(buffers_alloc, "buffers_alloc"),
+                        })
+                    unsupported["buffers_backend_per_sec"] = (
+                        "PostgreSQL 17+ sürümünde pg_stat_bgwriter'dan kaldırıldı; doğrudan bir "
+                        "karşılığı yok (backend I/O artık pg_stat_io içinde context bazlı raporlanıyor)."
+                    )
+                    unsupported["buffers_backend_fsync_per_sec"] = unsupported["buffers_backend_per_sec"]
+                else:
+                    bgwriter = await conn.fetchrow(
+                        """
+                        SELECT
+                            checkpoints_timed,
+                            checkpoints_req,
+                            checkpoint_write_time,
+                            checkpoint_sync_time,
+                            buffers_checkpoint,
+                            buffers_clean,
+                            buffers_backend,
+                            buffers_backend_fsync,
+                            buffers_alloc
+                        FROM pg_stat_bgwriter
+                        """
+                    )
+                    if bgwriter:
+                        buffers_checkpoint = int(bgwriter["buffers_checkpoint"] or 0)
+                        buffers_clean = int(bgwriter["buffers_clean"] or 0)
+                        buffers_backend = int(bgwriter["buffers_backend"] or 0)
+                        buffers_alloc = int(bgwriter["buffers_alloc"] or 0)
+                        metrics.update({
+                            "checkpoints_timed": int(bgwriter["checkpoints_timed"] or 0),
+                            "checkpoints_req": int(bgwriter["checkpoints_req"] or 0),
+                            "checkpoint_write_time_ms": float(bgwriter["checkpoint_write_time"] or 0),
+                            "checkpoint_sync_time_ms": float(bgwriter["checkpoint_sync_time"] or 0),
+                            "buffers_checkpoint_per_sec": _rate(buffers_checkpoint, "buffers_checkpoint"),
+                            "buffers_clean_per_sec": _rate(buffers_clean, "buffers_clean"),
+                            "buffers_backend_per_sec": _rate(buffers_backend, "buffers_backend"),
+                            "buffers_alloc_per_sec": _rate(buffers_alloc, "buffers_alloc"),
+                        })
             except Exception as exc:
-                logger.debug("pg_stat_io collection failed: %s", exc)
+                # Genuinely unexpected (e.g. permission denied on the view) — every
+                # checkpoint-related metric for this cycle is unavailable, everything else
+                # collected so far is kept.
+                logger.warning("checkpoint/bgwriter stats collection failed (PG %s): %s", version_num, exc)
+                for key in (
+                    "checkpoints_timed", "checkpoints_req", "checkpoint_write_time_ms",
+                    "checkpoint_sync_time_ms", "buffers_checkpoint_per_sec", "buffers_clean_per_sec",
+                    "buffers_backend_per_sec", "buffers_alloc_per_sec",
+                ):
+                    unsupported.setdefault(key, f"Toplama hatası: {exc}")
+
+            # pg_stat_io (PostgreSQL 16+ only — the view doesn't exist before that).
+            io_reads = io_writes = io_extends = 0
+            if version_num >= PG_VERSION_STAT_IO:
+                try:
+                    io_stats = await conn.fetchrow(
+                        """
+                        SELECT
+                            COALESCE(SUM(reads), 0) AS reads,
+                            COALESCE(SUM(writes), 0) AS writes,
+                            COALESCE(SUM(extends), 0) AS extends,
+                            COALESCE(MAX(op_bytes), 0) AS op_bytes
+                        FROM pg_stat_io
+                        WHERE context = 'normal' AND object = 'relation'
+                        """
+                    )
+                    if io_stats:
+                        io_reads = int(io_stats["reads"] or 0)
+                        io_writes = int(io_stats["writes"] or 0)
+                        io_extends = int(io_stats["extends"] or 0)
+                        metrics.update({
+                            "io_reads_per_sec": _rate(io_reads, "io_reads"),
+                            "io_writes_per_sec": _rate(io_writes, "io_writes"),
+                            "io_extends_per_sec": _rate(io_extends, "io_extends"),
+                            "io_op_bytes": int(io_stats["op_bytes"] or 0),
+                        })
+                except Exception as exc:
+                    logger.warning("pg_stat_io collection failed (PG %s): %s", version_num, exc)
+                    for key in ("io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec", "io_op_bytes"):
+                        unsupported.setdefault(key, f"Toplama hatası: {exc}")
+            else:
+                reason = f"pg_stat_io PostgreSQL 16+ gerektirir (bu sunucu: {version_num})."
+                for key in ("io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec", "io_op_bytes"):
+                    unsupported[key] = reason
+                logger.debug("pg_stat_io skipped: %s", reason)
+
+            metrics["_server_version"] = version_string
+            metrics["_server_version_num"] = version_num
+            metrics["_unsupported_metrics"] = unsupported
 
             state = {
                 "xact_total": xact_commit + xact_rollback,
@@ -218,16 +306,14 @@ class PostgreSQLCollector(BaseCollector):
                 "tup_deleted": float(db_stats["tup_deleted"] or 0),
                 "temp_bytes": float(db_stats["temp_bytes"] or 0),
                 "temp_files": float(db_stats["temp_files"] or 0),
-                "buffers_checkpoint": int(bgwriter["buffers_checkpoint"] if bgwriter else 0),
-                "buffers_clean": int(bgwriter["buffers_clean"] if bgwriter else 0),
-                "buffers_backend": int(bgwriter["buffers_backend"] if bgwriter else 0),
-                "buffers_alloc": int(bgwriter["buffers_alloc"] if bgwriter else 0),
+                "buffers_checkpoint": buffers_checkpoint,
+                "buffers_clean": buffers_clean,
+                "buffers_backend": buffers_backend,
+                "buffers_alloc": buffers_alloc,
+                "io_reads": io_reads,
+                "io_writes": io_writes,
+                "io_extends": io_extends,
             }
-            state.update({
-                "io_reads": metrics.get("_io_reads", 0),
-                "io_writes": metrics.get("_io_writes", 0),
-                "io_extends": metrics.get("_io_extends", 0),
-            })
             metrics["_state"] = state
 
             return metrics
@@ -237,6 +323,8 @@ class PostgreSQLCollector(BaseCollector):
     async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
         conn = await self._connect()
         try:
+            version_num, _ = await self._detect_version(conn)
+
             has_ext = await conn.fetchval(
                 "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')"
             )
@@ -247,13 +335,21 @@ class PostgreSQLCollector(BaseCollector):
                 "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_kcache')"
             )
 
-            sql = """
+            # pg_stat_statements renamed total_time/mean_time -> total_exec_time/mean_exec_time
+            # in PostgreSQL 13 (splitting out planning time separately) — pre-13 only has the
+            # old names.
+            if version_num >= PG_VERSION_STAT_STATEMENTS_EXEC_TIME:
+                total_col, mean_col = "total_exec_time", "mean_exec_time"
+            else:
+                total_col, mean_col = "total_time", "mean_time"
+
+            sql = f"""
                 SELECT
                     s.queryid::text,
                     LEFT(s.query, 2000) AS query,
                     s.calls,
-                    s.total_exec_time AS total_time_ms,
-                    s.mean_exec_time AS mean_time_ms,
+                    s.{total_col} AS total_time_ms,
+                    s.{mean_col} AS mean_time_ms,
                     s.rows,
                     s.shared_blks_hit,
                     s.shared_blks_read,
@@ -265,13 +361,13 @@ class PostgreSQLCollector(BaseCollector):
                 WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
             """
             if has_kcache:
-                sql = """
+                sql = f"""
                     SELECT
                         s.queryid::text,
                         LEFT(s.query, 2000) AS query,
                         s.calls,
-                        s.total_exec_time AS total_time_ms,
-                        s.mean_exec_time AS mean_time_ms,
+                        s.{total_col} AS total_time_ms,
+                        s.{mean_col} AS mean_time_ms,
                         s.rows,
                         s.shared_blks_hit,
                         s.shared_blks_read,
@@ -288,7 +384,7 @@ class PostgreSQLCollector(BaseCollector):
                     WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
                 """
 
-            sql += " ORDER BY s.mean_exec_time DESC LIMIT $1"
+            sql += f" ORDER BY s.{mean_col} DESC LIMIT $1"
             rows = await conn.fetch(sql, limit)
             return [dict(row) for row in rows]
         finally:

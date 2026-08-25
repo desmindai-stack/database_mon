@@ -250,6 +250,10 @@ class InstanceOut(BaseModel):
     services: list[str] | None
     group_id: int | None = None
     options: dict[str, Any] | None = None
+    # Collector-derived (see Instance model docstring) — null until the first successful
+    # collect_metrics() run for this instance.
+    server_version: str | None = None
+    unsupported_metrics: dict[str, str] | None = None
 
     model_config = {"from_attributes": True}
 
