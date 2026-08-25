@@ -143,6 +143,7 @@ export default function GroupDetailPage() {
           </div>
           <p className="detail-subtitle">
             {application && <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>}
+            {group?.access_name && <span className="detail-meta"> · Erişim: {group.access_name}</span>}
           </p>
         </div>
       </header>

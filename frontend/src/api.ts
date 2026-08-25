@@ -344,6 +344,15 @@ export interface ApplicationCreate {
   description?: string;
 }
 
+export interface GroupStatusSummary {
+  overall: string;
+  nodes_up: number;
+  nodes_down: number;
+  primary_node: string | null;
+  replication_lag_bytes: number | null;
+  checked_at: string | null;
+}
+
 export interface DatabaseGroup {
   id: number;
   application_id: number;
@@ -351,8 +360,10 @@ export interface DatabaseGroup {
   engine: DbEngine;
   topology: GroupTopology;
   environment: GroupEnvironment;
+  access_name: string | null;
   notes: string | null;
   created_at: string;
+  status: GroupStatusSummary | null;
 }
 
 export interface DatabaseGroupCreate {
@@ -361,6 +372,7 @@ export interface DatabaseGroupCreate {
   engine: DbEngine;
   topology: GroupTopology;
   environment?: GroupEnvironment;
+  access_name?: string;
   notes?: string;
 }
 

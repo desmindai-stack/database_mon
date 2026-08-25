@@ -19,6 +19,7 @@ export default function DatabaseGroupsPage() {
   const [engine, setEngine] = useState<DbEngine>("postgresql");
   const [topology, setTopology] = useState<GroupTopology>("patroni");
   const [environment, setEnvironment] = useState<GroupEnvironment>("prod");
+  const [accessName, setAccessName] = useState("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,8 +37,17 @@ export default function DatabaseGroupsPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.createGroup({ application_id: id, name, engine, topology, environment, notes: notes || undefined });
+      await api.createGroup({
+        application_id: id,
+        name,
+        engine,
+        topology,
+        environment,
+        access_name: accessName || undefined,
+        notes: notes || undefined,
+      });
       setName("");
+      setAccessName("");
       setNotes("");
       await load();
     } catch (err) {
@@ -71,9 +81,10 @@ export default function DatabaseGroupsPage() {
           <table>
             <thead>
               <tr>
-                <th>Ad</th>
+                <th>Ad / Erişim</th>
                 <th>Motor</th>
                 <th>Topoloji</th>
+                <th>Durum</th>
                 <th>Ortam</th>
                 <th></th>
               </tr>
@@ -81,28 +92,49 @@ export default function DatabaseGroupsPage() {
             <tbody>
               {groups.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="empty">Kayıtlı grup yok</td>
+                  <td colSpan={6} className="empty">Kayıtlı grup yok</td>
                 </tr>
               ) : (
-                groups.map((g) => (
-                  <tr key={g.id}>
-                    <td>
-                      <Link to={`/groups/${g.id}`}>{g.name}</Link>
-                    </td>
-                    <td>
-                      <span className="engine-badge">{g.engine}</span>
-                    </td>
-                    <td>{g.topology}</td>
-                    <td>
-                      <span className={`env-badge ${g.environment}`}>{ENV_LABELS[g.environment]}</span>
-                    </td>
-                    <td>
-                      <button className="btn btn-danger" onClick={() => onDelete(g.id)}>
-                        Sil
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                groups.map((g) => {
+                  const isCluster = g.topology !== "standalone";
+                  const status = g.status;
+                  return (
+                    <tr key={g.id}>
+                      <td>
+                        <Link to={`/groups/${g.id}`}>{isCluster && g.access_name ? g.access_name : g.name}</Link>
+                        {isCluster && g.access_name && <div className="instance-meta">{g.name}</div>}
+                      </td>
+                      <td>
+                        <span className="engine-badge">{g.engine}</span>
+                      </td>
+                      <td>{g.topology}</td>
+                      <td>
+                        {status ? (
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
+                            <span className={`tuning-status ${status.overall}`}>{status.overall}</span>
+                            {isCluster && (
+                              <span className="muted-note">
+                                {status.nodes_up}/{status.nodes_up + status.nodes_down} up
+                                {status.primary_node ? ` · primary: ${status.primary_node}` : ""}
+                                {status.replication_lag_bytes != null ? ` · lag: ${status.replication_lag_bytes}` : ""}
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="muted-note">—</span>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`env-badge ${g.environment}`}>{ENV_LABELS[g.environment]}</span>
+                      </td>
+                      <td>
+                        <button className="btn btn-danger" onClick={() => onDelete(g.id)}>
+                          Sil
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -140,6 +172,16 @@ export default function DatabaseGroupsPage() {
                 <option value="dev">Dev</option>
               </select>
             </label>
+            {topology !== "standalone" && (
+              <label>
+                Erişim adı (listener / VIP)
+                <input
+                  value={accessName}
+                  onChange={(e) => setAccessName(e.target.value)}
+                  placeholder="boa-ag-listener.internal"
+                />
+              </label>
+            )}
             <label>
               Notlar
               <input value={notes} onChange={(e) => setNotes(e.target.value)} />

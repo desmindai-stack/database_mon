@@ -119,6 +119,33 @@ tıklanabilir "En kritik sorunlar" listesi (Group Detail'e linkli) ve
 Eski Instance-bazlı özet (stat kartları + filtreli tablo) "Instance bazlı
 görünüm" başlığı altında altta kalmaya devam ediyor.
 
+**Faz 7 — Test turu düzeltmeleri (3 iş, 3 ayrı commit).**
+
+- **İŞ 1 — Dashboard performansı.** `GET /api/dashboard/summary` artık canlı
+  probe atmıyor (~6sn → önbellekten okuyup ms mertebesinde döner). Yeni
+  `GroupHealthSnapshot` tablosu grup bazında son health raporu + öneri
+  listesi + zaman damgasını tutuyor; `services/dashboard_snapshot.py`'deki
+  `refresh_all_group_snapshots()` bunu dolduruyor — collector scheduler'da
+  periyodik (`dashboard_refresh_interval_seconds`, varsayılan 60sn, ilk
+  çalıştırma anında) ve yeni `POST /api/dashboard/refresh` ile manuel
+  tetiklenebiliyor. Yanıt artık `last_checked` taşıyor; DashboardPage'de
+  "Son güncelleme: X önce" + Yenile butonu eklendi.
+- **İŞ 2 — Sol menü.** Private modda eski Instance-tabanlı ağaç
+  ("Müşteriler") ile yeni nav linki ("Uygulamalar") aynı anda görünüp iki
+  ayrı "müşteri" girişi gibi duruyordu. Eski ağaç artık sadece public
+  modda görünüyor ve adı "Instance Gezgini" oldu (yeni akışla aynı ismi
+  paylaşmasın diye); public moddaki üst nav linki "Müşteri Grupları"
+  yerine "Müşteriler" oldu.
+- **İŞ 3 — Cluster'lar tek satır.** `DatabaseGroup`'a `access_name`
+  (listener/VIP adı) eklendi. Grup listesi ve Group Detail zaten grup
+  bazında tek satırdı (düğümler sadece Group Detail'de listeleniyor) —
+  asıl tekrar `top_issues`'daki down-node satırlarındaydı: bir gruptaki
+  tüm down düğümler artık tek "N düğüm erişilemez: ad1 (site1), ad2
+  (site2)..." satırında birleşiyor (önceden düğüm başına ayrı satırdı).
+  Grup listesi artık `GroupHealthSnapshot` önbelleğinden türetilen bir
+  "Durum" sütunu gösteriyor (up/down düğüm sayısı, primary düğüm,
+  replikasyon lag özeti, overall rozet) — ekstra canlı prob yapmadan.
+
 ## Nasıl test edilir
 
 ### Backend
@@ -150,10 +177,17 @@ Sonra:
 - `GET /api/config` — `deployment_mode`/`default_customer_name` döner.
   `DEPLOYMENT_MODE=private DEFAULT_CUSTOMER_NAME="X Bank" uvicorn ...` ile
   başlatırsanız (temiz bir DB'de) açılışta otomatik bir müşteri oluşur.
-- `GET /api/dashboard/summary` — X Bank demo verisiyle (tüm host'lar
-  erişilemez) `health.critical: 4`, `top_issues` 10 kayıt, hepsi
-  `environment: "prod"` önce sıralı. Boş bir DB'de hepsi `0`/`[]` döner,
-  yavaşlamadan (probe edilecek grup yoksa network çağrısı yapılmaz).
+- `GET /api/dashboard/summary` — ilk çalıştırmada (henüz snapshot yokken)
+  hepsi `0`/`[]`/`last_checked: null` döner, anında (DB read only).
+  `POST /api/dashboard/refresh` çağırdıktan sonra (X Bank demo verisiyle,
+  tüm host'lar erişilemez) `health.critical: 4`, `top_issues`'da grup
+  başına tek satır (ör. "4 düğüm erişilemez: boa-node-1 (primary), ..."),
+  `last_checked` dolu döner; sonraki `GET /summary` çağrıları ms
+  mertebesinde. `run_mode=worker`/`all` ile başlatılmışsa scheduler bunu
+  60sn'de bir kendiliğinden de tazeliyor.
+- `GET /api/groups?application_id=...` — her grup artık `access_name`
+  (cluster gruplarda listener/VIP adı) ve `status` (refresh sonrası
+  `nodes_up`/`nodes_down`/`primary_node`/`overall`) alanlarını taşıyor.
 
 ### Frontend
 ```bash
@@ -184,12 +218,20 @@ sayfasına gidip düğüm ekleme formunu ve "Sağlığı kontrol et" /
   ortamda tarayıcı otomasyon aracı yoktu); bunun yerine `tsc -b && vite build`
   ve backend+frontend'i gerçekten ayağa kaldırıp `curl` ile uçtan uca API
   şekli karşılaştırması yapıldı.
-- `GET /api/dashboard/summary` canlı prob yapıyor, cache'lemiyor — çok
-  sayıda grup / yavaş host'lu kurulumlarda yavaş hissedilebilir (demo'da
-  4 erişilemez grup için ~6sn). `index_advisor`/`performance_insights`
-  önerileri yalnızca `Instance.group_id` ile bir gruba bağlanmış
-  instance'lar için üretiliyor — `seed_demo.py` hiç Instance oluşturmadığı
-  için demo'da bu iki kaynak boş kalır (beklenen davranış).
+- `GET /api/dashboard/summary` artık önbellekten okuyor (Faz 7 test turu
+  düzeltmesi) — canlı prob sadece scheduler'da (worker/all run_mode,
+  60sn'de bir) veya `POST /api/dashboard/refresh`'te çalışıyor.
+  `run_mode=api` tek başına çalıştırılan bir deployment'ta scheduler
+  çalışmaz, veri manuel refresh'e kadar bayat kalır. `index_advisor`/
+  `performance_insights` önerileri yalnızca `Instance.group_id` ile bir
+  gruba bağlanmış instance'lar için üretiliyor — `seed_demo.py` hiç
+  Instance oluşturmadığı için demo'da bu iki kaynak boş kalır (beklenen
+  davranış).
+- Grup listesindeki "Durum" özeti (`GroupStatusSummaryOut`) genel amaçlı
+  `collect_group_health` prob'undan türetiliyor; Always On grupları için
+  `primary_node` ve `replication_lag_bytes` bu yüzden çoğunlukla boş/
+  statik kalır — AG'nin gerçek DMV tabanlı primary/lag bilgisi sadece
+  Group Detail'in Always On sekmesinde (`GET /api/groups/{id}/alwayson`).
 
 ## API uyumluluğu
 

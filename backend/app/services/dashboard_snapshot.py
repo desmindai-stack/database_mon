@@ -184,3 +184,48 @@ async def refresh_all_group_snapshots(session: AsyncSession) -> int:
 
     await session.commit()
     return len(groups)
+
+
+async def group_status_summaries(session: AsyncSession, group_ids: list[int]) -> dict[int, dict[str, Any]]:
+    """Compact per-group status (used by the group list + Group Detail header) built from the
+    same GroupHealthSnapshot cache the dashboard reads — no extra live probing."""
+    if not group_ids:
+        return {}
+
+    snapshots = (
+        await session.execute(select(GroupHealthSnapshot).where(GroupHealthSnapshot.group_id.in_(group_ids)))
+    ).scalars().all()
+    snapshot_by_group = {s.group_id: s for s in snapshots}
+
+    nodes = (await session.execute(select(Node).where(Node.group_id.in_(group_ids)))).scalars().all()
+    primary_by_group: dict[int, str] = {}
+    for node in nodes:
+        if node.role_hint == "primary":
+            primary_by_group[node.group_id] = node.name
+
+    summaries: dict[int, dict[str, Any]] = {}
+    for group_id in group_ids:
+        snapshot = snapshot_by_group.get(group_id)
+        if snapshot is None:
+            summaries[group_id] = {"primary_node": primary_by_group.get(group_id)}
+            continue
+
+        report = snapshot.report_json or {}
+        cluster = report.get("cluster") or {}
+        max_lag: float | None = None
+        for member in cluster.get("members") or []:
+            lag = member.get("lag")
+            if isinstance(lag, (int, float)):
+                max_lag = float(lag) if max_lag is None else max(max_lag, float(lag))
+
+        down_nodes = report.get("down_nodes") or []
+        total_nodes = len(report.get("nodes") or [])
+        summaries[group_id] = {
+            "overall": snapshot.overall,
+            "nodes_up": max(total_nodes - len(down_nodes), 0),
+            "nodes_down": len(down_nodes),
+            "primary_node": cluster.get("leader") or primary_by_group.get(group_id),
+            "replication_lag_bytes": max_lag,
+            "checked_at": snapshot.checked_at,
+        }
+    return summaries

@@ -53,6 +53,7 @@ class DatabaseGroupCreate(BaseModel):
     engine: DatabaseEngine = DatabaseEngine.POSTGRESQL
     topology: GroupTopology = GroupTopology.STANDALONE
     environment: GroupEnvironment = GroupEnvironment.PROD
+    access_name: str | None = None
     notes: str | None = None
 
 
@@ -61,7 +62,17 @@ class DatabaseGroupUpdate(BaseModel):
     engine: DatabaseEngine | None = None
     topology: GroupTopology | None = None
     environment: GroupEnvironment | None = None
+    access_name: str | None = None
     notes: str | None = None
+
+
+class GroupStatusSummaryOut(BaseModel):
+    overall: str = "unknown"
+    nodes_up: int = 0
+    nodes_down: int = 0
+    primary_node: str | None = None
+    replication_lag_bytes: float | None = None
+    checked_at: datetime | None = None
 
 
 class DatabaseGroupOut(BaseModel):
@@ -71,8 +82,10 @@ class DatabaseGroupOut(BaseModel):
     engine: str
     topology: str
     environment: str
+    access_name: str | None
     notes: str | None
     created_at: datetime
+    status: GroupStatusSummaryOut | None = None
 
     model_config = {"from_attributes": True}
 

@@ -55,6 +55,7 @@ async def _get_or_create_group(
     topology: str,
     notes: str,
     environment: str = "prod",
+    access_name: str | None = None,
 ) -> DatabaseGroup:
     existing = (
         await session.execute(
@@ -71,6 +72,7 @@ async def _get_or_create_group(
         engine=engine,
         topology=topology,
         environment=environment,
+        access_name=access_name,
         notes=notes,
     )
     session.add(group)
@@ -120,6 +122,7 @@ async def seed() -> None:
             topology="alwayson",
             notes="4 düğüm Always On AG, düğüm 4 disaster site'ta.",
             environment="prod",
+            access_name="boa-ag-listener.internal",
         )
         await _ensure_node(session, boa_group, "boa-node-1", "boa-node-1.internal", 1433, "primary", "primary")
         await _ensure_node(session, boa_group, "boa-node-2", "boa-node-2.internal", 1433, "primary", "replica")
@@ -150,6 +153,7 @@ async def seed() -> None:
             topology="patroni",
             notes="3 düğüm Patroni cluster, düğüm 3 disaster site'ta.",
             environment="prod",
+            access_name="aapara-patroni-vip.internal",
         )
         await _ensure_node(
             session, aapara_group, "aapara-node-1", "aapara-node-1.internal", 5432, "primary", "primary"

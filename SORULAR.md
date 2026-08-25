@@ -66,6 +66,45 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 7 — Test turu düzeltmeleri (dashboard performansı, sol menü, cluster tekilleştirme)
+
+- **`last_checked` = en eski snapshot:** Özet birden çok grubun
+  `GroupHealthSnapshot`'ını birleştiriyor; `last_checked` olarak grupların
+  en eski `checked_at`'ini (min) döndürdüm — "en güncel" değil "en bayat"
+  veri ne kadar eski, onu gösteriyor. Batch içindeki gruplar aynı
+  `asyncio.gather` turunda prob'landığı için pratikte aralarındaki fark
+  milisaniyeler, bu seçim çoğunlukla görünmez ama tutarlılık için
+  belirtiyorum.
+- **Dashboard refresh scheduler'ı worker/all run_mode'a bağlı:** Instance
+  metrik toplama ile aynı desen — `run_mode=api` olan bir deployment'ta
+  (ör. ayrı web dyno) hiçbir arka plan job çalışmaz, veri sadece
+  `POST /api/dashboard/refresh` ile manuel tetiklenene kadar bayat kalır.
+  Mevcut mimariyle tutarlı bir tercih, ayrı bir "worker her zaman
+  gerekli" kısıtı eklemedim.
+- **`GroupStatusSummaryOut.primary_node` iki kaynaklı:** Önce Patroni
+  `cluster.leader` (canlı prob sonucu), yoksa gruptaki `role_hint=
+  "primary"` işaretli `Node.name` (statik, kullanıcı girişi) kullanılıyor.
+  Always On grupları için gerçek AG DMV tabanlı primary tespiti sadece
+  `GET /api/groups/{id}/alwayson`'da var (ayrı, pahalı bir DMV sorgusu) —
+  grup listesindeki özet bunu cache'lemiyor, bu yüzden Always On
+  gruplarında "primary" alanı genelde statik `role_hint` fallback'inden
+  geliyor, canlı değil.
+- **`replication_lag_bytes` özeti sadece Patroni'de dolu:** Genel
+  `collect_group_health` prob'u sadece Patroni `/cluster` member'larından
+  `lag` alıyor; Always On'un log/redo queue metrikleri ayrı DMV
+  endpoint'inde. Grup listesindeki lag özeti bu yüzden Always On
+  gruplarında her zaman boş — detay için Group Detail'in Always On
+  sekmesine gitmek gerekiyor.
+- **`access_name` sadece görüntüleme/organizasyon amaçlı:** Hiçbir
+  probe/collector `access_name`'e bağlanmıyor — düğümler hâlâ kendi
+  `host`/`port` alanlarından prob'lanıyor. Alan sadece UI'da cluster
+  grubunun "gerçek" erişim adını (listener/VIP) göstermek için.
+- **Down-node issue konsolidasyonu `_issues_from_group_health`'te:** Bu
+  fonksiyon İŞ 1'in önbellek geçişiyle aynı commit'te değişti (aynı
+  fonksiyonu iki kez düzenlemek yapay olurdu) — bir gruptaki tüm down
+  node'lar artık "N düğüm erişilemez: ad1 (site1), ad2 (site2)..." tek
+  satırında birleşiyor, önceden düğüm başına ayrı satır vardı.
+
 ## ~~Faz 2 — Grup seviyeli alert kalıcılığı~~ (KAPANDI — Faz 6)
 
 ~~`AlertRule`/`AlertEvent` modelleri `instance_id`'ye bağlı...~~

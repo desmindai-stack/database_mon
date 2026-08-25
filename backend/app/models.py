@@ -57,6 +57,7 @@ class DatabaseGroup(Base):
     engine: Mapped[str] = mapped_column(String(32), default="postgresql", nullable=False)
     topology: Mapped[str] = mapped_column(String(32), default="standalone", nullable=False)
     environment: Mapped[str] = mapped_column(String(16), default="prod", nullable=False)
+    access_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

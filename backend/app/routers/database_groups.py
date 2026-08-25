@@ -12,6 +12,7 @@ from app.schemas import (
     DatabaseGroupOut,
     DatabaseGroupUpdate,
     GroupHealthOut,
+    GroupStatusSummaryOut,
     NodeOut,
     ParameterAuditOut,
 )
@@ -19,6 +20,7 @@ from app.services.alert_engine import ensure_group_alert_rules, evaluate_group_a
 from app.services.alwayson_health import collect_alwayson_health
 from app.services.cluster_health import collect_group_health, group_health_metric_flags
 from app.services.credentials import redact_node_options
+from app.services.dashboard_snapshot import group_status_summaries
 from app.services.parameter_audit import collect_parameter_audit
 
 logger = logging.getLogger(__name__)
@@ -30,12 +32,18 @@ router = APIRouter(prefix="/groups", tags=["database-groups"])
 async def list_groups(
     application_id: int | None = Query(default=None),
     db: AsyncSession = Depends(get_db),
-) -> list[DatabaseGroup]:
+) -> list[DatabaseGroupOut]:
     query = select(DatabaseGroup).order_by(DatabaseGroup.name)
     if application_id is not None:
         query = query.where(DatabaseGroup.application_id == application_id)
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    groups = list((await db.execute(query)).scalars().all())
+    statuses = await group_status_summaries(db, [g.id for g in groups])
+    return [
+        DatabaseGroupOut.model_validate(g).model_copy(
+            update={"status": GroupStatusSummaryOut(**statuses[g.id]) if g.id in statuses else None}
+        )
+        for g in groups
+    ]
 
 
 @router.post("", response_model=DatabaseGroupOut, status_code=status.HTTP_201_CREATED)
@@ -59,11 +67,13 @@ async def create_group(payload: DatabaseGroupCreate, db: AsyncSession = Depends(
 
 
 @router.get("/{group_id}", response_model=DatabaseGroupOut)
-async def get_group(group_id: int, db: AsyncSession = Depends(get_db)) -> DatabaseGroup:
+async def get_group(group_id: int, db: AsyncSession = Depends(get_db)) -> DatabaseGroupOut:
     group = await db.get(DatabaseGroup, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
-    return group
+    statuses = await group_status_summaries(db, [group_id])
+    status = GroupStatusSummaryOut(**statuses[group_id]) if group_id in statuses else None
+    return DatabaseGroupOut.model_validate(group).model_copy(update={"status": status})
 
 
 @router.patch("/{group_id}", response_model=DatabaseGroupOut)

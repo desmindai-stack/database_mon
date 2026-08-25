@@ -1,0 +1,1 @@
+ALTER TABLE database_groups ADD COLUMN IF NOT EXISTS access_name VARCHAR(255);
