@@ -5,6 +5,58 @@ push edilmeden yapıldı. Her faz ayrı commit — `git log master..feature/mult
 ile tek tek görülebilir. Karar veremediğim / varsayımla ilerlediğim noktalar
 `SORULAR.md`'de, gerekçeleriyle.
 
+## Doğrulanmış uçtan uca akış (sıfırdan)
+
+Bu ortamda tarayıcı otomasyonu yok, bu yüzden aşağıdaki akış Faz 9
+sonunda **gerçek bir API scripti ile, boş bir DB'den başlayarak, gerçek
+HTTP istekleriyle uçtan uca çalıştırılıp doğrulandı** (her adım gerçek
+bir yanıt kodu ve veri döndürdü — hayali değil). Her adımın karşılığı
+olan UI eylemi de yazılı; kullanıcı bu sırayla ilerleyerek aynı sonucu
+tarayıcıda alabilir:
+
+1. **Müşteri ekleme** — Sol menüde "Müşteriler" (public mod) → sayfa
+   açılır → sağdaki "Yeni müşteri" formuna Ad + Tip girip Ekle (veya
+   başlıktaki "+ Müşteri Ekle" butonu forma kaydırır). *Doğrulandı:*
+   `POST /api/customers` → 201, müşteri oluştu.
+2. **Uygulama ekleme** — Müşteriler listesinde müşteri adına tıkla →
+   Uygulamalar sayfası → "+ Uygulama Ekle" / sağdaki form → Ad + Açıklama
+   → Ekle. *Doğrulandı:* `POST /api/applications` → 201.
+3. **Database group oluşturma** — Uygulamalar sayfasında uygulama adına
+   tıkla → Database Groups sayfası → "+ Grup Ekle" → Ad, Motor
+   (postgresql), Topoloji (standalone), Ortam → Ekle. *Doğrulandı:*
+   `POST /api/groups` → 201, `topology=standalone`.
+4. **Sunucu ekleme** — Uygulamalar sayfası başlığındaki "Sunucular"
+   butonu (veya sol menü ağacında müşteri dalını açıp "📁 Sunucular") →
+   Sunucular sayfası → "+ Sunucu Ekle" → Ad/Host/OS/Site → Ekle.
+   *Doğrulandı:* `POST /api/servers` → 201.
+5. **Instance ekleme + gruba alma** — Grup adına tıkla → Group Detail →
+   Düğümler sekmesi → "Yeni düğüm" formu (üstteki "+ Düğüm Ekle" da
+   forma kaydırır): Sunucu seç, Ad/Port/Rol gir, "Instance bağlantısı:
+   Yeni instance oluştur" seçiliyken DB kullanıcı adı/parola gir → Ekle.
+   Bu TEK adım hem instance'ı oluşturuyor hem de düğümü (dolayısıyla
+   instance'ı) gruba üye yapıyor. *Doğrulandı:* `POST /api/nodes`
+   (`db_username` ile) → 201, yanıtta `instance_id` dolu; ikinci bir
+   düğüm daha eklendi.
+6. **Cluster'a dönüştürme** — Group Detail'de (grup hâlâ standalone'ken)
+   "Cluster'a dönüştür" kartı → Topoloji (patroni/alwayson), Erişim adı,
+   Cluster adı, VIP gir → Dönüştür. *Doğrulandı:*
+   `POST /api/groups/{id}/convert-to-cluster` → 200, `topology=patroni`
+   oldu; ikinci düğüm eklendikten sonra grup artık tam Patroni yığınını
+   (`postgresql, patroni, etcd, keepalived, haproxy`) prob'luyor.
+7. **Sağlık görüntüleme** — Group Detail → Düğümler sekmesi → "Sağlığı
+   kontrol et" → UP/DOWN sayıları, etcd quorum, split-brain durumu,
+   Patroni cluster tablosu, her düğüm kartında servis durumları
+   görünür. *Doğrulandı:* `GET /api/groups/{id}/health` → 200; aynı
+   sorun `POST /api/dashboard/refresh` sonrası Dashboard'ın
+   `top_issues` listesinde de göründü.
+8. **Instance detayına gitme** — Sol menü ağacında Müşteri → Uygulama →
+   Grup → Düğüm'ü aç, düğüme tıkla (instance bağlıysa link aktif) —
+   veya Group Detail'deki düğüm kartındaki "Instance detayı" linkine
+   tıkla → Instance detay sayfası (Overview/Metrics/Queries/Activity/
+   Cluster/Schema/Tuning sekmeleri) açılır. *Doğrulandı:*
+   `GET /api/instances/{id}` ve `GET /api/instances/{id}/insights` →
+   200, ilk yüklemede kullanılan tüm uçlar hatasız.
+
 ## Ne yapıldı
 
 **Faz 0 — Temizlik.** `backend/app/collector/pg_collector.py` hiçbir yerden
