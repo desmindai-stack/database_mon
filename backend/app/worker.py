@@ -18,7 +18,7 @@ async def _run() -> None:
     if settings.run_mode not in ("worker", "all"):
         logger.warning("RUN_MODE=%s; worker process expects worker or all", settings.run_mode)
     await init_db()
-    start_scheduler()
+    await start_scheduler()
     logger.info("dbace worker running (interval=%ss)", settings.collect_interval_seconds)
     stop = asyncio.Event()
 

@@ -66,6 +66,35 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 8 — İŞ 3: Otomatik yenileme aralığı
+
+- **Ayar global/paylaşımlı, kullanıcı-bazlı değil:** dbace'de bir
+  auth/kullanıcı modeli yok (herkes aynı backend'e bağlanıyor), bu yüzden
+  yenileme aralığını yeni `app_settings` (basit key/value) tablosuna
+  DB'de tek satır olarak sakladım — tüm tarayıcılar/DBA'lar için ortak.
+  localStorage (tarayıcı-bazlı) alternatifti ama "Scheduler bu aralığa
+  göre çalışsın" isteği zaten sunucu tarafında paylaşımlı bir değer
+  gerektiriyordu; ikisini ayrı tutmak (localStorage sadece UI polling'i,
+  DB sadece scheduler'ı etkiler) kafa karıştırıcı olurdu, tek kaynak
+  seçtim.
+- **Aynı ayar hem scheduler'ın canlı-prob aralığını hem dashboard'ın
+  önbellek okuma (poll) aralığını kontrol ediyor:** Dashboard'ın kendi
+  otomatik yenilemesi `POST /refresh` (pahalı, canlı prob) değil,
+  `GET /summary` (ucuz, önbellek okuma) çağırıyor — aynı aralıkta iki
+  ayrı kaynağı (biri canlı prob, biri UI poll) senkron tutmanın en basit
+  yolu tek bir paylaşılan değer kullanmaktı; kullanıcı isterse ileride
+  ikisini ayrı ayar yapabilir ama şu anki istekte "aynı aralık" ima
+  ediliyordu.
+- **Ayar değişikliği çalışan scheduler'ı `APScheduler.reschedule_job`
+  ile canlı günceller** (yeniden başlatma gerekmez) — ama sadece
+  `run_mode=worker`/`all` olan, o an ayağa kalkmış process'te. `api`-only
+  bir deployment'ta scheduler hiç çalışmadığından bu no-op; DB'ye yazılan
+  değer bir sonraki worker başlangıcında (`start_scheduler()` artık DB'den
+  okuyor) devreye giriyor.
+- **Geçersiz/desteklenmeyen bir `seconds` değeri 400 ile reddediliyor**
+  (sadece 10/30/60/300/900/3600) — açık uçlu bir sayısal input yerine
+  spesifikasyondaki 6 seçenekle sınırlı tutuldu, istenirse gevşetilebilir.
+
 ## Faz 8 — İŞ 2: Cluster'a dönüşüm akışı
 
 - **Engine/topology uyumu denetlenmiyor:** `convert-to-cluster` teorik

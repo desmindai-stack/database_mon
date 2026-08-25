@@ -407,6 +407,15 @@ class DashboardSummaryOut(BaseModel):
     last_checked: datetime | None = None
 
 
+class RefreshIntervalOut(BaseModel):
+    seconds: int
+    options: list[int]
+
+
+class RefreshIntervalIn(BaseModel):
+    seconds: int
+
+
 class ConnectionTestResult(BaseModel):
     ok: bool
     message: str

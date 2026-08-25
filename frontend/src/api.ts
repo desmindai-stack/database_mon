@@ -610,6 +610,11 @@ export interface DashboardSummary {
   last_checked: string | null;
 }
 
+export interface RefreshInterval {
+  seconds: number;
+  options: number[];
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -707,6 +712,9 @@ export const api = {
 
   getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
   refreshDashboard: () => request<DashboardSummary>("/api/dashboard/refresh", { method: "POST" }),
+  getRefreshInterval: () => request<RefreshInterval>("/api/dashboard/refresh-interval"),
+  setRefreshInterval: (seconds: number) =>
+    request<RefreshInterval>("/api/dashboard/refresh-interval", { method: "PUT", body: JSON.stringify({ seconds }) }),
 
   getGroupHealth: (groupId: number) => request<GroupHealth>(`/api/groups/${groupId}/health`),
   getGroupParameters: (groupId: number) => request<ParameterAudit>(`/api/groups/${groupId}/parameters`),

@@ -215,6 +215,16 @@ class AlertEvent(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class AppSetting(Base):
+    """Small global key/value store for operational settings (e.g. dashboard refresh
+    interval) — there is no per-user auth model in dbace, so settings are shared/global."""
+
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(255), nullable=False)
+
+
 class GroupHealthSnapshot(Base):
     __tablename__ = "group_health_snapshots"
 

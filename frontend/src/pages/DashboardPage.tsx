@@ -11,6 +11,15 @@ const SEVERITY_COLOR: Record<string, string> = {
   info: "var(--success)",
 };
 
+const INTERVAL_LABELS: Record<number, string> = {
+  10: "10 saniye",
+  30: "30 saniye",
+  60: "1 dakika",
+  300: "5 dakika",
+  900: "15 dakika",
+  3600: "1 saat",
+};
+
 type StatusFilter = "all" | "healthy" | "warning" | "alerting" | "pending" | "disabled";
 type EnvFilter = "all" | "public" | "private";
 
@@ -48,6 +57,8 @@ export default function DashboardPage() {
   const [groupSummaryLoading, setGroupSummaryLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+  const [refreshOptions, setRefreshOptions] = useState<number[]>([10, 30, 60, 300, 900, 3600]);
+  const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
 
   useEffect(() => {
     api.getSummaries()
@@ -60,7 +71,21 @@ export default function DashboardPage() {
       .then(setGroupSummary)
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setGroupSummaryLoading(false));
+    api.getRefreshInterval().then((r) => {
+      setRefreshOptions(r.options);
+      setRefreshSeconds(r.seconds);
+    }).catch(() => undefined);
   }, []);
+
+  // Dashboard'ı seçilen aralıkta kendini otomatik güncelle — sadece önbellekten okur
+  // (GET /summary), canlı probe scheduler'ın kendi işi (aynı aralık orada da geçerli).
+  useEffect(() => {
+    if (!refreshSeconds) return;
+    const id = window.setInterval(() => {
+      api.getDashboardSummary().then(setGroupSummary).catch(() => undefined);
+    }, refreshSeconds * 1000);
+    return () => window.clearInterval(id);
+  }, [refreshSeconds]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -69,6 +94,11 @@ export default function DashboardPage() {
       .then(setGroupSummary)
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setRefreshing(false));
+  };
+
+  const onChangeInterval = (seconds: number) => {
+    setRefreshSeconds(seconds);
+    api.setRefreshInterval(seconds).catch(() => undefined);
   };
 
   const isPrivateGroups = appConfig?.deployment_mode === "private";
@@ -189,9 +219,22 @@ export default function DashboardPage() {
               ? "Yükleniyor…"
               : "Henüz sağlık verisi toplanmadı"}
         </span>
-        <button className="btn" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? "Yenileniyor…" : "Yenile"}
-        </button>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <label className="muted-note" style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+            Otomatik yenileme
+            <select
+              value={refreshSeconds ?? ""}
+              onChange={(e) => onChangeInterval(Number(e.target.value))}
+            >
+              {refreshOptions.map((s) => (
+                <option key={s} value={s}>{INTERVAL_LABELS[s] ?? `${s}sn`}</option>
+              ))}
+            </select>
+          </label>
+          <button className="btn" onClick={onRefresh} disabled={refreshing}>
+            {refreshing ? "Yenileniyor…" : "Yenile"}
+          </button>
+        </div>
       </div>
 
       {!groupSummaryLoading && groupSummary && groupSummary.totals.groups === 0 ? (

@@ -29,7 +29,7 @@ async def lifespan(_: FastAPI):
     await init_db()
     await ensure_default_customer()
     if settings.run_mode in ("worker", "all"):
-        start_scheduler()
+        await start_scheduler()
     yield
     if settings.run_mode in ("worker", "all"):
         stop_scheduler()

@@ -192,6 +192,18 @@ Detail'de standalone bir grupta "Cluster'a dönüştür" kartı — topoloji
 erişim adı, cluster adı, VIP formu; dönüşümden sonra kart kayboluyor,
 kullanıcı "Yeni düğüm" formuyla diğer düğümleri ekleyebiliyor.
 
+**Faz 8 — İŞ 3: Otomatik yenileme aralığı.** Yeni `app_settings`
+key/value tablosu (`services/settings.py`) — `dashboard_refresh_interval_
+seconds` artık DB'de kalıcı (10/30/60/300/900/3600sn seçenekleri).
+`GET/PUT /api/dashboard/refresh-interval`; PUT hem DB'yi günceller hem
+de (scheduler o an çalışıyorsa) `APScheduler.reschedule_job` ile canlı
+job'ı yeniden başlatmadan günceller. `start_scheduler()` artık async —
+açılışta DB'den kalıcı değeri okuyup job'ı onunla kuruyor (yoksa
+`DASHBOARD_REFRESH_INTERVAL_SECONDS` env var'ına düşüyor).
+DashboardPage'e açılır liste eklendi; seçim hem backend'e yazılıyor hem
+de sayfanın kendi otomatik yenilemesi (sadece ucuz `GET /summary`
+önbellek okuması, canlı prob değil) o aralığa göre çalışıyor.
+
 ## Nasıl test edilir
 
 ### Backend
