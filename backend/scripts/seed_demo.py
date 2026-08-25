@@ -178,34 +178,53 @@ async def seed() -> None:
         await _ensure_node(session, boa, customer, boa_group, boa_srv_3, "boa-node-3", 1433, "replica", "MSSQLSERVER")
         await _ensure_node(session, boa, customer, boa_group, boa_srv_4, "boa-node-4", 1433, "replica", "MSSQLSERVER")
 
-        # Windows sunucusunda iki ayrı SQL Server named instance örneği: aynı fiziksel/VM
-        # sunucu, farklı gruplara üye iki ayrı Node (instance) barındırıyor.
+        # Windows sunucusunda iki ayrı named SQL Server instance örneği: aynı fiziksel/VM
+        # sunucu (boa-shared-winsvr), biri MSSQLSERVER (varsayılan instance) biri SQLPROD02
+        # (named instance) olmak üzere iki ayrı Node (instance) barındırıyor — ve bu ikisi
+        # FARKLI Always On gruplarına üye. Bu, Server/Node modelinin "bir Windows sunucusundaki
+        # instance'lar birbirinden bağımsız gruplara üye olabilir" iddiasını kanıtlayan senaryo
+        # (İŞ 1'in yapısal gereksinimi — bkz. SORULAR.md Faz 9 İŞ 1). Her iki AG'nin de gerçekçi
+        # olması için ikinci birer replika düğüm ayrı sunuculara eklendi.
         boa_shared_srv = await _get_or_create_server(
             session, customer, "boa-shared-winsvr", "boa-shared-winsvr.internal", "windows"
         )
         boa_test_group = await _get_or_create_group(
             session,
             boa,
-            "boa-sqlserver-test",
+            "boa-sqlserver-test-ag",
             engine="sqlserver",
-            topology="standalone",
-            notes="Tek düğüm test ortamı (paylaşımlı Windows sunucusundaki varsayılan instance).",
+            topology="alwayson",
+            notes="2 düğüm Always On AG (test ortamı) — birincil düğüm, paylaşımlı Windows sunucusundaki varsayılan (MSSQLSERVER) instance.",
             environment="test",
+            access_name="boa-test-ag-listener.internal",
+        )
+        boa_test_srv_2 = await _get_or_create_server(
+            session, customer, "boa-test-winsvr-02", "boa-test-winsvr-02.internal", "windows"
         )
         await _ensure_node(
-            session, boa, customer, boa_test_group, boa_shared_srv, "boa-test-node-1", 1433, "unknown", "MSSQLSERVER"
+            session, boa, customer, boa_test_group, boa_shared_srv, "boa-test-node-1", 1433, "primary", "MSSQLSERVER"
+        )
+        await _ensure_node(
+            session, boa, customer, boa_test_group, boa_test_srv_2, "boa-test-node-2", 1433, "replica", "MSSQLSERVER"
         )
         boa_reporting_group = await _get_or_create_group(
             session,
             boa,
-            "boa-reporting",
+            "boa-reporting-ag",
             engine="sqlserver",
-            topology="standalone",
-            notes="Aynı paylaşımlı Windows sunucusunda, ayrı named instance — farklı gruba üye.",
+            topology="alwayson",
+            notes="2 düğüm Always On AG (raporlama) — birincil düğüm, aynı paylaşımlı Windows sunucusunda AYRI bir named instance (SQLPROD02); boa-sqlserver-test-ag'den bağımsız bir AG.",
             environment="dev",
+            access_name="boa-reporting-ag-listener.internal",
+        )
+        boa_reporting_srv_2 = await _get_or_create_server(
+            session, customer, "boa-reporting-winsvr-02", "boa-reporting-winsvr-02.internal", "windows"
         )
         await _ensure_node(
-            session, boa, customer, boa_reporting_group, boa_shared_srv, "boa-reporting-node-1", 1434, "unknown", "REPORTING"
+            session, boa, customer, boa_reporting_group, boa_shared_srv, "boa-reporting-node-1", 1434, "primary", "SQLPROD02"
+        )
+        await _ensure_node(
+            session, boa, customer, boa_reporting_group, boa_reporting_srv_2, "boa-reporting-node-2", 1434, "replica", "SQLPROD02"
         )
 
         aapara = await _get_or_create_application(
