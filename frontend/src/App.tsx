@@ -87,7 +87,7 @@ function CustomerTree() {
         className={`nav-link nav-tree-root${isActive ? " active" : ""}${isOpen ? " open" : ""}`}
         onClick={() => setIsOpen(!isOpen)}
       >
-        <span>Müşteriler</span>
+        <span>Instance Gezgini</span>
         <span className="nav-tree-chevron">{isOpen ? "▾" : "▸"}</span>
       </button>
       {isOpen && (
@@ -166,7 +166,7 @@ export default function App() {
   }, []);
 
   const groupsHref = isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers";
-  const groupsLabel = isPrivate ? "Uygulamalar" : "Müşteri Grupları";
+  const groupsLabel = isPrivate ? "Uygulamalar" : "Müşteriler";
 
   return (
     <div className="app-shell">
@@ -185,7 +185,7 @@ export default function App() {
           <NavLink to={groupsHref} className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             {groupsLabel}
           </NavLink>
-          <CustomerTree />
+          {!isPrivate && <CustomerTree />}
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances
           </NavLink>
