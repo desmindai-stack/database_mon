@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.collectors.base import ConnectionTarget
 from app.models import DatabaseGroup, GroupHealthSnapshot, Instance, MetricSample, Node, SlowQuerySample
@@ -148,7 +149,7 @@ async def refresh_all_group_snapshots(session: AsyncSession) -> int:
     if not groups:
         return 0
 
-    all_nodes = (await session.execute(select(Node))).scalars().all()
+    all_nodes = (await session.execute(select(Node).options(selectinload(Node.instance)))).scalars().all()
     nodes_by_group: dict[int, list[Node]] = {}
     for node in all_nodes:
         nodes_by_group.setdefault(node.group_id, []).append(node)

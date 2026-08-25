@@ -7,6 +7,7 @@ import {
   DatabaseGroup,
   DbNode,
   GroupHealth,
+  Instance,
   NodeCreate,
   NodeRoleHint,
   NodeSite,
@@ -24,6 +25,9 @@ const emptyNodeForm = (groupId: number): NodeCreate => ({
   role_hint: "unknown",
   agent_url: "",
   agent_token: "",
+  db_username: "",
+  db_password: "",
+  db_database: "",
 });
 
 const STATUS_TR: Record<string, string> = { up: "UP", down: "DOWN", unknown: "UNKNOWN", skipped: "SKIP" };
@@ -36,6 +40,8 @@ export default function GroupDetailPage() {
   const [application, setApplication] = useState<Application | null>(null);
   const [nodes, setNodes] = useState<DbNode[]>([]);
   const [nodeForm, setNodeForm] = useState<NodeCreate>(emptyNodeForm(id));
+  const [instanceMode, setInstanceMode] = useState<"new" | "existing" | "none">("new");
+  const [existingInstances, setExistingInstances] = useState<Instance[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("nodes");
@@ -61,6 +67,7 @@ export default function GroupDetailPage() {
       api.getApplication(g.application_id).then(setApplication).catch(() => undefined);
     }).catch((e) => setError(String(e.message || e)));
     loadNodes();
+    api.getInstances().then(setExistingInstances).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -74,9 +81,14 @@ export default function GroupDetailPage() {
         group_id: id,
         agent_url: nodeForm.agent_url || undefined,
         agent_token: nodeForm.agent_token || undefined,
+        instance_id: instanceMode === "existing" ? nodeForm.instance_id : undefined,
+        db_username: instanceMode === "new" ? nodeForm.db_username || undefined : undefined,
+        db_password: instanceMode === "new" ? nodeForm.db_password || undefined : undefined,
+        db_database: instanceMode === "new" ? nodeForm.db_database || undefined : undefined,
       });
       setNodeForm(emptyNodeForm(id));
       await loadNodes();
+      await api.getInstances().then(setExistingInstances);
     } catch (err) {
       setError(String((err as Error).message));
     } finally {
@@ -263,6 +275,15 @@ export default function GroupDetailPage() {
                     </div>
                     <p className="muted-note">{node.host}:{node.port}</p>
                     {node.agent_url && <p className="muted-note">agent: {node.agent_url}</p>}
+                    {node.instance_id ? (
+                      <p>
+                        <Link to={`/instances/${node.instance_id}`} className="detail-link tuning">
+                          Instance detayı (metrikler, yavaş sorgular, index önerileri, explain)
+                        </Link>
+                      </p>
+                    ) : (
+                      <p className="muted-note">Bağlı instance yok — kimlik bilgisi girilmedi.</p>
+                    )}
                     {nodeHealth ? (
                       <div className="cluster-service-meta" style={{ flexDirection: "column", alignItems: "flex-start", gap: "0.3rem" }}>
                         {nodeHealth.services.map((svc) => (
@@ -336,6 +357,56 @@ export default function GroupDetailPage() {
                   onChange={(e) => setNodeForm({ ...nodeForm, agent_token: e.target.value })}
                 />
               </label>
+              <label>
+                Instance bağlantısı
+                <select value={instanceMode} onChange={(e) => setInstanceMode(e.target.value as typeof instanceMode)}>
+                  <option value="new">Yeni instance oluştur</option>
+                  <option value="existing">Mevcut instance'a bağla</option>
+                  <option value="none">Bağlama (kimlik bilgisi yok)</option>
+                </select>
+              </label>
+              {instanceMode === "new" && (
+                <>
+                  <label>
+                    DB kullanıcı adı
+                    <input
+                      value={nodeForm.db_username}
+                      onChange={(e) => setNodeForm({ ...nodeForm, db_username: e.target.value })}
+                      placeholder="postgres, sa..."
+                    />
+                  </label>
+                  <label>
+                    DB parola
+                    <input
+                      type="password"
+                      value={nodeForm.db_password}
+                      onChange={(e) => setNodeForm({ ...nodeForm, db_password: e.target.value })}
+                    />
+                  </label>
+                  <label>
+                    DB adı (opsiyonel)
+                    <input
+                      value={nodeForm.db_database}
+                      onChange={(e) => setNodeForm({ ...nodeForm, db_database: e.target.value })}
+                      placeholder="postgres, master..."
+                    />
+                  </label>
+                </>
+              )}
+              {instanceMode === "existing" && (
+                <label>
+                  Instance
+                  <select
+                    value={nodeForm.instance_id ?? ""}
+                    onChange={(e) => setNodeForm({ ...nodeForm, instance_id: e.target.value ? Number(e.target.value) : null })}
+                  >
+                    <option value="">— seçin —</option>
+                    {existingInstances.map((i) => (
+                      <option key={i.id} value={i.id}>{i.name}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <div className="form-actions">
                 <button type="submit" className="btn btn-primary" disabled={busy}>
                   Ekle

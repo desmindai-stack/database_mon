@@ -7,7 +7,7 @@ from typing import Any
 from app.collectors.base import ConnectionTarget
 from app.collectors.sqlserver_mongodb import build_odbc_connection_string
 from app.models import DatabaseGroup, Node
-from app.services.credentials import decrypt_node_options
+from app.services.credentials import decrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -46,20 +46,18 @@ async def _connect(node: Node):
             "(ör. 'ODBC Driver 18 for SQL Server')."
         ) from exc
 
-    opts = decrypt_node_options(node.options) or {}
-    username = opts.get("db_username")
-    if not username:
+    instance = node.instance
+    if instance is None:
         raise ValueError(
-            f"Node '{node.name}' için node.options.db_username tanımlı değil "
-            "(Always On denetimi bağlantı gerektirir)"
+            f"Node '{node.name}' bir Instance'a bağlı değil (Always On denetimi bağlantı gerektirir)"
         )
     target = ConnectionTarget(
-        host=node.host,
-        port=node.port,
-        database=opts.get("db_database", "master"),
-        username=username,
-        password=opts.get("db_password") or "",
-        options=opts,
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        username=instance.username,
+        password=decrypt_secret(instance.password),
+        options=node.options,
     )
     return await aioodbc.connect(dsn=build_odbc_connection_string(target), timeout=10, autocommit=True)
 

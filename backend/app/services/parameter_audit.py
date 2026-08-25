@@ -8,7 +8,7 @@ import asyncpg
 import httpx
 
 from app.models import DatabaseGroup, Node
-from app.services.credentials import decrypt_node_options
+from app.services.credentials import decrypt_secret
 
 logger = logging.getLogger(__name__)
 
@@ -217,18 +217,17 @@ def _evaluate_parameter(name: str, spec: dict[str, Any], row: dict[str, Any] | N
 
 
 async def _pg_connect(node: Node) -> asyncpg.Connection:
-    opts = decrypt_node_options(node.options) or {}
-    username = opts.get("db_username")
-    if not username:
+    instance = node.instance
+    if instance is None:
         raise ValueError(
-            f"Node '{node.name}' için node.options.db_username tanımlı değil (parametre denetimi bağlantı gerektirir)"
+            f"Node '{node.name}' bir Instance'a bağlı değil (parametre denetimi bağlantı gerektirir)"
         )
     return await asyncpg.connect(
-        host=node.host,
-        port=node.port,
-        database=opts.get("db_database", "postgres"),
-        user=username,
-        password=opts.get("db_password") or "",
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        user=instance.username,
+        password=decrypt_secret(instance.password),
         timeout=10,
     )
 

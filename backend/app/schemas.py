@@ -100,6 +100,12 @@ class NodeCreate(BaseModel):
     agent_url: str | None = None
     agent_token: str | None = None
     options: dict[str, Any] | None = None
+    # Instance linkage: either point at an existing Instance, or supply
+    # db_username (+ optional password/database) to auto-create one for this node.
+    instance_id: int | None = None
+    db_username: str | None = None
+    db_password: str | None = None
+    db_database: str | None = None
 
 
 class NodeUpdate(BaseModel):
@@ -111,6 +117,10 @@ class NodeUpdate(BaseModel):
     agent_url: str | None = None
     agent_token: str | None = None
     options: dict[str, Any] | None = None
+    instance_id: int | None = None
+    db_username: str | None = None
+    db_password: str | None = None
+    db_database: str | None = None
 
 
 class NodeOut(BaseModel):
@@ -124,6 +134,7 @@ class NodeOut(BaseModel):
     agent_url: str | None
     agent_token: str | None
     options: dict[str, Any] | None = None
+    instance_id: int | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}

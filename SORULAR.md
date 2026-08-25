@@ -66,6 +66,54 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 8 — İŞ 1: Node/Instance birleştirme
+
+- **Node silme, bağlı Instance'ı silmiyor:** Bir düğüm silindiğinde
+  `node.instance_id` sadece FK'si kırılır (Instance kalır) — hem çünkü
+  düğüm kullanıcının seçtiği MEVCUT bir Instance'a bağlanmış olabilir
+  (silinmesi başka bir yerde kullanılan gerçek veriyi yok eder), hem de
+  metrik/yavaş sorgu geçmişini korumak için. Otomatik oluşturulan
+  Instance'lar da bu yüzden "öksüz" kalabilir — kullanıcı isterse
+  `/instances`'tan elle silebilir.
+- **Instance.environment ≠ DatabaseGroup.environment:** İkisi de
+  "environment" adını taşıyor ama anlamları farklı — `Instance.
+  environment` eski, "public"/"private" (müşteri görünürlüğü) değeri
+  alıyor (auto-create'te `customer.type`'tan geliyor); `DatabaseGroup.
+  environment` yeni, "prod"/"preprod"/"test"/"dev" alıyor. Karışıklığı
+  önlemek adına isim değiştirmedim (mevcut API'yi kırardı), ama burada
+  not düşüyorum.
+- **Auto-create edilen Instance, `cluster_name` + `services=
+  ["postgresql"]` alıyor ama tam Patroni/etcd/haproxy stack'i değil:**
+  Amaç, mevcut per-instance collector döngüsünün (`collect_all_
+  instances`) bu instance'ı metrik toplamaya alması (bu da dashboard
+  önerilerinin dolmasını sağlıyor — asıl istenen buydu). `cluster_name`
+  boş bırakılsaydı legacy Dashboard tablosunda "Cluster/Rol" sütunu boş
+  kalırdı; ama `cluster_name` set edip `services`'i boş bırakmak eski
+  `collect_cluster_health()`'in varsayılan tam Patroni stack'ini (yanlış
+  portlarla, çünkü `instance.options` boş) tekrar tekrar prob'lamasına
+  yol açardı — bu da yeni grup-seviyeli `collect_group_health()` ile
+  tamamen örtüşen, gereksiz ve potansiyel olarak yanıltıcı bir ikinci
+  probe olurdu. `services=["postgresql"]` ile bu, tek bir hafif TCP
+  kontrolüne indirgendi.
+- **Var olan bir Instance'a bağlanınca `group_id` üzerine yazılıyor:**
+  Bir düğümü mevcut bir Instance'a bağlarken o Instance'ın `group_id`'si
+  bu düğümün grubuna set ediliyor — Instance başka bir grupta zaten
+  kullanılıyorsa sessizce oradan "taşınmış" olur. Kullanıcı bilinçli bir
+  seçim yaptığı için (dropdown'dan elle seçiyor) bunu bir hata değil,
+  beklenen davranış olarak ele aldım.
+- **Sol menü bir seviye daha büyüdü:** Grup → Düğüm; düğüm bir Instance'a
+  bağlıysa `/instances/{id}`'ye linkli, değilse düz metin (tıklanamaz,
+  "Bağlı instance yok" title'ı ile). "Instance Gezgini" (eski Instance-
+  tabanlı ağaç) tamamen kaldırıldı — istenen buydu, artık tüm instance
+  erişimi yeni ağacın içinden.
+- **`node.options`'ta `db_username`/`db_password`/`db_database` artık
+  kullanılmıyor** (bu üç anahtar artık Node oluşturma/güncellemede üst
+  seviye alanlar, Instance'a taşınıyor) — ama `services/credentials.py`
+  içindeki `encrypt_node_options`/`decrypt_node_options`/
+  `redact_node_options` fonksiyonlarını kaldırmadım; herhangi bir eski
+  kayıtta `options.db_password` kalmışsa hâlâ doğru şifrelenip/redakte
+  ediliyor (geriye dönük uyumluluk, ölü kod değil).
+
 ## Faz 7 — Sol menü: tek gezinme ağacı (test turu revizyonu)
 
 İlk İŞ 2 denemesi (bkz. aşağıdaki "test turu düzeltmeleri" bölümü) sadece

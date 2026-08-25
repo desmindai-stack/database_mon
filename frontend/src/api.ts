@@ -387,6 +387,7 @@ export interface DbNode {
   agent_url: string | null;
   agent_token: string | null;
   options: Record<string, unknown> | null;
+  instance_id: number | null;
   created_at: string;
 }
 
@@ -400,6 +401,10 @@ export interface NodeCreate {
   agent_url?: string;
   agent_token?: string;
   options?: Record<string, unknown>;
+  instance_id?: number | null;
+  db_username?: string;
+  db_password?: string;
+  db_database?: string;
 }
 
 export interface NodeServiceStatus {

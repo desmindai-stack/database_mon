@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, NavLink, Route, Routes, useLocation, useSearchParams } from "react-router-dom";
-import { api, Application, Customer, DatabaseGroup, InstanceSummary } from "./api";
+import { useEffect, useState } from "react";
+import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { api, Application, Customer, DatabaseGroup, DbNode } from "./api";
 import AlertsPage from "./pages/AlertsPage";
 import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
@@ -11,151 +11,12 @@ import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import PredictionsPage from "./pages/PredictionsPage";
 
-// --- Legacy Instance-based nav (Instance.customer_name/application/cluster_name strings).
-// Kept as a standalone bottom link, separate from the real Customer/Application/DatabaseGroup
-// tree below — the two used to sit side by side and both looked like a "customer" entry.
-type LegacyAppNode = {
-  name: string;
-  instances: { id: number; name: string; cluster_name: string | null }[];
-};
-
-type LegacyCustomerNode = {
-  name: string;
-  apps: LegacyAppNode[];
-};
-
-function LegacyInstanceTree() {
-  const [summaries, setSummaries] = useState<InstanceSummary[]>([]);
-  const [openCustomers, setOpenCustomers] = useState<Set<string>>(new Set());
-  const [openApps, setOpenApps] = useState<Set<string>>(new Set());
-  const [isOpen, setIsOpen] = useState(false);
-  const [searchParams] = useSearchParams();
-  const activeCustomer = searchParams.get("customer");
-  const activeApp = searchParams.get("app");
-
-  useEffect(() => {
-    api.getSummaries().then(setSummaries).catch(() => undefined);
-  }, []);
-
-  const tree = useMemo<LegacyCustomerNode[]>(() => {
-    const customerMap = new Map<string, Map<string, LegacyAppNode>>();
-    for (const s of summaries) {
-      const customer = s.instance.customer_name || "Bilinmeyen Müşteri";
-      const app = s.instance.application || "Uygulamasız";
-      if (!customerMap.has(customer)) customerMap.set(customer, new Map());
-      const appMap = customerMap.get(customer)!;
-      if (!appMap.has(app)) {
-        appMap.set(app, { name: app, instances: [] });
-      }
-      appMap.get(app)!.instances.push({
-        id: s.instance.id,
-        name: s.instance.name,
-        cluster_name: s.instance.cluster_name,
-      });
-    }
-    const result: LegacyCustomerNode[] = [];
-    for (const [customer, apps] of customerMap.entries()) {
-      const appList = Array.from(apps.values()).sort((a, b) => a.name.localeCompare(b.name));
-      appList.forEach((app) => {
-        app.instances.sort((a, b) => a.name.localeCompare(b.name));
-      });
-      result.push({ name: customer, apps: appList });
-    }
-    return result.sort((a, b) => a.name.localeCompare(b.name));
-  }, [summaries]);
-
-  const toggleCustomer = (customer: string) => {
-    setOpenCustomers((prev) => {
-      const next = new Set(prev);
-      if (next.has(customer)) next.delete(customer);
-      else next.add(customer);
-      return next;
-    });
-  };
-
-  const toggleApp = (app: string) => {
-    setOpenApps((prev) => {
-      const next = new Set(prev);
-      if (next.has(app)) next.delete(app);
-      else next.add(app);
-      return next;
-    });
-  };
-
-  const isActive = activeCustomer !== null || activeApp !== null;
-
-  return (
-    <div className="nav-group">
-      <button
-        className={`nav-link nav-tree-root${isActive ? " active" : ""}${isOpen ? " open" : ""}`}
-        onClick={() => setIsOpen(!isOpen)}
-      >
-        <span>Instance Gezgini</span>
-        <span className="nav-tree-chevron">{isOpen ? "▾" : "▸"}</span>
-      </button>
-      {isOpen && (
-        <div className="nav-tree">
-          {tree.map((customer) => {
-            const isCustomerOpen = openCustomers.has(customer.name) || (activeCustomer === customer.name && activeApp !== null);
-            return (
-              <div key={customer.name} className="nav-tree-section">
-                <button className="nav-tree-customer" onClick={() => toggleCustomer(customer.name)}>
-                  <span className={`nav-tree-arrow${isCustomerOpen ? " open" : ""}`}>▶</span>
-                  {customer.name}
-                </button>
-                {isCustomerOpen && (
-                  <div className="nav-tree-apps">
-                    {customer.apps.map((app) => {
-                      const isAppOpen = openApps.has(app.name) || (activeCustomer === customer.name && activeApp === app.name);
-                      const appActive = activeCustomer === customer.name && activeApp === app.name;
-                      return (
-                        <div key={app.name} className="nav-tree-app-section">
-                          <div className="nav-tree-app-row">
-                            <Link
-                              to={`/?customer=${encodeURIComponent(customer.name)}&app=${encodeURIComponent(app.name)}`}
-                              className={`nav-tree-app${appActive ? " active" : ""}`}
-                            >
-                              {app.name}
-                            </Link>
-                            <button
-                              className={`nav-tree-app-toggle${isAppOpen ? " open" : ""}`}
-                              onClick={() => toggleApp(app.name)}
-                            >
-                              ▶
-                            </button>
-                          </div>
-                          {isAppOpen && (
-                            <div className="nav-tree-instances">
-                              {app.instances.map((inst) => (
-                                <Link
-                                  key={inst.id}
-                                  to={`/instances/${inst.id}?tab=tuning`}
-                                  className="nav-tree-instance"
-                                  title={`${inst.name} · Tuning`}
-                                >
-                                  {inst.name}
-                                  {inst.cluster_name && <span className="nav-tree-cluster">{inst.cluster_name}</span>}
-                                </Link>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// --- Real navigation tree: Customer → Application → DatabaseGroup (public mode) or
-// Application → DatabaseGroup (private mode, customer level skipped since there's only one).
-// Only the leaf (a group) navigates on click; customer/application rows just expand/collapse.
+// Real navigation tree: Customer → Application → DatabaseGroup → Node (public mode) or
+// Application → DatabaseGroup → Node (private mode, customer level skipped since there's
+// only one). Only leaves that have somewhere to go navigate on click — a group links to
+// Group Detail while also expanding to show its nodes; a node links to its linked Instance's
+// detail page (metrics/slow queries/index advice/explain) when one is linked, otherwise it's
+// shown as plain text (nothing to visit yet — no credentials configured for that node).
 type NavTreeNode = {
   id: string;
   name: string;
@@ -168,6 +29,15 @@ type NavTreeNode = {
   emptyLabel?: string;
 };
 
+function nodeLeaf(n: DbNode): NavTreeNode {
+  return {
+    id: `node-${n.id}`,
+    name: n.name,
+    href: n.instance_id != null ? `/instances/${n.instance_id}` : undefined,
+    meta: n.role_hint !== "unknown" ? n.role_hint : undefined,
+  };
+}
+
 function groupNode(g: DatabaseGroup): NavTreeNode {
   const isCluster = g.topology !== "standalone";
   return {
@@ -175,6 +45,9 @@ function groupNode(g: DatabaseGroup): NavTreeNode {
     name: isCluster && g.access_name ? g.access_name : g.name,
     href: `/groups/${g.id}`,
     meta: isCluster ? g.topology : undefined,
+    loadChildren: () => api.getGroupNodes(g.id).then((nodes) => nodes.map(nodeLeaf)),
+    emptyHref: `/groups/${g.id}`,
+    emptyLabel: "+ Düğüm ekle",
   };
 }
 
@@ -202,22 +75,30 @@ function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: st
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<NavTreeNode[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const isActive = node.href != null && activePath === node.href;
 
-  if (node.href) {
-    const isActive = activePath === node.href;
+  // Pure leaf — nothing beneath it (a node, or a group/app/customer that never gets children).
+  if (!node.loadChildren) {
+    if (node.href) {
+      return (
+        <Link to={node.href} className={`nav-tree-instance${isActive ? " active" : ""}`}>
+          {node.name}
+          {node.meta && <span className="nav-tree-cluster">{node.meta}</span>}
+        </Link>
+      );
+    }
     return (
-      <Link to={node.href} className={`nav-tree-instance${isActive ? " active" : ""}`}>
+      <span className="nav-tree-instance" style={{ opacity: 0.5, cursor: "default" }} title="Bağlı instance yok">
         {node.name}
-        {node.meta && <span className="nav-tree-cluster">{node.meta}</span>}
-      </Link>
+      </span>
     );
   }
 
   const toggle = async () => {
-    if (!open && children === null && node.loadChildren) {
+    if (!open && children === null) {
       setLoading(true);
       try {
-        setChildren(await node.loadChildren());
+        setChildren(await node.loadChildren!());
       } finally {
         setLoading(false);
       }
@@ -225,12 +106,24 @@ function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: st
     setOpen((v) => !v);
   };
 
+  // Branch — expandable, and optionally also a link (e.g. a group links to Group Detail
+  // while the separate toggle arrow expands to show its nodes).
   return (
     <div className="nav-tree-section">
-      <button className="nav-tree-customer" onClick={toggle}>
-        <span className={`nav-tree-arrow${open ? " open" : ""}`}>▶</span>
-        {node.name}
-      </button>
+      <div className="nav-tree-app-row">
+        {node.href ? (
+          <Link to={node.href} className={`nav-tree-app${isActive ? " active" : ""}`}>
+            {node.name}
+          </Link>
+        ) : (
+          <button className="nav-tree-app" style={{ textAlign: "left" }} onClick={toggle}>
+            {node.name}
+          </button>
+        )}
+        <button className={`nav-tree-app-toggle${open ? " open" : ""}`} onClick={toggle}>
+          ▶
+        </button>
+      </div>
       {open && (
         <div className="nav-tree-apps">
           {loading && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
@@ -264,7 +157,10 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
 
   const label = isPrivate ? "Uygulamalar" : "Müşteriler";
   const isActiveRoot =
-    activePath.startsWith("/customers") || activePath.startsWith("/applications") || activePath.startsWith("/groups");
+    activePath.startsWith("/customers") ||
+    activePath.startsWith("/applications") ||
+    activePath.startsWith("/groups") ||
+    activePath.startsWith("/instances/");
 
   const toggleRoot = async () => {
     if (!isOpen && roots === null) {
@@ -356,7 +252,6 @@ export default function App() {
           <NavLink to="/alerts" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Alerts
           </NavLink>
-          <LegacyInstanceTree />
         </nav>
       </aside>
       <main className="main">

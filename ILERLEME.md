@@ -155,6 +155,30 @@ görünüm" başlığı altında altta kalmaya devam ediyor.
   "Durum" sütunu gösteriyor (up/down düğüm sayısı, primary düğüm,
   replikasyon lag özeti, overall rozet) — ekstra canlı prob yapmadan.
 
+**Faz 8 — İŞ 1: Node ve Instance birleştirme.** `Node`'a nullable
+`instance_id` FK eklendi. `POST/PATCH /api/nodes`: `instance_id` verilirse
+mevcut bir Instance'a bağlanıyor (ve o Instance'ın `group_id`'si bu gruba
+set ediliyor); `db_username` (+ opsiyonel `db_password`/`db_database`)
+verilirse `services/routers/nodes.py::_auto_create_instance` yeni bir
+Instance oluşturup bağlıyor (host/port node'dan, şifre `encrypt_secret`
+ile Instance.password mekanizmasıyla saklanıyor — `node.options.
+db_password` artık kullanılmıyor). `services/parameter_audit.py` ve
+`services/alwayson_health.py` artık bağlantı bilgisini `node.options`
+yerine `node.instance`'tan okuyor (ilgili router'larda `selectinload
+(Node.instance)` ile eager-load ediliyor). Auto-create edilen Instance'a
+`group_id` de set edildiği için `services/dashboard_snapshot.py`'nin
+zaten var olan `Instance.group_id` bazlı öneri toplama mantığı (performance_
+insights, index_advisor) hiçbir değişiklik gerektirmeden bu instance'ları
+otomatik kapsıyor — Faz 7'de "seed_demo hiç Instance oluşturmadığı için
+bu iki kaynak boş kalıyor" diye not düşülen sınırlama artık kapandı.
+`seed_demo.py` her düğüm için bir Instance oluşturup bağlıyor. Frontend:
+Group Detail'deki her düğüm kartında bağlı Instance'a giden bir link
+("metrikler, yavaş sorgular, index önerileri, explain") + "Yeni düğüm"
+formuna instance bağlama seçenekleri (yeni oluştur / mevcuda bağlan /
+bağlama) eklendi. Sol menü ağacı bir seviye büyüdü (Grup → Düğüm, düğüm
+Instance'a bağlıysa tıklanabilir); eski "Instance Gezgini" ağacı tamamen
+kaldırıldı — artık tüm instance erişimi bu tek ağacın içinden.
+
 ## Nasıl test edilir
 
 ### Backend
@@ -197,6 +221,10 @@ Sonra:
 - `GET /api/groups?application_id=...` — her grup artık `access_name`
   (cluster gruplarda listener/VIP adı) ve `status` (refresh sonrası
   `nodes_up`/`nodes_down`/`primary_node`/`overall`) alanlarını taşıyor.
+- `GET /api/groups/{id}/nodes` — her düğüm artık `instance_id` taşıyor
+  (seed_demo sonrası dolu). `POST /api/nodes` `db_username` ile çağrılırsa
+  201 yanıtında `instance_id` dolu döner; `GET /api/instances/{instance_id}`
+  ile o instance'ın metrik/tuning uçları normal instance gibi çalışır.
 
 ### Frontend
 ```bash
@@ -237,9 +265,13 @@ getir" butonlarını deneyin.
   `run_mode=api` tek başına çalıştırılan bir deployment'ta scheduler
   çalışmaz, veri manuel refresh'e kadar bayat kalır. `index_advisor`/
   `performance_insights` önerileri yalnızca `Instance.group_id` ile bir
-  gruba bağlanmış instance'lar için üretiliyor — `seed_demo.py` hiç
-  Instance oluşturmadığı için demo'da bu iki kaynak boş kalır (beklenen
-  davranış).
+  gruba bağlanmış instance'lar için üretiliyor — Faz 8 İŞ 1'den beri
+  `seed_demo.py` her düğüm için bir Instance oluşturup bağladığından bu
+  artık demo'da da çalışıyor (önceki sınırlama kapandı), ama gerçek
+  öneri üretebilmek için o instance'ların gerçekten toplanmış metrik/
+  yavaş sorgu verisine ihtiyacı var (collector scheduler'ın bir süre
+  çalışmış olması gerekir — taze bir DB'de ilk birkaç dakika hâlâ boş
+  dönebilir).
 - Grup listesindeki "Durum" özeti (`GroupStatusSummaryOut`) genel amaçlı
   `collect_group_health` prob'undan türetiliyor; Always On grupları için
   `primary_node` ve `replication_lag_bytes` bu yüzden çoğunlukla boş/

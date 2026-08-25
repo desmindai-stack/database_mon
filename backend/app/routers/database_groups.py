@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Application, DatabaseGroup, Node
@@ -145,7 +146,16 @@ async def get_group_parameters(group_id: int, db: AsyncSession = Depends(get_db)
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
     nodes = list(
-        (await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))).scalars().all()
+        (
+            await db.execute(
+                select(Node)
+                .options(selectinload(Node.instance))
+                .where(Node.group_id == group_id)
+                .order_by(Node.name)
+            )
+        )
+        .scalars()
+        .all()
     )
     try:
         report = await collect_parameter_audit(group, nodes)
@@ -162,7 +172,16 @@ async def get_group_alwayson(group_id: int, db: AsyncSession = Depends(get_db)) 
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
     nodes = list(
-        (await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))).scalars().all()
+        (
+            await db.execute(
+                select(Node)
+                .options(selectinload(Node.instance))
+                .where(Node.group_id == group_id)
+                .order_by(Node.name)
+            )
+        )
+        .scalars()
+        .all()
     )
     try:
         report = await collect_alwayson_health(group, nodes)

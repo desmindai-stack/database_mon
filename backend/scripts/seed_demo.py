@@ -20,7 +20,11 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal, init_db  # noqa: E402
-from app.models import Application, Customer, DatabaseGroup, Node  # noqa: E402
+from app.domain.engines import DEFAULT_DATABASES, DatabaseEngine  # noqa: E402
+from app.models import Application, Customer, DatabaseGroup, Instance, Node  # noqa: E402
+from app.services.credentials import encrypt_secret  # noqa: E402
+
+_DEMO_USERNAME = {"postgresql": "postgres", "sqlserver": "sa", "mongodb": "admin"}
 
 
 async def _get_or_create_customer(session, name: str, ctype: str) -> Customer:
@@ -82,6 +86,8 @@ async def _get_or_create_group(
 
 async def _ensure_node(
     session,
+    application: Application,
+    customer: Customer,
     group: DatabaseGroup,
     name: str,
     host: str,
@@ -94,6 +100,27 @@ async def _ensure_node(
     ).scalar_one_or_none()
     if existing:
         return
+
+    instance = Instance(
+        name=f"{group.name}-{name}",
+        engine=group.engine,
+        host=host,
+        port=port,
+        database=DEFAULT_DATABASES.get(DatabaseEngine(group.engine), "postgres"),
+        username=_DEMO_USERNAME.get(group.engine, "postgres"),
+        password=encrypt_secret("demo-password"),
+        customer_name=customer.name,
+        environment=customer.type,
+        application=application.name,
+        cluster_name=group.name,
+        role=role_hint if role_hint != "unknown" else None,
+        services=["postgresql"],
+        group_id=group.id,
+        enabled=True,
+    )
+    session.add(instance)
+    await session.flush()
+
     session.add(
         Node(
             group_id=group.id,
@@ -102,6 +129,7 @@ async def _ensure_node(
             port=port,
             site=site,
             role_hint=role_hint,
+            instance_id=instance.id,
         )
     )
 
@@ -124,10 +152,10 @@ async def seed() -> None:
             environment="prod",
             access_name="boa-ag-listener.internal",
         )
-        await _ensure_node(session, boa_group, "boa-node-1", "boa-node-1.internal", 1433, "primary", "primary")
-        await _ensure_node(session, boa_group, "boa-node-2", "boa-node-2.internal", 1433, "primary", "replica")
-        await _ensure_node(session, boa_group, "boa-node-3", "boa-node-3.internal", 1433, "primary", "replica")
-        await _ensure_node(session, boa_group, "boa-node-4", "boa-node-4.dr.internal", 1433, "disaster", "replica")
+        await _ensure_node(session, boa, customer, boa_group, "boa-node-1", "boa-node-1.internal", 1433, "primary", "primary")
+        await _ensure_node(session, boa, customer, boa_group, "boa-node-2", "boa-node-2.internal", 1433, "primary", "replica")
+        await _ensure_node(session, boa, customer, boa_group, "boa-node-3", "boa-node-3.internal", 1433, "primary", "replica")
+        await _ensure_node(session, boa, customer, boa_group, "boa-node-4", "boa-node-4.dr.internal", 1433, "disaster", "replica")
 
         boa_test_group = await _get_or_create_group(
             session,
@@ -139,7 +167,7 @@ async def seed() -> None:
             environment="test",
         )
         await _ensure_node(
-            session, boa_test_group, "boa-test-node-1", "boa-test-node-1.internal", 1433, "primary", "unknown"
+            session, boa, customer, boa_test_group, "boa-test-node-1", "boa-test-node-1.internal", 1433, "primary", "unknown"
         )
 
         aapara = await _get_or_create_application(
@@ -156,13 +184,13 @@ async def seed() -> None:
             access_name="aapara-patroni-vip.internal",
         )
         await _ensure_node(
-            session, aapara_group, "aapara-node-1", "aapara-node-1.internal", 5432, "primary", "primary"
+            session, aapara, customer, aapara_group, "aapara-node-1", "aapara-node-1.internal", 5432, "primary", "primary"
         )
         await _ensure_node(
-            session, aapara_group, "aapara-node-2", "aapara-node-2.internal", 5432, "primary", "replica"
+            session, aapara, customer, aapara_group, "aapara-node-2", "aapara-node-2.internal", 5432, "primary", "replica"
         )
         await _ensure_node(
-            session, aapara_group, "aapara-node-3", "aapara-node-3.dr.internal", 5432, "disaster", "replica"
+            session, aapara, customer, aapara_group, "aapara-node-3", "aapara-node-3.dr.internal", 5432, "disaster", "replica"
         )
 
         aapara_test_group = await _get_or_create_group(
@@ -175,7 +203,7 @@ async def seed() -> None:
             environment="test",
         )
         await _ensure_node(
-            session, aapara_test_group, "aapara-test-node-1", "aapara-test-node-1.internal", 5432, "primary", "unknown"
+            session, aapara, customer, aapara_test_group, "aapara-test-node-1", "aapara-test-node-1.internal", 5432, "primary", "unknown"
         )
 
         await session.commit()

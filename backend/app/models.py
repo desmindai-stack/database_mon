@@ -80,9 +80,11 @@ class Node(Base):
     agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
     agent_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     options: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    instance_id: Mapped[int | None] = mapped_column(ForeignKey("instances.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     group: Mapped["DatabaseGroup"] = relationship(back_populates="nodes")
+    instance: Mapped["Instance | None"] = relationship(foreign_keys=[instance_id])
 
 
 class Instance(Base):
