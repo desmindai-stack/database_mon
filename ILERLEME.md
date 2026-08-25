@@ -374,6 +374,128 @@ duymadığı için erişilemez demo'da bile her zaman dolu. Doğrulandı: 5
 demo grubunun 5'i de artık hem "Öneriler" panelinde hem kendi
 `top_issues` satırının altında bir öneri gösteriyor.
 
+**Faz 10 — İŞ 1: Düğüme bağlantı bilgisi girme akışı.** Node kartında
+`instance_id` yoksa artık "Bağlantı bilgisi gir" butonu var: tıklayınca
+açılan formda ya yeni bağlantı (kullanıcı adı/parola/db adı/port) ya da
+mevcut bir Instance'a bağlama (açılır liste) seçilebiliyor, kaydetmeden
+önce "Bağlantıyı test et" sonucu (`POST /api/instances/test` veya
+`POST /api/instances/{id}/test`) gösteriyor. Bağlandıktan sonra kart
+instance detay sayfasına (metrikler/yavaş sorgular/index önerileri/
+explain/tuning) linkleniyor. Backend'de bu akışın tamamı zaten Faz 9'dan
+beri vardı (`PATCH /api/nodes/{id}` `db_username`/`instance_id` ile) —
+eksik olan sadece ona erişecek UI'ydı.
+
+**Faz 10 — İŞ 2: Seed'de çoklu instance/farklı AG senaryosu.** Önceki
+seed'deki paylaşımlı Windows sunucusu (`boa-shared-winsvr`) iki instance
+barındırıyordu ama ikisi de standalone gruba üyeydi — bu, "aynı sunucudaki
+instance'lar farklı Always On gruplarına üye olabilir" iddiasını
+kanıtlamıyordu. Artık ikisi de gerçek birer 2 düğümlü Always On AG'nin
+(`boa-sqlserver-test-ag`: MSSQLSERVER, `boa-reporting-ag`: SQLPROD02)
+birincil düğümü; her AG'nin ikinci (replika) düğümü ayrı bir sunucuda.
+
+**Faz 10 — İŞ 3: Müşteriler/Uygulamalar için sabit sol menü linkleri.**
+Sol menünün gezinme ağacı kökü artık hem tıklanabilir bir link hem de ayrı
+bir ok butonuyla genişletilebilir (branch node'ların zaten kullandığı
+link+toggle deseniyle aynı) — public modda "Müşteriler" doğrudan
+`/customers`'a, private modda "Uygulamalar" doğrudan tek müşterinin
+uygulama sayfasına gider. Public modda ayrıca "seçili müşteri"nin
+Uygulamalar sayfasına giden ikinci bir sabit link var (seçili müşteri
+URL'den izleniyor; ağaçta bir müşterinin adına tıklamak da artık doğrudan
+Uygulamalar sayfasına gidip seçimi günceller). Ağaçtaki genişlet/daralt ve
+alt düğümlere tıklama bağımsız çalışmaya devam ediyor.
+
+**Faz 10 — İŞ 4: Önerilerde açıklama/aksiyon ayrımı.**
+`DashboardRecommendationOut`'a opsiyonel `action` alanı eklendi (tek
+satırlık, kopyalanabilir komut). `dashboard_snapshot.py`'deki dört öneri
+kaynağı buna göre ayrıldı: connectivity (action: journalctl/Get-EventLog
+log komutu), parameter_audit (action: `SHOW <param>;` — hedef değeri
+sunucu RAM/CPU olmadan uydurmak yerine mevcut değeri kontrol etmeye
+yönlendiriyor), index_advisor (action: gerçek `CREATE INDEX` DDL'i),
+performance_insights (action yok — `insight.recommendation` zaten düzyazı,
+`insight.action` bir tab-hint'i, komut değil; bunun yerine recommendation
+metni artık `message`'a dahil edildi, önceden hiç gösterilmiyordu).
+Frontend'de Dashboard'daki her iki öneri gösterimi de artık açıklama ile
+komutu ayrı satırlarda gösteriyor, komut monospace ve "Kopyala" butonuyla
+tek tıkla panoya kopyalanabiliyor.
+
+**Faz 10 — SONRA: Ekleme akışlarının eksiklerini tamamlama.** Dört
+senaryonun (aşağıdaki bölüm) uçtan uca denenmesi sırasında bulunan
+gerçek eksikler kapatıldı:
+- "Yeni düğüm" formunda (grup içinde ilk kez düğüm eklerken) da artık
+  "Bağlantıyı test et" butonu var — önceden bu buton sadece İŞ 1'in
+  post-creation "Bağlantı bilgisi gir" akışındaydı, ilk oluşturma formunda
+  yoktu.
+- Aynı formda zorunlu alan validasyonu eklendi: "Yeni instance oluştur"
+  modunda kullanıcı adı, "Mevcut instance'a bağla" modunda instance seçimi
+  artık HTML `required` ile zorunlu — önceden boş bırakılırsa backend
+  sessizce `instance_id: null` ile düğüm oluşturuyordu (kullanıcı bağlı
+  sanıyor ama değil).
+- `Server` seviyesinde agent bilgisi (`agent_url`/`agent_token`) artık
+  test edilebiliyor: yeni `POST /api/servers/test-agent` (kayıttan önce,
+  Sunucu formundaki "Agent'ı test et" butonu) ve
+  `POST /api/servers/{id}/test-agent` (kayıtlı bir sunucu için, liste
+  satırındaki "Agent testi" butonu) — ikisi de `fetch_agent_snapshot`'ı
+  (Faz 2'den beri var olan agent probe) yeniden kullanıyor.
+- Bağlantı test hataları artık anlaşılır Türkçe mesajlara sınıflandırılıyor
+  (`collectors/base.py` → `classify_connection_error`, PostgreSQL/SQL
+  Server/MongoDB collector'larının `test_connection`'ında kullanılıyor):
+  yanlış şifre/kimlik doğrulama, host çözümlenemiyor (DNS), port
+  kapalı/reddedildi, zaman aşımı, veritabanı bulunamadı ayrı ayrı
+  mesajlarla ayırt ediliyor — orijinal driver mesajı parantez içinde hâlâ
+  korunuyor.
+
+## Doğrulanmış senaryo akışları (motor/topoloji bazında)
+
+Yukarıdaki genel 8 adımlık akışa ek olarak, Faz 10 sonunda dört somut
+senaryo — her biri UI'ın kullandığı gerçek uçlarla, sıfırdan bir DB'de,
+httpx/ASGITransport üzerinden gerçek HTTP istekleriyle — ayrı ayrı
+doğrulandı:
+
+**a) PostgreSQL standalone.** Sunucu ekle (os=linux) → grup oluştur
+(engine=postgresql, topology=standalone) → Group Detail'de "Yeni düğüm":
+sunucu seç, "Yeni instance oluştur" + kullanıcı adı/parola/db → önce
+"Bağlantıyı test et" (erişilemeyen demo host için temiz, sınıflandırılmış
+hata) → Ekle. *Doğrulandı:* `POST /api/nodes` → 201, `instance_id` dolu;
+oluşan instance `enabled=true` ve `GET /api/instances/summary`'de görünüyor
+(yani "izlemeye başlamak" için ekstra bir adım yok — collector scheduler
+zaten enabled instance'ları topluyor).
+
+**b) PostgreSQL Patroni cluster.** Grup oluştur (topology=patroni,
+access_name=VIP/listener adı, cluster_name, vip_address) → 3 sunucu ekle
+(2'si primary site, 1'i site=disaster + her birine agent_url/agent_token)
+→ her sunucuya bir düğüm/instance ekle → DR sunucusundan oluşan düğümün
+`site` alanı `"disaster"` dönüyor (Server'dan türetilen salt-okunur alan,
+ayrıca bir "DR işaretle" adımı yok — DR'yi seçmek = site=disaster olan
+sunucuyu seçmek). Agent bilgisi hem kayıttan önce
+(`POST /api/servers/test-agent`) hem kayıtlı bir sunucu için
+(`POST /api/servers/{id}/test-agent`) test edildi (erişilemeyen demo
+host'lar için temiz `ok: false`). *Doğrulandı:* `GET /api/groups/{id}/health`
+→ 200 (host'lar erişilemez olduğundan `overall: "critical"`, beklenen).
+
+**c) SQL Server standalone (named instance).** Sunucu ekle (os=windows) →
+grup oluştur (engine=sqlserver, topology=standalone) → "Yeni düğüm"
+formunda SQL Server için görünen `instance_name` alanına named instance adı
+(`SQLPROD01`) + port gir, kullanıcı adı/parola → Ekle. *Doğrulandı:*
+`node.instance_name == "SQLPROD01"`; `POST /api/instances/test` (engine=
+sqlserver) 200 dönüyor, bu ortamda ODBC sürücüsü kurulu olmadığından
+sınıflandırılmış hata "Bağlantı başarısız." (driver mesajı parantez
+içinde) — gerçek bir Windows/SQL Server ortamında aynı yol kimlik
+doğrulama/host/port hatalarını ayrı ayrı sınıflandırır.
+
+**d) SQL Server Always On.** Grup oluştur (topology=alwayson, access_name=
+listener adı, cluster_name) → 2 sunucu (biri site=disaster) → her birine
+`instance_name=MSSQLSERVER` ile birer düğüm/instance → DR replikası =
+site=disaster sunucusundan gelen düğüm (yine Server'dan türetilen alan).
+*Doğrulandı:* `GET /api/groups/{id}/alwayson` çökmeden yanıt veriyor — bu
+uç gerçek bir DMV bağlantısı gerektirdiğinden (TCP-probe'lu `/health`'in
+aksine) bu sandbox'ta ODBC sürücüsü olmadan `502` + net `detail` mesajıyla
+dönüyor; gerçek bir SQL Server + ODBC sürücüsüyle `200` + AG durumu döner.
+
+Ayrıca doğrulandı: var olmayan bir `server_id`/`customer_id` referansıyla
+düğüm/sunucu oluşturma girişimi temiz `404` ile reddediliyor (backend
+seviyesinde savunma — frontend'deki `required` alanlar zaten bu durumu
+normalde engelliyor).
+
 ## Nasıl test edilir
 
 ### Backend
@@ -472,6 +594,14 @@ getir" butonlarını deneyin.
   `primary_node` ve `replication_lag_bytes` bu yüzden çoğunlukla boş/
   statik kalır — AG'nin gerçek DMV tabanlı primary/lag bilgisi sadece
   Group Detail'in Always On sekmesinde (`GET /api/groups/{id}/alwayson`).
+- `classify_connection_error` (Faz 10) driver'ın ham hata metnini anahtar
+  kelime eşleştirmeyle Türkçe bir kategoriye ayırıyor (kimlik doğrulama /
+  DNS / port / timeout / veritabanı yok) — bu bir sezgisel eşleme, driver
+  sürümüne göre farklı ifadeler kullanılırsa (asyncpg/pyodbc/motor
+  arasında veya sürümler arası) sınıflandırma "Bağlantı başarısız."
+  genel mesajına düşebilir; orijinal driver mesajı her zaman parantez
+  içinde korunduğundan bilgi kaybı yok, sadece kategori tahmini
+  başarısız olabilir.
 
 ## API uyumluluğu
 

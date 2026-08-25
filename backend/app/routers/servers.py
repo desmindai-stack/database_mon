@@ -4,9 +4,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Customer, Node, Server
-from app.schemas import ServerCreate, ServerOut, ServerUpdate
+from app.schemas import ConnectionTestResult, ServerAgentTestRequest, ServerCreate, ServerOut, ServerUpdate
+from app.services.cluster_health import fetch_agent_snapshot
 
 router = APIRouter(prefix="/servers", tags=["servers"])
+
+
+async def _test_agent(agent_url: str | None, agent_token: str | None) -> ConnectionTestResult:
+    if not agent_url:
+        return ConnectionTestResult(ok=False, message="Bu sunucu için agent_url tanımlı değil.")
+    snapshot = await fetch_agent_snapshot({"agent_url": agent_url, "agent_token": agent_token}, timeout=5.0)
+    if snapshot is None:
+        return ConnectionTestResult(
+            ok=False, message="Agent'a ulaşılamadı — agent_url'i, token'ı ve ağ erişimini kontrol edin."
+        )
+    service_count = len(snapshot.get("services") or {})
+    return ConnectionTestResult(
+        ok=True, message=f"Agent'a ulaşıldı, {service_count} servis raporlandı.", details=snapshot
+    )
 
 
 @router.get("", response_model=list[ServerOut])
@@ -34,6 +49,19 @@ async def create_server(payload: ServerCreate, db: AsyncSession = Depends(get_db
     await db.commit()
     await db.refresh(server)
     return server
+
+
+@router.post("/test-agent", response_model=ConnectionTestResult)
+async def test_agent_pre_save(payload: ServerAgentTestRequest) -> ConnectionTestResult:
+    return await _test_agent(payload.agent_url, payload.agent_token)
+
+
+@router.post("/{server_id}/test-agent", response_model=ConnectionTestResult)
+async def test_agent_existing(server_id: int, db: AsyncSession = Depends(get_db)) -> ConnectionTestResult:
+    server = await db.get(Server, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return await _test_agent(server.agent_url, server.agent_token)
 
 
 @router.get("/{server_id}", response_model=ServerOut)

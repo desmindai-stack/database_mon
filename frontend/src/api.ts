@@ -675,6 +675,12 @@ export interface RefreshInterval {
   options: number[];
 }
 
+export interface ConnectionTestResult {
+  ok: boolean;
+  message: string;
+  details: Record<string, unknown>;
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -703,15 +709,9 @@ export const api = {
   deleteInstance: (id: number) =>
     request<void>(`/api/instances/${id}`, { method: "DELETE" }),
   testConnection: (data: InstanceCreate) =>
-    request<{ ok: boolean; message: string; details: Record<string, unknown> }>(
-      "/api/instances/test",
-      { method: "POST", body: JSON.stringify(data) },
-    ),
+    request<ConnectionTestResult>("/api/instances/test", { method: "POST", body: JSON.stringify(data) }),
   testExistingInstance: (id: number) =>
-    request<{ ok: boolean; message: string; details: Record<string, unknown> }>(
-      `/api/instances/${id}/test`,
-      { method: "POST" },
-    ),
+    request<ConnectionTestResult>(`/api/instances/${id}/test`, { method: "POST" }),
   getMetrics: (id: number, hours = 1) =>
     request<MetricSample[]>(`/api/metrics/${id}?hours=${hours}`),
   getLatestMetrics: (id: number) =>
@@ -793,6 +793,13 @@ export const api = {
   updateServer: (id: number, data: Partial<Omit<ServerCreate, "customer_id">>) =>
     request<DbServer>(`/api/servers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteServer: (id: number) => request<void>(`/api/servers/${id}`, { method: "DELETE" }),
+  testServerAgent: (agentUrl: string, agentToken?: string) =>
+    request<ConnectionTestResult>("/api/servers/test-agent", {
+      method: "POST",
+      body: JSON.stringify({ agent_url: agentUrl, agent_token: agentToken || undefined }),
+    }),
+  testExistingServerAgent: (id: number) =>
+    request<ConnectionTestResult>(`/api/servers/${id}/test-agent`, { method: "POST" }),
 
   getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
   refreshDashboard: () => request<DashboardSummary>("/api/dashboard/refresh", { method: "POST" }),

@@ -3,6 +3,99 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 10 — SONRA: Ekleme akışlarının eksiklerini tamamlama
+
+Dört senaryoyu (a: PostgreSQL standalone, b: PostgreSQL Patroni, c: SQL
+Server standalone/named instance, d: SQL Server Always On) sıfırdan
+httpx/ASGITransport ile uçtan uca çalıştırırken bulunan gerçek eksikler:
+
+- **"Yeni düğüm" formunda test butonu yoktu.** Faz 10 İŞ 1'in
+  post-creation "Bağlantı bilgisi gir" akışına test butonu eklenmişti ama
+  grup içinde İLK KEZ düğüm eklerken kullanılan orijinal "Yeni düğüm"
+  formunda yoktu — aynı `onTestNewNodeConnection` deseni oraya da eklendi
+  (form henüz kaydedilmediği için `POST /api/instances/test`'e sunucudan
+  alınan `host` + formdaki kullanıcı adı/parola/db/port gönderiliyor).
+- **Sessiz "bağlanmamış" düğüm oluşturma.** `instanceMode==="new"` iken
+  kullanıcı adını boş bırakıp Ekle'ye basarsa, backend `db_username`
+  boşsa sessizce `instance_id: None` ile düğüm oluşturuyordu (kullanıcı
+  "bağladım" sanıp aslında bağlamamış oluyordu) — aynı şekilde
+  `instanceMode==="existing"` iken instance seçilmezse. İkisi de artık
+  HTML `required` ile client-side engelleniyor; backend davranışı
+  bilerek değiştirilmedi (geriye dönük uyumluluk — `db_username`'siz
+  `POST /api/nodes` hâlâ "bağlama" anlamına geliyor, bu form dışı
+  kullanım için (ör. script) hâlâ geçerli bir senaryo).
+- **Agent bilgisi test edilemiyordu.** "Agent bilgisi Server seviyesinde
+  girilsin ve test edilebilsin" isteği için `fetch_agent_snapshot`
+  (Faz 2'den beri `services/cluster_health.py`'de var, `v1/services` +
+  `v1/keepalived` uçlarına GET atıp `agent_ok` döndürüyor) yeniden
+  kullanılarak iki yeni uç eklendi: `POST /api/servers/test-agent`
+  (kayıttan önce, `InstanceCreate`/`instances/test` ile aynı desen) ve
+  `POST /api/servers/{id}/test-agent` (kayıtlı bir sunucu için). İkisi de
+  aynı `_test_agent()` yardımcı fonksiyonunu paylaşıyor. Not: bu, agent'ın
+  TCP/HTTP olarak erişilebilir ve `v1/services` uç noktasının doğru
+  şekilde yanıt verdiğini doğruluyor — token'ın GERÇEKTEN doğru olup
+  olmadığını (ör. agent 401 yerine sessizce boş liste dönerse) agent
+  implementasyonuna bağlı; dbace tarafında ekstra bir doğrulama yok.
+- **Hata mesajları ham driver metniydi.** `str(exc)` doğrudan kullanıcıya
+  gösteriliyordu (`"password authentication failed for user \"postgres\""`
+  gibi İngilizce/driver-özel metin). `collectors/base.py`'ye eklenen
+  `classify_connection_error()` anahtar kelime eşleştirmeyle (kimlik
+  doğrulama/DNS/port/timeout/veritabanı yok) Türkçe bir kategori mesajına
+  çeviriyor, orijinal metni parantez içinde koruyarak. Bu bir sezgisel
+  eşleme — kapsamlı bir driver-hata-kodu haritası değil; bilinen sınır
+  olarak ILERLEME.md'de not edildi.
+
+## Faz 10 — İŞ 4: Önerilerde action alanı — kaynak başına farklı anlam
+
+"Aksiyon" tek bir şablona oturmuyor, dört öneri kaynağının dördü de farklı
+bir şey sunabiliyor:
+- `connectivity` → gerçek bir komut var (log komutu), doğrudan `action`.
+- `index_advisor` → gerçek bir komut var (`CREATE INDEX` DDL'i), doğrudan
+  `action`.
+- `parameter_audit` → gerçek bir "düzeltme" komutu YOK, çünkü hedef değer
+  sunucunun RAM/CPU'suna bağlı ve dbace bunu toplamıyor (Faz 3'ten beri
+  bilinen sınır). `ALTER SYSTEM SET x = '<tahmini-değer>'` uydurmak yanlış
+  bir değeri "resmi öneri" gibi göstermek olurdu — onun yerine güvenli,
+  gerçek bir sonraki adım olan `SHOW <param>;` seçildi (mevcut değeri
+  kontrol etmeye yönlendiriyor, hiçbir şeyi tahmin etmiyor).
+- `performance_insights` → `insight.action` alanı VAR ama bu bir UI
+  tab-hint'i (`"queries"`/`"metrics"`/`"alerts"` — TuningPanel'in hangi
+  sekmeyi açacağını söylüyor), kopyalanabilir bir komut değil. Bunu
+  `action` olarak kullanmak kullanıcıya "queries" diye bir "komut"
+  kopyalatırdı — anlamsız. Bu kaynak için `action` bilerek boş bırakıldı;
+  bunun yerine önceden hiç gösterilmeyen `insight.recommendation` (düzyazı
+  öneri metni) artık `message`'a dahil edildi, en azından öneri içeriği
+  kayboldu değil.
+
+## Faz 10 — İŞ 3: "Seçili müşteri" public modda nasıl belirleniyor
+
+Private modda "seçili müşteri" tek ve sabit (tek tenant). Public modda
+böyle bir kavram doğal olarak yok — birden fazla müşteri var ve hangisinin
+"seçili" sayılacağı belirsiz. Basit bir sezgisel kural seçildi: seçili
+müşteri, kullanıcının o an içinde bulunduğu `/customers/:id/...` URL'sinden
+okunuyor (route değiştikçe güncelleniyor), ayrıca ağaçta bir müşteri adına
+tıklamak da (artık o da bir link) hem oraya gidiyor hem seçimi güncelliyor.
+Bilinçli olarak YAPILMAYAN: `/applications/:id/groups` veya `/groups/:id`
+gibi müşteri ID'si URL'de doğrudan görünmeyen sayfalarda ekstra bir API
+çağrısıyla (`GET /api/applications/{id}` → `customer_id`) müşteriyi geriye
+doğru çözmek — bu, her sayfa geçişinde bir round-trip daha eklerdi ve o
+sayfaların zaten kendi breadcrumb'ı var. Sonuç: sabit "Uygulamalar" linki
+kullanıcı bir müşteri sayfasını hiç ziyaret etmeden Group Detail'e URL ile
+gelirse `/customers`'a düşer (boş/yanlış değil, sadece "henüz seçilmedi").
+
+## Faz 10 — İŞ 2: Seed'de "farklı AG" kanıtı
+
+Önceki (Faz 9) seed'de paylaşımlı Windows sunucusundaki iki instance
+ikisi de `topology="standalone"` gruba üyeydi — bu, kullanıcının asıl
+sormak istediği "aynı sunucudaki instance'lar birbirinden bağımsız
+Always On gruplarına üye olabilir mi" sorusunu hiç test etmiyordu (iki
+standalone grup, iki AG'den yapısal olarak ayırt edilemez bir senaryu
+değil). Düzeltme: ikisi de artık gerçek `topology="alwayson"` gruplar,
+her birinin ikinci bir replika düğümü var (aksi halde "tek düğümlü AG"
+gerçekçi olmayan bir demo olurdu). Bu, sunucu sayısını artırdı (2 yeni
+sunucu) — kapsam dışı bir büyüme değil, senaryonun asıl iddiasını
+kanıtlamak için gerekli minimum gerçekçilik.
+
 ## Faz 9 — İŞ 5: Dashboard öneri alanları
 
 **Teşhis:** Kullanıcının şüphesi kısmen doğruydu ama tam isabetli değildi

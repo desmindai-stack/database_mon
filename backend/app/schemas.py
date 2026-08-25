@@ -122,6 +122,11 @@ class ServerUpdate(BaseModel):
     agent_token: str | None = None
 
 
+class ServerAgentTestRequest(BaseModel):
+    agent_url: str
+    agent_token: str | None = None
+
+
 class ServerOut(BaseModel):
     id: int
     customer_id: int

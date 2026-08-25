@@ -15,6 +15,51 @@ class ConnectionTarget:
     options: dict[str, Any] | None = None
 
 
+def classify_connection_error(exc: Exception) -> str:
+    """Turns a raw driver exception into a Turkish message that names the likely cause —
+    wrong password, unreachable host, wrong/closed port, timeout — instead of leaking an
+    English driver string as the only signal. The original exception text is kept in
+    parentheses so nothing is lost for someone who wants the raw detail."""
+    text = str(exc) or exc.__class__.__name__
+    lower = text.lower()
+
+    def wrap(prefix: str) -> str:
+        return f"{prefix} ({text})"
+
+    if any(
+        k in lower
+        for k in (
+            "password authentication failed",
+            "authentication failed",
+            "login failed",
+            "invalid authorization specification",
+            "access denied for user",
+            "auth error",
+            "unauthorized",
+        )
+    ):
+        return wrap("Kimlik doğrulama başarısız: kullanıcı adı veya parola yanlış.")
+    if any(k in lower for k in ("does not exist", "unknown database", "cannot open database")):
+        return wrap("Veritabanı bulunamadı: veritabanı adını kontrol edin.")
+    if any(
+        k in lower
+        for k in (
+            "getaddrinfo failed",
+            "name or service not known",
+            "nodename nor servname",
+            "temporary failure in name resolution",
+        )
+    ):
+        return wrap("Sunucuya ulaşılamıyor: host adresi çözümlenemedi (DNS/hostname hatası).")
+    if any(k in lower for k in ("connection refused", "actively refused", "connect call failed")):
+        return wrap("Bağlantı reddedildi: port kapalı veya yanlış port numarası.")
+    if "timed out" in lower or "timeout" in lower:
+        return wrap("Bağlantı zaman aşımına uğradı: host erişilebilir mi ve güvenlik duvarı/port açık mı kontrol edin.")
+    if any(k in lower for k in ("network is unreachable", "no route to host")):
+        return wrap("Ağ erişilemiyor: host'a giden ağ yolu yok.")
+    return wrap("Bağlantı başarısız.")
+
+
 class BaseCollector(ABC):
     @abstractmethod
     async def test_connection(self) -> tuple[bool, str, dict[str, Any]]:

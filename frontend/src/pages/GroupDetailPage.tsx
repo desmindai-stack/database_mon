@@ -45,6 +45,8 @@ export default function GroupDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("nodes");
+  const [newNodeTesting, setNewNodeTesting] = useState(false);
+  const [newNodeTestResult, setNewNodeTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const [health, setHealth] = useState<GroupHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -107,10 +109,44 @@ export default function GroupDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  const onTestNewNodeConnection = async () => {
+    const server = servers.find((s) => s.id === nodeForm.server_id);
+    if (!group || !server) {
+      setError("Önce bir sunucu seçin");
+      return;
+    }
+    setNewNodeTesting(true);
+    setNewNodeTestResult(null);
+    try {
+      const result = await api.testConnection({
+        name: `${group.name}-${nodeForm.name || "yeni-dugum"}-test`,
+        engine: group.engine,
+        host: server.host,
+        port: nodeForm.port,
+        database: nodeForm.db_database || (group.engine === "sqlserver" ? "master" : group.engine === "mongodb" ? "admin" : "postgres"),
+        username: nodeForm.db_username || "",
+        password: nodeForm.db_password || "",
+      });
+      setNewNodeTestResult({ ok: result.ok, message: result.message });
+    } catch (err) {
+      setNewNodeTestResult({ ok: false, message: String((err as Error).message) });
+    } finally {
+      setNewNodeTesting(false);
+    }
+  };
+
   const onAddNode = async (e: FormEvent) => {
     e.preventDefault();
-    setBusy(true);
     setError(null);
+    if (instanceMode === "new" && !nodeForm.db_username) {
+      setError("Yeni instance için kullanıcı adı zorunlu — ya kullanıcı adı girin ya da 'Bağlama' seçeneğini kullanın.");
+      return;
+    }
+    if (instanceMode === "existing" && !nodeForm.instance_id) {
+      setError("Mevcut instance'a bağlamak için listeden bir instance seçin.");
+      return;
+    }
+    setBusy(true);
     try {
       await api.createNode({
         ...nodeForm,
@@ -122,6 +158,7 @@ export default function GroupDetailPage() {
         db_database: instanceMode === "new" ? nodeForm.db_database || undefined : undefined,
       });
       setNodeForm(emptyNodeForm(id));
+      setNewNodeTestResult(null);
       await loadNodes();
       await api.getInstances().then(setExistingInstances);
     } catch (err) {
@@ -723,6 +760,7 @@ export default function GroupDetailPage() {
                       value={nodeForm.db_username}
                       onChange={(e) => setNodeForm({ ...nodeForm, db_username: e.target.value })}
                       placeholder="postgres, sa..."
+                      required
                     />
                   </label>
                   <label>
@@ -749,6 +787,7 @@ export default function GroupDetailPage() {
                   <select
                     value={nodeForm.instance_id ?? ""}
                     onChange={(e) => setNodeForm({ ...nodeForm, instance_id: e.target.value ? Number(e.target.value) : null })}
+                    required
                   >
                     <option value="">— seçin —</option>
                     {existingInstances.map((i) => (
@@ -757,7 +796,15 @@ export default function GroupDetailPage() {
                   </select>
                 </label>
               )}
+              {instanceMode === "new" && newNodeTestResult && (
+                <div className={newNodeTestResult.ok ? "ok-text" : "warn-text"}>{newNodeTestResult.message}</div>
+              )}
               <div className="form-actions">
+                {instanceMode === "new" && (
+                  <button type="button" className="btn" disabled={newNodeTesting} onClick={onTestNewNodeConnection}>
+                    {newNodeTesting ? "Test ediliyor…" : "Bağlantıyı test et"}
+                  </button>
+                )}
                 <button type="submit" className="btn btn-primary" disabled={busy}>
                   Ekle
                 </button>

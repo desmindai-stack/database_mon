@@ -19,6 +19,9 @@ export default function ServersPage() {
   const [agentToken, setAgentToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [agentTesting, setAgentTesting] = useState(false);
+  const [createAgentResult, setCreateAgentResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [rowAgentResult, setRowAgentResult] = useState<{ id: number; ok: boolean; message: string } | null>(null);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
@@ -57,6 +60,32 @@ export default function ServersPage() {
       setError(String((err as Error).message));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const onTestCreateAgent = async () => {
+    if (!agentUrl) {
+      setCreateAgentResult({ ok: false, message: "Önce agent URL girin" });
+      return;
+    }
+    setAgentTesting(true);
+    setCreateAgentResult(null);
+    try {
+      const result = await api.testServerAgent(agentUrl, agentToken);
+      setCreateAgentResult({ ok: result.ok, message: result.message });
+    } catch (err) {
+      setCreateAgentResult({ ok: false, message: String((err as Error).message) });
+    } finally {
+      setAgentTesting(false);
+    }
+  };
+
+  const onTestRowAgent = async (s: DbServer) => {
+    try {
+      const result = await api.testExistingServerAgent(s.id);
+      setRowAgentResult({ id: s.id, ok: result.ok, message: result.message });
+    } catch (err) {
+      setRowAgentResult({ id: s.id, ok: false, message: String((err as Error).message) });
     }
   };
 
@@ -103,6 +132,11 @@ export default function ServersPage() {
       </header>
 
       {error && <div className="error">{error}</div>}
+      {rowAgentResult && (
+        <div className={rowAgentResult.ok ? "ok-text" : "warn-text"} style={{ marginBottom: "0.75rem" }}>
+          {servers.find((s) => s.id === rowAgentResult.id)?.name}: {rowAgentResult.message}
+        </div>
+      )}
 
       <div className="grid grid-2">
         <div className="table-wrap">
@@ -158,6 +192,14 @@ export default function ServersPage() {
                       </td>
                       <td>
                         <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <button
+                            className="btn btn-xs"
+                            disabled={!s.agent_url}
+                            title={s.agent_url ? "Agent'a bağlan ve servis listesini kontrol et" : "agent_url tanımlı değil"}
+                            onClick={() => onTestRowAgent(s)}
+                          >
+                            Agent testi
+                          </button>
                           <button className="btn" onClick={() => startEdit(s)}>Düzenle</button>
                           <button className="btn btn-danger" onClick={() => onDelete(s.id)}>Sil</button>
                         </div>
@@ -203,7 +245,13 @@ export default function ServersPage() {
               Host agent token (opsiyonel)
               <input type="password" value={agentToken} onChange={(e) => setAgentToken(e.target.value)} />
             </label>
+            {createAgentResult && (
+              <div className={createAgentResult.ok ? "ok-text" : "warn-text"}>{createAgentResult.message}</div>
+            )}
             <div className="form-actions">
+              <button type="button" className="btn" disabled={agentTesting} onClick={onTestCreateAgent}>
+                {agentTesting ? "Test ediliyor…" : "Agent'ı test et"}
+              </button>
               <button type="submit" className="btn btn-primary" disabled={busy}>
                 Ekle
               </button>

@@ -4,7 +4,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from app.collectors.base import BaseCollector, ConnectionTarget
+from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class SqlServerCollector(BaseCollector):
             conn = await self._connect()
         except Exception as exc:
             logger.exception("SQL Server connection test failed")
-            return False, str(exc), {"engine": "sqlserver"}
+            return False, classify_connection_error(exc), {"engine": "sqlserver"}
         try:
             async with conn.cursor() as cur:
                 await cur.execute("SELECT @@VERSION")
@@ -105,7 +105,7 @@ class SqlServerCollector(BaseCollector):
             return True, "Connection successful", {"engine": "sqlserver", "version": row[0] if row else None}
         except Exception as exc:
             logger.exception("SQL Server connection test query failed")
-            return False, str(exc), {"engine": "sqlserver"}
+            return False, classify_connection_error(exc), {"engine": "sqlserver"}
         finally:
             await conn.close()
 
@@ -296,7 +296,7 @@ class MongoDBCollector(BaseCollector):
             }
         except Exception as exc:
             logger.exception("MongoDB connection test failed")
-            return False, str(exc), {}
+            return False, classify_connection_error(exc), {}
         finally:
             client.close()
 

@@ -5,7 +5,7 @@ from typing import Any
 
 import asyncpg
 
-from app.collectors.base import BaseCollector, ConnectionTarget
+from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ class PostgreSQLCollector(BaseCollector):
                 await conn.close()
         except Exception as exc:
             logger.exception("PostgreSQL connection test failed")
-            return False, str(exc), {}
+            return False, classify_connection_error(exc), {}
 
     async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
         conn = await self._connect()
