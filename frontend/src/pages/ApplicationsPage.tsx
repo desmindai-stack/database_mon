@@ -14,6 +14,10 @@ export default function ApplicationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+
   const load = () => api.getApplications(id).then(setApplications).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
@@ -45,6 +49,22 @@ export default function ApplicationsPage() {
     await load();
   };
 
+  const startEdit = (a: Application) => {
+    setEditingId(a.id);
+    setEditName(a.name);
+    setEditDescription(a.description || "");
+  };
+
+  const saveEdit = async (appId: number) => {
+    try {
+      await api.updateApplication(appId, { name: editName, description: editDescription || undefined });
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
   return (
     <>
       <header className="page-header">
@@ -58,6 +78,7 @@ export default function ApplicationsPage() {
         </div>
         <div className="header-actions">
           <Link to={`/customers/${id}/servers`} className="btn">Sunucular</Link>
+          <a href="#new-application-form" className="btn btn-primary">+ Uygulama Ekle</a>
         </div>
       </header>
 
@@ -81,15 +102,35 @@ export default function ApplicationsPage() {
               ) : (
                 applications.map((a) => (
                   <tr key={a.id}>
-                    <td>
-                      <Link to={`/applications/${a.id}/groups`}>{a.name}</Link>
-                    </td>
-                    <td>{a.description || "—"}</td>
-                    <td>
-                      <button className="btn btn-danger" onClick={() => onDelete(a.id)}>
-                        Sil
-                      </button>
-                    </td>
+                    {editingId === a.id ? (
+                      <>
+                        <td>
+                          <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                        </td>
+                        <td>
+                          <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <button className="btn btn-primary" onClick={() => saveEdit(a.id)}>Kaydet</button>
+                            <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
+                          </div>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          <Link to={`/applications/${a.id}/groups`}>{a.name}</Link>
+                        </td>
+                        <td>{a.description || "—"}</td>
+                        <td>
+                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <button className="btn" onClick={() => startEdit(a)}>Düzenle</button>
+                            <button className="btn btn-danger" onClick={() => onDelete(a.id)}>Sil</button>
+                          </div>
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))
               )}
@@ -97,7 +138,7 @@ export default function ApplicationsPage() {
           </table>
         </div>
 
-        <div className="card">
+        <div className="card" id="new-application-form">
           <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni uygulama</h3>
           <form className="form-grid" onSubmit={onSubmit}>
             <label>

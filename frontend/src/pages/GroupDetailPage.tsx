@@ -68,6 +68,13 @@ export default function GroupDetailPage() {
   const [convertBusy, setConvertBusy] = useState(false);
   const [convertError, setConvertError] = useState<string | null>(null);
 
+  const [editingNodeId, setEditingNodeId] = useState<number | null>(null);
+  const [editNodeName, setEditNodeName] = useState("");
+  const [editInstanceName, setEditInstanceName] = useState("");
+  const [editPort, setEditPort] = useState(5432);
+  const [editRoleHint, setEditRoleHint] = useState<NodeRoleHint>("unknown");
+  const [editServerId, setEditServerId] = useState(0);
+
   const loadNodes = () => api.getGroupNodes(id).then(setNodes).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
@@ -116,6 +123,31 @@ export default function GroupDetailPage() {
     if (!confirm("Düğüm silinsin mi?")) return;
     await api.deleteNode(nodeId);
     await loadNodes();
+  };
+
+  const startEditNode = (node: DbNode) => {
+    setEditingNodeId(node.id);
+    setEditNodeName(node.name);
+    setEditInstanceName(node.instance_name || "");
+    setEditPort(node.port);
+    setEditRoleHint(node.role_hint);
+    setEditServerId(node.server_id || servers[0]?.id || 0);
+  };
+
+  const saveEditNode = async (nodeId: number) => {
+    try {
+      await api.updateNode(nodeId, {
+        name: editNodeName,
+        instance_name: editInstanceName || undefined,
+        port: editPort,
+        role_hint: editRoleHint,
+        server_id: editServerId,
+      });
+      setEditingNodeId(null);
+      await loadNodes();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
   };
 
   const onConvertToCluster = async (e: FormEvent) => {
@@ -193,6 +225,11 @@ export default function GroupDetailPage() {
             {group?.vip_address && <span className="detail-meta"> · VIP: {group.vip_address}</span>}
           </p>
         </div>
+        {tab === "nodes" && (
+          <div className="header-actions">
+            <a href="#new-node-form" className="btn btn-primary">+ Düğüm Ekle</a>
+          </div>
+        )}
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -357,6 +394,48 @@ export default function GroupDetailPage() {
               {nodes.length === 0 && <p className="muted-note">Henüz düğüm eklenmedi.</p>}
               {nodes.map((node) => {
                 const nodeHealth = healthByNodeId.get(node.id);
+                if (editingNodeId === node.id) {
+                  return (
+                    <div key={node.id} className="cluster-service-card">
+                      <form className="form-grid" onSubmit={(e) => { e.preventDefault(); saveEditNode(node.id); }}>
+                        <label>
+                          Ad
+                          <input value={editNodeName} onChange={(e) => setEditNodeName(e.target.value)} required />
+                        </label>
+                        <label>
+                          Sunucu
+                          <select value={editServerId} onChange={(e) => setEditServerId(Number(e.target.value))}>
+                            {servers.map((s) => (
+                              <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                            ))}
+                          </select>
+                        </label>
+                        {group?.engine === "sqlserver" && (
+                          <label>
+                            Instance adı
+                            <input value={editInstanceName} onChange={(e) => setEditInstanceName(e.target.value)} />
+                          </label>
+                        )}
+                        <label>
+                          Port
+                          <input type="number" value={editPort} onChange={(e) => setEditPort(Number(e.target.value))} />
+                        </label>
+                        <label>
+                          Rol
+                          <select value={editRoleHint} onChange={(e) => setEditRoleHint(e.target.value as NodeRoleHint)}>
+                            <option value="unknown">Bilinmiyor</option>
+                            <option value="primary">Primary</option>
+                            <option value="replica">Replica</option>
+                          </select>
+                        </label>
+                        <div className="form-actions">
+                          <button type="submit" className="btn btn-primary">Kaydet</button>
+                          <button type="button" className="btn" onClick={() => setEditingNodeId(null)}>Vazgeç</button>
+                        </div>
+                      </form>
+                    </div>
+                  );
+                }
                 return (
                   <div key={node.id} className={`cluster-service-card${node.site === "disaster" ? " status-unknown" : ""}`}>
                     <div className="cluster-service-head">
@@ -392,16 +471,17 @@ export default function GroupDetailPage() {
                     ) : (
                       <p className="muted-note">Sağlık verisi için üstteki butonu kullanın.</p>
                     )}
-                    <button className="btn btn-danger" style={{ marginTop: "0.5rem" }} onClick={() => onDeleteNode(node.id)}>
-                      Sil
-                    </button>
+                    <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.5rem" }}>
+                      <button className="btn" onClick={() => startEditNode(node)}>Düzenle</button>
+                      <button className="btn btn-danger" onClick={() => onDeleteNode(node.id)}>Sil</button>
+                    </div>
                   </div>
                 );
               })}
             </div>
           </div>
 
-          <div className="card">
+          <div className="card" id="new-node-form">
             <h3 className="chart-title">Yeni düğüm</h3>
             {servers.length === 0 ? (
               <p className="muted-note">

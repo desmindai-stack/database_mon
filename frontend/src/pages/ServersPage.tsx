@@ -20,6 +20,12 @@ export default function ServersPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editHost, setEditHost] = useState("");
+  const [editOs, setEditOs] = useState<ServerOS>("linux");
+  const [editSite, setEditSite] = useState<NodeSite>("primary");
+
   const load = () => api.getServers(id).then(setServers).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
@@ -64,6 +70,24 @@ export default function ServersPage() {
     }
   };
 
+  const startEdit = (s: DbServer) => {
+    setEditingId(s.id);
+    setEditName(s.name);
+    setEditHost(s.host);
+    setEditOs(s.os);
+    setEditSite(s.site);
+  };
+
+  const saveEdit = async (serverId: number) => {
+    try {
+      await api.updateServer(serverId, { name: editName, host: editHost, os: editOs, site: editSite });
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
   return (
     <>
       <header className="page-header">
@@ -72,6 +96,9 @@ export default function ServersPage() {
           <p>
             <Link to={`/customers/${id}/applications`}>← Uygulamalar</Link>
           </p>
+        </div>
+        <div className="header-actions">
+          <a href="#new-server-form" className="btn btn-primary">+ Sunucu Ekle</a>
         </div>
       </header>
 
@@ -95,29 +122,55 @@ export default function ServersPage() {
                   <td colSpan={5} className="empty">Kayıtlı sunucu yok</td>
                 </tr>
               ) : (
-                servers.map((s) => (
-                  <tr key={s.id}>
-                    <td>{s.name}</td>
-                    <td>{s.host}</td>
-                    <td><span className="engine-badge">{OS_LABELS[s.os]}</span></td>
-                    <td>
-                      <span className={`tag ${s.site === "disaster" ? "private" : "public"}`}>
-                        {SITE_LABELS[s.site]}
-                      </span>
-                    </td>
-                    <td>
-                      <button className="btn btn-danger" onClick={() => onDelete(s.id)}>
-                        Sil
-                      </button>
-                    </td>
-                  </tr>
-                ))
+                servers.map((s) =>
+                  editingId === s.id ? (
+                    <tr key={s.id}>
+                      <td><input value={editName} onChange={(e) => setEditName(e.target.value)} /></td>
+                      <td><input value={editHost} onChange={(e) => setEditHost(e.target.value)} /></td>
+                      <td>
+                        <select value={editOs} onChange={(e) => setEditOs(e.target.value as ServerOS)}>
+                          <option value="linux">Linux</option>
+                          <option value="windows">Windows</option>
+                        </select>
+                      </td>
+                      <td>
+                        <select value={editSite} onChange={(e) => setEditSite(e.target.value as NodeSite)}>
+                          <option value="primary">Ana DC</option>
+                          <option value="disaster">Disaster (DR)</option>
+                        </select>
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <button className="btn btn-primary" onClick={() => saveEdit(s.id)}>Kaydet</button>
+                          <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    <tr key={s.id}>
+                      <td>{s.name}</td>
+                      <td>{s.host}</td>
+                      <td><span className="engine-badge">{OS_LABELS[s.os]}</span></td>
+                      <td>
+                        <span className={`tag ${s.site === "disaster" ? "private" : "public"}`}>
+                          {SITE_LABELS[s.site]}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <button className="btn" onClick={() => startEdit(s)}>Düzenle</button>
+                          <button className="btn btn-danger" onClick={() => onDelete(s.id)}>Sil</button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                )
               )}
             </tbody>
           </table>
         </div>
 
-        <div className="card">
+        <div className="card" id="new-server-form">
           <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni sunucu</h3>
           <form className="form-grid" onSubmit={onSubmit}>
             <label>

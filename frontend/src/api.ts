@@ -748,6 +748,8 @@ export const api = {
   getCustomers: () => request<Customer[]>("/api/customers"),
   createCustomer: (data: CustomerCreate) =>
     request<Customer>("/api/customers", { method: "POST", body: JSON.stringify(data) }),
+  updateCustomer: (id: number, data: Partial<CustomerCreate>) =>
+    request<Customer>(`/api/customers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteCustomer: (id: number) => request<void>(`/api/customers/${id}`, { method: "DELETE" }),
 
   getApplications: (customerId?: number) =>
@@ -755,6 +757,8 @@ export const api = {
   getApplication: (id: number) => request<Application>(`/api/applications/${id}`),
   createApplication: (data: ApplicationCreate) =>
     request<Application>("/api/applications", { method: "POST", body: JSON.stringify(data) }),
+  updateApplication: (id: number, data: Partial<Omit<ApplicationCreate, "customer_id">>) =>
+    request<Application>(`/api/applications/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteApplication: (id: number) => request<void>(`/api/applications/${id}`, { method: "DELETE" }),
 
   getGroups: (applicationId?: number) =>
@@ -762,6 +766,8 @@ export const api = {
   getGroup: (id: number) => request<DatabaseGroup>(`/api/groups/${id}`),
   createGroup: (data: DatabaseGroupCreate) =>
     request<DatabaseGroup>("/api/groups", { method: "POST", body: JSON.stringify(data) }),
+  updateGroup: (id: number, data: Partial<Omit<DatabaseGroupCreate, "application_id">>) =>
+    request<DatabaseGroup>(`/api/groups/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteGroup: (id: number) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
   convertGroupToCluster: (id: number, data: ClusterConversionRequest) =>
     request<DatabaseGroup>(`/api/groups/${id}/convert-to-cluster`, { method: "POST", body: JSON.stringify(data) }),
@@ -769,6 +775,8 @@ export const api = {
   getGroupNodes: (groupId: number) => request<DbNode[]>(`/api/groups/${groupId}/nodes`),
   createNode: (data: NodeCreate) =>
     request<DbNode>("/api/nodes", { method: "POST", body: JSON.stringify(data) }),
+  updateNode: (id: number, data: Partial<Omit<NodeCreate, "group_id">>) =>
+    request<DbNode>(`/api/nodes/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteNode: (id: number) => request<void>(`/api/nodes/${id}`, { method: "DELETE" }),
 
   getServers: (customerId?: number) =>
@@ -776,6 +784,8 @@ export const api = {
   getServer: (id: number) => request<DbServer>(`/api/servers/${id}`),
   createServer: (data: ServerCreate) =>
     request<DbServer>("/api/servers", { method: "POST", body: JSON.stringify(data) }),
+  updateServer: (id: number, data: Partial<Omit<ServerCreate, "customer_id">>) =>
+    request<DbServer>(`/api/servers/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteServer: (id: number) => request<void>(`/api/servers/${id}`, { method: "DELETE" }),
 
   getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),

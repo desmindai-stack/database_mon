@@ -133,6 +133,11 @@ function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: st
             {node.name}
           </button>
         )}
+        {node.emptyHref && (
+          <Link to={node.emptyHref} className="nav-tree-add-btn" title={node.emptyLabel ?? "Ekle"}>
+            +
+          </Link>
+        )}
         <button className={`nav-tree-app-toggle${open ? " open" : ""}`} onClick={toggle}>
           ▶
         </button>

@@ -289,6 +289,24 @@ keepalived/haproxy hiç yok), `down_nodes` 4 düğümü de doğru tespit
 ediyor, dashboard'daki hiçbir sorun mesajında "PostgreSQL" geçmiyor;
 `aapara-patroni` (postgresql/patroni) davranışı değişmedi.
 
+**Faz 9 — İŞ 4: CRUD erişimi.** Her liste sayfasında (Müşteriler,
+Uygulamalar, Database Groups, Sunucular) artık başlıkta net bir "+ X
+Ekle" butonu var (sayfadaki mevcut forma çapalıyor) ve her satırda
+"Düzenle" (inline, alanlar yerinde düzenlenebilir) + "Sil" birlikte
+duruyor — önceden sadece "Sil" vardı, düzenleme hiçbir yerde yoktu.
+Group Detail'deki düğüm kartlarına da aynı "Düzenle" (sunucu/instance
+adı/port/rol) eklendi. Backend'de zaten var olan `PATCH` endpoint'leri
+(customers/applications/groups/servers/nodes) kullanıldı — hiçbiri yeni
+değildi, sadece frontend'de karşılığı yoktu. Sol menü ağacında artık her
+seviyede (Müşteri/Uygulama/Grup) satırın üzerine gelince beliren bir "+"
+düğmesi var, ilgili alt-öğe ekleme sayfasına gidiyor — önceden bu sadece
+dal boşken (`Kayıt yok` yerine) görünüyordu, artık dolu bir dalda da
+erişilebilir. Breadcrumb gezinme (← Uygulamalar, ← Müşteriler vb.)
+değişmeden duruyor — artık tek erişim yolu değil, üç yol var (breadcrumb,
+liste sayfası + Ekle butonu, sol menü ağacındaki + düğmesi). Private
+modda müşteri ekleme/silme hâlâ kapalı (CustomersPage `!isPrivate`
+kontrolü değişmedi).
+
 ## Nasıl test edilir
 
 ### Backend

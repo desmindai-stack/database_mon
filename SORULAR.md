@@ -3,6 +3,35 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 9 — İŞ 4: CRUD erişimi
+
+- **DatabaseGroup düzenlemede engine/topology hariç tutuldu:** Grup
+  listesindeki inline "Düzenle" sadece `name`/`environment`/
+  `access_name`/`notes` değiştiriyor — `engine`/`topology` kasıtlı
+  olarak inline düzenlemeye açılmadı çünkü bunlar zaten kendi özel
+  akışları olan, daha ciddi yapısal değişiklikler (topology için
+  "Cluster'a dönüştür" akışı var; engine değişimi hâlâ hiçbir yerde
+  desteklenmiyor, mevcut düğümlerin/instance'ların bağlantı mantığını
+  bozardı). Aynı gerekçeyle Node düzenlemede `group_id` değiştirilemiyor
+  (farklı bir gruba taşımak yerine silip yeniden oluşturmak daha güvenli
+  — grup değişimi cluster üyeliğini etkiler).
+- **"+ Ekle" butonları sayfa içi forma kaydırma (`<a href="#...">`)
+  kullanıyor, modal/toggle değil:** Formlar zaten sayfada her zaman
+  görünür (mevcut tasarım deseni) — modal eklemek yerine üstteki CTA
+  butonunu forma çapa (`id="new-x-form"`) ile bağladım, hem "üstte net
+  bir + Ekle butonu" isteğini karşılıyor hem de var olan sayfa yapısını
+  korudu.
+- **Sol menü ağacındaki "+" düğmesi hover ile beliriyor (varsayılan
+  `opacity:0`), her zaman görünür değil:** Masaüstü/mouse kullanımını
+  varsayıyor — dokunmatik cihazlarda satıra dokunmak `:focus-visible`
+  üzerinden erişilebilir kalıyor ama fiziksel olarak "hover" yok; bu bir
+  sınırlama, tam dokunmatik-öncelikli bir tasarım için buton her zaman
+  görünür yapılabilir ama masaüstü-öncelikli bu DBA aracında görsel
+  gürültüyü azaltmak için hover tercih edildi.
+- **Server silme, bağlı düğüm varsa 409 ile reddediliyor** (İŞ 1'de zaten
+  eklenmişti) — kullanıcı önce düğümleri silmeli/taşımalı. Sessizce
+  orphan bırakmak yerine engellemeyi tercih ettim.
+
 ## Faz 9 — İŞ 3: Engine-aware probe doğrulaması
 
 Asıl kod değişikliği İŞ 1'in `cluster_health.py` yeniden yazımında

@@ -26,6 +26,12 @@ export default function DatabaseGroupsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editEnvironment, setEditEnvironment] = useState<GroupEnvironment>("prod");
+  const [editAccessName, setEditAccessName] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+
   const load = () => api.getGroups(id).then(setGroups).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
@@ -69,6 +75,29 @@ export default function DatabaseGroupsPage() {
     await load();
   };
 
+  const startEdit = (g: DatabaseGroup) => {
+    setEditingId(g.id);
+    setEditName(g.name);
+    setEditEnvironment(g.environment);
+    setEditAccessName(g.access_name || "");
+    setEditNotes(g.notes || "");
+  };
+
+  const saveEdit = async (groupId: number) => {
+    try {
+      await api.updateGroup(groupId, {
+        name: editName,
+        environment: editEnvironment,
+        access_name: editAccessName || undefined,
+        notes: editNotes || undefined,
+      });
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
   return (
     <>
       <header className="page-header">
@@ -77,6 +106,9 @@ export default function DatabaseGroupsPage() {
           <p>
             {application && <Link to={`/customers/${application.customer_id}/applications`}>← Uygulamalar</Link>}
           </p>
+        </div>
+        <div className="header-actions">
+          <a href="#new-group-form" className="btn btn-primary">+ Grup Ekle</a>
         </div>
       </header>
 
@@ -104,6 +136,41 @@ export default function DatabaseGroupsPage() {
                 groups.map((g) => {
                   const isCluster = g.topology !== "standalone";
                   const status = g.status;
+                  if (editingId === g.id) {
+                    return (
+                      <tr key={g.id}>
+                        <td>
+                          <input value={editName} onChange={(e) => setEditName(e.target.value)} style={{ marginBottom: "0.3rem" }} />
+                          {isCluster && (
+                            <input
+                              value={editAccessName}
+                              onChange={(e) => setEditAccessName(e.target.value)}
+                              placeholder="Erişim adı"
+                            />
+                          )}
+                        </td>
+                        <td><span className="engine-badge">{g.engine}</span></td>
+                        <td>{g.topology}</td>
+                        <td>
+                          <input value={editNotes} onChange={(e) => setEditNotes(e.target.value)} placeholder="Notlar" />
+                        </td>
+                        <td>
+                          <select value={editEnvironment} onChange={(e) => setEditEnvironment(e.target.value as GroupEnvironment)}>
+                            <option value="prod">Prod</option>
+                            <option value="preprod">Preprod</option>
+                            <option value="test">Test</option>
+                            <option value="dev">Dev</option>
+                          </select>
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <button className="btn btn-primary" onClick={() => saveEdit(g.id)}>Kaydet</button>
+                            <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  }
                   return (
                     <tr key={g.id}>
                       <td>
@@ -134,9 +201,10 @@ export default function DatabaseGroupsPage() {
                         <span className={`env-badge ${g.environment}`}>{ENV_LABELS[g.environment]}</span>
                       </td>
                       <td>
-                        <button className="btn btn-danger" onClick={() => onDelete(g.id)}>
-                          Sil
-                        </button>
+                        <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <button className="btn" onClick={() => startEdit(g)}>Düzenle</button>
+                          <button className="btn btn-danger" onClick={() => onDelete(g.id)}>Sil</button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -146,7 +214,7 @@ export default function DatabaseGroupsPage() {
           </table>
         </div>
 
-        <div className="card">
+        <div className="card" id="new-group-form">
           <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni database group</h3>
           <form className="form-grid" onSubmit={onSubmit}>
             <label>

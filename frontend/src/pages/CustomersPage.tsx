@@ -11,6 +11,10 @@ export default function CustomersPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editType, setEditType] = useState<CustomerType>("private");
+
   const load = () => api.getCustomers().then(setCustomers).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
@@ -47,6 +51,22 @@ export default function CustomersPage() {
     await load();
   };
 
+  const startEdit = (c: Customer) => {
+    setEditingId(c.id);
+    setEditName(c.name);
+    setEditType(c.type);
+  };
+
+  const saveEdit = async (id: number) => {
+    try {
+      await api.updateCustomer(id, { name: editName, type: editType });
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
   return (
     <>
       <header className="page-header">
@@ -54,6 +74,11 @@ export default function CustomersPage() {
           <h2>Müşteriler</h2>
           <p>Customer → Application → Database Group → Node hiyerarşisinin kökü</p>
         </div>
+        {!isPrivate && (
+          <div className="header-actions">
+            <a href="#new-customer-form" className="btn btn-primary">+ Müşteri Ekle</a>
+          </div>
+        )}
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -76,19 +101,42 @@ export default function CustomersPage() {
               ) : (
                 customers.map((c) => (
                   <tr key={c.id}>
-                    <td>
-                      <Link to={`/customers/${c.id}/applications`}>{c.name}</Link>
-                    </td>
-                    <td>
-                      <span className={`tag ${c.type}`}>{c.type}</span>
-                    </td>
-                    <td>
-                      {!isPrivate && (
-                        <button className="btn btn-danger" onClick={() => onDelete(c.id)}>
-                          Sil
-                        </button>
-                      )}
-                    </td>
+                    {editingId === c.id ? (
+                      <>
+                        <td>
+                          <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                        </td>
+                        <td>
+                          <select value={editType} onChange={(e) => setEditType(e.target.value as CustomerType)}>
+                            <option value="private">Private</option>
+                            <option value="public">Public</option>
+                          </select>
+                        </td>
+                        <td>
+                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <button className="btn btn-primary" onClick={() => saveEdit(c.id)}>Kaydet</button>
+                            <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
+                          </div>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          <Link to={`/customers/${c.id}/applications`}>{c.name}</Link>
+                        </td>
+                        <td>
+                          <span className={`tag ${c.type}`}>{c.type}</span>
+                        </td>
+                        <td>
+                          {!isPrivate && (
+                            <div style={{ display: "flex", gap: "0.3rem" }}>
+                              <button className="btn" onClick={() => startEdit(c)}>Düzenle</button>
+                              <button className="btn btn-danger" onClick={() => onDelete(c.id)}>Sil</button>
+                            </div>
+                          )}
+                        </td>
+                      </>
+                    )}
                   </tr>
                 ))
               )}
@@ -97,7 +145,7 @@ export default function CustomersPage() {
         </div>
 
         {!isPrivate && (
-          <div className="card">
+          <div className="card" id="new-customer-form">
             <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni müşteri</h3>
             <form className="form-grid" onSubmit={onSubmit}>
               <label>
