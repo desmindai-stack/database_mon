@@ -551,6 +551,17 @@ veritabanına yazıldığı teyit edildi. `backend/requirements-dev.txt` +
 `pytest.ini` eklendi (`pytest`/`pytest-asyncio` — prod
 `requirements.txt`'e dokunulmadı, deploy image'larını etkilemiyor).
 
+**Faz 11 — Instance detayında tespit edilen sürüm gösterimi.** Instance
+Detail sayfasının başlık alt satırına `instance.server_version` eklendi
+(`host:port/database · engine · uygulama · sürüm`). Bu sürümde
+desteklenmeyen metrikler varsa (`instance.unsupported_metrics` boş
+değilse) Özet sekmesinde, istatistik kartlarının hemen üstünde, her
+metrik adı + Türkçe nedeniyle listelenen uyarı-renkli bir bilgi kartı
+görünüyor. `GET /api/instances/{id}` yanıtında bu iki alanın gerçekten
+döndüğü doğrulandı (`server_version`/`unsupported_metrics` — henüz
+toplama yapılmamış taze bir instance'da ikisi de `null`, ilk
+`collect_metrics()` sonrası dolar).
+
 ## Nasıl test edilir
 
 ### Backend

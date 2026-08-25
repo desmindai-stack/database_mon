@@ -926,6 +926,27 @@ td code,
   margin-bottom: 1rem;
 }
 
+.unsupported-metrics-note {
+  margin-bottom: 1rem;
+  padding: 0.85rem 1rem;
+  border-left: 3px solid var(--warning);
+}
+
+.unsupported-metrics-note ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.unsupported-metrics-note li {
+  margin-bottom: 0.25rem;
+}
+
+.unsupported-metrics-note code {
+  color: var(--text);
+}
+
 .tag {
   display: inline-flex;
   align-items: center;

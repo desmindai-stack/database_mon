@@ -29,6 +29,9 @@ export interface Instance {
   role: string | null;
   services: string[] | null;
   options?: ClusterServiceOptions | null;
+  // Collector-derived, read-only — null until the first successful metric collection.
+  server_version: string | null;
+  unsupported_metrics: Record<string, string> | null;
 }
 
 export interface MetricSample {

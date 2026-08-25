@@ -397,6 +397,7 @@ export default function InstanceDetailPage() {
             <span className="detail-meta">
               {instance.host}:{instance.port}/{instance.database} · {instance.engine}
               {instance.application ? ` · ${instance.application}` : ""}
+              {instance.server_version ? ` · ${instance.server_version}` : ""}
             </span>
           </p>
         </div>
@@ -447,6 +448,21 @@ export default function InstanceDetailPage() {
               <span key={s} className="tag service">{s}</span>
             ))}
           </div>
+
+          {instance.unsupported_metrics && Object.keys(instance.unsupported_metrics).length > 0 && (
+            <div className="card unsupported-metrics-note">
+              <p className="muted-note">
+                Bu sunucu sürümünde desteklenmeyen metrikler ({Object.keys(instance.unsupported_metrics).length}):
+              </p>
+              <ul>
+                {Object.entries(instance.unsupported_metrics).map(([key, reason]) => (
+                  <li key={key}>
+                    <code>{key}</code> — {reason}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           <div className="stats-grid compact">
             <StatTile
