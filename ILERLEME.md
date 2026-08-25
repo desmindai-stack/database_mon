@@ -281,6 +281,14 @@ predictions/insights) taze/hiç toplanmamış bir instance için bile hatasız
 edilemedi (muhtemelen eski bir `data/dbace.db` dosyası), detay ve
 kurtarma adımı SORULAR.md'de.
 
+**Faz 9 — İŞ 3: Engine-aware probe doğrulandı.** Asıl kod değişikliği İŞ 1
+commit'inde (`cluster_health.py` yeniden yazımı) — burada hedeflenen
+semptomun düzeldiğini doğruladım: `boa-sqlserver-ag` artık sadece
+`{sqlserver, alwayson, windows_cluster}` prob'luyor (Patroni/etcd/
+keepalived/haproxy hiç yok), `down_nodes` 4 düğümü de doğru tespit
+ediyor, dashboard'daki hiçbir sorun mesajında "PostgreSQL" geçmiyor;
+`aapara-patroni` (postgresql/patroni) davranışı değişmedi.
+
 ## Nasıl test edilir
 
 ### Backend

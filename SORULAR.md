@@ -3,6 +3,25 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 9 — İŞ 3: Engine-aware probe doğrulaması
+
+Asıl kod değişikliği İŞ 1'in `cluster_health.py` yeniden yazımında
+yapıldı (bkz. o bölüm) — burada sadece hedeflenen semptomun tam olarak
+düzeldiğini doğruladım:
+- `boa-sqlserver-ag` (engine=sqlserver, topology=alwayson) grubunun
+  prob'ladığı servisler artık tam olarak `{sqlserver, alwayson,
+  windows_cluster}` — `postgresql`/`patroni`/`etcd`/`keepalived`/
+  `haproxy`'den hiçbiri yok, ne prob'lanıyor ne raporda görünüyor.
+- Dashboard `top_issues` listesindeki mesajlarda ("4 düğüm erişilemez: ...")
+  hiçbir yerde "PostgreSQL" geçmiyor — zaten mesaj şablonları motor adı
+  kullanmıyordu, asıl sorun servis etiketinin kendisiydi (madde yukarıda).
+- `down_nodes` artık `boa-sqlserver-ag`'in 4 düğümünü de doğru şekilde
+  "down" işaretliyor (demo host'ları erişilemez olduğu için) — İŞ 1
+  öncesi bu her zaman boş kalıyordu (bkz. İŞ 1 notu, `_ENGINE_SERVICE_
+  NAME` düzeltmesi).
+- `aapara-patroni` (engine=postgresql) davranışı hiç değişmedi — hâlâ tam
+  Patroni/etcd/keepalived/haproxy yığınını prob'luyor.
+
 ## Faz 9 — İŞ 2: Node ↔ Instance eşleşmesi doğrulaması
 
 Teşhis: `seed_demo.py` her düğüm için gerçekten bir Instance oluşturup
