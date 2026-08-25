@@ -296,10 +296,30 @@ class AlertRuleCreate(BaseModel):
     instance_id: int | None = None
     group_id: int | None = None
     name: str
-    metric: str
+    rule_type: Literal["metric", "custom"] = "metric"
+    metric: str | None = None
     operator: str
     threshold: float
     enabled: bool = True
+    severity: str = "warning"
+    engine: str | None = None
+    sql_query: str | None = None
+    interval_seconds: int = Field(default=60, ge=10, le=3600)
+
+
+class AlertRuleUpdate(BaseModel):
+    """Applies to custom rules only — default (auto-created) rules only accept threshold/
+    enabled changes, enforced in the router, not here."""
+
+    name: str | None = None
+    metric: str | None = None
+    operator: str | None = None
+    threshold: float | None = None
+    enabled: bool | None = None
+    severity: str | None = None
+    engine: str | None = None
+    sql_query: str | None = None
+    interval_seconds: int | None = Field(default=None, ge=10, le=3600)
 
 
 class AlertRuleOut(BaseModel):
@@ -307,10 +327,16 @@ class AlertRuleOut(BaseModel):
     instance_id: int | None
     group_id: int | None = None
     name: str
+    rule_type: str
     metric: str
     operator: str
     threshold: float
     enabled: bool
+    is_default: bool
+    severity: str
+    engine: str | None
+    sql_query: str | None
+    interval_seconds: int
     created_at: datetime
 
     model_config = {"from_attributes": True}

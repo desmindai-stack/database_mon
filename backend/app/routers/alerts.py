@@ -4,7 +4,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AlertEvent, AlertRule
-from app.schemas import AlertEventOut, AlertRuleCreate, AlertRuleOut
+from app.schemas import AlertEventOut, AlertRuleCreate, AlertRuleOut, AlertRuleUpdate
+from app.services.custom_alert_rules import validate_readonly_sql
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -17,8 +18,58 @@ async def list_rules(db: AsyncSession = Depends(get_db)) -> list[AlertRule]:
 
 @router.post("/rules", response_model=AlertRuleOut, status_code=status.HTTP_201_CREATED)
 async def create_rule(payload: AlertRuleCreate, db: AsyncSession = Depends(get_db)) -> AlertRule:
-    rule = AlertRule(**payload.model_dump())
+    data = payload.model_dump()
+
+    if payload.rule_type == "custom":
+        if not payload.sql_query:
+            raise HTTPException(status_code=400, detail="Özel kural için sql_query zorunlu")
+        if not payload.engine:
+            raise HTTPException(status_code=400, detail="Özel kural için engine zorunlu")
+        if bool(payload.instance_id) == bool(payload.group_id):
+            raise HTTPException(
+                status_code=400, detail="Özel kural tam olarak bir hedef almalı: instance_id veya group_id"
+            )
+        try:
+            validate_readonly_sql(payload.sql_query)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        data["metric"] = ""
+    else:
+        if not payload.metric:
+            raise HTTPException(status_code=400, detail="Metrik kuralı için metric zorunlu")
+        data["engine"] = None
+        data["sql_query"] = None
+
+    rule = AlertRule(**data, is_default=False)
     db.add(rule)
+    await db.commit()
+    await db.refresh(rule)
+    return rule
+
+
+@router.patch("/rules/{rule_id}", response_model=AlertRuleOut)
+async def update_rule(rule_id: int, payload: AlertRuleUpdate, db: AsyncSession = Depends(get_db)) -> AlertRule:
+    rule = await db.get(AlertRule, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+
+    if rule.is_default:
+        disallowed = set(updates) - {"threshold", "enabled"}
+        if disallowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Varsayılan kurallarda sadece eşik değeri ve aç/kapa düzenlenebilir (izin verilmeyen: {', '.join(sorted(disallowed))})",
+            )
+    elif rule.rule_type == "custom" and "sql_query" in updates and updates["sql_query"]:
+        try:
+            validate_readonly_sql(updates["sql_query"])
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    for key, value in updates.items():
+        setattr(rule, key, value)
     await db.commit()
     await db.refresh(rule)
     return rule
@@ -29,6 +80,8 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db)) -> None:
     rule = await db.get(AlertRule, rule_id)
     if not rule:
         raise HTTPException(status_code=404, detail="Rule not found")
+    if rule.is_default:
+        raise HTTPException(status_code=400, detail="Varsayılan kurallar silinemez")
     await db.delete(rule)
     await db.commit()
 

@@ -260,16 +260,51 @@ export interface SchemaHealth {
   };
 }
 
+export type AlertRuleType = "metric" | "custom";
+
 export interface AlertRule {
   id: number;
   instance_id: number | null;
-  group_id?: number | null;
+  group_id: number | null;
   name: string;
+  rule_type: AlertRuleType;
   metric: string;
   operator: string;
   threshold: number;
   enabled: boolean;
+  is_default: boolean;
+  severity: string;
+  engine: string | null;
+  sql_query: string | null;
+  interval_seconds: number;
   created_at: string;
+}
+
+export interface AlertRuleCreate {
+  instance_id?: number | null;
+  group_id?: number | null;
+  name: string;
+  rule_type: AlertRuleType;
+  metric?: string;
+  operator: string;
+  threshold: number;
+  enabled?: boolean;
+  severity?: string;
+  engine?: string | null;
+  sql_query?: string | null;
+  interval_seconds?: number;
+}
+
+export interface AlertRuleUpdate {
+  name?: string;
+  metric?: string;
+  operator?: string;
+  threshold?: number;
+  enabled?: boolean;
+  severity?: string;
+  engine?: string | null;
+  sql_query?: string | null;
+  interval_seconds?: number;
 }
 
 export interface AlertEvent {
@@ -674,8 +709,10 @@ export const api = {
       body: JSON.stringify({ query, analyze }),
     }),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
-  createAlertRule: (data: Omit<AlertRule, "id" | "created_at">) =>
+  createAlertRule: (data: AlertRuleCreate) =>
     request<AlertRule>("/api/alerts/rules", { method: "POST", body: JSON.stringify(data) }),
+  updateAlertRule: (id: number, data: AlertRuleUpdate) =>
+    request<AlertRule>(`/api/alerts/rules/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteAlertRule: (id: number) =>
     request<void>(`/api/alerts/rules/${id}`, { method: "DELETE" }),
   getAlertEvents: () => request<AlertEvent[]>("/api/alerts/events"),

@@ -57,6 +57,7 @@ async def ensure_cluster_alert_rules(session: AsyncSession, instance_id: int) ->
                 operator=operator,
                 threshold=float(threshold),
                 enabled=True,
+                is_default=True,
             )
         )
     await session.flush()
@@ -66,6 +67,7 @@ async def evaluate_alerts(session: AsyncSession, instance_id: int, metrics: dict
     result = await session.execute(
         select(AlertRule).where(
             AlertRule.enabled.is_(True),
+            AlertRule.rule_type == "metric",
             (AlertRule.instance_id == instance_id) | (AlertRule.instance_id.is_(None)),
         )
     )
@@ -119,6 +121,7 @@ async def ensure_group_alert_rules(session: AsyncSession, group_id: int) -> None
                 operator=operator,
                 threshold=float(threshold),
                 enabled=True,
+                is_default=True,
             )
         )
     await session.flush()
@@ -126,7 +129,9 @@ async def ensure_group_alert_rules(session: AsyncSession, group_id: int) -> None
 
 async def evaluate_group_alerts(session: AsyncSession, group_id: int, metrics: dict) -> None:
     result = await session.execute(
-        select(AlertRule).where(AlertRule.enabled.is_(True), AlertRule.group_id == group_id)
+        select(AlertRule).where(
+            AlertRule.enabled.is_(True), AlertRule.rule_type == "metric", AlertRule.group_id == group_id
+        )
     )
     rules = result.scalars().all()
 

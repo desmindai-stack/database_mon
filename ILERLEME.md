@@ -218,6 +218,29 @@ kendi grubunun en yüksek öncelikli önerisiyle (varsa) eşleştiriliyor
 (nedensel değil, "aynı grubun en iyi önerisi" yaklaşıklığı — SORULAR.md).
 Öneri yoksa UI'da hiçbir şey render edilmiyor (boş kutu yok).
 
+**Faz 8 — İŞ 5: Alarm kuralları (default + custom).** `AlertRule`'a
+`rule_type` (metric/custom), `is_default`, `severity`, `engine`,
+`sql_query`, `interval_seconds`, `last_run_at` eklendi. Otomatik
+oluşturulan kurallar (`ensure_cluster_alert_rules`/`ensure_group_alert_
+rules`) artık `is_default=True` ile işaretleniyor — `DELETE
+/api/alerts/rules/{id}` bunları 400 ile reddediyor, `PATCH` sadece
+`threshold`/`enabled` alanlarına izin veriyor (başka bir alan
+gönderilirse 400). Yeni `services/custom_alert_rules.py`: özel SQL
+kuralları hedef instance/gruba bağlanıp sorguyu çalıştırıp tek bir
+sayısal değeri (`fetchval`/ilk satır ilk kolon) eşik değeriyle
+karşılaştırıyor, aşımda `AlertEvent` üretiyor. Güvenlik katmanları
+(SELECT/WITH-only + anahtar kelime kara listesi + PostgreSQL'de gerçek
+`READ ONLY` transaction + üç seviyeli zaman aşımı) ayrıntılı olarak
+SORULAR.md'de — SQL Server hedeflerinde sunucu-taraflı zorlamanın
+olmadığı bilinen bir sınırlama olarak orada işaretli. Scheduler'a sabit
+10sn'lik bir tick eklendi (`evaluate_custom_rules_tick`) — her kuralın
+kendi `interval_seconds`'ı bu tick içinde `last_run_at`'e göre
+self-servis uygulanıyor (kural başına ayrı job yok). AlertsPage yeniden
+yazıldı: özel kural ekleme formu (hedef/engine/aralık/severity/SQL),
+kural tablosunda Varsayılan/Özel rozeti, inline düzenleme (varsayılan
+kurallarda sadece eşik+aç-kapa, özel kurallarda tüm alanlar), varsayılan
+kurallarda Sil butonu gizli.
+
 ## Nasıl test edilir
 
 ### Backend

@@ -10,6 +10,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Instance
 from app.services.collection import collect_instance
+from app.services.custom_alert_rules import evaluate_custom_alert_rules
 from app.services.dashboard_snapshot import refresh_all_group_snapshots
 from app.services.settings import get_dashboard_refresh_interval
 
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 REFRESH_JOB_ID = "refresh_dashboard_snapshots"
+# Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
+# evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
+CUSTOM_RULES_TICK_SECONDS = 10
 
 
 async def collect_all_instances() -> None:
@@ -40,6 +44,14 @@ async def refresh_dashboard_snapshots() -> None:
             logger.exception("Failed refreshing dashboard group health snapshots")
 
 
+async def evaluate_custom_rules_tick() -> None:
+    async with SessionLocal() as session:
+        try:
+            await evaluate_custom_alert_rules(session)
+        except Exception:
+            logger.exception("Failed evaluating custom alert rules")
+
+
 async def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -60,6 +72,13 @@ async def start_scheduler() -> None:
         id=REFRESH_JOB_ID,
         replace_existing=True,
         next_run_time=datetime.now(),
+    )
+    scheduler.add_job(
+        evaluate_custom_rules_tick,
+        "interval",
+        seconds=CUSTOM_RULES_TICK_SECONDS,
+        id="evaluate_custom_rules",
+        replace_existing=True,
     )
     scheduler.start()
     logger.info(

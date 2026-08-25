@@ -193,10 +193,19 @@ class AlertRule(Base):
     instance_id: Mapped[int | None] = mapped_column(ForeignKey("instances.id"), nullable=True)
     group_id: Mapped[int | None] = mapped_column(ForeignKey("database_groups.id"), nullable=True)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    metric: Mapped[str] = mapped_column(String(64), nullable=False)
+    # "metric": evaluated against already-collected metrics_json (existing behavior).
+    # "custom": evaluated by running rule.sql_query live against the target (Faz 8 İŞ 5).
+    rule_type: Mapped[str] = mapped_column(String(16), default="metric", nullable=False)
+    metric: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     operator: Mapped[str] = mapped_column(String(8), nullable=False)
     threshold: Mapped[float] = mapped_column(Float, nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), default="warning", nullable=False)
+    engine: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    sql_query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    interval_seconds: Mapped[int] = mapped_column(Integer, default=60, nullable=False)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     instance: Mapped["Instance | None"] = relationship(back_populates="alert_rules")

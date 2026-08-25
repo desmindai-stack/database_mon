@@ -66,6 +66,71 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 8 — İŞ 5: Alarm kuralları (default + custom) — GÜVENLİK
+
+Özel SQL kurallarının salt-okunur çalışmasını sağlayan katmanlar
+(`services/custom_alert_rules.py`):
+
+1. **Sözdizimsel ön-denetim (`validate_readonly_sql`)** — hem kural
+   oluşturma/düzenleme anında (router) hem de her çalıştırmadan hemen
+   önce (defense in depth) uygulanıyor:
+   - Boş sorgu reddedilir.
+   - Sorgu gövdesinde `;` varsa reddedilir (çoklu ifade / stacked query
+     enjeksiyonunu engellemek için — `SELECT 1; DROP TABLE x;` gibi).
+   - Sorgu `SELECT` veya `WITH` ile başlamıyorsa reddedilir.
+   - **Anahtar kelime kara listesi tüm sorgu gövdesinde taranıyor**
+     (sadece baştan değil): `INSERT, UPDATE, DELETE, MERGE, EXEC,
+     EXECUTE, DROP, ALTER, CREATE, TRUNCATE, GRANT, REVOKE, CALL,
+     VACUUM, COPY`. Bunun nedeni: PostgreSQL'de veri değiştiren CTE'ler
+     (`WITH x AS (DELETE FROM t RETURNING *) SELECT count(*) FROM x`)
+     sözdizimsel olarak `WITH` ile başlayan geçerli bir SELECT'tir ama
+     veri siler — salt "SELECT/WITH ile başlıyor mu" kontrolü bunu
+     YAKALAYAMAZDI, bu yüzden anahtar kelime taraması eklendi.
+2. **Gerçek salt-okunur transaction (sadece PostgreSQL hedeflerinde):**
+   `asyncpg`'nin `connection.transaction(readonly=True)`'ı gerçek bir
+   `START TRANSACTION READ ONLY` başlatıyor — PostgreSQL bu transaction
+   içinde HERHANGİ bir yazma girişimini (madde 1'in kaçırdığı bir şey
+   olsa bile) kendisi reddeder. Bu asıl güvenlik sınırı; regex sadece
+   "erken ve anlaşılır hata mesajı" katmanı.
+3. **Zaman aşımı, üç seviyeli:** PostgreSQL'de bağlantı açılırken
+   `SET statement_timeout = '10s'` (gerçek sunucu-taraflı iptal) +
+   `asyncpg.fetchval(..., timeout=10)` (istemci taraflı iptal) +
+   dıştan `asyncio.wait_for(..., timeout=15)` (her ihtimale karşı genel
+   güvenlik ağı, bağlantı kapanınca sunucudaki sorgu da iptal olur).
+4. **SQL Server hedeflerinde madde 2 YOK — bilinen sınırlama:** T-SQL'de
+   ad-hoc bir oturum için "bu transaction'da hiçbir yazma kabul etme"
+   diyen, PostgreSQL'in `READ ONLY` transaction'ına denk bir birincil
+   mekanizma yok (Always On okunabilir secondary'ler için
+   `ApplicationIntent=ReadOnly` var ama primary'ye karşı hiçbir şeyi
+   engellemez). Bu yüzden SQL Server hedeflerinde asıl savunma madde
+   1'deki sözdizimsel + anahtar kelime denetimi — gerçek sunucu-taraflı
+   zorlama yok. Eğer bu ciddi bir tehdit modeliyse, önerilen çözüm: DBA
+   özel kural sorguları için ayrı, gerçekten salt-okunur bir SQL Server
+   login/rolü (`db_datareader` + `DENY INSERT/UPDATE/DELETE`)
+   yapılandırıp o kimlik bilgilerini kullanmalı — bu app seviyesinde
+   zorlanamaz, altyapı/DBA sorumluluğunda.
+- **Hedef instance/grup çözümleme (grup kuralları için):** Bir grup
+  hedefli özel kural, gruptaki `role_hint == "primary"` düğümün bağlı
+  Instance'ını kullanır (yoksa ilk düğüm) — `parameter_audit.py`/
+  `alwayson_health.py`'deki `_select_target_node` deseniyle aynı.
+  Düğümün bağlı bir Instance'ı yoksa kural o turda sessizce atlanır
+  (loglanır), hata AlertEvent üretmez.
+- **Her kuralın kendi `interval_seconds`'ı, tek bir sabit scheduler
+  tick'i (10sn) üzerinden self-servis işleniyor:** N kural için N ayrı
+  APScheduler job'ı açmak yerine, tek bir job her 10 saniyede tüm
+  enabled custom kuralları tarayıp `last_run_at`'i kendi
+  `interval_seconds`'ından eskiyse çalıştırıyor. En kısa desteklenen
+  aralık (10sn) bu yüzden tick periyoduyla aynı seçildi — daha kısa bir
+  aralık isteği pratikte 10sn'de bir çalışır.
+- **`metric` kolonu NOT NULL kalmaya devam ediyor, custom kurallarda
+  `""` saklanıyor:** SQLite `ALTER TABLE ... ADD COLUMN` ile var olan
+  bir NOT NULL kısıtını gevşetemediği için (Faz 6'da aynı sorun
+  `alert_events.instance_id` için yaşanmıştı — o zaman kullanıcı
+  DB dosyasını silmek zorunda kalmıştı), bu kez modeli hiç
+  `nullable`'a çevirmedim; custom kurallar `metric=""` ile geliyor
+  (kullanılmıyor). Supabase migration'ı da aynı şekli koruyor (tutarlılık
+  için, orada gevşetmek teknik olarak mümkün olsa da).
+
 ## Faz 8 — İŞ 4: Dashboard düzeni
 
 - **Eski Instance-tabanlı blok tamamen kaldırıldı (birleştirilmedi):**

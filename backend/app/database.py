@@ -58,6 +58,19 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "database_groups", "cluster_name", "cluster_name VARCHAR(128)")
         await _sqlite_add_column_if_missing(conn, "database_groups", "vip_address", "vip_address VARCHAR(128)")
         await _sqlite_add_column_if_missing(
+            conn, "alert_rules", "rule_type", "rule_type VARCHAR(16) DEFAULT 'metric'"
+        )
+        await _sqlite_add_column_if_missing(conn, "alert_rules", "is_default", "is_default BOOLEAN DEFAULT 0")
+        await _sqlite_add_column_if_missing(
+            conn, "alert_rules", "severity", "severity VARCHAR(16) DEFAULT 'warning'"
+        )
+        await _sqlite_add_column_if_missing(conn, "alert_rules", "engine", "engine VARCHAR(32)")
+        await _sqlite_add_column_if_missing(conn, "alert_rules", "sql_query", "sql_query TEXT")
+        await _sqlite_add_column_if_missing(
+            conn, "alert_rules", "interval_seconds", "interval_seconds INTEGER DEFAULT 60"
+        )
+        await _sqlite_add_column_if_missing(conn, "alert_rules", "last_run_at", "last_run_at DATETIME")
+        await _sqlite_add_column_if_missing(
             conn, "metric_samples", "metrics_json", "metrics_json JSON"
         )
         await _sqlite_add_column_if_missing(conn, "slow_query_samples", "shared_blks_hit", "shared_blks_hit INTEGER")
