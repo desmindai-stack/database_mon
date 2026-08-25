@@ -66,6 +66,44 @@ makul bir varsayımla devam ettim.
   bir müşteriye göre filtreleme eklemedim; `top_issues`'daki `customer`
   sütununu sadece `isPrivateGroups` iken DashboardPage'de render etmiyorum.
 
+## Faz 8 — İŞ 4: Dashboard düzeni
+
+- **Eski Instance-tabanlı blok tamamen kaldırıldı (birleştirilmedi):**
+  Karar: stat kartları (Toplam instance/Aktif bağlantı/Healthy/Alerting/
+  Warning/Açık tahmin) üstteki yeni grup-bazlı sağlık sayaçlarıyla
+  kavramsal olarak çakışıyordu ("neyin dikkat istediği" sinyali iki kez
+  veriliyordu). Filtrelenebilir per-instance tablosunun satırları
+  (bağlantı sayısı, cache hit, TPS, I/O, temp, DB boyutu gibi ham metrik
+  değerleri) gerçekten üst özette YOK ve benzersizdi — ama Faz 8 İŞ 1'den
+  beri her instance zaten sol menü ağacından (Grup → Düğüm → Instance) ve
+  Group Detail'deki düğüm kartından erişilebilir; hiçbir instance sayfası
+  artık ulaşılamaz durumda değil. Bu yüzden "üst özete birleştir"
+  yerine, Faz 7'nin "status-first" tasarım yönünü tamamlayarak tamamen
+  kaldırmayı seçtim — ham metrik tablosunu üst özetin içine sıkıştırmak
+  o özeti yeniden eski karmaşık haline döndürürdü. Predictions/Alerts
+  sayaçları zaten kendi özel sayfalarında (`/predictions`, `/alerts`)
+  mevcut, ayrıca yinelenmedi.
+- **Sıralama önceliği değişti (bu bir önceki Faz 7 kararının üzerine
+  yazıyor):** Faz 7'de `top_issues` `(environment, severity)` sırasına
+  göre dizilmişti (prod birincil, severity ikincil) — bu istek açıkça
+  "kritik önce, sonra uyarı, PROD ortam öncelikli" dedi, yani severity
+  şimdi birincil, environment sadece aynı severity içinde eşit
+  durumları ayırt eden ikincil anahtar. `_issue_sort_key` bu yüzden
+  `(severity_rank, env_rank)` oldu.
+- **Sorun→öneri eşleşmesi sebep-sonuç değil, "aynı grubun en önemli
+  önerisi":** dbace'de bir "sorun" (cluster health'ten: split-brain, node
+  down, vb.) ile bir "öneri" (parameter_audit/index_advisor/
+  performance_insights'tan) arasında gerçek bir nedensel bağlantı yok —
+  farklı, birbirinden habersiz tanı alt sistemlerinden geliyorlar. İstek
+  "ilgili çözüm önerisi" dediği için elimdeki en yakın yaklaşıklık:
+  sorunun ait olduğu grubun en yüksek öncelikli (aynı severity/env
+  sıralamasıyla) önerisini o satıra iliştirmek. Bu, bazen konusu
+  alakasız görünebilir (ör. "split-brain" sorununun yanında
+  "shared_buffers çok düşük" önerisi çıkabilir) — ama spesifikasyonun
+  istediği "öneri yoksa boş kutu koyma" davranışı tam olarak uygulanıyor
+  (grubun hiç önerisi yoksa `recommendation: null`, UI hiçbir şey
+  render etmiyor).
+
 ## Faz 8 — İŞ 3: Otomatik yenileme aralığı
 
 - **Ayar global/paylaşımlı, kullanıcı-bazlı değil:** dbace'de bir

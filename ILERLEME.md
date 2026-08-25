@@ -204,6 +204,20 @@ DashboardPage'e açılır liste eklendi; seçim hem backend'e yazılıyor hem
 de sayfanın kendi otomatik yenilemesi (sadece ucuz `GET /summary`
 önbellek okuması, canlı prob değil) o aralığa göre çalışıyor.
 
+**Faz 8 — İŞ 4: Dashboard düzeni.** Alttaki eski Instance-tabanlı blok
+("Instance bazlı görünüm" — stat kartları + filtrelenebilir per-instance
+tablo) **kaldırıldı** (birleştirilmedi) — gerekçe: stat kartları üstteki
+grup-bazlı sağlık sayaçlarıyla çakışıyordu, tablo satırlarının benzersiz
+içeriği (ham metrik değerleri) artık her instance sol menü ağacından ve
+Group Detail'den erişilebilir olduğu için kaybolmuyor (Faz 8 İŞ 1). Detay
+ve gerekçe SORULAR.md'de. `top_issues` sıralaması artık severity birincil
+(kritik→uyarı), environment sadece aynı severity içinde ikincil anahtar
+(prod öne) — Faz 7'deki tersini kırıyor, bilinçli bir değişiklik.
+`DashboardIssueOut`'a `recommendation` alanı eklendi: her sorun,
+kendi grubunun en yüksek öncelikli önerisiyle (varsa) eşleştiriliyor
+(nedensel değil, "aynı grubun en iyi önerisi" yaklaşıklığı — SORULAR.md).
+Öneri yoksa UI'da hiçbir şey render edilmiyor (boş kutu yok).
+
 ## Nasıl test edilir
 
 ### Backend

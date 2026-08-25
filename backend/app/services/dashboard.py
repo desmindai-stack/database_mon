@@ -13,7 +13,9 @@ _SEVERITY_RANK = {"critical": 0, "high": 1, "warning": 2, "medium": 3, "low": 4,
 
 
 def _issue_sort_key(issue: dict[str, Any]) -> tuple[int, int]:
-    return (_ENV_RANK.get(issue["environment"], 9), _SEVERITY_RANK.get(issue["severity"], 9))
+    # Severity first (critical before warning) so the worst problems are always on top,
+    # regardless of environment; prod only breaks ties within the same severity.
+    return (_SEVERITY_RANK.get(issue["severity"], 9), _ENV_RANK.get(issue["environment"], 9))
 
 
 def _rec_sort_key(rec: dict[str, Any]) -> tuple[int, int]:
@@ -41,6 +43,7 @@ def _issue(ctx: dict[str, Any], severity: str, message: str) -> dict[str, Any]:
         "environment": group.environment,
         "message": message,
         "link_hint": f"/groups/{group.id}",
+        "_group_id": group.id,
     }
 
 
@@ -93,6 +96,7 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
     health_counts = {"critical": 0, "warning": 0, "healthy": 0, "unknown": 0}
     all_issues: list[dict[str, Any]] = []
     all_recommendations: list[dict[str, Any]] = []
+    recs_by_group: dict[int, list[dict[str, Any]]] = {}
     checked_ats: list[datetime] = []
 
     for group_id, ctx in context_by_group.items():
@@ -106,11 +110,32 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
         if snapshot.report_json:
             all_issues.extend(_issues_from_group_health(ctx, snapshot.report_json))
 
+        group_recs = []
         for rec in snapshot.recommendations_json or []:
-            all_recommendations.append({**rec, "_environment": ctx["group"].environment})
+            enriched = {**rec, "_environment": ctx["group"].environment}
+            all_recommendations.append(enriched)
+            group_recs.append(enriched)
+        group_recs.sort(key=_rec_sort_key)
+        recs_by_group[group_id] = group_recs
 
     all_issues.sort(key=_issue_sort_key)
     all_recommendations.sort(key=_rec_sort_key)
+
+    # Attach each issue's own group's best (highest-severity) recommendation, if it has one —
+    # dbace has no causal link between a specific issue and a specific recommendation (they
+    # come from independent diagnostic subsystems: cluster health vs. parameter audit vs.
+    # performance insights/index advisor), so "the group's top recommendation" is the closest
+    # available approximation of "the fix for this row" (see SORULAR.md).
+    for issue in all_issues:
+        group_id = issue.pop("_group_id", None)
+        best = recs_by_group.get(group_id) or []
+        if best:
+            rec = dict(best[0])
+            rec.pop("_environment", None)
+            issue["recommendation"] = rec
+        else:
+            issue["recommendation"] = None
+
     for rec in all_recommendations:
         rec.pop("_environment", None)
 

@@ -382,6 +382,13 @@ class DashboardHealthOut(BaseModel):
     unknown: int = 0
 
 
+class DashboardRecommendationOut(BaseModel):
+    severity: str
+    source: str
+    group: str
+    message: str
+
+
 class DashboardIssueOut(BaseModel):
     severity: str
     customer: str
@@ -390,13 +397,7 @@ class DashboardIssueOut(BaseModel):
     environment: str
     message: str
     link_hint: str
-
-
-class DashboardRecommendationOut(BaseModel):
-    severity: str
-    source: str
-    group: str
-    message: str
+    recommendation: DashboardRecommendationOut | None = None
 
 
 class DashboardSummaryOut(BaseModel):

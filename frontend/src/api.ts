@@ -585,6 +585,13 @@ export interface DashboardHealth {
   unknown: number;
 }
 
+export interface DashboardRecommendation {
+  severity: string;
+  source: string;
+  group: string;
+  message: string;
+}
+
 export interface DashboardIssue {
   severity: string;
   customer: string;
@@ -593,13 +600,7 @@ export interface DashboardIssue {
   environment: GroupEnvironment;
   message: string;
   link_hint: string;
-}
-
-export interface DashboardRecommendation {
-  severity: string;
-  source: string;
-  group: string;
-  message: string;
+  recommendation: DashboardRecommendation | null;
 }
 
 export interface DashboardSummary {
