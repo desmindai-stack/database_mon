@@ -71,6 +71,9 @@ function customerNode(c: Customer): NavTreeNode {
   return {
     id: `customer-${c.id}`,
     name: c.name,
+    // Clicking the name itself now goes straight to this customer's Uygulamalar page (İŞ 3) —
+    // the separate toggle arrow still expands the tree to browse servers/apps/groups/nodes.
+    href: `/customers/${c.id}/applications`,
     // Always has at least the "Sunucular" entry, so the generic empty-branch fallback
     // (emptyHref/emptyLabel) never kicks in here — add the "+ Uygulama ekle" leaf explicitly
     // when there are no applications yet, instead.
@@ -174,13 +177,16 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
   }, [isPrivate, privateCustomerId]);
 
   const label = isPrivate ? "Uygulamalar" : "Müşteriler";
+  // Private mode: root links straight to the one tenant's Uygulamalar list/manage page.
+  // Public mode: root links straight to the Müşteriler list/add page.
+  const rootHref = isPrivate ? (privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : null) : "/customers";
   const isActiveRoot =
     activePath.startsWith("/customers") ||
     activePath.startsWith("/applications") ||
     activePath.startsWith("/groups") ||
     activePath.startsWith("/instances/");
 
-  const toggleRoot = async () => {
+  const loadRoots = async () => {
     if (!isOpen && roots === null) {
       setLoadingRoots(true);
       try {
@@ -204,13 +210,16 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
 
   return (
     <div className="nav-group">
-      <button
-        className={`nav-link nav-tree-root${isActiveRoot ? " active" : ""}${isOpen ? " open" : ""}`}
-        onClick={toggleRoot}
-      >
-        <span>{label}</span>
-        <span className="nav-tree-chevron">{isOpen ? "▾" : "▸"}</span>
-      </button>
+      <div className={`nav-link nav-tree-root${isActiveRoot ? " active" : ""}${isOpen ? " open" : ""}`}>
+        {rootHref ? (
+          <Link to={rootHref} className="nav-tree-root-label">{label}</Link>
+        ) : (
+          <span className="nav-tree-root-label">{label}</span>
+        )}
+        <button className="nav-tree-chevron-btn" onClick={loadRoots} title={isOpen ? "Daralt" : "Genişlet"}>
+          <span className="nav-tree-chevron">{isOpen ? "▾" : "▸"}</span>
+        </button>
+      </div>
       {isOpen && (
         <div className="nav-tree">
           {loadingRoots && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
@@ -234,17 +243,32 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
 export default function App() {
   const [isPrivate, setIsPrivate] = useState(false);
   const [privateCustomerId, setPrivateCustomerId] = useState<number | null>(null);
+  // "Selected" customer for the always-visible "Uygulamalar" sidebar link (İŞ 3): in private
+  // mode this is just the one tenant customer; in public mode it tracks whichever customer the
+  // user last visited (derived from the URL), so the link stays meaningful without requiring
+  // the tree to be expanded first.
+  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
+  const location = useLocation();
 
   useEffect(() => {
     api.getConfig().then((cfg) => {
       setIsPrivate(cfg.deployment_mode === "private");
       if (cfg.deployment_mode === "private") {
         api.getCustomers().then((all: Customer[]) => {
-          if (all.length > 0) setPrivateCustomerId(all[0].id);
+          if (all.length > 0) {
+            setPrivateCustomerId(all[0].id);
+            setSelectedCustomerId(all[0].id);
+          }
         }).catch(() => undefined);
       }
     }).catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (isPrivate) return;
+    const match = location.pathname.match(/^\/customers\/(\d+)/);
+    if (match) setSelectedCustomerId(Number(match[1]));
+  }, [location.pathname, isPrivate]);
 
   return (
     <div className="app-shell">
@@ -261,6 +285,17 @@ export default function App() {
             Dashboard
           </NavLink>
           <MainNavTree isPrivate={isPrivate} privateCustomerId={privateCustomerId} />
+          {/* Private mode's tree root already links straight to the one tenant's Uygulamalar
+              page (see MainNavTree) — this fixed link only adds value in public mode, where the
+              root links to Müşteriler instead and "which customer" varies by what's selected. */}
+          {!isPrivate && (
+            <NavLink
+              to={selectedCustomerId != null ? `/customers/${selectedCustomerId}/applications` : "/customers"}
+              className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+            >
+              Uygulamalar
+            </NavLink>
+          )}
           {isPrivate && privateCustomerId != null && (
             <NavLink
               to={`/customers/${privateCustomerId}/servers`}
