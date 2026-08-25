@@ -68,25 +68,55 @@ class DatabaseGroup(Base):
     instances: Mapped[list["Instance"]] = relationship(back_populates="group")
 
 
+class Server(Base):
+    """A physical/VM host. Linux+PostgreSQL: one service per server, so effectively 1
+    server = 1 Node. Windows+SQL Server: a box can run several named instances (Nodes),
+    each potentially in a different Always On group — hence Server and Node are split.
+    Service/OS/log access all come from the Server (one host-agent per machine, serving
+    every instance on it)."""
+
+    __tablename__ = "servers"
+    __table_args__ = (UniqueConstraint("customer_id", "name", name="uq_server_customer_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    os: Mapped[str] = mapped_column(String(16), default="linux", nullable=False)
+    site: Mapped[str] = mapped_column(String(16), default="primary", nullable=False)
+    agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    agent_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    customer: Mapped["Customer"] = relationship()
+    nodes: Mapped[list["Node"]] = relationship(back_populates="server")
+
+
 class Node(Base):
+    """One database instance/service — on Linux this is effectively "the server", on
+    Windows it's one named SQL Server instance among possibly several on the same Server.
+    Group (cluster) membership lives here, at the instance level, so two instances on the
+    same physical server can belong to two different Always On groups."""
+
     __tablename__ = "nodes"
     __table_args__ = (UniqueConstraint("group_id", "name", name="uq_node_group_name"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    server_id: Mapped[int | None] = mapped_column(ForeignKey("servers.id"), nullable=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("database_groups.id"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
-    host: Mapped[str] = mapped_column(String(255), nullable=False)
+    # SQL Server named instance (e.g. "MSSQLSERVER" for default, or a custom name) — not
+    # meaningful for PostgreSQL, where a server only ever runs one instance.
+    instance_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     port: Mapped[int] = mapped_column(Integer, nullable=False)
-    site: Mapped[str] = mapped_column(String(16), default="primary", nullable=False)
     role_hint: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
-    agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    agent_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     options: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     instance_id: Mapped[int | None] = mapped_column(ForeignKey("instances.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     group: Mapped["DatabaseGroup"] = relationship(back_populates="nodes")
     instance: Mapped["Instance | None"] = relationship(foreign_keys=[instance_id])
+    server: Mapped["Server | None"] = relationship(back_populates="nodes")
 
 
 class Instance(Base):

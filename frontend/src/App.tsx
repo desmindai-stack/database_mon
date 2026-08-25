@@ -10,6 +10,7 @@ import GroupDetailPage from "./pages/GroupDetailPage";
 import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import PredictionsPage from "./pages/PredictionsPage";
+import ServersPage from "./pages/ServersPage";
 
 // Real navigation tree: Customer → Application → DatabaseGroup → Node (public mode) or
 // Application → DatabaseGroup → Node (private mode, customer level skipped since there's
@@ -30,11 +31,12 @@ type NavTreeNode = {
 };
 
 function nodeLeaf(n: DbNode): NavTreeNode {
+  const meta = [n.instance_name, n.role_hint !== "unknown" ? n.role_hint : null].filter(Boolean).join(" · ");
   return {
     id: `node-${n.id}`,
     name: n.name,
     href: n.instance_id != null ? `/instances/${n.instance_id}` : undefined,
-    meta: n.role_hint !== "unknown" ? n.role_hint : undefined,
+    meta: meta || undefined,
   };
 }
 
@@ -61,13 +63,24 @@ function applicationNode(a: Application): NavTreeNode {
   };
 }
 
+function serversNode(customerId: number): NavTreeNode {
+  return { id: `servers-${customerId}`, name: "📁 Sunucular", href: `/customers/${customerId}/servers` };
+}
+
 function customerNode(c: Customer): NavTreeNode {
   return {
     id: `customer-${c.id}`,
     name: c.name,
-    loadChildren: () => api.getApplications(c.id).then((apps) => apps.map(applicationNode)),
-    emptyHref: `/customers/${c.id}/applications`,
-    emptyLabel: "+ Uygulama ekle",
+    // Always has at least the "Sunucular" entry, so the generic empty-branch fallback
+    // (emptyHref/emptyLabel) never kicks in here — add the "+ Uygulama ekle" leaf explicitly
+    // when there are no applications yet, instead.
+    loadChildren: () =>
+      api.getApplications(c.id).then((apps) => [
+        serversNode(c.id),
+        ...(apps.length === 0
+          ? [{ id: `customer-${c.id}-add-app`, name: "+ Uygulama ekle", href: `/customers/${c.id}/applications` }]
+          : apps.map(applicationNode)),
+      ]),
   };
 }
 
@@ -243,6 +256,14 @@ export default function App() {
             Dashboard
           </NavLink>
           <MainNavTree isPrivate={isPrivate} privateCustomerId={privateCustomerId} />
+          {isPrivate && privateCustomerId != null && (
+            <NavLink
+              to={`/customers/${privateCustomerId}/servers`}
+              className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+            >
+              Sunucular
+            </NavLink>
+          )}
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances
           </NavLink>
@@ -263,6 +284,7 @@ export default function App() {
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/customers/:customerId/applications" element={<ApplicationsPage />} />
+          <Route path="/customers/:customerId/servers" element={<ServersPage />} />
           <Route path="/applications/:applicationId/groups" element={<DatabaseGroupsPage />} />
           <Route path="/groups/:groupId" element={<GroupDetailPage />} />
         </Routes>

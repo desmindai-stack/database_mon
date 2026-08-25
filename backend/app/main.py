@@ -19,6 +19,7 @@ from app.routers import (
     nodes,
     predictions,
     queries,
+    servers,
 )
 from app.schemas import ConfigOut, HealthResponse
 from app.services.bootstrap import ensure_default_customer
@@ -57,6 +58,7 @@ app.include_router(customers.router, prefix="/api")
 app.include_router(applications.router, prefix="/api")
 app.include_router(database_groups.router, prefix="/api")
 app.include_router(nodes.router, prefix="/api")
+app.include_router(servers.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 
 

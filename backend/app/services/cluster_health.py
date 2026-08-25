@@ -26,13 +26,10 @@ DEFAULT_OPTIONS = {
     "agent_token": None,
 }
 
-UNIT_MAP = {
-    "etcd": "etcd",
-    "patroni": "patroni",
-    "postgresql": "postgresql",
-    "keepalived": "keepalived",
-    "haproxy": "haproxy",
-}
+# Engine -> the single service name used for a plain "is the DB port reachable" check
+# (standalone topology, or as the base connectivity signal generally). Getting this right
+# matters: a SQL Server node reported as "postgresql: down" is misleading, not just cosmetic.
+_ENGINE_SERVICE_NAME = {"postgresql": "postgresql", "sqlserver": "sqlserver", "mongodb": "mongodb"}
 
 
 def _opts(instance: Instance) -> dict[str, Any]:
@@ -127,6 +124,29 @@ async def probe_postgresql_host(host: str, port: int, timeout: float) -> dict[st
 
 async def probe_postgresql(instance: Instance, timeout: float) -> dict[str, Any]:
     return await probe_postgresql_host(instance.host, instance.port, timeout)
+
+
+async def probe_sqlserver_host(host: str, port: int, timeout: float) -> dict[str, Any]:
+    ok, latency, err = await _tcp_reachable(host, port, timeout)
+    if ok:
+        return _result("sqlserver", "up", latency_ms=latency, detail=f"TCP {host}:{port} open")
+    return _result("sqlserver", "down", latency_ms=latency, detail=err or "unreachable")
+
+
+async def probe_alwayson_host(host: str, port: int, timeout: float) -> dict[str, Any]:
+    """Lightweight reachability signal only — full AG sync-state/role detail comes from the
+    DMV-based GET /groups/{id}/alwayson endpoint, not this generic multi-node probe."""
+    ok, latency, err = await _tcp_reachable(host, port, timeout)
+    if ok:
+        return _result("alwayson", "up", latency_ms=latency, detail=f"AG replica endpoint {host}:{port} açık")
+    return _result("alwayson", "down", latency_ms=latency, detail=err or "unreachable")
+
+
+async def probe_windows_cluster_host(timeout: float) -> dict[str, Any]:
+    """No native WSFC (Windows Server Failover Clustering) probing without a host agent —
+    merge_agent_into_services() will override this if the node's server has one configured
+    and it reports a "windows_cluster" service key."""
+    return _result("windows_cluster", "skipped", detail="Windows cluster durumu için host agent gerekli")
 
 
 async def probe_patroni_host(
@@ -532,37 +552,68 @@ def _node_opts(node: Node) -> dict[str, Any]:
 
 
 def _node_services(group: DatabaseGroup, node: Node) -> set[str]:
+    """Which services to probe for one node — engine- and topology-aware.
+
+    - topology=patroni (always engine=postgresql): full Patroni/etcd/keepalived/haproxy stack.
+    - topology=alwayson (always engine=sqlserver): SQL Server + Always On + Windows cluster —
+      never the Postgres stack.
+    - topology=standalone: no "cluster service" stack at all, just a single engine-correct
+      connectivity check (this used to always be a literal "postgresql" TCP probe regardless
+      of engine — the root cause of a SQL Server standalone group reporting "PostgreSQL down").
+    """
     raw = node.options or {}
     override = raw.get("services")
     if override:
         return set(override)
     if group.topology == "patroni":
         return {"etcd", "patroni", "postgresql", "keepalived", "haproxy"}
-    # standalone / alwayson: just confirm the database port itself is reachable.
-    return {"postgresql"}
+    if group.topology == "alwayson":
+        return {"sqlserver", "alwayson", "windows_cluster"}
+    return {_ENGINE_SERVICE_NAME.get(group.engine, group.engine)}
 
 
 async def probe_node(group: DatabaseGroup, node: Node, timeout_default: float) -> dict[str, Any]:
-    """Probe every enabled service for one Node, plus its optional host-agent snapshot."""
+    """Probe every enabled service for one Node, plus its Server's optional host-agent
+    snapshot. Host/site/agent connection info all come from node.server now (Faz 8 test turu
+    İŞ 1) — a node without a server assigned is reported as unknown rather than crashing."""
+    server = node.server
     opts = _node_opts(node)
     timeout = float(opts.get("probe_timeout_sec") or timeout_default)
+
+    if server is None:
+        return {
+            "node_id": node.id,
+            "node_name": node.name,
+            "site": "primary",
+            "role_hint": node.role_hint,
+            "services": [_result("server", "unknown", detail="Düğüme bağlı bir sunucu yok")],
+            "cluster_summary": None,
+            "agent": {"configured": False, "reachable": False, "url": None},
+        }
+
     enabled = _node_services(group, node)
 
     tasks: dict[str, Any] = {}
     if "postgresql" in enabled:
-        tasks["postgresql"] = asyncio.create_task(probe_postgresql_host(node.host, node.port, timeout))
+        tasks["postgresql"] = asyncio.create_task(probe_postgresql_host(server.host, node.port, timeout))
+    if "sqlserver" in enabled:
+        tasks["sqlserver"] = asyncio.create_task(probe_sqlserver_host(server.host, node.port, timeout))
+    if "alwayson" in enabled:
+        tasks["alwayson"] = asyncio.create_task(probe_alwayson_host(server.host, node.port, timeout))
+    if "windows_cluster" in enabled:
+        tasks["windows_cluster"] = asyncio.create_task(probe_windows_cluster_host(timeout))
     if "patroni" in enabled:
-        tasks["patroni"] = asyncio.create_task(probe_patroni_host(node.host, opts, timeout))
+        tasks["patroni"] = asyncio.create_task(probe_patroni_host(server.host, opts, timeout))
     if "etcd" in enabled:
-        tasks["etcd"] = asyncio.create_task(probe_etcd_host(node.host, opts, timeout))
+        tasks["etcd"] = asyncio.create_task(probe_etcd_host(server.host, opts, timeout))
     if "haproxy" in enabled:
-        tasks["haproxy"] = asyncio.create_task(probe_haproxy_host(node.host, opts, timeout))
+        tasks["haproxy"] = asyncio.create_task(probe_haproxy_host(server.host, opts, timeout))
     if "keepalived" in enabled:
         tasks["keepalived"] = asyncio.create_task(
             probe_keepalived_host(opts.get("keepalived_vip"), node.port, timeout)
         )
 
-    agent_opts = {"agent_url": node.agent_url, "agent_token": node.agent_token}
+    agent_opts = {"agent_url": server.agent_url, "agent_token": server.agent_token}
     agent_task = asyncio.create_task(fetch_agent_snapshot(agent_opts, timeout))
 
     results: list[dict[str, Any]] = []
@@ -578,7 +629,10 @@ async def probe_node(group: DatabaseGroup, node: Node, timeout_default: float) -
         except Exception as exc:
             results.append(_result(name, "unknown", detail=str(exc)))
 
-    order = {"patroni": 0, "etcd": 1, "postgresql": 2, "keepalived": 3, "haproxy": 4}
+    order = {
+        "patroni": 0, "etcd": 1, "postgresql": 2, "keepalived": 3, "haproxy": 4,
+        "alwayson": 0, "windows_cluster": 1, "sqlserver": 2,
+    }
     results.sort(key=lambda r: order.get(r["service"], 99))
 
     agent = None
@@ -591,20 +645,22 @@ async def probe_node(group: DatabaseGroup, node: Node, timeout_default: float) -
     return {
         "node_id": node.id,
         "node_name": node.name,
-        "site": node.site,
+        "site": server.site,
         "role_hint": node.role_hint,
         "services": results,
         "cluster_summary": cluster_summary,
         "agent": {
-            "configured": bool(node.agent_url),
+            "configured": bool(server.agent_url),
             "reachable": bool(agent and agent.get("agent_ok")),
-            "url": node.agent_url,
+            "url": server.agent_url,
         },
     }
 
 
 async def collect_group_health(group: DatabaseGroup, nodes: list[Node]) -> dict[str, Any]:
-    """Multi-node health for a DatabaseGroup: per-node probes + etcd quorum + split-brain detection."""
+    """Multi-node health for a DatabaseGroup: per-node probes + etcd quorum + split-brain
+    detection. etcd/keepalived-based checks naturally no-op for non-Patroni groups since
+    _node_services() never includes those services outside topology=patroni."""
     timeout_default = 3.0
     node_reports = list(await asyncio.gather(*(probe_node(group, node, timeout_default) for node in nodes)))
 
@@ -631,10 +687,14 @@ async def collect_group_health(group: DatabaseGroup, nodes: list[Node]) -> dict[
     ]
     split_brain = len(vip_owner_nodes) > 1
 
+    # The "is this node down" service depends on the group's engine — used to always be a
+    # hardcoded "postgresql" check, which silently never matched (and so never flagged a down
+    # node) for sqlserver/mongodb groups.
+    primary_service = _ENGINE_SERVICE_NAME.get(group.engine, group.engine)
     down_nodes = [
         {"node_name": r["node_name"], "site": r["site"]}
         for r in node_reports
-        if any(s["service"] == "postgresql" and s["status"] == "down" for s in r["services"])
+        if any(s["service"] == primary_service and s["status"] == "down" for s in r["services"])
     ]
 
     up = sum(1 for r in node_reports for s in r["services"] if s["status"] == "up")

@@ -3,6 +3,71 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 9 — İŞ 1: Server modeli (+ İŞ 3'ün engine-aware probe düzeltmesi)
+
+İŞ 1 ve İŞ 3 aynı dosyada (`cluster_health.py`) kesişiyordu — `probe_node()`
+zaten `node.server`'a taşınması gerektiğinden (İŞ 1), aynı anda hangi
+servislerin prob'lanacağını da engine/topology'ye göre düzeltmek (İŞ 3)
+doğal geldi; ikisini tek bir yeniden yazımda birleştirdim. Bu yüzden asıl
+"PostgreSQL down" düzeltmesi bu commit'te — İŞ 3'ün kendi commit'i sadece
+doğrulama/dokümantasyon içeriyor, kod tekrar yazılmadı.
+
+- **`Node.server_id` nullable kaldı (NOT NULL yapılamadı):** SQLite `ALTER
+  TABLE ADD COLUMN` yeni bir NOT NULL kısıtı (varsayılansız) ekleyemiyor;
+  model `int | None` tanımlıyor ama uygulama kodu (router) her zaman
+  zorunlu kılıyor (`NodeCreate.server_id: int`, opsiyonel değil). Aynı
+  desen daha önce de kullanıldı (bkz. Instance.group_id).
+- **Geriye dönük uyumluluk gerçek bir veri migrasyonu ile yapıldı (DB
+  silme istenmedi):** Var olan `nodes.host/site/agent_url/agent_token`
+  sütunları için `database.py::_migrate_nodes_to_server_model()` her
+  (customer, host) çifti için bir Server satırı oluşturup düğümleri ona
+  bağlıyor, sonra eski sütunları SQLite'ın (3.35+) desteklediği `ALTER
+  TABLE ... DROP COLUMN` ile siliyor — bu, önceki fazlarda (Faz 6, Faz 8
+  alert_rules.metric) SQLite'ın NOT NULL/tip kısıtı gevşetememesi
+  yüzünden kullanıcıdan DB dosyasını silmesinin istendiği durumların
+  aksine, gerçek bir kod-tarafı migrasyon. Supabase migration'ı da eşdeğer
+  bir backfill + DROP COLUMN içeriyor (`DO $$ ... $$` bloğu, idempotent).
+  Migrasyon başarısız olursa (ör. çok eski bir SQLite sürümü DROP
+  COLUMN'u desteklemiyorsa) hata loglanıp yutuluyor — açılış çökmüyor,
+  ama o durumda düğümler `server_id=NULL` kalır ve elle düzeltme
+  gerekebilir; bu ortamda (Python 3.14 bundled SQLite) sorunsuz çalıştı.
+- **`Node.agent_token` artık `Server.agent_token`'da — hâlâ düz metin:**
+  Aynı kapsam-dışı karar (Faz 3/6'da not düşüldü) burada da geçerli;
+  host-agent paylaşımlı sırrı bir DB kimlik bilgisi değil, bu istekte de
+  adı geçmedi.
+- **`NodeOut.host`/`site` salt-okunur, türetilmiş alanlar:** Host/site
+  artık Node'da değil Server'da yaşadığı için API tüketicilerinin (özellikle
+  frontend'in) her düğüm için ayrı bir Server sorgusu yapmasını önlemek
+  amacıyla router bunları `node.server`'dan okuyup NodeOut'a dolduruyor —
+  `NodeCreate`/`NodeUpdate`'te bu alanlar yok (sadece `server_id` kabul
+  ediliyor), gerçek kaynak hep Server.
+- **`_node_services()` artık engine+topology bazlı:** `topology=patroni`
+  (her zaman postgresql) tam Patroni yığınını, `topology=alwayson` (her
+  zaman sqlserver) `{sqlserver, alwayson, windows_cluster}`'ı,
+  `topology=standalone` ise sadece tek bir engine-doğru servisi
+  (`postgresql`/`sqlserver`/`mongodb`) prob'luyor — hiçbiri karışmıyor.
+  `windows_cluster` servisi host-agent olmadan hiçbir şekilde
+  prob'lanamıyor (WSFC için PowerShell remoting/WMI gerekir, dbace'nin
+  bunu yapacak bir mekanizması yok) — agent yoksa her zaman "skipped"
+  döner, varsa `merge_agent_into_services()` üzerinden agent'ın raporladığı
+  değerle geçersiz kılınabilir (aynı mekanizma keepalived için zaten
+  vardı, genelleştirdim).
+  `alwayson` servisi de sadece TCP erişilebilirlik sinyali — gerçek AG
+  sync-state/role detayı zaten ayrı, DMV-tabanlı `GET /groups/{id}/
+  alwayson` endpoint'inde.
+- **`down_nodes` artık engine-doğru servise bakıyor:** Önceden hep
+  literal `"postgresql"` servisine bakıyordu — bu yüzden sqlserver/mongodb
+  gruplarında düğümler ASLA "down" olarak işaretlenmiyordu (servis adı hiç
+  eşleşmediği için sessizce boş kalıyordu), sadece SQL Server'da yanlış
+  "PostgreSQL down" mesajı değil, ayrı ve daha ciddi bir sessiz-hata idi.
+  Şimdi `_ENGINE_SERVICE_NAME[group.engine]`'e bakıyor.
+- **Windows'ta bir sunucuda birden çok named instance örneği
+  (`boa-shared-winsvr`):** `seed_demo.py`'de bu tek Windows sunucusu iki
+  ayrı Node'a ev sahipliği yapıyor (`MSSQLSERVER` @ port 1433, grup
+  `boa-sqlserver-test`; `REPORTING` @ port 1434, grup `boa-reporting` —
+  yeni eklenen küçük bir grup) — tam olarak istenen "aynı sunucu, farklı
+  gruplara üye iki instance" senaryosu.
+
 ## Faz 7 — İŞ 2: deployment mode / environment ayrımı
 
 - `GET /api/config`, `deployment_mode`/`default_customer_name` alanlarını

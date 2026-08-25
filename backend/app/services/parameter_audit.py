@@ -245,10 +245,12 @@ async def _fetch_pg_settings(node: Node) -> dict[str, dict[str, Any]]:
 
 
 async def _fetch_patroni_config(node: Node) -> dict[str, Any] | None:
+    if node.server is None:
+        return {"error": "Düğüme bağlı bir sunucu yok"}
     opts = node.options or {}
     port = int(opts.get("patroni_port") or 8008)
     scheme = "https" if opts.get("patroni_tls") else "http"
-    url = f"{scheme}://{node.host}:{port}/config"
+    url = f"{scheme}://{node.server.host}:{port}/config"
     try:
         async with httpx.AsyncClient(timeout=5, verify=False) as client:
             resp = await client.get(url)

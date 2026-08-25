@@ -149,7 +149,9 @@ async def refresh_all_group_snapshots(session: AsyncSession) -> int:
     if not groups:
         return 0
 
-    all_nodes = (await session.execute(select(Node).options(selectinload(Node.instance)))).scalars().all()
+    all_nodes = (
+        await session.execute(select(Node).options(selectinload(Node.instance), selectinload(Node.server)))
+    ).scalars().all()
     nodes_by_group: dict[int, list[Node]] = {}
     for node in all_nodes:
         nodes_by_group.setdefault(node.group_id, []).append(node)

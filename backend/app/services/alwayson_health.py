@@ -71,7 +71,8 @@ def _match_node(replica_server_name: str | None, nodes: list[Node]) -> Node | No
     if not name:
         return None
     for node in nodes:
-        if node.name.strip().lower() == name or node.host.strip().lower() == name:
+        candidates = [node.name, node.instance_name, node.server.host if node.server else None]
+        if any(c and c.strip().lower() == name for c in candidates):
             return node
     return None
 

@@ -21,10 +21,11 @@ from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal, init_db  # noqa: E402
 from app.domain.engines import DEFAULT_DATABASES, DatabaseEngine  # noqa: E402
-from app.models import Application, Customer, DatabaseGroup, Instance, Node  # noqa: E402
+from app.models import Application, Customer, DatabaseGroup, Instance, Node, Server  # noqa: E402
 from app.services.credentials import encrypt_secret  # noqa: E402
 
 _DEMO_USERNAME = {"postgresql": "postgres", "sqlserver": "sa", "mongodb": "admin"}
+_ENGINE_SERVICE_NAME = {"postgresql": "postgresql", "sqlserver": "sqlserver", "mongodb": "mongodb"}
 
 
 async def _get_or_create_customer(session, name: str, ctype: str) -> Customer:
@@ -84,16 +85,30 @@ async def _get_or_create_group(
     return group
 
 
+async def _get_or_create_server(
+    session, customer: Customer, name: str, host: str, os: str, site: str = "primary"
+) -> Server:
+    existing = (
+        await session.execute(select(Server).where(Server.customer_id == customer.id, Server.name == name))
+    ).scalar_one_or_none()
+    if existing:
+        return existing
+    server = Server(customer_id=customer.id, name=name, host=host, os=os, site=site)
+    session.add(server)
+    await session.flush()
+    return server
+
+
 async def _ensure_node(
     session,
     application: Application,
     customer: Customer,
     group: DatabaseGroup,
+    server: Server,
     name: str,
-    host: str,
     port: int,
-    site: str,
     role_hint: str,
+    instance_name: str | None = None,
 ) -> None:
     existing = (
         await session.execute(select(Node).where(Node.group_id == group.id, Node.name == name))
@@ -104,7 +119,7 @@ async def _ensure_node(
     instance = Instance(
         name=f"{group.name}-{name}",
         engine=group.engine,
-        host=host,
+        host=server.host,
         port=port,
         database=DEFAULT_DATABASES.get(DatabaseEngine(group.engine), "postgres"),
         username=_DEMO_USERNAME.get(group.engine, "postgres"),
@@ -114,7 +129,7 @@ async def _ensure_node(
         application=application.name,
         cluster_name=group.name,
         role=role_hint if role_hint != "unknown" else None,
-        services=["postgresql"],
+        services=[_ENGINE_SERVICE_NAME.get(group.engine, group.engine)],
         group_id=group.id,
         enabled=True,
     )
@@ -124,10 +139,10 @@ async def _ensure_node(
     session.add(
         Node(
             group_id=group.id,
+            server_id=server.id,
             name=name,
-            host=host,
+            instance_name=instance_name,
             port=port,
-            site=site,
             role_hint=role_hint,
             instance_id=instance.id,
         )
@@ -152,22 +167,45 @@ async def seed() -> None:
             environment="prod",
             access_name="boa-ag-listener.internal",
         )
-        await _ensure_node(session, boa, customer, boa_group, "boa-node-1", "boa-node-1.internal", 1433, "primary", "primary")
-        await _ensure_node(session, boa, customer, boa_group, "boa-node-2", "boa-node-2.internal", 1433, "primary", "replica")
-        await _ensure_node(session, boa, customer, boa_group, "boa-node-3", "boa-node-3.internal", 1433, "primary", "replica")
-        await _ensure_node(session, boa, customer, boa_group, "boa-node-4", "boa-node-4.dr.internal", 1433, "disaster", "replica")
+        boa_srv_1 = await _get_or_create_server(session, customer, "boa-winsvr-01", "boa-node-1.internal", "windows")
+        boa_srv_2 = await _get_or_create_server(session, customer, "boa-winsvr-02", "boa-node-2.internal", "windows")
+        boa_srv_3 = await _get_or_create_server(session, customer, "boa-winsvr-03", "boa-node-3.internal", "windows")
+        boa_srv_4 = await _get_or_create_server(
+            session, customer, "boa-winsvr-04-dr", "boa-node-4.dr.internal", "windows", site="disaster"
+        )
+        await _ensure_node(session, boa, customer, boa_group, boa_srv_1, "boa-node-1", 1433, "primary", "MSSQLSERVER")
+        await _ensure_node(session, boa, customer, boa_group, boa_srv_2, "boa-node-2", 1433, "replica", "MSSQLSERVER")
+        await _ensure_node(session, boa, customer, boa_group, boa_srv_3, "boa-node-3", 1433, "replica", "MSSQLSERVER")
+        await _ensure_node(session, boa, customer, boa_group, boa_srv_4, "boa-node-4", 1433, "replica", "MSSQLSERVER")
 
+        # Windows sunucusunda iki ayrı SQL Server named instance örneği: aynı fiziksel/VM
+        # sunucu, farklı gruplara üye iki ayrı Node (instance) barındırıyor.
+        boa_shared_srv = await _get_or_create_server(
+            session, customer, "boa-shared-winsvr", "boa-shared-winsvr.internal", "windows"
+        )
         boa_test_group = await _get_or_create_group(
             session,
             boa,
             "boa-sqlserver-test",
             engine="sqlserver",
             topology="standalone",
-            notes="Tek düğüm test ortamı.",
+            notes="Tek düğüm test ortamı (paylaşımlı Windows sunucusundaki varsayılan instance).",
             environment="test",
         )
         await _ensure_node(
-            session, boa, customer, boa_test_group, "boa-test-node-1", "boa-test-node-1.internal", 1433, "primary", "unknown"
+            session, boa, customer, boa_test_group, boa_shared_srv, "boa-test-node-1", 1433, "unknown", "MSSQLSERVER"
+        )
+        boa_reporting_group = await _get_or_create_group(
+            session,
+            boa,
+            "boa-reporting",
+            engine="sqlserver",
+            topology="standalone",
+            notes="Aynı paylaşımlı Windows sunucusunda, ayrı named instance — farklı gruba üye.",
+            environment="dev",
+        )
+        await _ensure_node(
+            session, boa, customer, boa_reporting_group, boa_shared_srv, "boa-reporting-node-1", 1434, "unknown", "REPORTING"
         )
 
         aapara = await _get_or_create_application(
@@ -183,15 +221,15 @@ async def seed() -> None:
             environment="prod",
             access_name="aapara-patroni-vip.internal",
         )
-        await _ensure_node(
-            session, aapara, customer, aapara_group, "aapara-node-1", "aapara-node-1.internal", 5432, "primary", "primary"
+        # Linux/PostgreSQL: bir sunucuda tek servis, yani 1 sunucu = 1 Node.
+        aapara_srv_1 = await _get_or_create_server(session, customer, "aapara-node-1", "aapara-node-1.internal", "linux")
+        aapara_srv_2 = await _get_or_create_server(session, customer, "aapara-node-2", "aapara-node-2.internal", "linux")
+        aapara_srv_3 = await _get_or_create_server(
+            session, customer, "aapara-node-3-dr", "aapara-node-3.dr.internal", "linux", site="disaster"
         )
-        await _ensure_node(
-            session, aapara, customer, aapara_group, "aapara-node-2", "aapara-node-2.internal", 5432, "primary", "replica"
-        )
-        await _ensure_node(
-            session, aapara, customer, aapara_group, "aapara-node-3", "aapara-node-3.dr.internal", 5432, "disaster", "replica"
-        )
+        await _ensure_node(session, aapara, customer, aapara_group, aapara_srv_1, "aapara-node-1", 5432, "primary")
+        await _ensure_node(session, aapara, customer, aapara_group, aapara_srv_2, "aapara-node-2", 5432, "replica")
+        await _ensure_node(session, aapara, customer, aapara_group, aapara_srv_3, "aapara-node-3", 5432, "replica")
 
         aapara_test_group = await _get_or_create_group(
             session,
@@ -202,8 +240,11 @@ async def seed() -> None:
             notes="Tek düğüm test ortamı.",
             environment="test",
         )
+        aapara_test_srv = await _get_or_create_server(
+            session, customer, "aapara-test-node-1", "aapara-test-node-1.internal", "linux"
+        )
         await _ensure_node(
-            session, aapara, customer, aapara_test_group, "aapara-test-node-1", "aapara-test-node-1.internal", 5432, "primary", "unknown"
+            session, aapara, customer, aapara_test_group, aapara_test_srv, "aapara-test-node-1", 5432, "unknown"
         )
 
         await session.commit()

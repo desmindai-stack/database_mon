@@ -241,6 +241,35 @@ kural tablosunda Varsayılan/Özel rozeti, inline düzenleme (varsayılan
 kurallarda sadece eşik+aç-kapa, özel kurallarda tüm alanlar), varsayılan
 kurallarda Sil butonu gizli.
 
+**Faz 9 — İŞ 1: Server modeli (sunucu/instance ayrımı).** Yeni `Server`
+modeli (`id, customer_id, name, host, os, site, agent_url, agent_token`)
+— bir müşterinin fiziksel/VM envanteri. `Node` artık "sunucu" değil,
+instance seviyesinde: `server_id` FK ile bir Server'a bağlanıyor,
+`host/site/agent_url/agent_token` Node'dan kalktı (artık `node.server`
+üzerinden), yeni `instance_name` alanı (SQL Server named instance için)
+eklendi. Grup (cluster) üyeliği hâlâ Node seviyesinde — aynı Windows
+sunucusundaki iki named instance farklı gruplara üye olabiliyor
+(`seed_demo.py`'de `boa-shared-winsvr` örneği: `MSSQLSERVER` instance'ı
+`boa-sqlserver-test` grubunda, `REPORTING` instance'ı yeni `boa-reporting`
+grubunda). Yeni CRUD router `routers/servers.py` + `ServersPage.tsx`
+(`/customers/{id}/servers`). Geriye dönük uyumluluk: `database.py::
+_migrate_nodes_to_server_model()` var olan düğümler için otomatik Server
+satırları oluşturup bağlıyor, sonra eski sütunları güvenli şekilde
+düşürüyor (detay SORULAR.md'de) — DB silmeye gerek kalmadı.
+
+Aynı yeniden yazımda (aynı dosya, `cluster_health.py`) **İŞ 3'ün asıl
+düzeltmesi de** yapıldı: `_node_services()` artık engine+topology bazlı
+— `alwayson` grupları `{sqlserver, alwayson, windows_cluster}` prob'luyor,
+Patroni/etcd/keepalived/haproxy hiç görünmüyor; `standalone` gruplar hiç
+cluster stack'i sorgulamıyor, sadece tek bir engine-doğru servis. Ayrıca
+`down_nodes` tespiti önceden hep literal `"postgresql"` servisine
+bakıyordu — bu yüzden sqlserver/mongodb gruplarında düğümler hiçbir zaman
+"down" işaretlenmiyordu (sessiz bir hataydı, sadece yanlış etiket değil);
+artık engine-doğru servise bakıyor. Doğrulandı: `boa-sqlserver-ag` grubu
+artık `services=['alwayson','windows_cluster','sqlserver']` döndürüyor ve
+4 düğümü de doğru şekilde down olarak işaretliyor (demo host'ları
+erişilemez); `aapara-patroni` değişmeden tam Patroni yığınını koruyor.
+
 ## Nasıl test edilir
 
 ### Backend

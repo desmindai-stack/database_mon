@@ -24,6 +24,11 @@ class NodeSite(StrEnum):
     DISASTER = "disaster"
 
 
+class ServerOS(StrEnum):
+    LINUX = "linux"
+    WINDOWS = "windows"
+
+
 class NodeRoleHint(StrEnum):
     PRIMARY = "primary"
     REPLICA = "replica"

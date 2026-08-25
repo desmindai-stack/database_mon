@@ -7,11 +7,11 @@ import {
   ClusterConversionRequest,
   DatabaseGroup,
   DbNode,
+  DbServer,
   GroupHealth,
   Instance,
   NodeCreate,
   NodeRoleHint,
-  NodeSite,
   ParameterAudit,
 } from "../api";
 
@@ -19,13 +19,11 @@ type Tab = "nodes" | "parameters" | "alwayson";
 
 const emptyNodeForm = (groupId: number): NodeCreate => ({
   group_id: groupId,
+  server_id: 0,
   name: "",
-  host: "",
+  instance_name: "",
   port: 5432,
-  site: "primary",
   role_hint: "unknown",
-  agent_url: "",
-  agent_token: "",
   db_username: "",
   db_password: "",
   db_database: "",
@@ -43,6 +41,7 @@ export default function GroupDetailPage() {
   const [nodeForm, setNodeForm] = useState<NodeCreate>(emptyNodeForm(id));
   const [instanceMode, setInstanceMode] = useState<"new" | "existing" | "none">("new");
   const [existingInstances, setExistingInstances] = useState<Instance[]>([]);
+  const [servers, setServers] = useState<DbServer[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("nodes");
@@ -76,7 +75,13 @@ export default function GroupDetailPage() {
       setGroup(g);
       setNodeForm((prev) => ({ ...prev, port: g.engine === "sqlserver" ? 1433 : g.engine === "mongodb" ? 27017 : 5432 }));
       setConvertForm((prev) => ({ ...prev, topology: g.engine === "sqlserver" ? "alwayson" : "patroni" }));
-      api.getApplication(g.application_id).then(setApplication).catch(() => undefined);
+      api.getApplication(g.application_id).then((app) => {
+        setApplication(app);
+        api.getServers(app.customer_id).then((all) => {
+          setServers(all);
+          if (all.length > 0) setNodeForm((prev) => ({ ...prev, server_id: prev.server_id || all[0].id }));
+        }).catch(() => undefined);
+      }).catch(() => undefined);
     }).catch((e) => setError(String(e.message || e)));
     loadNodes();
     api.getInstances().then(setExistingInstances).catch(() => undefined);
@@ -91,8 +96,7 @@ export default function GroupDetailPage() {
       await api.createNode({
         ...nodeForm,
         group_id: id,
-        agent_url: nodeForm.agent_url || undefined,
-        agent_token: nodeForm.agent_token || undefined,
+        instance_name: nodeForm.instance_name || undefined,
         instance_id: instanceMode === "existing" ? nodeForm.instance_id : undefined,
         db_username: instanceMode === "new" ? nodeForm.db_username || undefined : undefined,
         db_password: instanceMode === "new" ? nodeForm.db_password || undefined : undefined,
@@ -364,8 +368,10 @@ export default function GroupDetailPage() {
                         <span className="tag service">{node.role_hint}</span>
                       </div>
                     </div>
-                    <p className="muted-note">{node.host}:{node.port}</p>
-                    {node.agent_url && <p className="muted-note">agent: {node.agent_url}</p>}
+                    <p className="muted-note">
+                      {node.host}:{node.port}
+                      {node.instance_name && ` · instance: ${node.instance_name}`}
+                    </p>
                     {node.instance_id ? (
                       <p>
                         <Link to={`/instances/${node.instance_id}`} className="detail-link tuning">
@@ -397,15 +403,39 @@ export default function GroupDetailPage() {
 
           <div className="card">
             <h3 className="chart-title">Yeni düğüm</h3>
+            {servers.length === 0 ? (
+              <p className="muted-note">
+                Önce bir sunucu ekleyin —{" "}
+                {application && <Link to={`/customers/${application.customer_id}/servers`}>Sunucular sayfasına git</Link>}.
+              </p>
+            ) : (
             <form className="form-grid" onSubmit={onAddNode}>
               <label>
                 Ad
                 <input value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} required />
               </label>
               <label>
-                Host
-                <input value={nodeForm.host} onChange={(e) => setNodeForm({ ...nodeForm, host: e.target.value })} required />
+                Sunucu
+                <select
+                  value={nodeForm.server_id}
+                  onChange={(e) => setNodeForm({ ...nodeForm, server_id: Number(e.target.value) })}
+                  required
+                >
+                  {servers.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                  ))}
+                </select>
               </label>
+              {group?.engine === "sqlserver" && (
+                <label>
+                  SQL Server instance adı (opsiyonel)
+                  <input
+                    value={nodeForm.instance_name}
+                    onChange={(e) => setNodeForm({ ...nodeForm, instance_name: e.target.value })}
+                    placeholder="MSSQLSERVER (varsayılan) veya named instance adı"
+                  />
+                </label>
+              )}
               <label>
                 Port
                 <input
@@ -413,13 +443,6 @@ export default function GroupDetailPage() {
                   value={nodeForm.port}
                   onChange={(e) => setNodeForm({ ...nodeForm, port: Number(e.target.value) })}
                 />
-              </label>
-              <label>
-                Site
-                <select value={nodeForm.site} onChange={(e) => setNodeForm({ ...nodeForm, site: e.target.value as NodeSite })}>
-                  <option value="primary">Primary (ana DC)</option>
-                  <option value="disaster">Disaster (DR)</option>
-                </select>
               </label>
               <label>
                 Rol
@@ -431,22 +454,6 @@ export default function GroupDetailPage() {
                   <option value="primary">Primary</option>
                   <option value="replica">Replica</option>
                 </select>
-              </label>
-              <label>
-                Host agent URL (opsiyonel)
-                <input
-                  value={nodeForm.agent_url}
-                  onChange={(e) => setNodeForm({ ...nodeForm, agent_url: e.target.value })}
-                  placeholder="http://db-host:9105"
-                />
-              </label>
-              <label>
-                Host agent token (opsiyonel)
-                <input
-                  type="password"
-                  value={nodeForm.agent_token}
-                  onChange={(e) => setNodeForm({ ...nodeForm, agent_token: e.target.value })}
-                />
               </label>
               <label>
                 Instance bağlantısı
@@ -504,6 +511,7 @@ export default function GroupDetailPage() {
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}

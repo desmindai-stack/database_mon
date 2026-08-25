@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import text
@@ -5,6 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import DeclarativeBase
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class Base(DeclarativeBase):
@@ -35,6 +38,74 @@ async def _sqlite_add_column_if_missing(conn, table: str, column: str, ddl: str)
         await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
 
 
+async def _sqlite_table_columns(conn, table: str) -> set[str]:
+    result = await conn.execute(text(f"PRAGMA table_info({table})"))
+    return {row[1] for row in result.fetchall()}
+
+
+async def _sqlite_drop_column_if_exists(conn, table: str, column: str) -> None:
+    cols = await _sqlite_table_columns(conn, table)
+    if column not in cols:
+        return
+    try:
+        await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+    except Exception:
+        logger.warning("could not drop column %s.%s (sqlite too old?) — leaving it in place, unused", table, column)
+
+
+async def _migrate_nodes_to_server_model(conn) -> None:
+    """Faz 8 (test turu) İŞ 1: Node used to BE the server (host/site/agent_* lived on it).
+    Now Server is its own table and Node is instance-level, linked via server_id. For any
+    existing nodes.host column (i.e. this hasn't run yet), back-fill one Server per distinct
+    (customer, host) and point every node at it, then drop the columns that moved to Server."""
+    cols = await _sqlite_table_columns(conn, "nodes")
+    if "host" not in cols:
+        return
+
+    rows = (
+        await conn.execute(
+            text(
+                """
+                SELECT n.id, n.host, n.site, n.agent_url, n.agent_token, c.id, c.name
+                FROM nodes n
+                JOIN database_groups g ON g.id = n.group_id
+                JOIN applications a ON a.id = g.application_id
+                JOIN customers c ON c.id = a.customer_id
+                WHERE n.server_id IS NULL
+                """
+            )
+        )
+    ).fetchall()
+
+    server_cache: dict[tuple[int, str], int] = {}
+    for node_id, host, site, agent_url, agent_token, customer_id, customer_name in rows:
+        key = (customer_id, host)
+        server_id = server_cache.get(key)
+        if server_id is None:
+            insert_result = await conn.execute(
+                text(
+                    "INSERT INTO servers (customer_id, name, host, os, site, agent_url, agent_token) "
+                    "VALUES (:customer_id, :name, :host, 'linux', :site, :agent_url, :agent_token)"
+                ),
+                {
+                    "customer_id": customer_id,
+                    "name": f"{customer_name}-{host}",
+                    "host": host,
+                    "site": site or "primary",
+                    "agent_url": agent_url,
+                    "agent_token": agent_token,
+                },
+            )
+            server_id = insert_result.lastrowid
+            server_cache[key] = server_id
+        await conn.execute(
+            text("UPDATE nodes SET server_id = :sid WHERE id = :nid"), {"sid": server_id, "nid": node_id}
+        )
+
+    for column in ("host", "site", "agent_url", "agent_token"):
+        await _sqlite_drop_column_if_exists(conn, "nodes", column)
+
+
 async def migrate_schema() -> None:
     if not settings.database_url.startswith("sqlite"):
         return
@@ -55,6 +126,12 @@ async def migrate_schema() -> None:
         )
         await _sqlite_add_column_if_missing(conn, "database_groups", "access_name", "access_name VARCHAR(255)")
         await _sqlite_add_column_if_missing(conn, "nodes", "instance_id", "instance_id INTEGER")
+        await _sqlite_add_column_if_missing(conn, "nodes", "server_id", "server_id INTEGER")
+        await _sqlite_add_column_if_missing(conn, "nodes", "instance_name", "instance_name VARCHAR(128)")
+        try:
+            await _migrate_nodes_to_server_model(conn)
+        except Exception:
+            logger.exception("nodes -> server model backfill failed; existing nodes may be missing server_id")
         await _sqlite_add_column_if_missing(conn, "database_groups", "cluster_name", "cluster_name VARCHAR(128)")
         await _sqlite_add_column_if_missing(conn, "database_groups", "vip_address", "vip_address VARCHAR(128)")
         await _sqlite_add_column_if_missing(

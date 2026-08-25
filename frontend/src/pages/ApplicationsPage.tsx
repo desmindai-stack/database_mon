@@ -56,6 +56,9 @@ export default function ApplicationsPage() {
             </p>
           )}
         </div>
+        <div className="header-actions">
+          <Link to={`/customers/${id}/servers`} className="btn">Sunucular</Link>
+        </div>
       </header>
 
       {error && <div className="error">{error}</div>}

@@ -133,11 +133,15 @@ async def list_group_nodes(group_id: int, db: AsyncSession = Depends(get_db)) ->
     group = await db.get(DatabaseGroup, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
-    result = await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))
+    result = await db.execute(
+        select(Node).options(selectinload(Node.server)).where(Node.group_id == group_id).order_by(Node.name)
+    )
     nodes = result.scalars().all()
     outs = [NodeOut.model_validate(n) for n in nodes]
-    for out in outs:
+    for out, node in zip(outs, nodes):
         out.options = redact_node_options(out.options)
+        out.host = node.server.host if node.server else None
+        out.site = node.server.site if node.server else None
     return outs
 
 
@@ -147,7 +151,16 @@ async def get_group_health(group_id: int, db: AsyncSession = Depends(get_db)) ->
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
     nodes = list(
-        (await db.execute(select(Node).where(Node.group_id == group_id).order_by(Node.name))).scalars().all()
+        (
+            await db.execute(
+                select(Node)
+                .options(selectinload(Node.server))
+                .where(Node.group_id == group_id)
+                .order_by(Node.name)
+            )
+        )
+        .scalars()
+        .all()
     )
     if not nodes:
         raise HTTPException(status_code=400, detail="Group has no nodes to probe")
@@ -177,7 +190,7 @@ async def get_group_parameters(group_id: int, db: AsyncSession = Depends(get_db)
         (
             await db.execute(
                 select(Node)
-                .options(selectinload(Node.instance))
+                .options(selectinload(Node.instance), selectinload(Node.server))
                 .where(Node.group_id == group_id)
                 .order_by(Node.name)
             )
@@ -203,7 +216,7 @@ async def get_group_alwayson(group_id: int, db: AsyncSession = Depends(get_db)) 
         (
             await db.execute(
                 select(Node)
-                .options(selectinload(Node.instance))
+                .options(selectinload(Node.instance), selectinload(Node.server))
                 .where(Node.group_id == group_id)
                 .order_by(Node.name)
             )

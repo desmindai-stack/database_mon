@@ -4,7 +4,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.domain.engines import DEFAULT_PORTS, DatabaseEngine
-from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite
+from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite, ServerOS
 
 
 class CustomerCreate(BaseModel):
@@ -103,15 +103,46 @@ class DatabaseGroupOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class NodeCreate(BaseModel):
-    group_id: int
+class ServerCreate(BaseModel):
+    customer_id: int
     name: str = Field(min_length=1, max_length=128)
     host: str
-    port: int
+    os: ServerOS = ServerOS.LINUX
     site: NodeSite = NodeSite.PRIMARY
-    role_hint: NodeRoleHint = NodeRoleHint.UNKNOWN
     agent_url: str | None = None
     agent_token: str | None = None
+
+
+class ServerUpdate(BaseModel):
+    name: str | None = None
+    host: str | None = None
+    os: ServerOS | None = None
+    site: NodeSite | None = None
+    agent_url: str | None = None
+    agent_token: str | None = None
+
+
+class ServerOut(BaseModel):
+    id: int
+    customer_id: int
+    name: str
+    host: str
+    os: str
+    site: str
+    agent_url: str | None
+    agent_token: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NodeCreate(BaseModel):
+    group_id: int
+    server_id: int
+    name: str = Field(min_length=1, max_length=128)
+    instance_name: str | None = None
+    port: int
+    role_hint: NodeRoleHint = NodeRoleHint.UNKNOWN
     options: dict[str, Any] | None = None
     # Instance linkage: either point at an existing Instance, or supply
     # db_username (+ optional password/database) to auto-create one for this node.
@@ -122,13 +153,11 @@ class NodeCreate(BaseModel):
 
 
 class NodeUpdate(BaseModel):
+    server_id: int | None = None
     name: str | None = None
-    host: str | None = None
+    instance_name: str | None = None
     port: int | None = None
-    site: NodeSite | None = None
     role_hint: NodeRoleHint | None = None
-    agent_url: str | None = None
-    agent_token: str | None = None
     options: dict[str, Any] | None = None
     instance_id: int | None = None
     db_username: str | None = None
@@ -139,16 +168,18 @@ class NodeUpdate(BaseModel):
 class NodeOut(BaseModel):
     id: int
     group_id: int
+    server_id: int | None
     name: str
-    host: str
+    instance_name: str | None
     port: int
-    site: str
     role_hint: str
-    agent_url: str | None
-    agent_token: str | None
     options: dict[str, Any] | None = None
     instance_id: int | None = None
     created_at: datetime
+    # Read-only display convenience, derived from node.server (host/site now live on Server,
+    # not Node) — never accepted on create/update, just filled in by the router.
+    host: str | None = None
+    site: str | None = None
 
     model_config = {"from_attributes": True}
 

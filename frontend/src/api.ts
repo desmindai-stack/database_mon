@@ -422,30 +422,53 @@ export interface ClusterConversionRequest {
   vip_address?: string;
 }
 
+export type ServerOS = "linux" | "windows";
+
+export interface DbServer {
+  id: number;
+  customer_id: number;
+  name: string;
+  host: string;
+  os: ServerOS;
+  site: NodeSite;
+  agent_url: string | null;
+  agent_token: string | null;
+  created_at: string;
+}
+
+export interface ServerCreate {
+  customer_id: number;
+  name: string;
+  host: string;
+  os: ServerOS;
+  site: NodeSite;
+  agent_url?: string;
+  agent_token?: string;
+}
+
 export interface DbNode {
   id: number;
   group_id: number;
+  server_id: number | null;
   name: string;
-  host: string;
+  instance_name: string | null;
   port: number;
-  site: NodeSite;
   role_hint: NodeRoleHint;
-  agent_url: string | null;
-  agent_token: string | null;
   options: Record<string, unknown> | null;
   instance_id: number | null;
   created_at: string;
+  // Read-only, derived from the linked Server for display convenience.
+  host: string | null;
+  site: NodeSite | null;
 }
 
 export interface NodeCreate {
   group_id: number;
+  server_id: number;
   name: string;
-  host: string;
+  instance_name?: string;
   port: number;
-  site: NodeSite;
   role_hint: NodeRoleHint;
-  agent_url?: string;
-  agent_token?: string;
   options?: Record<string, unknown>;
   instance_id?: number | null;
   db_username?: string;
@@ -747,6 +770,13 @@ export const api = {
   createNode: (data: NodeCreate) =>
     request<DbNode>("/api/nodes", { method: "POST", body: JSON.stringify(data) }),
   deleteNode: (id: number) => request<void>(`/api/nodes/${id}`, { method: "DELETE" }),
+
+  getServers: (customerId?: number) =>
+    request<DbServer[]>(`/api/servers${customerId ? `?customer_id=${customerId}` : ""}`),
+  getServer: (id: number) => request<DbServer>(`/api/servers/${id}`),
+  createServer: (data: ServerCreate) =>
+    request<DbServer>("/api/servers", { method: "POST", body: JSON.stringify(data) }),
+  deleteServer: (id: number) => request<void>(`/api/servers/${id}`, { method: "DELETE" }),
 
   getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
   refreshDashboard: () => request<DashboardSummary>("/api/dashboard/refresh", { method: "POST" }),
