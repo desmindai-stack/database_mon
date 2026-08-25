@@ -6,10 +6,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from datetime import datetime
+
 from app.config import settings
 from app.database import SessionLocal
 from app.models import Instance
 from app.services.collection import collect_instance
+from app.services.dashboard_snapshot import refresh_all_group_snapshots
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,14 @@ async def collect_all_instances() -> None:
         await session.commit()
 
 
+async def refresh_dashboard_snapshots() -> None:
+    async with SessionLocal() as session:
+        try:
+            await refresh_all_group_snapshots(session)
+        except Exception:
+            logger.exception("Failed refreshing dashboard group health snapshots")
+
+
 def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -37,6 +48,14 @@ def start_scheduler() -> None:
         seconds=settings.collect_interval_seconds,
         id="collect_all",
         replace_existing=True,
+    )
+    scheduler.add_job(
+        refresh_dashboard_snapshots,
+        "interval",
+        seconds=settings.dashboard_refresh_interval_seconds,
+        id="refresh_dashboard_snapshots",
+        replace_existing=True,
+        next_run_time=datetime.now(),
     )
     scheduler.start()
     logger.info("Collector scheduler started (interval=%ss)", settings.collect_interval_seconds)

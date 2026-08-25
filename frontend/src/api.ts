@@ -579,6 +579,7 @@ export interface DashboardSummary {
   health: DashboardHealth;
   top_issues: DashboardIssue[];
   recommendations: DashboardRecommendation[];
+  last_checked: string | null;
 }
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
@@ -675,6 +676,7 @@ export const api = {
   deleteNode: (id: number) => request<void>(`/api/nodes/${id}`, { method: "DELETE" }),
 
   getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
+  refreshDashboard: () => request<DashboardSummary>("/api/dashboard/refresh", { method: "POST" }),
 
   getGroupHealth: (groupId: number) => request<GroupHealth>(`/api/groups/${groupId}/health`),
   getGroupParameters: (groupId: number) => request<ParameterAudit>(`/api/groups/${groupId}/parameters`),
@@ -690,6 +692,17 @@ export function formatBytes(bytes: number): string {
 
 export function formatTime(iso: string): string {
   return new Date(iso).toLocaleString();
+}
+
+export function formatRelativeTime(iso: string): string {
+  const diffSec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (diffSec < 5) return "az önce";
+  if (diffSec < 60) return `${Math.floor(diffSec)} saniye önce`;
+  const diffMin = diffSec / 60;
+  if (diffMin < 60) return `${Math.floor(diffMin)} dakika önce`;
+  const diffHour = diffMin / 60;
+  if (diffHour < 24) return `${Math.floor(diffHour)} saat önce`;
+  return `${Math.floor(diffHour / 24)} gün önce`;
 }
 
 export const ENGINE_DEFAULTS: Record<DbEngine, { port: number; database: string }> = {

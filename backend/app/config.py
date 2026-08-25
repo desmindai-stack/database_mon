@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     app_name: str = "dbace"
     database_url: str = f"sqlite+aiosqlite:///{Path(__file__).resolve().parents[2] / 'data' / 'dbace.db'}"
     collect_interval_seconds: int = 15
+    dashboard_refresh_interval_seconds: int = 60
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     cors_origins: str = '["http://localhost:5173", "http://127.0.0.1:5173"]'

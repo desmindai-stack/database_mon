@@ -210,6 +210,17 @@ class AlertEvent(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class GroupHealthSnapshot(Base):
+    __tablename__ = "group_health_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("database_groups.id"), unique=True, index=True, nullable=False)
+    overall: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
+    report_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    recommendations_json: Mapped[list[Any] | None] = mapped_column(JSON, nullable=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class PredictionInsight(Base):
     __tablename__ = "prediction_insights"
 

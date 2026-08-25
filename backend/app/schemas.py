@@ -367,6 +367,7 @@ class DashboardSummaryOut(BaseModel):
     health: DashboardHealthOut
     top_issues: list[DashboardIssueOut]
     recommendations: list[DashboardRecommendationOut]
+    last_checked: datetime | None = None
 
 
 class ConnectionTestResult(BaseModel):

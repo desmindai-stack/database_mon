@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, AppConfig, DashboardSummary, formatBytes, HealthResponse, InstanceSummary } from "../api";
+import { api, AppConfig, DashboardSummary, formatBytes, formatRelativeTime, HealthResponse, InstanceSummary } from "../api";
 
 const SEVERITY_COLOR: Record<string, string> = {
   critical: "var(--danger)",
@@ -46,6 +46,7 @@ export default function DashboardPage() {
   const [groupSummary, setGroupSummary] = useState<DashboardSummary | null>(null);
   const [groupSummaryError, setGroupSummaryError] = useState<string | null>(null);
   const [groupSummaryLoading, setGroupSummaryLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
 
   useEffect(() => {
@@ -60,6 +61,15 @@ export default function DashboardPage() {
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setGroupSummaryLoading(false));
   }, []);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    setGroupSummaryError(null);
+    api.refreshDashboard()
+      .then(setGroupSummary)
+      .catch((err) => setGroupSummaryError(String(err.message || err)))
+      .finally(() => setRefreshing(false));
+  };
 
   const isPrivateGroups = appConfig?.deployment_mode === "private";
 
@@ -170,6 +180,19 @@ export default function DashboardPage() {
       </header>
 
       {groupSummaryError && <div className="error">{groupSummaryError}</div>}
+
+      <div className="activity-toolbar" style={{ marginBottom: "1rem" }}>
+        <span className="muted-note">
+          {groupSummary?.last_checked
+            ? `Son güncelleme: ${formatRelativeTime(groupSummary.last_checked)}`
+            : groupSummaryLoading
+              ? "Yükleniyor…"
+              : "Henüz sağlık verisi toplanmadı"}
+        </span>
+        <button className="btn" onClick={onRefresh} disabled={refreshing}>
+          {refreshing ? "Yenileniyor…" : "Yenile"}
+        </button>
+      </div>
 
       {!groupSummaryLoading && groupSummary && groupSummary.totals.groups === 0 ? (
         <div className="card empty-card" style={{ marginBottom: "1.5rem" }}>
