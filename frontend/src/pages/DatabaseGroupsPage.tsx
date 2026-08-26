@@ -22,8 +22,10 @@ export default function DatabaseGroupsPage() {
   const [accessName, setAccessName] = useState("");
   const [clusterName, setClusterName] = useState("");
   const [vipAddress, setVipAddress] = useState("");
+  const [listenerPort, setListenerPort] = useState<number | "">("");
   const [notes, setNotes] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -40,8 +42,21 @@ export default function DatabaseGroupsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  const validateCreate = (): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (!name.trim()) errors.name = "Grup adı zorunlu";
+    if (topology !== "standalone") {
+      if (!accessName.trim()) errors.access_name = "Erişim adı (listener/VIP) zorunlu";
+      if (!clusterName.trim()) errors.cluster_name = "Cluster adı zorunlu";
+    }
+    return errors;
+  };
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    const errors = validateCreate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -54,13 +69,16 @@ export default function DatabaseGroupsPage() {
         access_name: accessName || undefined,
         cluster_name: clusterName || undefined,
         vip_address: vipAddress || undefined,
+        listener_port: listenerPort === "" ? undefined : Number(listenerPort),
         notes: notes || undefined,
       });
       setName("");
       setAccessName("");
       setClusterName("");
       setVipAddress("");
+      setListenerPort("");
       setNotes("");
+      setFieldErrors({});
       await load();
     } catch (err) {
       setError(String((err as Error).message));
@@ -81,9 +99,14 @@ export default function DatabaseGroupsPage() {
     setEditEnvironment(g.environment);
     setEditAccessName(g.access_name || "");
     setEditNotes(g.notes || "");
+    setError(null);
   };
 
   const saveEdit = async (groupId: number) => {
+    if (!editName.trim()) {
+      setError("Grup adı zorunlu");
+      return;
+    }
     try {
       await api.updateGroup(groupId, {
         name: editName,
@@ -219,8 +242,14 @@ export default function DatabaseGroupsPage() {
           <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni database group</h3>
           <form className="form-grid" onSubmit={onSubmit}>
             <label>
-              Ad
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="boa-sqlserver-ag" required />
+              Ad <span className="required-mark">*</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="boa-sqlserver-ag"
+                className={fieldErrors.name ? "field-invalid" : ""}
+              />
+              {fieldErrors.name && <span className="field-error">{fieldErrors.name}</span>}
             </label>
             <label>
               Motor
@@ -250,20 +279,24 @@ export default function DatabaseGroupsPage() {
             {topology !== "standalone" && (
               <>
                 <label>
-                  Erişim adı (listener / VIP)
+                  Erişim adı (listener / VIP) <span className="required-mark">*</span>
                   <input
                     value={accessName}
                     onChange={(e) => setAccessName(e.target.value)}
                     placeholder="boa-ag-listener.internal"
+                    className={fieldErrors.access_name ? "field-invalid" : ""}
                   />
+                  {fieldErrors.access_name && <span className="field-error">{fieldErrors.access_name}</span>}
                 </label>
                 <label>
-                  Cluster adı
+                  Cluster adı <span className="required-mark">*</span>
                   <input
                     value={clusterName}
                     onChange={(e) => setClusterName(e.target.value)}
                     placeholder="boa-ag"
+                    className={fieldErrors.cluster_name ? "field-invalid" : ""}
                   />
+                  {fieldErrors.cluster_name && <span className="field-error">{fieldErrors.cluster_name}</span>}
                 </label>
                 <label>
                   VIP / IP
@@ -271,6 +304,15 @@ export default function DatabaseGroupsPage() {
                     value={vipAddress}
                     onChange={(e) => setVipAddress(e.target.value)}
                     placeholder="10.0.0.50"
+                  />
+                </label>
+                <label>
+                  {engine === "sqlserver" ? "Listener portu" : "VIP / HAProxy portu"}
+                  <input
+                    type="number"
+                    value={listenerPort}
+                    onChange={(e) => setListenerPort(e.target.value === "" ? "" : Number(e.target.value))}
+                    placeholder={engine === "sqlserver" ? "1433" : "5000"}
                   />
                 </label>
               </>

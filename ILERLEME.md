@@ -801,6 +801,21 @@ gidip düzeltmeden ilerlenemiyor). Bağlantı testi mevcut ve teşvik
 ediliyor ama Kaydet'i kilitlemiyor — mevcut sayfa-bazlı düğüm ekleme
 akışlarıyla aynı davranış (bkz. SORULAR.md).
 
+**Faz 13 — İŞ 3: Mevcut formlarda zorunlu alan işaretlemesi + doğrulama.**
+`ServersPage.tsx`, `InstancesPage.tsx`, `DatabaseGroupsPage.tsx`'in
+oluşturma formlarına sihirbazla aynı desen uygulandı: zorunlu alanlar
+`*` ile işaretli, gönderimde alan bazlı `fieldErrors` state'i ile
+kırmızı hata metni (`.field-error`/`.field-invalid`), önceden sadece
+HTML5 `required`'a (tarayıcıya göre değişen, stilsiz tooltip) güvenen
+yerler artık uygulama genelinde tutarlı görünüyor. İki gerçek eksik de
+kapandı: `ServersPage`/`DatabaseGroupsPage`'in tablo-içi satır düzenleme
+formları (`saveEdit`) `<form>` DIŞINDAki bir butona bağlı olduğundan
+HTML5 `required`'ın hiç etkisi yoktu — boş ad/host ile sessizce
+kaydediliyordu; artık `saveEdit` içinde açık bir kontrol var. Aynı
+geçişte `ServersPage`'e `ip_address`, `DatabaseGroupsPage`'e
+`listener_port` alanları da eklendi (Faz 13 İŞ 1'den — önceden sadece
+backend/şemada vardı, hiçbir formda giriş alanı yoktu).
+
 ## Nasıl test edilir
 
 ### Backend

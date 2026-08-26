@@ -13,11 +13,13 @@ export default function ServersPage() {
   const [servers, setServers] = useState<DbServer[]>([]);
   const [name, setName] = useState("");
   const [host, setHost] = useState("");
+  const [ipAddress, setIpAddress] = useState("");
   const [os, setOs] = useState<ServerOS>("linux");
   const [site, setSite] = useState<NodeSite>("primary");
   const [agentUrl, setAgentUrl] = useState("");
   const [agentToken, setAgentToken] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [agentTesting, setAgentTesting] = useState(false);
   const [createAgentResult, setCreateAgentResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -26,6 +28,7 @@ export default function ServersPage() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editHost, setEditHost] = useState("");
+  const [editIpAddress, setEditIpAddress] = useState("");
   const [editOs, setEditOs] = useState<ServerOS>("linux");
   const [editSite, setEditSite] = useState<NodeSite>("primary");
 
@@ -37,8 +40,18 @@ export default function ServersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  const validateCreate = (): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (!name.trim()) errors.name = "Sunucu adı zorunlu";
+    if (!host.trim()) errors.host = "Hostname zorunlu";
+    return errors;
+  };
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    const errors = validateCreate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -46,6 +59,7 @@ export default function ServersPage() {
         customer_id: id,
         name,
         host,
+        ip_address: ipAddress || undefined,
         os,
         site,
         agent_url: agentUrl || undefined,
@@ -53,8 +67,10 @@ export default function ServersPage() {
       });
       setName("");
       setHost("");
+      setIpAddress("");
       setAgentUrl("");
       setAgentToken("");
+      setFieldErrors({});
       await load();
     } catch (err) {
       setError(String((err as Error).message));
@@ -103,14 +119,23 @@ export default function ServersPage() {
     setEditingId(s.id);
     setEditName(s.name);
     setEditHost(s.host);
+    setEditIpAddress(s.ip_address ?? "");
     setEditOs(s.os);
     setEditSite(s.site);
+    setError(null);
   };
 
   const saveEdit = async (serverId: number) => {
+    if (!editName.trim() || !editHost.trim()) {
+      setError("Sunucu adı ve hostname zorunlu");
+      return;
+    }
     try {
-      await api.updateServer(serverId, { name: editName, host: editHost, os: editOs, site: editSite });
+      await api.updateServer(serverId, {
+        name: editName, host: editHost, ip_address: editIpAddress || null, os: editOs, site: editSite,
+      });
       setEditingId(null);
+      setError(null);
       await load();
     } catch (err) {
       setError(String((err as Error).message));
@@ -145,6 +170,7 @@ export default function ServersPage() {
               <tr>
                 <th>Ad</th>
                 <th>Host</th>
+                <th>IP</th>
                 <th>OS</th>
                 <th>Site</th>
                 <th></th>
@@ -153,14 +179,15 @@ export default function ServersPage() {
             <tbody>
               {servers.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="empty">Kayıtlı sunucu yok</td>
+                  <td colSpan={6} className="empty">Kayıtlı sunucu yok</td>
                 </tr>
               ) : (
                 servers.map((s) =>
                   editingId === s.id ? (
                     <tr key={s.id}>
-                      <td><input value={editName} onChange={(e) => setEditName(e.target.value)} /></td>
-                      <td><input value={editHost} onChange={(e) => setEditHost(e.target.value)} /></td>
+                      <td><input value={editName} onChange={(e) => setEditName(e.target.value)} required /></td>
+                      <td><input value={editHost} onChange={(e) => setEditHost(e.target.value)} required /></td>
+                      <td><input value={editIpAddress} onChange={(e) => setEditIpAddress(e.target.value)} placeholder="10.0.0.1" /></td>
                       <td>
                         <select value={editOs} onChange={(e) => setEditOs(e.target.value as ServerOS)}>
                           <option value="linux">Linux</option>
@@ -184,6 +211,7 @@ export default function ServersPage() {
                     <tr key={s.id}>
                       <td>{s.name}</td>
                       <td>{s.host}</td>
+                      <td className="muted-note">{s.ip_address || "—"}</td>
                       <td><span className="engine-badge">{OS_LABELS[s.os]}</span></td>
                       <td>
                         <span className={`tag ${s.site === "disaster" ? "private" : "public"}`}>
@@ -216,12 +244,28 @@ export default function ServersPage() {
           <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni sunucu</h3>
           <form className="form-grid" onSubmit={onSubmit}>
             <label>
-              Ad
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="boa-winsvr-01" required />
+              Ad <span className="required-mark">*</span>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="boa-winsvr-01"
+                className={fieldErrors.name ? "field-invalid" : ""}
+              />
+              {fieldErrors.name && <span className="field-error">{fieldErrors.name}</span>}
             </label>
             <label>
-              Host
-              <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="boa-winsvr-01.internal" required />
+              Host <span className="required-mark">*</span>
+              <input
+                value={host}
+                onChange={(e) => setHost(e.target.value)}
+                placeholder="boa-winsvr-01.internal"
+                className={fieldErrors.host ? "field-invalid" : ""}
+              />
+              {fieldErrors.host && <span className="field-error">{fieldErrors.host}</span>}
+            </label>
+            <label>
+              IP adresi (opsiyonel)
+              <input value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} placeholder="10.0.0.1" />
             </label>
             <label>
               İşletim sistemi

@@ -64,6 +64,7 @@ export default function InstancesPage() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [form, setForm] = useState<InstanceCreate>(emptyForm());
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [config, setConfig] = useState<HealthResponse | null>(null);
@@ -115,6 +116,7 @@ export default function InstancesPage() {
     setForm(emptyForm("postgresql", isPrivate ? defaultCustomer : undefined));
     setEditingId(null);
     setTestResult(null);
+    setFieldErrors({});
     setIsFormOpen(true);
   };
 
@@ -122,6 +124,7 @@ export default function InstancesPage() {
     setForm(instanceToForm(inst));
     setEditingId(inst.id);
     setTestResult(null);
+    setFieldErrors({});
     setIsFormOpen(true);
   };
 
@@ -129,6 +132,7 @@ export default function InstancesPage() {
     setIsFormOpen(false);
     setEditingId(null);
     setTestResult(null);
+    setFieldErrors({});
   };
 
   const onTest = async () => {
@@ -144,8 +148,21 @@ export default function InstancesPage() {
     }
   };
 
+  const validate = (): Record<string, string> => {
+    const errors: Record<string, string> = {};
+    if (!form.name.trim()) errors.name = "Ad zorunlu";
+    if (!form.host.trim()) errors.host = "Host zorunlu";
+    if (!form.database.trim()) errors.database = "Veritabanı adı zorunlu";
+    if (!form.username.trim()) errors.username = "Kullanıcı adı zorunlu";
+    if (editingId === null && !form.password.trim()) errors.password = "Şifre zorunlu";
+    return errors;
+  };
+
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
+    const errors = validate();
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
     setBusy(true);
     setError(null);
     try {
@@ -156,6 +173,7 @@ export default function InstancesPage() {
       }
       setForm(emptyForm(form.engine, isPrivate ? defaultCustomer : undefined));
       setTestResult(null);
+      setFieldErrors({});
       setIsFormOpen(false);
       setEditingId(null);
       await load();
@@ -187,8 +205,13 @@ export default function InstancesPage() {
           </select>
         </label>
         <label>
-          Ad
-          <input value={form.name} onChange={(e) => update("name", e.target.value)} required />
+          Ad <span className="required-mark">*</span>
+          <input
+            value={form.name}
+            onChange={(e) => update("name", e.target.value)}
+            className={fieldErrors.name ? "field-invalid" : ""}
+          />
+          {fieldErrors.name && <span className="field-error">{fieldErrors.name}</span>}
         </label>
         {!isPrivate && (
           <label>
@@ -302,24 +325,46 @@ export default function InstancesPage() {
           </>
         )}
         <label>
-          Host
-          <input value={form.host} onChange={(e) => update("host", e.target.value)} required />
+          Host <span className="required-mark">*</span>
+          <input
+            value={form.host}
+            onChange={(e) => update("host", e.target.value)}
+            className={fieldErrors.host ? "field-invalid" : ""}
+          />
+          {fieldErrors.host && <span className="field-error">{fieldErrors.host}</span>}
         </label>
         <label>
           Port
           <input type="number" value={form.port} onChange={(e) => update("port", Number(e.target.value))} />
         </label>
         <label>
-          Database
-          <input value={form.database} onChange={(e) => update("database", e.target.value)} required />
+          Database <span className="required-mark">*</span>
+          <input
+            value={form.database}
+            onChange={(e) => update("database", e.target.value)}
+            className={fieldErrors.database ? "field-invalid" : ""}
+          />
+          {fieldErrors.database && <span className="field-error">{fieldErrors.database}</span>}
         </label>
         <label>
-          Kullanıcı
-          <input value={form.username} onChange={(e) => update("username", e.target.value)} required />
+          Kullanıcı <span className="required-mark">*</span>
+          <input
+            value={form.username}
+            onChange={(e) => update("username", e.target.value)}
+            className={fieldErrors.username ? "field-invalid" : ""}
+          />
+          {fieldErrors.username && <span className="field-error">{fieldErrors.username}</span>}
         </label>
         <label>
-          Şifre
-          <input type="password" value={form.password} onChange={(e) => update("password", e.target.value)} placeholder={editingId !== null ? "Değiştirmek için yazın" : ""} required={editingId === null} />
+          Şifre {editingId === null && <span className="required-mark">*</span>}
+          <input
+            type="password"
+            value={form.password}
+            onChange={(e) => update("password", e.target.value)}
+            placeholder={editingId !== null ? "Değiştirmek için yazın" : ""}
+            className={fieldErrors.password ? "field-invalid" : ""}
+          />
+          {fieldErrors.password && <span className="field-error">{fieldErrors.password}</span>}
         </label>
         {testResult && (
           <div style={{ color: testResult.startsWith("OK") ? "var(--success)" : "var(--danger)" }}>
