@@ -29,6 +29,20 @@ async def _unique_instance_name(db: AsyncSession, base: str) -> str:
     return name
 
 
+async def _unique_node_name(db: AsyncSession, group_id: int, base: str) -> str:
+    """Node.name has a (group_id, name) unique constraint — a plain `server.name` collides when
+    a second instance on an already-registered server (existing_server_id) is added to the same
+    group it's already in."""
+    name = base
+    suffix = 2
+    while (
+        await db.execute(select(Node.id).where(Node.group_id == group_id, Node.name == name))
+    ).first() is not None:
+        name = f"{base}-{suffix}"
+        suffix += 1
+    return name
+
+
 def _instance_options(node_input: WizardNodeInput, engine: DatabaseEngine) -> dict | None:
     """Engine-specific connection knobs that don't have a dedicated Instance column — stored in
     Instance.options and read straight through by the collectors (ConnectionTarget.options)."""
@@ -55,38 +69,43 @@ async def _create_server_instance_node(
     name_prefix: str,
     cluster_options: dict | None,
 ) -> Node:
-    """Creates one Server + Instance + Node for a single wizard node entry, all `flush()`ed
-    (not committed) onto the caller's transaction — shared by "create a new group" and "add
-    node(s) to an existing group", both of which wrap this in the same commit-everything-or-
-    roll-back-everything pattern."""
+    """Creates an Instance + Node for a single wizard node entry — the Server is either newly
+    created or (when `existing_server_id` is set) reused, e.g. a second named SQL Server
+    instance on a box that already hosts one. All `flush()`ed (not committed) onto the caller's
+    transaction — shared by "create a new group" and "add node(s) to an existing group", both
+    of which wrap this in the same commit-everything-or-roll-back-everything pattern."""
     engine = DatabaseEngine(group.engine)
 
-    existing_server = await db.execute(
-        select(Server).where(Server.customer_id == customer.id, Server.name == node_input.server_name)
-    )
-    if existing_server.scalar_one_or_none():
-        raise HTTPException(
-            status_code=409, detail=f"'{node_input.server_name}' adında bir sunucu bu müşteride zaten var"
+    if node_input.existing_server_id is not None:
+        server = await db.get(Server, node_input.existing_server_id)
+        if not server or server.customer_id != customer.id:
+            raise HTTPException(status_code=404, detail="Seçilen sunucu bulunamadı")
+    else:
+        existing_server = await db.execute(
+            select(Server).where(Server.customer_id == customer.id, Server.name == node_input.server_name)
         )
+        if existing_server.scalar_one_or_none():
+            raise HTTPException(
+                status_code=409, detail=f"'{node_input.server_name}' adında bir sunucu bu müşteride zaten var"
+            )
+        server = Server(
+            customer_id=customer.id,
+            name=node_input.server_name,
+            host=node_input.host,
+            ip_address=node_input.ip_address or None,
+            os=node_input.os.value,
+            site=node_input.site.value,
+            agent_url=node_input.agent_url or None,
+            agent_token=node_input.agent_token or None,
+        )
+        db.add(server)
+        await db.flush()
 
-    server = Server(
-        customer_id=customer.id,
-        name=node_input.server_name,
-        host=node_input.host,
-        ip_address=node_input.ip_address or None,
-        os=node_input.os.value,
-        site=node_input.site.value,
-        agent_url=node_input.agent_url or None,
-        agent_token=node_input.agent_token or None,
-    )
-    db.add(server)
-    await db.flush()
-
-    instance_name = await _unique_instance_name(db, f"{name_prefix}-{node_input.server_name}")
+    instance_name = await _unique_instance_name(db, f"{name_prefix}-{node_input.server_name or server.name}")
     instance = Instance(
         name=instance_name,
         engine=engine.value,
-        host=node_input.host,
+        host=server.host,
         port=node_input.port,
         database=node_input.database or DEFAULT_DATABASES.get(engine, "postgres"),
         username=node_input.db_username,
@@ -107,10 +126,13 @@ async def _create_server_instance_node(
     db.add(instance)
     await db.flush()
 
+    node_base_name = node_input.server_name or (
+        f"{server.name}-{node_input.instance_name}" if node_input.instance_name else server.name
+    )
     node = Node(
         group_id=group.id,
         server_id=server.id,
-        name=node_input.server_name,
+        name=await _unique_node_name(db, group.id, node_base_name),
         instance_name=node_input.instance_name or None,
         port=node_input.port,
         role_hint=node_input.role_hint.value,
@@ -159,8 +181,8 @@ async def wizard_create_group(payload: WizardCreateGroupRequest, db: AsyncSessio
     if existing_group.scalar_one_or_none():
         raise HTTPException(status_code=409, detail="Group name already exists for this application")
 
-    server_names = [n.server_name for n in payload.nodes]
-    if len(server_names) != len(set(server_names)):
+    new_server_names = [n.server_name for n in payload.nodes if n.existing_server_id is None]
+    if len(new_server_names) != len(set(new_server_names)):
         raise HTTPException(status_code=400, detail="Düğüm listesinde tekrar eden sunucu adı var")
 
     try:
@@ -231,8 +253,8 @@ async def wizard_add_nodes(
     if len(existing_nodes) + len(payload.nodes) > 8:
         raise HTTPException(status_code=400, detail="Bir grupta en fazla 8 düğüm olabilir")
 
-    new_names = [n.server_name for n in payload.nodes]
-    if len(new_names) != len(set(new_names)):
+    new_server_names = [n.server_name for n in payload.nodes if n.existing_server_id is None]
+    if len(new_server_names) != len(set(new_server_names)):
         raise HTTPException(status_code=400, detail="Düğüm listesinde tekrar eden sunucu adı var")
 
     cluster_options = payload.cluster_options.model_dump(exclude_none=True) if payload.cluster_options else None

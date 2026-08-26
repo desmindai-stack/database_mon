@@ -6,6 +6,7 @@ import {
   ConnectionTestResult,
   DatabaseGroup,
   DbEngine,
+  DbServer,
   ENGINE_DEFAULTS,
   GroupEnvironment,
   GroupTopology,
@@ -38,6 +39,10 @@ type PostgresSslMode = "disable" | "require";
 
 interface NodeFormState {
   key: string;
+  // "new" creates a Server row; "existing" attaches to one already registered (existingServerId)
+  // — the second-named-instance-on-one-box scenario (İŞ 3).
+  serverMode: "new" | "existing";
+  existingServerId: number | null;
   server_name: string;
   host: string;
   ip_address: string;
@@ -67,6 +72,8 @@ interface NodeFormState {
 function makeNode(engine: DbEngine, site: NodeSite, role_hint: NodeRoleHint): NodeFormState {
   return {
     key: nextNodeKey(),
+    serverMode: "new",
+    existingServerId: null,
     server_name: "",
     host: "",
     ip_address: "",
@@ -120,13 +127,17 @@ const REQUIRED = <span className="required-mark">*</span>;
 
 function nodeToWizardInput(n: NodeFormState, engine: DbEngine): WizardNodeInput {
   return {
-    server_name: n.server_name.trim(),
-    host: n.host.trim(),
-    ip_address: n.ip_address.trim() || null,
-    os: n.os,
-    site: n.site,
-    agent_url: n.agent_url.trim() || null,
-    agent_token: n.agent_token.trim() || null,
+    ...(n.serverMode === "existing"
+      ? { existing_server_id: n.existingServerId ?? undefined }
+      : {
+          server_name: n.server_name.trim(),
+          host: n.host.trim(),
+          ip_address: n.ip_address.trim() || null,
+          os: n.os,
+          site: n.site,
+          agent_url: n.agent_url.trim() || null,
+          agent_token: n.agent_token.trim() || null,
+        }),
     instance_name: engine === "sqlserver" ? n.instance_name.trim() || null : null,
     port: n.port,
     database: n.database.trim() || null,
@@ -151,6 +162,7 @@ export default function DatabaseWizardPage() {
   const [existingGroup, setExistingGroup] = useState<DatabaseGroup | null>(null);
   const [existingNodeCount, setExistingNodeCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [servers, setServers] = useState<DbServer[]>([]);
 
   const [step, setStep] = useState(0);
   const [engine, setEngine] = useState<DbEngine>("postgresql");
@@ -188,7 +200,10 @@ export default function DatabaseWizardPage() {
   useEffect(() => {
     if (mode === "create-group") {
       if (!appId) return;
-      api.getApplication(appId).then(setApplication).catch(() => undefined);
+      api.getApplication(appId).then((app) => {
+        setApplication(app);
+        api.getServers(app.customer_id).then(setServers).catch(() => undefined);
+      }).catch(() => undefined);
       return;
     }
     if (!gId) return;
@@ -198,6 +213,10 @@ export default function DatabaseWizardPage() {
         setExistingNodeCount(groupNodes.length);
         setEngine(group.engine);
         setNodes([makeNode(group.engine, "primary", "replica")]);
+        api.getApplication(group.application_id).then((app) => {
+          setApplication(app);
+          api.getServers(app.customer_id).then(setServers).catch(() => undefined);
+        }).catch(() => undefined);
       })
       .catch((e) => setLoadError(String((e as Error).message || e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -281,6 +300,11 @@ export default function DatabaseWizardPage() {
   const testNodeConnection = async (key: string) => {
     const node = nodes.find((n) => n.key === key);
     if (!node) return;
+    const host = node.serverMode === "existing" ? servers.find((s) => s.id === node.existingServerId)?.host : node.host;
+    if (!host) {
+      updateNode(key, "testResult", { ok: false, message: "Önce bir sunucu seçin", details: {} });
+      return;
+    }
     updateNode(key, "testing", true);
     updateNode(key, "testResult", null);
     try {
@@ -295,7 +319,7 @@ export default function DatabaseWizardPage() {
       const result = await api.testConnection({
         name: `${groupName || existingGroup?.name || "wizard"}-${node.server_name || "node"}-test`,
         engine,
-        host: node.host,
+        host,
         port: node.port,
         database: node.database || defaultDatabase(),
         username: node.db_username,
@@ -350,10 +374,14 @@ export default function DatabaseWizardPage() {
     const errors: Record<string, string> = {};
     const seenNames = new Set<string>();
     nodes.forEach((n, idx) => {
-      if (!n.server_name.trim()) errors[`node-${idx}-server_name`] = "Sunucu adı zorunlu";
-      else if (seenNames.has(n.server_name.trim())) errors[`node-${idx}-server_name`] = "Bu sunucu adı listede tekrar ediyor";
-      seenNames.add(n.server_name.trim());
-      if (!n.host.trim()) errors[`node-${idx}-host`] = "Hostname zorunlu";
+      if (n.serverMode === "existing") {
+        if (!n.existingServerId) errors[`node-${idx}-server_name`] = "Bir sunucu seçin";
+      } else {
+        if (!n.server_name.trim()) errors[`node-${idx}-server_name`] = "Sunucu adı zorunlu";
+        else if (seenNames.has(n.server_name.trim())) errors[`node-${idx}-server_name`] = "Bu sunucu adı listede tekrar ediyor";
+        seenNames.add(n.server_name.trim());
+        if (!n.host.trim()) errors[`node-${idx}-host`] = "Hostname zorunlu";
+      }
       const usernameNeeded = !(engine === "sqlserver" && n.authType === "windows");
       if (usernameNeeded && !n.db_username.trim()) errors[`node-${idx}-db_username`] = "Kullanıcı adı zorunlu";
       if (!n.port || n.port <= 0) errors[`node-${idx}-port`] = "Geçerli bir port girin";
@@ -682,52 +710,85 @@ export default function DatabaseWizardPage() {
                   )}
                 </div>
                 <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-                  <label>
-                    Sunucu adı {REQUIRED}
-                    <input
-                      value={node.server_name}
-                      onChange={(e) => updateNode(node.key, "server_name", e.target.value)}
-                      className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
-                      placeholder={`${engine === "sqlserver" ? "winsvr" : "pgsvr"}-0${idx + 1}`}
-                    />
-                    {fieldErrors[`node-${idx}-server_name`] && (
-                      <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
-                    )}
-                  </label>
-                  <label>
-                    Hostname {REQUIRED}
-                    <input
-                      value={node.host}
-                      onChange={(e) => updateNode(node.key, "host", e.target.value)}
-                      className={fieldErrors[`node-${idx}-host`] ? "field-invalid" : ""}
-                      placeholder="node.internal"
-                    />
-                    {fieldErrors[`node-${idx}-host`] && (
-                      <span className="field-error">{fieldErrors[`node-${idx}-host`]}</span>
-                    )}
-                  </label>
-                  <label>
-                    IP adresi
-                    <input
-                      value={node.ip_address}
-                      onChange={(e) => updateNode(node.key, "ip_address", e.target.value)}
-                      placeholder="10.0.0.10"
-                    />
-                  </label>
-                  <label>
-                    İşletim sistemi
-                    <select value={node.os} onChange={(e) => updateNode(node.key, "os", e.target.value as ServerOS)}>
-                      <option value="linux">Linux</option>
-                      <option value="windows">Windows</option>
-                    </select>
-                  </label>
-                  <label>
-                    Site
-                    <select value={node.site} onChange={(e) => updateNode(node.key, "site", e.target.value as NodeSite)}>
-                      <option value="primary">Ana DC</option>
-                      <option value="disaster">Disaster (DR)</option>
-                    </select>
-                  </label>
+                  {servers.length > 0 && (
+                    <label>
+                      Sunucu
+                      <select
+                        value={node.serverMode}
+                        onChange={(e) => updateNode(node.key, "serverMode", e.target.value as "new" | "existing")}
+                      >
+                        <option value="new">Yeni sunucu</option>
+                        <option value="existing">Mevcut sunucu</option>
+                      </select>
+                    </label>
+                  )}
+                  {node.serverMode === "existing" ? (
+                    <label>
+                      Mevcut sunucu {REQUIRED}
+                      <select
+                        value={node.existingServerId ?? ""}
+                        onChange={(e) => updateNode(node.key, "existingServerId", e.target.value ? Number(e.target.value) : null)}
+                        className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
+                      >
+                        <option value="">— seçin —</option>
+                        {servers.map((s) => (
+                          <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                        ))}
+                      </select>
+                      {fieldErrors[`node-${idx}-server_name`] && (
+                        <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
+                      )}
+                    </label>
+                  ) : (
+                    <>
+                      <label>
+                        Sunucu adı {REQUIRED}
+                        <input
+                          value={node.server_name}
+                          onChange={(e) => updateNode(node.key, "server_name", e.target.value)}
+                          className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
+                          placeholder={`${engine === "sqlserver" ? "winsvr" : "pgsvr"}-0${idx + 1}`}
+                        />
+                        {fieldErrors[`node-${idx}-server_name`] && (
+                          <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
+                        )}
+                      </label>
+                      <label>
+                        Hostname {REQUIRED}
+                        <input
+                          value={node.host}
+                          onChange={(e) => updateNode(node.key, "host", e.target.value)}
+                          className={fieldErrors[`node-${idx}-host`] ? "field-invalid" : ""}
+                          placeholder="node.internal"
+                        />
+                        {fieldErrors[`node-${idx}-host`] && (
+                          <span className="field-error">{fieldErrors[`node-${idx}-host`]}</span>
+                        )}
+                      </label>
+                      <label>
+                        IP adresi
+                        <input
+                          value={node.ip_address}
+                          onChange={(e) => updateNode(node.key, "ip_address", e.target.value)}
+                          placeholder="10.0.0.10"
+                        />
+                      </label>
+                      <label>
+                        İşletim sistemi
+                        <select value={node.os} onChange={(e) => updateNode(node.key, "os", e.target.value as ServerOS)}>
+                          <option value="linux">Linux</option>
+                          <option value="windows">Windows</option>
+                        </select>
+                      </label>
+                      <label>
+                        Site
+                        <select value={node.site} onChange={(e) => updateNode(node.key, "site", e.target.value as NodeSite)}>
+                          <option value="primary">Ana DC</option>
+                          <option value="disaster">Disaster (DR)</option>
+                        </select>
+                      </label>
+                    </>
+                  )}
                   {(mode === "add-node" || isCluster) && (
                     <label>
                       Rol
@@ -837,22 +898,26 @@ export default function DatabaseWizardPage() {
                       </label>
                     </>
                   )}
-                  <label>
-                    Host agent URL (opsiyonel)
-                    <input
-                      value={node.agent_url}
-                      onChange={(e) => updateNode(node.key, "agent_url", e.target.value)}
-                      placeholder="http://node.internal:9105"
-                    />
-                  </label>
-                  <label>
-                    Host agent token (opsiyonel)
-                    <input
-                      type="password"
-                      value={node.agent_token}
-                      onChange={(e) => updateNode(node.key, "agent_token", e.target.value)}
-                    />
-                  </label>
+                  {node.serverMode === "new" && (
+                    <>
+                      <label>
+                        Host agent URL (opsiyonel)
+                        <input
+                          value={node.agent_url}
+                          onChange={(e) => updateNode(node.key, "agent_url", e.target.value)}
+                          placeholder="http://node.internal:9105"
+                        />
+                      </label>
+                      <label>
+                        Host agent token (opsiyonel)
+                        <input
+                          type="password"
+                          value={node.agent_token}
+                          onChange={(e) => updateNode(node.key, "agent_token", e.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
                 </div>
                 <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
                   <button type="button" className="btn btn-xs" disabled={node.testing} onClick={() => testNodeConnection(node.key)}>
@@ -910,12 +975,24 @@ export default function DatabaseWizardPage() {
                 )}
               </div>
             )}
-            {nodes.map((node, idx) => (
+            {nodes.map((node, idx) => {
+              const existingServer = node.serverMode === "existing" ? servers.find((s) => s.id === node.existingServerId) : null;
+              return (
               <div className="wizard-summary-block" key={node.key}>
                 <h4>{mode === "add-node" || isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</h4>
-                <div className="wizard-summary-row"><span>Sunucu adı</span><strong>{node.server_name || "—"}</strong></div>
-                <div className="wizard-summary-row"><span>Host</span><strong>{node.host || "—"}{node.ip_address ? ` (${node.ip_address})` : ""}</strong></div>
-                <div className="wizard-summary-row"><span>Site / Rol</span><strong>{node.site} / {node.role_hint}</strong></div>
+                {node.serverMode === "existing" ? (
+                  <>
+                    <div className="wizard-summary-row"><span>Sunucu</span><strong>{existingServer ? `${existingServer.name} (mevcut)` : "—"}</strong></div>
+                    <div className="wizard-summary-row"><span>Host</span><strong>{existingServer?.host || "—"}</strong></div>
+                    <div className="wizard-summary-row"><span>Site / Rol</span><strong>{existingServer?.site || "—"} / {node.role_hint}</strong></div>
+                  </>
+                ) : (
+                  <>
+                    <div className="wizard-summary-row"><span>Sunucu adı</span><strong>{node.server_name || "—"}</strong></div>
+                    <div className="wizard-summary-row"><span>Host</span><strong>{node.host || "—"}{node.ip_address ? ` (${node.ip_address})` : ""}</strong></div>
+                    <div className="wizard-summary-row"><span>Site / Rol</span><strong>{node.site} / {node.role_hint}</strong></div>
+                  </>
+                )}
                 <div className="wizard-summary-row"><span>Port / DB</span><strong>{node.port} / {node.database || defaultDatabase()}</strong></div>
                 <div className="wizard-summary-row"><span>Kullanıcı</span><strong>{node.db_username || "—"}</strong></div>
                 <div className="wizard-summary-row">
@@ -925,7 +1002,8 @@ export default function DatabaseWizardPage() {
                   </strong>
                 </div>
               </div>
-            ))}
+              );
+            })}
             <div className="form-actions">
               <button type="button" className="btn" onClick={goBack} disabled={saving}>Geri</button>
               <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>

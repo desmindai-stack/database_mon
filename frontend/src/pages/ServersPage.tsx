@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Customer, DbServer, NodeSite, ServerOS } from "../api";
 
@@ -11,18 +11,7 @@ export default function ServersPage() {
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [servers, setServers] = useState<DbServer[]>([]);
-  const [name, setName] = useState("");
-  const [host, setHost] = useState("");
-  const [ipAddress, setIpAddress] = useState("");
-  const [os, setOs] = useState<ServerOS>("linux");
-  const [site, setSite] = useState<NodeSite>("primary");
-  const [agentUrl, setAgentUrl] = useState("");
-  const [agentToken, setAgentToken] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState(false);
-  const [agentTesting, setAgentTesting] = useState(false);
-  const [createAgentResult, setCreateAgentResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [rowAgentResult, setRowAgentResult] = useState<{ id: number; ok: boolean; message: string } | null>(null);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -39,62 +28,6 @@ export default function ServersPage() {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  const validateCreate = (): Record<string, string> => {
-    const errors: Record<string, string> = {};
-    if (!name.trim()) errors.name = "Sunucu adı zorunlu";
-    if (!host.trim()) errors.host = "Hostname zorunlu";
-    return errors;
-  };
-
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    const errors = validateCreate();
-    setFieldErrors(errors);
-    if (Object.keys(errors).length > 0) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api.createServer({
-        customer_id: id,
-        name,
-        host,
-        ip_address: ipAddress || undefined,
-        os,
-        site,
-        agent_url: agentUrl || undefined,
-        agent_token: agentToken || undefined,
-      });
-      setName("");
-      setHost("");
-      setIpAddress("");
-      setAgentUrl("");
-      setAgentToken("");
-      setFieldErrors({});
-      await load();
-    } catch (err) {
-      setError(String((err as Error).message));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onTestCreateAgent = async () => {
-    if (!agentUrl) {
-      setCreateAgentResult({ ok: false, message: "Önce agent URL girin" });
-      return;
-    }
-    setAgentTesting(true);
-    setCreateAgentResult(null);
-    try {
-      const result = await api.testServerAgent(agentUrl, agentToken);
-      setCreateAgentResult({ ok: result.ok, message: result.message });
-    } catch (err) {
-      setCreateAgentResult({ ok: false, message: String((err as Error).message) });
-    } finally {
-      setAgentTesting(false);
-    }
-  };
 
   const onTestRowAgent = async (s: DbServer) => {
     try {
@@ -151,10 +84,13 @@ export default function ServersPage() {
             <Link to={`/customers/${id}/applications`}>← Uygulamalar</Link>
           </p>
         </div>
-        <div className="header-actions">
-          <a href="#new-server-form" className="btn btn-primary">+ Sunucu Ekle</a>
-        </div>
       </header>
+
+      <p className="muted-note" style={{ marginBottom: "1rem" }}>
+        Sunucu tek başına eklenmiyor — bir veritabanı instance'ı eklerken "Yeni sunucu"yu
+        seçtiğinizde otomatik oluşturuluyor (bkz. "+ Veritabanı Ekle" sihirbazı). Burada sadece
+        var olan sunucuları düzenleyebilir/silebilirsiniz.
+      </p>
 
       {error && <div className="error">{error}</div>}
       {rowAgentResult && (
@@ -163,8 +99,7 @@ export default function ServersPage() {
         </div>
       )}
 
-      <div className="grid grid-2">
-        <div className="table-wrap">
+      <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -238,70 +173,6 @@ export default function ServersPage() {
               )}
             </tbody>
           </table>
-        </div>
-
-        <div className="card" id="new-server-form">
-          <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni sunucu</h3>
-          <form className="form-grid" onSubmit={onSubmit}>
-            <label>
-              Ad <span className="required-mark">*</span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="boa-winsvr-01"
-                className={fieldErrors.name ? "field-invalid" : ""}
-              />
-              {fieldErrors.name && <span className="field-error">{fieldErrors.name}</span>}
-            </label>
-            <label>
-              Host <span className="required-mark">*</span>
-              <input
-                value={host}
-                onChange={(e) => setHost(e.target.value)}
-                placeholder="boa-winsvr-01.internal"
-                className={fieldErrors.host ? "field-invalid" : ""}
-              />
-              {fieldErrors.host && <span className="field-error">{fieldErrors.host}</span>}
-            </label>
-            <label>
-              IP adresi (opsiyonel)
-              <input value={ipAddress} onChange={(e) => setIpAddress(e.target.value)} placeholder="10.0.0.1" />
-            </label>
-            <label>
-              İşletim sistemi
-              <select value={os} onChange={(e) => setOs(e.target.value as ServerOS)}>
-                <option value="linux">Linux</option>
-                <option value="windows">Windows</option>
-              </select>
-            </label>
-            <label>
-              Site
-              <select value={site} onChange={(e) => setSite(e.target.value as NodeSite)}>
-                <option value="primary">Ana DC</option>
-                <option value="disaster">Disaster (DR)</option>
-              </select>
-            </label>
-            <label>
-              Host agent URL (opsiyonel)
-              <input value={agentUrl} onChange={(e) => setAgentUrl(e.target.value)} placeholder="http://boa-winsvr-01:9105" />
-            </label>
-            <label>
-              Host agent token (opsiyonel)
-              <input type="password" value={agentToken} onChange={(e) => setAgentToken(e.target.value)} />
-            </label>
-            {createAgentResult && (
-              <div className={createAgentResult.ok ? "ok-text" : "warn-text"}>{createAgentResult.message}</div>
-            )}
-            <div className="form-actions">
-              <button type="button" className="btn" disabled={agentTesting} onClick={onTestCreateAgent}>
-                {agentTesting ? "Test ediliyor…" : "Agent'ı test et"}
-              </button>
-              <button type="submit" className="btn btn-primary" disabled={busy}>
-                Ekle
-              </button>
-            </div>
-          </form>
-        </div>
       </div>
     </>
   );

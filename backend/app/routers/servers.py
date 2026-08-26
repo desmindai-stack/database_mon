@@ -64,6 +64,18 @@ async def test_agent_existing(server_id: int, db: AsyncSession = Depends(get_db)
     return await _test_agent(server.agent_url, server.agent_token)
 
 
+@router.get("/{server_id}/node-count", response_model=int)
+async def server_node_count(server_id: int, db: AsyncSession = Depends(get_db)) -> int:
+    """Lets the frontend check whether deleting a node just orphaned its Server (see
+    GroupDetailPage's onDeleteNode) without needing a full node listing."""
+    server = await db.get(Server, server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return (
+        await db.execute(select(func.count()).select_from(Node).where(Node.server_id == server_id))
+    ).scalar_one()
+
+
 @router.get("/{server_id}", response_model=ServerOut)
 async def get_server(server_id: int, db: AsyncSession = Depends(get_db)) -> Server:
     server = await db.get(Server, server_id)

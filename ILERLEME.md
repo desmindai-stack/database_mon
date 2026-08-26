@@ -932,6 +932,51 @@ ismi ilk düğümle çakışınca, o istekte flush edilmiş 1. düğümün sunuc
 da geri alınıyor — sızmadığı sunucu sayısıyla doğrulandı). Toplam 29
 test yeşil. `tsc -b && vite build` yeşil.
 
+**Faz 14 — İŞ 3: Bağımsız sunucu ekleme kalktı.** `ServersPage`'in
+inline "Yeni sunucu" formu ve "+ Sunucu Ekle" giriş noktası kaldırıldı
+(düzenleme/silme kaldı) — yerine sayfanın üstünde sihirbaza yönlendiren
+bir not var. Sunucu bilgisi artık sadece instance eklerken giriliyor:
+sihirbazın her düğüm kartında "Sunucu" seçimi (`servers.length > 0`
+olduğunda görünür) — **Yeni sunucu** (eskisi gibi ad/host/ip/os/site/
+agent alanları) veya **Mevcut sunucu** (müşterinin kayıtlı
+sunucularından bir açılır liste; aynı fiziksel kutuda ikinci bir SQL
+Server named instance'ı senaryosu için). Sihirbaz artık hem
+create-group hem add-node modunda `GET /api/servers?customer_id=...`
+çekip node kartlarında sunuyor.
+
+**Backend:** `WizardNodeInput`'a `existing_server_id: int | None`
+eklendi; `server_name`/`host` artık zorunlu değil, bir
+`model_validator` ikisinden birinin (server_name+host YA DA
+existing_server_id) verilmiş olmasını zorluyor.
+`_create_server_instance_node()` artık `existing_server_id` varsa yeni
+bir Server oluşturmak yerine var olanı (customer_id eşleşmesi
+doğrulanarak — başka müşterinin sunucusu `404`) yeniden kullanıyor;
+Instance/Node'un host'u her zaman `server.host`'tan okunuyor (tek
+kaynak). Bunu yazarken gerçek bir bug bulundu ve test onu yakaladı:
+`Node.name`'in `(group_id, name)` üzerinde unique kısıtı var — var olan
+bir sunucuyu AYNI gruba ikinci kez eklerken (`server.name`'i doğrudan
+node adı olarak kullanmak) çakışıyordu; `_unique_node_name()` helper'ı
+eklendi (aynı `_unique_instance_name()` deseni, `-2`/`-3` soneki ekliyor).
+Düğüm listesindeki "tekrar eden sunucu adı" reddi artık sadece yeni
+sunucu oluşturan node'ları karşılaştırıyor (existing_server_id'li
+node'ların `server_name`'i `None`, hepsini "aynı" sayıp yanlışlıkla
+reddetmemesi için).
+
+**Sunucu ne olacak (kullanıcıya soruluyor, otomatik silinmiyor):**
+Kararın gerekçesi SORULAR.md'de — kısaca, bir Server artık birden fazla
+Node barındırabildiğinden (yukarıdaki existing_server_id senaryosu),
+"son düğüm silindi" anında kullanıcının niyeti belirsiz. Yeni uç nokta
+`GET /api/servers/{id}/node-count`; `GroupDetailPage::onDeleteNode` bir
+düğüm sildikten sonra bunu çağırıp sunucu sahipsiz kaldıysa ikinci bir
+`confirm()` ile soruyor, evetse `DELETE /api/servers/{id}` çağırıyor.
+
+**Test:** 2 yeni backend testi (`test_wizard_existing_server.py`):
+`existing_server_id` ile eklenen düğümün gerçekten aynı Server row'unu
+(yeni satır oluşturmadan) kullandığı ve host'unun o sunucudan doğru
+okunduğu; başka bir müşterinin `existing_server_id`'sini kullanmaya
+çalışmanın `404` ile reddedildiği. Toplam 31 test yeşil. `tsc -b &&
+vite build` yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

@@ -87,10 +87,23 @@ export default function GroupDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const onDeleteNode = async (nodeId: number) => {
+  const onDeleteNode = async (node: DbNode) => {
     if (!confirm("Düğüm silinsin mi?")) return;
-    await api.deleteNode(nodeId);
+    await api.deleteNode(node.id);
     await loadNodes();
+    // The server itself isn't auto-deleted with its last node (a Server can host more than one
+    // Node — a second named SQL Server instance, see İŞ 3) — ask instead of silently orphaning
+    // it or silently deleting a possibly-still-wanted server record (see SORULAR.md).
+    if (node.server_id) {
+      try {
+        const remaining = await api.getServerNodeCount(node.server_id);
+        if (remaining === 0 && confirm("Bu, sunucudaki son düğümdü. Sunucu kaydı da silinsin mi?")) {
+          await api.deleteServer(node.server_id);
+        }
+      } catch {
+        // Best-effort — a failure here shouldn't block the node deletion that already succeeded.
+      }
+    }
   };
 
   const startEditNode = (node: DbNode) => {
@@ -601,7 +614,7 @@ export default function GroupDetailPage() {
                     )}
                     <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.5rem" }}>
                       <button className="btn" onClick={() => startEditNode(node)}>Düzenle</button>
-                      <button className="btn btn-danger" onClick={() => onDeleteNode(node.id)}>Sil</button>
+                      <button className="btn btn-danger" onClick={() => onDeleteNode(node)}>Sil</button>
                     </div>
                   </div>
                 );

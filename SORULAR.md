@@ -68,13 +68,24 @@ kurtarma" değildi); istenirse `GroupDetailPage`'e "grubu sil" veya
 "standalone'a tek düğüm ekle" için wizard'ın 400'ünü gevşeten ayrı bir
 küçük iş açılabilir.
 
-## Faz 14 — İŞ 2: Sunucusuz düğüm silindiğinde sunucu ne olacak (İŞ 3'e devredildi)
+## Faz 14 — İŞ 3: Son düğümü silinen sunucu — kullanıcıya soruyoruz (auto-delete değil)
 
-Görevin İŞ 3 maddesi şunu soruyor: bir sunucunun son instance'ı
-silinince sunucu sahipsiz kalmasın. İŞ 2 sırasında bu konuya
-dokunmadım — mevcut `deleteNode`/`deleteServer` davranışı değişmedi
-(node silinince server silinmiyor, server ayrı sayfadan silinene kadar
-duruyor). Karar İŞ 3'te veriliyor, orada ayrıca yazılacak.
+Görev iki seçenek sunuyordu: sunucu otomatik silinsin ya da kullanıcıya
+sorulsun. **Kullanıcıya sormayı seçtim.** Gerekçe: bir Server artık
+birden fazla Node'u barındırabiliyor (İŞ 3'ün kendisi — aynı fiziksel
+kutuda ikinci bir named SQL Server instance'ı — `existing_server_id`
+ile). Bu, "sunucunun son düğümü silindi" anını nadir ama gerçek kılıyor
+ve o anda kullanıcının niyeti belirsiz: bazen sunucu gerçekten
+kullanımdan kalkmıştır (silinsin), bazen sadece o instance/node hatalı
+kaydedilmiştir ve sunucu bilgisi (host, agent_url, vb.) korunup yeni bir
+node ona yeniden bağlanacaktır. Sessiz otomatik silme bu ikinci
+senaryoda veri kaybı olur; bu yüzden `GroupDetailPage::onDeleteNode`
+düğümü sildikten sonra `GET /api/servers/{id}/node-count` (yeni uç
+nokta) ile sunucunun sahipsiz kalıp kalmadığını kontrol ediyor, kaldıysa
+ikinci bir `confirm()` ile soruyor — evetse `DELETE /api/servers/{id}`
+çağrılıyor. Bu, kod tabanındaki mevcut "her silme işleminden önce
+confirm()" desenine de uyuyor (bkz. CLAUDE.md'nin genel yıkıcı-işlem
+temkinliliği ilkesi).
 
 ## Faz 13 — İŞ 2: "Bağlantıyı test et → kaydet" bir kapı değil, bir öneri
 

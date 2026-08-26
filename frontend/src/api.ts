@@ -446,13 +446,17 @@ export interface WizardClusterOptions {
 }
 
 export interface WizardNodeInput {
-  server_name: string;
-  host: string;
+  // Either server_name+host (create a new Server) or existing_server_id (attach to an
+  // already-registered one — e.g. a second named SQL Server instance on a box that already
+  // hosts one) must be given.
+  server_name?: string;
+  host?: string;
   ip_address?: string | null;
-  os: ServerOS;
-  site: NodeSite;
+  os?: ServerOS;
+  site?: NodeSite;
   agent_url?: string | null;
   agent_token?: string | null;
+  existing_server_id?: number | null;
   instance_name?: string | null;
   port: number;
   database?: string | null;
@@ -874,6 +878,7 @@ export const api = {
     }),
   testExistingServerAgent: (id: number) =>
     request<ConnectionTestResult>(`/api/servers/${id}/test-agent`, { method: "POST" }),
+  getServerNodeCount: (id: number) => request<number>(`/api/servers/${id}/node-count`),
 
   getDashboardSummary: () => request<DashboardSummary>("/api/dashboard/summary"),
   refreshDashboard: () => request<DashboardSummary>("/api/dashboard/refresh", { method: "POST" }),

@@ -91,13 +91,17 @@ class WizardClusterOptions(BaseModel):
 
 
 class WizardNodeInput(BaseModel):
-    server_name: str = Field(min_length=1, max_length=128)
-    host: str = Field(min_length=1, max_length=255)
+    # Either server_name+host (create a new Server) or existing_server_id (attach to one
+    # already registered — e.g. a second named SQL Server instance on a box that already hosts
+    # one) must be given; see _validate_server_reference below.
+    server_name: str | None = Field(default=None, max_length=128)
+    host: str | None = Field(default=None, max_length=255)
     ip_address: str | None = None
     os: ServerOS = ServerOS.LINUX
     site: NodeSite = NodeSite.PRIMARY
     agent_url: str | None = None
     agent_token: str | None = None
+    existing_server_id: int | None = None
     instance_name: str | None = None
     port: int
     database: str | None = None
@@ -113,6 +117,15 @@ class WizardNodeInput(BaseModel):
     # mongodb only.
     replica_set: str | None = None
     auth_source: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_server_reference(self) -> "WizardNodeInput":
+        if self.existing_server_id is None:
+            if not self.server_name or not self.server_name.strip():
+                raise ValueError("server_name zorunlu (ya da existing_server_id ile mevcut bir sunucu seçin)")
+            if not self.host or not self.host.strip():
+                raise ValueError("host zorunlu (ya da existing_server_id ile mevcut bir sunucu seçin)")
+        return self
 
 
 class WizardCreateGroupRequest(BaseModel):
