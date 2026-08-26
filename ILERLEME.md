@@ -625,6 +625,18 @@ bir önbellek girdisi olarak doğru şekilde yeni bir çağrı tetikledi.
 `backend/tests/test_query_cache.py`'de get/set/TTL expiry ayrıca birim
 testle de kanıtlandı (3 test).
 
+**Faz 12 — EXPLAIN ANALYZE artık ayrı, açıkça onaylanan bir eylem.**
+Backend zaten varsayılan olarak `analyze=false` kullanıyordu
+(`ExplainRequest.analyze: bool = False`) — asıl eksik olan UI'da hiç
+ANALYZE seçeneği olmamasıydı (tek buton hep `analyze=false`
+gönderiyordu). Instance Detail'in Yavaş Sorgular sekmesinde artık iki
+ayrı buton var: "EXPLAIN plan" (sorguyu çalıştırmaz, sadece planlar) ve
+kırmızı "EXPLAIN ANALYZE ⚠" (sorguyu gerçekten çalıştırır) — ikinciye
+tıklayınca "bu sorguyu GERÇEKTEN ÇALIŞTIRIR ... devam edilsin mi?"
+uyarısıyla `confirm()` çıkıyor, onaylanmadan istek gönderilmiyor.
+Sonuç panelinde zaten var olan `ExplainPlanTree`'nin mod etiketi
+("EXPLAIN"/"ANALYZE") hangi sonucun hangi modda üretildiğini gösteriyor.
+
 ## Nasıl test edilir
 
 ### Backend

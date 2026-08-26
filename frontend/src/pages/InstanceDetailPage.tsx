@@ -877,8 +877,28 @@ export default function InstanceDetailPage() {
                                     loadExplain(q, false);
                                   }}
                                   disabled={explainLoading[q.id]}
+                                  title="Sadece planı gösterir, sorguyu çalıştırmaz"
                                 >
                                   {explainLoading[q.id] ? "EXPLAIN…" : "EXPLAIN plan"}
+                                </button>
+                                <button
+                                  className="btn btn-danger"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (
+                                      confirm(
+                                        "EXPLAIN ANALYZE bu sorguyu GERÇEKTEN ÇALIŞTIRIR (sadece planlamaz) — " +
+                                          "hedef sunucuda gerçek kaynak tüketir ve SELECT dışı yan etkisi olmasa bile " +
+                                          "büyük/yavaş sorgularda yük oluşturabilir. Devam edilsin mi?"
+                                      )
+                                    ) {
+                                      loadExplain(q, true);
+                                    }
+                                  }}
+                                  disabled={explainLoading[q.id]}
+                                  title="Sorguyu gerçekten çalıştırır — dikkatli kullanın"
+                                >
+                                  {explainLoading[q.id] ? "EXPLAIN…" : "EXPLAIN ANALYZE ⚠"}
                                 </button>
                                 <button
                                   className="btn btn-primary"
