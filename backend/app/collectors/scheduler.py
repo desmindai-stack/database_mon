@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app.config import settings
 from app.database import SessionLocal
 from app.models import Instance
-from app.services.collection import collect_instance
+from app.services.collection import collect_instance, effective_collect_interval, last_collected_at
 from app.services.custom_alert_rules import evaluate_custom_alert_rules
 from app.services.dashboard_snapshot import refresh_all_group_snapshots
 from app.services.settings import get_dashboard_refresh_interval
@@ -25,10 +25,22 @@ CUSTOM_RULES_TICK_SECONDS = 10
 
 
 async def collect_all_instances() -> None:
+    """Runs on a fixed tick (settings.collect_interval_seconds — this is the minimum
+    granularity, not a per-instance guarantee). Each instance is only actually collected once
+    its own effective_collect_interval() has elapsed since its last run — an instance with a
+    longer override (e.g. a lower-priority/less critical server) is simply skipped on the
+    ticks it isn't due yet, same "per-item due-check on a shared tick" pattern
+    evaluate_custom_alert_rules already uses for custom alert rules."""
     async with SessionLocal() as session:
         result = await session.execute(select(Instance).where(Instance.enabled.is_(True)))
         instances = result.scalars().all()
+        now = datetime.now(UTC)
         for instance in instances:
+            last_at = last_collected_at(instance.id)
+            if last_at is not None:
+                elapsed = (now - last_at).total_seconds()
+                if elapsed < effective_collect_interval(instance):
+                    continue
             try:
                 await collect_instance(instance, session)
             except Exception:

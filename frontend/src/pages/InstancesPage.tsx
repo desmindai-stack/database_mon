@@ -39,6 +39,7 @@ const emptyForm = (engine: DbEngine = "postgresql", defaultCustomer?: string): I
   role: "",
   services: [],
   options: defaultOptions(),
+  collect_interval_seconds: undefined,
 });
 
 const instanceToForm = (inst: Instance): InstanceCreate => ({
@@ -56,6 +57,7 @@ const instanceToForm = (inst: Instance): InstanceCreate => ({
   role: inst.role ?? "",
   services: inst.services ?? [],
   options: { ...defaultOptions(), ...(inst.options || {}) },
+  collect_interval_seconds: inst.collect_interval_seconds ?? undefined,
 });
 
 export default function InstancesPage() {
@@ -87,6 +89,11 @@ export default function InstancesPage() {
 
   const update = (key: keyof InstanceCreate, value: string | number | string[] | ClusterServiceOptions) => {
     setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const updateCollectInterval = (raw: string) => {
+    const value = raw.trim() === "" ? undefined : Number(raw);
+    setForm((prev) => ({ ...prev, collect_interval_seconds: value }));
   };
 
   const updateOption = <K extends keyof ClusterServiceOptions>(key: K, value: ClusterServiceOptions[K]) => {
@@ -207,6 +214,17 @@ export default function InstancesPage() {
         <label>
           Rol
           <input value={form.role} onChange={(e) => update("role", e.target.value)} placeholder="primary, replica, haproxy..." />
+        </label>
+        <label>
+          Toplama aralığı (saniye, opsiyonel)
+          <input
+            type="number"
+            min={5}
+            max={3600}
+            value={form.collect_interval_seconds ?? ""}
+            onChange={(e) => updateCollectInterval(e.target.value)}
+            placeholder="Boş = uygulama genel varsayılanı"
+          />
         </label>
         <label>
           Sunucu servisleri

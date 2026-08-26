@@ -24,6 +24,20 @@ logger = logging.getLogger(__name__)
 _previous_state: dict[int, dict] = {}
 
 
+def effective_collect_interval(instance: Instance) -> int:
+    """The per-instance override (Instance.collect_interval_seconds) if set, else the
+    app-wide settings.collect_interval_seconds default."""
+    return instance.collect_interval_seconds or settings.collect_interval_seconds
+
+
+def last_collected_at(instance_id: int) -> datetime | None:
+    """Used by collect_all_instances() to decide whether an instance is due yet under its own
+    (possibly overridden) interval — the scheduler tick itself stays fixed/fast (see
+    collectors/scheduler.py), individual instances are skipped on ticks they're not due on,
+    mirroring the existing per-rule due-check pattern in evaluate_custom_alert_rules."""
+    return _previous_state.get(instance_id, {}).get("collected_at")
+
+
 def _target_for(instance: Instance) -> ConnectionTarget:
     return ConnectionTarget(
         host=instance.host,
@@ -50,10 +64,17 @@ def _apply_metrics_to_sample(sample: MetricSample, metrics: dict) -> None:
 async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     engine = DatabaseEngine(instance.engine)
     collector = get_collector(engine, _target_for(instance))
+    interval = effective_collect_interval(instance)
 
+    now = datetime.now(UTC)
     prev = _previous_state.get(instance.id)
     if prev:
-        prev["delta_time"] = settings.collect_interval_seconds
+        # Real elapsed wall-clock time, not the nominal configured interval — a scheduler
+        # tick that ran late (busy server, backlog) would otherwise skew every *_per_sec
+        # metric this cycle. Falls back to the configured interval only if collected_at is
+        # somehow missing from a previous cycle's state.
+        prev_collected_at = prev.get("collected_at")
+        prev["delta_time"] = (now - prev_collected_at).total_seconds() if prev_collected_at else interval
 
     # One connection shared across collect_metrics()/collect_slow_queries() instead of each
     # opening its own — halves the connections-per-cycle for engines that support it
@@ -67,7 +88,7 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
         await collector.close_connection(conn)
 
     state = metrics.pop("_state", {})
-    state["collected_at"] = datetime.now(UTC)
+    state["collected_at"] = now
     _previous_state[instance.id] = state
 
     # Collector-derived version/capability info (see collectors/postgresql.py,
@@ -126,5 +147,5 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
         session,
         instance.id,
         normalized,
-        sample_interval_seconds=settings.collect_interval_seconds,
+        sample_interval_seconds=interval,
     )

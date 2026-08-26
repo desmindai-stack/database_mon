@@ -692,6 +692,29 @@ eklendi (test DB yolunu `app.config.Settings()` ilk import edilmeden
 önce ayarlıyor — dosya sırasına bağlı kırılgan bir env-var hilesi
 yerine pytest'in standart mekanizması). Toplam 17 test yeşil.
 
+**Faz 12 — Toplama aralığı instance başına ayarlanabilir.** Yeni
+`Instance.collect_interval_seconds` (nullable — boş = uygulama genel
+`settings.collect_interval_seconds` varsayılanı, 15sn). Scheduler tick'i
+sabit kalıyor (`collect_all_instances()` hâlâ her `collect_interval_seconds`
+saniyede bir tetikleniyor — `evaluate_custom_alert_rules`'ın custom alarm
+kuralları için zaten kullandığı "sabit tick + öğe başına due-check"
+desenini birebir tekrarlıyor): her instance için son toplamadan bu yana
+geçen gerçek süre kendi (override edilmiş veya varsayılan) aralığını
+geçmediyse o cycle'da atlanıyor. Bunu mümkün kılmak için `collect_instance`
+artık `*_per_sec` metriklerin `delta_time`'ını nominal yapılandırılmış
+aralık yerine GERÇEK geçen süreden hesaplıyor (yan fayda: scheduler
+gecikmesi/backlog durumunda oran metrikleri artık daha doğru).
+`InstancesPage`'in formuna "Toplama aralığı (saniye, opsiyonel)" alanı
+eklendi (5-3600sn arası, boş = varsayılan). httpx ile doğrulandı:
+`collect_interval_seconds=300` ile oluştur → döner; `null`'a resetle →
+döner; `2` (min altı) → `422`.
+
+**Test:** Yeni `test_scheduler_due_check.py` (2 test): 20 saniye önce
+toplanmış iki instance'tan (biri varsayılan 15sn aralıkla, biri 3600sn
+override ile) sadece varsayılan olanın gerçekten toplandığını, hiç
+toplanmamış bir instance'ın override'dan bağımsız her zaman due
+olduğunu kanıtlıyor. Toplam 19 test yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

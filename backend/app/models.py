@@ -149,6 +149,10 @@ class Instance(Base):
 
     group_id: Mapped[int | None] = mapped_column(ForeignKey("database_groups.id"), nullable=True)
 
+    # Null = use the app-wide settings.collect_interval_seconds default. Lets a lower-priority
+    # instance be sampled less often — see services/collection.py / collectors/scheduler.py.
+    collect_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

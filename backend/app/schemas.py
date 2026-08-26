@@ -206,6 +206,9 @@ class InstanceCreate(BaseModel):
     role: str | None = None
     services: list[str] | None = None
     group_id: int | None = None
+    # Per-instance override of the global collect_interval_seconds — null means "use the
+    # app-wide default". Lets a lower-priority/less critical server be monitored less often.
+    collect_interval_seconds: int | None = Field(default=None, ge=5, le=3600)
 
     def resolved_port(self) -> int:
         if self.port is not None:
@@ -230,6 +233,7 @@ class InstanceUpdate(BaseModel):
     services: list[str] | None = None
     group_id: int | None = None
     enabled: bool | None = None
+    collect_interval_seconds: int | None = Field(default=None, ge=5, le=3600)
 
 
 class InstanceOut(BaseModel):
@@ -250,6 +254,7 @@ class InstanceOut(BaseModel):
     services: list[str] | None
     group_id: int | None = None
     options: dict[str, Any] | None = None
+    collect_interval_seconds: int | None = None
     # Collector-derived (see Instance model docstring) — null until the first successful
     # collect_metrics() run for this instance.
     server_version: str | None = None
