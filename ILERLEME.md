@@ -590,6 +590,25 @@ kolonu yoksa yavaş sorgu toplama `NULL AS rows` ile otomatik geri
 çekiliyor ve sonuç kaybolmuyor. Toplam 11 test (7 PostgreSQL + 4 SQL
 Server) `python -m pytest` ile yeşil.
 
+**Faz 12 — Toplama yükü denetimi: index_advisor otomatik döngüden çıkarıldı.**
+`services/dashboard_snapshot.py`'nin `_instance_recommendations()`'ı her
+dashboard refresh tick'inde (varsayılan 60sn, kullanıcı 10sn'ye kadar
+düşürebiliyor — `ALLOWED_REFRESH_INTERVALS`) her grubun her instance'ının
+en yavaş sorgusu için `PostgreSQLIndexAdvisor.advise()`'ı ÇAĞIRIYORDU —
+bu, izlenen veritabanına karşı gerçek bir katalog taraması
+(`pg_stats`/`pg_indexes`/`pg_class`) ve bazen `hypopg` ile iki kez
+`EXPLAIN (FORMAT JSON)` + hipotetik index oluşturma/silme demekti. Bu
+artık tamamen kaldırıldı — index önerisi sadece kullanıcı bir sorgunun
+"Index önerisi" panelini açtığında çalışıyor (`POST
+/api/queries/{id}/advice`, zaten vardı, sadece otomatik döngüden ayrık
+hale getirildi). `_load_instance_snapshots()` de artık sadece
+`analyze_metrics()`'in ihtiyaç duyduğu alanları (`name`/`engine`/
+`metrics_json`/`collected_at`) çekiyor — host/port/database/kullanıcı
+adı/şifre/options ve gereksiz bir `SlowQuerySample` sorgusu (N+1, her
+instance için bir tane) artık hiç çekilmiyor. `performance_insights`
+kaynağı (tamamen bellek içi, `metrics_json` üzerinde çalışıyor, hedef
+DB'ye hiç bağlanmıyor) değişmeden kalıyor.
+
 ## Nasıl test edilir
 
 ### Backend

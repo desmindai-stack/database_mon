@@ -9,11 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.collectors.base import ConnectionTarget
-from app.models import DatabaseGroup, GroupHealthSnapshot, Instance, MetricSample, Node, SlowQuerySample
+from app.models import DatabaseGroup, GroupHealthSnapshot, Instance, MetricSample, Node
 from app.services.cluster_health import collect_group_health
-from app.services.credentials import decrypt_secret
-from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.parameter_audit import collect_parameter_audit
 from app.services.performance_insights import analyze_metrics
 
@@ -86,7 +83,10 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
 
 
 async def _load_instance_snapshots(session: AsyncSession, group_id: int) -> list[dict[str, Any]]:
-    """Sequential, session-bound read — must run before any concurrent network work."""
+    """Sequential, session-bound read — must run before any concurrent network work. Only
+    pulls what analyze_metrics() (in-memory, no target-DB I/O) needs; connection details and
+    slow-query text used to be fetched here too for the (now-removed, see
+    _instance_recommendations) automatic index_advisor call."""
     instances = (await session.execute(select(Instance).where(Instance.group_id == group_id))).scalars().all()
     snapshots: list[dict[str, Any]] = []
     for instance in instances:
@@ -98,35 +98,26 @@ async def _load_instance_snapshots(session: AsyncSession, group_id: int) -> list
                 .limit(1)
             )
         ).scalar_one_or_none()
-        slow = (
-            await session.execute(
-                select(SlowQuerySample)
-                .where(SlowQuerySample.instance_id == instance.id)
-                .order_by(SlowQuerySample.mean_time_ms.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
         snapshots.append(
             {
                 "name": instance.name,
                 "engine": instance.engine,
-                "host": instance.host,
-                "port": instance.port,
-                "database": instance.database,
-                "username": instance.username,
-                "password_encrypted": instance.password,
-                "options": instance.options,
                 "metrics_json": dict(latest.metrics_json or {}) if latest else None,
                 "collected_at": latest.collected_at if latest else None,
-                "slow_query": slow.query if slow else None,
-                "slow_query_mean_ms": slow.mean_time_ms if slow else None,
             }
         )
     return snapshots
 
 
 async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Network-bound only (no app DB session) — safe to run concurrently across groups."""
+    """In-memory only — analyze_metrics() works off metrics_json already sitting in the DB
+    (no network I/O to the target instance at all). index_advisor recommendations used to be
+    generated here too, but that meant every dashboard refresh tick (as often as every 10s,
+    see ALLOWED_REFRESH_INTERVALS) ran a live catalog scan (pg_stats/pg_indexes/pg_class,
+    sometimes a hypopg EXPLAIN re-plan) against every instance with a slow query — real load
+    on the monitored database for a "just glance at the dashboard" action. Index advice is now
+    exclusively on-demand: POST /api/queries/{id}/advice, triggered by the user opening a slow
+    query's advice panel, response cached (see routers/queries.py) — see SORULAR.md."""
     out: list[dict[str, Any]] = []
 
     for snap in snapshots:
@@ -146,31 +137,6 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                         "message": f"{snap['name']}: {insight.title} — {insight.recommendation}",
                     }
                 )
-
-        if snap["engine"] == "postgresql" and snap["slow_query"] and (snap["slow_query_mean_ms"] or 0) > 100:
-            try:
-                target = ConnectionTarget(
-                    host=snap["host"],
-                    port=snap["port"],
-                    database=snap["database"],
-                    username=snap["username"],
-                    password=decrypt_secret(snap["password_encrypted"]),
-                    options=snap["options"],
-                )
-                advisor = PostgreSQLIndexAdvisor(target)
-                advice_list = await advisor.advise(snap["slow_query"])
-                for advice in advice_list[:1]:
-                    out.append(
-                        {
-                            "severity": "medium",
-                            "source": "index_advisor",
-                            "group": group.name,
-                            "message": f"{snap['name']}: {advice.reason}",
-                            "action": advice.index_ddl,
-                        }
-                    )
-            except Exception:
-                logger.debug("dashboard snapshot: index advisor failed for instance %s", snap["name"])
 
     return out
 
