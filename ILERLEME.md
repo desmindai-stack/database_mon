@@ -816,6 +816,39 @@ geçişte `ServersPage`'e `ip_address`, `DatabaseGroupsPage`'e
 `listener_port` alanları da eklendi (Faz 13 İŞ 1'den — önceden sadece
 backend/şemada vardı, hiçbir formda giriş alanı yoktu).
 
+**Faz 13 — Kapanış: sihirbaz dört topoloji için canlı sunucuya karşı
+doğrulandı.** Bu ortamda tarayıcı otomasyonu yok, bu yüzden şu üç
+katmanla doğrulandı:
+1. **Gerçek uvicorn + gerçek SQLite'a karşı, curl ile** (in-process
+   ASGITransport değil — `uvicorn app.main:app --port 8123` gerçekten
+   ayağa kaldırılıp dıştan HTTP isteğiyle vuruldu): dört senaryonun
+   hepsi (a: standalone, b: 2 düğüm AG, c: 3 düğüm Patroni+DR, d: 5
+   düğüm özel AG) `POST /api/wizard/database-groups` ile başarıyla
+   oluşturuldu; her grubun düğüm listesi (`GET /api/groups/{id}/nodes`)
+   doğru site/rol/instance_name/ip_address ve her düğümün kendi
+   instance'ına bağlı (`instance_id` dolu) olduğu teyit edildi; `GET
+   /api/groups/{id}/health` dördü için de `200` döndü;
+   `/parameters`/`/alwayson` (canlı DB bağlantısı gerektiren, demo
+   host'ları sahte olduğundan beklenen) `502` ile temiz şekilde
+   başarısız oldu, çökmedi.
+2. **Gerçek Vite dev server'a karşı, curl ile**: `npm run dev` gerçekten
+   ayağa kaldırılıp `/applications/1/groups/wizard` (SPA shell) ve
+   `DatabaseWizardPage.tsx`'in Vite'ın kendi transform ucundan servis
+   edilen hâli `200` döndü ve beklenen `export default function
+   DatabaseWizardPage` işaretini içeriyordu — yani component gerçekten
+   derleniyor/transform ediliyor, sadece `tsc` seviyesinde değil.
+3. **Statik**: `tsc -b && vite build` (tip güvenliği) + her formun
+   `buildPayload()`/`WizardCreateGroupRequest` şekli (1)'de doğrulanan
+   uç noktanın kabul ettiği şekille birebir aynı.
+
+**Doğrulanamayan şey, açıkça belirtiliyor:** Gerçek bir tarayıcıda
+adım adım tıklayarak (buton tıklamaları, alan doldurma, "İleri"/"Geri"
+geçişleri, hata mesajlarının görsel olarak doğru yerde çıkması) test
+edilmedi — bu ortamda tarayıcı otomasyon aracı yok. Yukarıdaki üç katman
+"sihirbazın ürettiği istekler backend tarafından doğru işleniyor" ve
+"component hatasız derleniyor/render ediliyor" iddialarını kanıtlıyor,
+"buton X'e tıklayınca Y oluyor" iddiasını değil.
+
 ## Nasıl test edilir
 
 ### Backend
