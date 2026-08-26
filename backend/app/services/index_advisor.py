@@ -40,7 +40,7 @@ class PostgreSQLIndexAdvisor:
         self.target = target
 
     async def _connect(self) -> asyncpg.Connection:
-        return await asyncpg.connect(
+        conn = await asyncpg.connect(
             host=self.target.host,
             port=self.target.port,
             database=self.target.database,
@@ -48,6 +48,11 @@ class PostgreSQLIndexAdvisor:
             password=self.target.password,
             timeout=15,
         )
+        # Catalog scans + hypopg re-planning (_hypopg_estimate) are still on-demand/user
+        # triggered, but should never be able to hang a connection open indefinitely against
+        # the monitored server.
+        await conn.execute("SET statement_timeout = '8000ms'")
+        return conn
 
     async def advise(self, query_text: str) -> list[IndexAdvice]:
         query_text = _strip_comments(query_text).strip()

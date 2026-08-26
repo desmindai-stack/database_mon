@@ -16,12 +16,20 @@ from app.schemas import (
     QueryHistorySeriesOut,
     SlowQueryOut,
 )
+from app.services import query_cache
 from app.services.credentials import decrypt_secret
 from app.services.explain_service import PostgreSQLExplainService
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
 
 router = APIRouter(prefix="/queries", tags=["queries"])
+
+# Both EXPLAIN and index advice are on-demand, user-triggered probes against the live target
+# instance (EXPLAIN ANALYZE executes the query; advice does catalog scans + sometimes a hypopg
+# re-plan) — cached for a few minutes so re-opening the same panel (tab switch, re-render,
+# accidental double click) doesn't repeat the expensive/executing work. See services/query_cache.py.
+_EXPLAIN_CACHE_TTL_SECONDS = 300.0
+_ADVICE_CACHE_TTL_SECONDS = 300.0
 
 
 @router.get("/{instance_id}/history", response_model=QueryHistoryListOut)
@@ -133,6 +141,11 @@ async def explain_query(
     if instance.engine != "postgresql":
         raise HTTPException(status_code=400, detail="EXPLAIN is only available for PostgreSQL")
 
+    cache_key = ("explain", instance_id, bool(body.analyze), body.query.strip())
+    cached = query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     target = ConnectionTarget(
         host=instance.host,
         port=instance.port,
@@ -148,7 +161,9 @@ async def explain_query(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"EXPLAIN failed: {exc}") from exc
-    return ExplainOut.model_validate(PostgreSQLExplainService.to_payload(result))
+    out = ExplainOut.model_validate(PostgreSQLExplainService.to_payload(result))
+    query_cache.set(cache_key, out, ttl_seconds=_EXPLAIN_CACHE_TTL_SECONDS)
+    return out
 
 
 @router.post("/{instance_id}/advice", response_model=list[IndexAdviceOut])
@@ -163,6 +178,11 @@ async def advise_indexes(
     if instance.engine != "postgresql":
         raise HTTPException(status_code=400, detail="Index advice is only available for PostgreSQL")
 
+    cache_key = ("advice", instance_id, body.query.strip())
+    cached = query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     target = ConnectionTarget(
         host=instance.host,
         port=instance.port,
@@ -173,7 +193,7 @@ async def advise_indexes(
     )
     advisor = PostgreSQLIndexAdvisor(target)
     recommendations = await advisor.advise(body.query)
-    return [
+    out = [
         IndexAdviceOut(
             table_name=r.table_name,
             schema_name=r.schema_name,
@@ -188,3 +208,5 @@ async def advise_indexes(
         )
         for r in recommendations
     ]
+    query_cache.set(cache_key, out, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
+    return out

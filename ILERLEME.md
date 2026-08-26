@@ -609,6 +609,22 @@ instance için bir tane) artık hiç çekilmiyor. `performance_insights`
 kaynağı (tamamen bellek içi, `metrics_json` üzerinde çalışıyor, hedef
 DB'ye hiç bağlanmıyor) değişmeden kalıyor.
 
+**Faz 12 — EXPLAIN/index önerisi sonuçları önbelleğe alındı + statement_timeout.**
+Yeni `services/query_cache.py`: küçük, process-local, TTL'li bir bellek
+içi önbellek (5 dakika). `POST /api/queries/{id}/explain` ve `POST
+/api/queries/{id}/advice` artık (instance_id, sorgu metni, [explain için
++ analyze bayrağı]) anahtarıyla önbellekten okuyor/yazıyor — aynı panel
+tekrar açılırsa (tab değişimi, re-render, çift tıklama) pahalı/yürüten
+işlem tekrarlanmıyor. `PostgreSQLIndexAdvisor._connect()`'e de
+`explain_service`'in zaten sahip olduğu `statement_timeout` (8sn)
+eklendi — katalog taraması + hypopg re-plan artık sınırsız süre
+bağlantı açık tutamıyor. httpx ile doğrulandı: `advise`/`explain`
+sahte implementasyonları çağrı sayacıyla sarmalanıp aynı sorgu 3 kez
+istendi — gerçek çağrı sayısı 1'de kaldı; farklı bir sorgu metni ayrı
+bir önbellek girdisi olarak doğru şekilde yeni bir çağrı tetikledi.
+`backend/tests/test_query_cache.py`'de get/set/TTL expiry ayrıca birim
+testle de kanıtlandı (3 test).
+
 ## Nasıl test edilir
 
 ### Backend
