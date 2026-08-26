@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   api,
@@ -36,9 +36,33 @@ function nextNodeKey(): string {
 
 type SqlServerAuthType = "sql" | "windows";
 type PostgresSslMode = "disable" | "require";
+type WizardSectionKey = "server" | "db" | "agent";
+
+function WizardSection({
+  title, sectionKey, open, onToggle, children,
+}: {
+  title: string; sectionKey: WizardSectionKey; open: boolean; onToggle: (key: WizardSectionKey) => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="wizard-section">
+      <button type="button" className="wizard-section-head" onClick={() => onToggle(sectionKey)}>
+        {title}
+        <span>{open ? "▾" : "▸"}</span>
+      </button>
+      {open && <div className="wizard-section-body">{children}</div>}
+    </div>
+  );
+}
 
 interface NodeFormState {
   key: string;
+  // Whole-card collapse for multi-node cluster views — closed cards show a one-line summary
+  // (name/site/test status) instead of the full field set.
+  collapsed: boolean;
+  // Single-open accordion within an (expanded) node card — "server" is the default-active
+  // section per İŞ 4 ("varsayılan olarak sadece aktif bölüm açık olsun"); null = all closed.
+  openSection: WizardSectionKey | null;
   // "new" creates a Server row; "existing" attaches to one already registered (existingServerId)
   // — the second-named-instance-on-one-box scenario (İŞ 3).
   serverMode: "new" | "existing";
@@ -72,6 +96,8 @@ interface NodeFormState {
 function makeNode(engine: DbEngine, site: NodeSite, role_hint: NodeRoleHint): NodeFormState {
   return {
     key: nextNodeKey(),
+    collapsed: false,
+    openSection: "server",
     serverMode: "new",
     existingServerId: null,
     server_name: "",
@@ -98,20 +124,26 @@ function makeNode(engine: DbEngine, site: NodeSite, role_hint: NodeRoleHint): No
   };
 }
 
+// Multi-node cluster views default to only the first node's card expanded — the rest collapse
+// to a one-line summary so a large cluster doesn't turn the step into an endless scroll (İŞ 4).
+function collapseAllButFirst(list: NodeFormState[]): NodeFormState[] {
+  return list.length <= 1 ? list : list.map((n, idx) => (idx === 0 ? n : { ...n, collapsed: true }));
+}
+
 function nodesForPreset(preset: TopologyPreset, engine: DbEngine): NodeFormState[] {
   switch (preset) {
     case "standalone":
       return [makeNode(engine, "primary", "unknown")];
     case "cluster-2":
-      return [makeNode(engine, "primary", "primary"), makeNode(engine, "primary", "replica")];
+      return collapseAllButFirst([makeNode(engine, "primary", "primary"), makeNode(engine, "primary", "replica")]);
     case "cluster-3":
-      return [
+      return collapseAllButFirst([
         makeNode(engine, "primary", "primary"),
         makeNode(engine, "primary", "replica"),
         makeNode(engine, "disaster", "replica"),
-      ];
+      ]);
     case "cluster-custom":
-      return [makeNode(engine, "primary", "primary"), makeNode(engine, "primary", "replica")];
+      return collapseAllButFirst([makeNode(engine, "primary", "primary"), makeNode(engine, "primary", "replica")]);
   }
 }
 
@@ -273,7 +305,7 @@ export default function DatabaseWizardPage() {
     setCustomNodeCount(clamped);
     setNodes((prev) => {
       if (clamped > prev.length) {
-        const additions = Array.from({ length: clamped - prev.length }, () => makeNode(engine, "primary", "replica"));
+        const additions = Array.from({ length: clamped - prev.length }, () => ({ ...makeNode(engine, "primary", "replica"), collapsed: true }));
         return [...prev, ...additions];
       }
       return prev.slice(0, clamped);
@@ -293,6 +325,16 @@ export default function DatabaseWizardPage() {
 
   const updateNode = <K extends keyof NodeFormState>(key: string, field: K, value: NodeFormState[K]) => {
     setNodes((prev) => prev.map((n) => (n.key === key ? { ...n, [field]: value } : n)));
+  };
+
+  const toggleNodeCollapsed = (key: string) => {
+    setNodes((prev) => prev.map((n) => (n.key === key ? { ...n, collapsed: !n.collapsed } : n)));
+  };
+
+  const toggleNodeSection = (key: string, section: WizardSectionKey) => {
+    setNodes((prev) =>
+      prev.map((n) => (n.key === key ? { ...n, openSection: n.openSection === section ? null : section } : n))
+    );
   };
 
   const defaultDatabase = () => ENGINE_DEFAULTS[engine].database;
@@ -491,7 +533,7 @@ export default function DatabaseWizardPage() {
 
       {loadError && <div className="error">{loadError}</div>}
 
-      <div className="wizard-steps">
+      <div className="wizard-steps sticky">
         {steps.map((s, idx) => (
           <div key={s.key} className={`wizard-step${idx === step ? " active" : ""}${idx < step ? " done" : ""}`}>
             <span className="wizard-step-num">{idx + 1}</span>
@@ -502,7 +544,7 @@ export default function DatabaseWizardPage() {
 
       {saveError && <div className="error">{saveError}</div>}
 
-      <div className="card">
+      <div className="card wizard-scroll-body">
         {currentKey === "topology" && (
           <>
             <h3 className="chart-title">Motor ve topoloji seçin</h3>
@@ -555,7 +597,7 @@ export default function DatabaseWizardPage() {
               {preset === "cluster-3" && `3 düğümlü ${engine === "sqlserver" ? "Always On" : "Patroni"} cluster — 2 ana DC + 1 disaster site.`}
               {preset === "cluster-custom" && `${nodes.length} düğümlü özel ${engine === "sqlserver" ? "Always On" : "Patroni"} cluster.`}
             </p>
-            <div className="form-actions">
+            <div className="form-actions wizard-form-actions">
               <button type="button" className="btn btn-primary" onClick={goNext}>İleri</button>
             </div>
           </>
@@ -654,7 +696,7 @@ export default function DatabaseWizardPage() {
                 <input value={notes} onChange={(e) => setNotes(e.target.value)} />
               </label>
             </div>
-            <div className="form-actions">
+            <div className="form-actions wizard-form-actions">
               <button type="button" className="btn" onClick={goBack}>Geri</button>
               <button type="button" className="btn btn-primary" onClick={goNext}>İleri</button>
             </div>
@@ -699,248 +741,301 @@ export default function DatabaseWizardPage() {
               </div>
             )}
 
-            {nodes.map((node, idx) => (
-              <div className="wizard-node-card" key={node.key}>
-                <div className="wizard-node-card-head">
-                  <strong>{mode === "add-node" || isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</strong>
-                  {canAddNode && nodes.length > minNodesInStep && (
-                    <button type="button" className="btn btn-danger btn-xs" onClick={() => removeNode(node.key)}>
-                      Sil
-                    </button>
-                  )}
-                </div>
-                <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-                  {servers.length > 0 && (
-                    <label>
-                      Sunucu
-                      <select
-                        value={node.serverMode}
-                        onChange={(e) => updateNode(node.key, "serverMode", e.target.value as "new" | "existing")}
-                      >
-                        <option value="new">Yeni sunucu</option>
-                        <option value="existing">Mevcut sunucu</option>
-                      </select>
-                    </label>
-                  )}
-                  {node.serverMode === "existing" ? (
-                    <label>
-                      Mevcut sunucu {REQUIRED}
-                      <select
-                        value={node.existingServerId ?? ""}
-                        onChange={(e) => updateNode(node.key, "existingServerId", e.target.value ? Number(e.target.value) : null)}
-                        className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
-                      >
-                        <option value="">— seçin —</option>
-                        {servers.map((s) => (
-                          <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
-                        ))}
-                      </select>
-                      {fieldErrors[`node-${idx}-server_name`] && (
-                        <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
+            {nodes.map((node, idx) => {
+              const showCollapse = mode === "add-node" || isCluster;
+              const isCollapsed = showCollapse && node.collapsed;
+              const existingServer = node.serverMode === "existing" ? servers.find((s) => s.id === node.existingServerId) : null;
+              const summaryName = node.serverMode === "existing" ? (existingServer?.name ?? "seçilmedi") : (node.server_name || `Düğüm ${idx + 1}`);
+              const summarySite = node.serverMode === "existing" ? existingServer?.site : node.site;
+              const summarySiteLabel = summarySite === "disaster" ? "DR" : summarySite === "primary" ? "Ana DC" : "—";
+              const summaryTest = node.testResult ? (node.testResult.ok ? "✓ bağlantı OK" : "✗ bağlantı başarısız") : "test edilmedi";
+              return (
+                <div className="wizard-node-card" key={node.key}>
+                  <div className="wizard-node-card-head">
+                    <button
+                      type="button"
+                      className="wizard-node-card-title"
+                      onClick={() => showCollapse && toggleNodeCollapsed(node.key)}
+                      style={{ cursor: showCollapse ? "pointer" : "default" }}
+                    >
+                      {showCollapse && <span className="wizard-node-card-chevron">{node.collapsed ? "▸" : "▾"}</span>}
+                      <strong>{mode === "add-node" || isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</strong>
+                      {isCollapsed && (
+                        <span className="wizard-node-summary-line">
+                          {summaryName} · {summarySiteLabel} · {summaryTest}
+                        </span>
                       )}
-                    </label>
-                  ) : (
-                    <>
-                      <label>
-                        Sunucu adı {REQUIRED}
-                        <input
-                          value={node.server_name}
-                          onChange={(e) => updateNode(node.key, "server_name", e.target.value)}
-                          className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
-                          placeholder={`${engine === "sqlserver" ? "winsvr" : "pgsvr"}-0${idx + 1}`}
-                        />
-                        {fieldErrors[`node-${idx}-server_name`] && (
-                          <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
-                        )}
-                      </label>
-                      <label>
-                        Hostname {REQUIRED}
-                        <input
-                          value={node.host}
-                          onChange={(e) => updateNode(node.key, "host", e.target.value)}
-                          className={fieldErrors[`node-${idx}-host`] ? "field-invalid" : ""}
-                          placeholder="node.internal"
-                        />
-                        {fieldErrors[`node-${idx}-host`] && (
-                          <span className="field-error">{fieldErrors[`node-${idx}-host`]}</span>
-                        )}
-                      </label>
-                      <label>
-                        IP adresi
-                        <input
-                          value={node.ip_address}
-                          onChange={(e) => updateNode(node.key, "ip_address", e.target.value)}
-                          placeholder="10.0.0.10"
-                        />
-                      </label>
-                      <label>
-                        İşletim sistemi
-                        <select value={node.os} onChange={(e) => updateNode(node.key, "os", e.target.value as ServerOS)}>
-                          <option value="linux">Linux</option>
-                          <option value="windows">Windows</option>
-                        </select>
-                      </label>
-                      <label>
-                        Site
-                        <select value={node.site} onChange={(e) => updateNode(node.key, "site", e.target.value as NodeSite)}>
-                          <option value="primary">Ana DC</option>
-                          <option value="disaster">Disaster (DR)</option>
-                        </select>
-                      </label>
-                    </>
-                  )}
-                  {(mode === "add-node" || isCluster) && (
-                    <label>
-                      Rol
-                      <select
-                        value={node.role_hint}
-                        onChange={(e) => updateNode(node.key, "role_hint", e.target.value as NodeRoleHint)}
-                      >
-                        <option value="unknown">Bilinmiyor</option>
-                        <option value="primary">Primary</option>
-                        <option value="replica">Replica</option>
-                      </select>
-                    </label>
-                  )}
-                  {engine === "sqlserver" && (
-                    <label>
-                      SQL Server instance adı
-                      <input
-                        value={node.instance_name}
-                        onChange={(e) => updateNode(node.key, "instance_name", e.target.value)}
-                        placeholder="MSSQLSERVER (varsayılan)"
-                      />
-                    </label>
-                  )}
-                  <label>
-                    {engine === "sqlserver" ? "Instance portu" : "Port"} {REQUIRED}
-                    <input
-                      type="number"
-                      value={node.port}
-                      onChange={(e) => updateNode(node.key, "port", Number(e.target.value))}
-                      className={fieldErrors[`node-${idx}-port`] ? "field-invalid" : ""}
-                    />
-                    {fieldErrors[`node-${idx}-port`] && (
-                      <span className="field-error">{fieldErrors[`node-${idx}-port`]}</span>
-                    )}
-                  </label>
-                  {engine === "sqlserver" && (
-                    <label>
-                      Kimlik doğrulama tipi
-                      <select
-                        value={node.authType}
-                        onChange={(e) => updateNode(node.key, "authType", e.target.value as SqlServerAuthType)}
-                      >
-                        <option value="sql">SQL Server kimlik doğrulama</option>
-                        <option value="windows">Windows (Integrated)</option>
-                      </select>
-                    </label>
-                  )}
-                  {(engine === "postgresql" || engine === "sqlserver") && (
-                    <label>
-                      Veritabanı adı
-                      <input
-                        value={node.database}
-                        onChange={(e) => updateNode(node.key, "database", e.target.value)}
-                        placeholder={defaultDatabase()}
-                      />
-                    </label>
-                  )}
-                  {engine === "postgresql" && (
-                    <label>
-                      SSL modu
-                      <select value={node.sslMode} onChange={(e) => updateNode(node.key, "sslMode", e.target.value as PostgresSslMode)}>
-                        <option value="disable">Devre dışı</option>
-                        <option value="require">Gerekli (require)</option>
-                      </select>
-                    </label>
-                  )}
-                  {engine === "mongodb" && (
-                    <>
-                      <label>
-                        Replica set adı
-                        <input
-                          value={node.replicaSet}
-                          onChange={(e) => updateNode(node.key, "replicaSet", e.target.value)}
-                          placeholder="rs0"
-                        />
-                      </label>
-                      <label>
-                        authSource
-                        <input
-                          value={node.authSource}
-                          onChange={(e) => updateNode(node.key, "authSource", e.target.value)}
-                          placeholder="admin"
-                        />
-                      </label>
-                    </>
-                  )}
-                  {!(engine === "sqlserver" && node.authType === "windows") && (
-                    <>
-                      <label>
-                        Kullanıcı adı {REQUIRED}
-                        <input
-                          value={node.db_username}
-                          onChange={(e) => updateNode(node.key, "db_username", e.target.value)}
-                          className={fieldErrors[`node-${idx}-db_username`] ? "field-invalid" : ""}
-                        />
-                        {fieldErrors[`node-${idx}-db_username`] && (
-                          <span className="field-error">{fieldErrors[`node-${idx}-db_username`]}</span>
-                        )}
-                      </label>
-                      <label>
-                        Şifre
-                        <input
-                          type="password"
-                          value={node.db_password}
-                          onChange={(e) => updateNode(node.key, "db_password", e.target.value)}
-                        />
-                      </label>
-                    </>
-                  )}
-                  {node.serverMode === "new" && (
-                    <>
-                      <label>
-                        Host agent URL (opsiyonel)
-                        <input
-                          value={node.agent_url}
-                          onChange={(e) => updateNode(node.key, "agent_url", e.target.value)}
-                          placeholder="http://node.internal:9105"
-                        />
-                      </label>
-                      <label>
-                        Host agent token (opsiyonel)
-                        <input
-                          type="password"
-                          value={node.agent_token}
-                          onChange={(e) => updateNode(node.key, "agent_token", e.target.value)}
-                        />
-                      </label>
-                    </>
-                  )}
-                </div>
-                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
-                  <button type="button" className="btn btn-xs" disabled={node.testing} onClick={() => testNodeConnection(node.key)}>
-                    {node.testing ? "Test ediliyor…" : "Bağlantıyı test et"}
-                  </button>
-                  {node.agent_url && (
-                    <button type="button" className="btn btn-xs" disabled={node.agentTesting} onClick={() => testNodeAgent(node.key)}>
-                      {node.agentTesting ? "Test ediliyor…" : "Agent'ı test et"}
                     </button>
-                  )}
-                  {node.testResult && (
-                    <span className={node.testResult.ok ? "ok-text" : "warn-text"}>{node.testResult.message}</span>
-                  )}
-                  {node.agentTestResult && (
-                    <span className={node.agentTestResult.ok ? "ok-text" : "warn-text"}>
-                      Agent: {node.agentTestResult.message}
-                    </span>
+                    {canAddNode && nodes.length > minNodesInStep && (
+                      <button type="button" className="btn btn-danger btn-xs" onClick={() => removeNode(node.key)}>
+                        Sil
+                      </button>
+                    )}
+                  </div>
+                  {!isCollapsed && (
+                    <>
+                      {(mode === "add-node" || isCluster) && (
+                        <label style={{ maxWidth: 220, display: "block", marginBottom: "0.75rem" }}>
+                          Rol
+                          <select
+                            value={node.role_hint}
+                            onChange={(e) => updateNode(node.key, "role_hint", e.target.value as NodeRoleHint)}
+                          >
+                            <option value="unknown">Bilinmiyor</option>
+                            <option value="primary">Primary</option>
+                            <option value="replica">Replica</option>
+                          </select>
+                        </label>
+                      )}
+
+                      <WizardSection
+                        title="Sunucu bilgileri"
+                        sectionKey="server"
+                        open={node.openSection === "server"}
+                        onToggle={(s) => toggleNodeSection(node.key, s)}
+                      >
+                        <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                          {servers.length > 0 && (
+                            <label>
+                              Sunucu
+                              <select
+                                value={node.serverMode}
+                                onChange={(e) => updateNode(node.key, "serverMode", e.target.value as "new" | "existing")}
+                              >
+                                <option value="new">Yeni sunucu</option>
+                                <option value="existing">Mevcut sunucu</option>
+                              </select>
+                            </label>
+                          )}
+                          {node.serverMode === "existing" ? (
+                            <label>
+                              Mevcut sunucu {REQUIRED}
+                              <select
+                                value={node.existingServerId ?? ""}
+                                onChange={(e) => updateNode(node.key, "existingServerId", e.target.value ? Number(e.target.value) : null)}
+                                className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
+                              >
+                                <option value="">— seçin —</option>
+                                {servers.map((s) => (
+                                  <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                                ))}
+                              </select>
+                              {fieldErrors[`node-${idx}-server_name`] && (
+                                <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
+                              )}
+                            </label>
+                          ) : (
+                            <>
+                              <label>
+                                Sunucu adı {REQUIRED}
+                                <input
+                                  value={node.server_name}
+                                  onChange={(e) => updateNode(node.key, "server_name", e.target.value)}
+                                  className={fieldErrors[`node-${idx}-server_name`] ? "field-invalid" : ""}
+                                  placeholder={`${engine === "sqlserver" ? "winsvr" : "pgsvr"}-0${idx + 1}`}
+                                />
+                                {fieldErrors[`node-${idx}-server_name`] && (
+                                  <span className="field-error">{fieldErrors[`node-${idx}-server_name`]}</span>
+                                )}
+                              </label>
+                              <label>
+                                Hostname {REQUIRED}
+                                <input
+                                  value={node.host}
+                                  onChange={(e) => updateNode(node.key, "host", e.target.value)}
+                                  className={fieldErrors[`node-${idx}-host`] ? "field-invalid" : ""}
+                                  placeholder="node.internal"
+                                />
+                                {fieldErrors[`node-${idx}-host`] && (
+                                  <span className="field-error">{fieldErrors[`node-${idx}-host`]}</span>
+                                )}
+                              </label>
+                              <label>
+                                IP adresi
+                                <input
+                                  value={node.ip_address}
+                                  onChange={(e) => updateNode(node.key, "ip_address", e.target.value)}
+                                  placeholder="10.0.0.10"
+                                />
+                              </label>
+                              <label>
+                                İşletim sistemi
+                                <select value={node.os} onChange={(e) => updateNode(node.key, "os", e.target.value as ServerOS)}>
+                                  <option value="linux">Linux</option>
+                                  <option value="windows">Windows</option>
+                                </select>
+                              </label>
+                              <label>
+                                Site
+                                <select value={node.site} onChange={(e) => updateNode(node.key, "site", e.target.value as NodeSite)}>
+                                  <option value="primary">Ana DC</option>
+                                  <option value="disaster">Disaster (DR)</option>
+                                </select>
+                              </label>
+                            </>
+                          )}
+                        </div>
+                      </WizardSection>
+
+                      <WizardSection
+                        title="Veritabanı bağlantısı"
+                        sectionKey="db"
+                        open={node.openSection === "db"}
+                        onToggle={(s) => toggleNodeSection(node.key, s)}
+                      >
+                        <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                          {engine === "sqlserver" && (
+                            <label>
+                              SQL Server instance adı
+                              <input
+                                value={node.instance_name}
+                                onChange={(e) => updateNode(node.key, "instance_name", e.target.value)}
+                                placeholder="MSSQLSERVER (varsayılan)"
+                              />
+                            </label>
+                          )}
+                          <label>
+                            {engine === "sqlserver" ? "Instance portu" : "Port"} {REQUIRED}
+                            <input
+                              type="number"
+                              value={node.port}
+                              onChange={(e) => updateNode(node.key, "port", Number(e.target.value))}
+                              className={fieldErrors[`node-${idx}-port`] ? "field-invalid" : ""}
+                            />
+                            {fieldErrors[`node-${idx}-port`] && (
+                              <span className="field-error">{fieldErrors[`node-${idx}-port`]}</span>
+                            )}
+                          </label>
+                          {engine === "sqlserver" && (
+                            <label>
+                              Kimlik doğrulama tipi
+                              <select
+                                value={node.authType}
+                                onChange={(e) => updateNode(node.key, "authType", e.target.value as SqlServerAuthType)}
+                              >
+                                <option value="sql">SQL Server kimlik doğrulama</option>
+                                <option value="windows">Windows (Integrated)</option>
+                              </select>
+                            </label>
+                          )}
+                          {(engine === "postgresql" || engine === "sqlserver") && (
+                            <label>
+                              Veritabanı adı
+                              <input
+                                value={node.database}
+                                onChange={(e) => updateNode(node.key, "database", e.target.value)}
+                                placeholder={defaultDatabase()}
+                              />
+                            </label>
+                          )}
+                          {engine === "postgresql" && (
+                            <label>
+                              SSL modu
+                              <select value={node.sslMode} onChange={(e) => updateNode(node.key, "sslMode", e.target.value as PostgresSslMode)}>
+                                <option value="disable">Devre dışı</option>
+                                <option value="require">Gerekli (require)</option>
+                              </select>
+                            </label>
+                          )}
+                          {engine === "mongodb" && (
+                            <>
+                              <label>
+                                Replica set adı
+                                <input
+                                  value={node.replicaSet}
+                                  onChange={(e) => updateNode(node.key, "replicaSet", e.target.value)}
+                                  placeholder="rs0"
+                                />
+                              </label>
+                              <label>
+                                authSource
+                                <input
+                                  value={node.authSource}
+                                  onChange={(e) => updateNode(node.key, "authSource", e.target.value)}
+                                  placeholder="admin"
+                                />
+                              </label>
+                            </>
+                          )}
+                          {!(engine === "sqlserver" && node.authType === "windows") && (
+                            <>
+                              <label>
+                                Kullanıcı adı {REQUIRED}
+                                <input
+                                  value={node.db_username}
+                                  onChange={(e) => updateNode(node.key, "db_username", e.target.value)}
+                                  className={fieldErrors[`node-${idx}-db_username`] ? "field-invalid" : ""}
+                                />
+                                {fieldErrors[`node-${idx}-db_username`] && (
+                                  <span className="field-error">{fieldErrors[`node-${idx}-db_username`]}</span>
+                                )}
+                              </label>
+                              <label>
+                                Şifre
+                                <input
+                                  type="password"
+                                  value={node.db_password}
+                                  onChange={(e) => updateNode(node.key, "db_password", e.target.value)}
+                                />
+                              </label>
+                            </>
+                          )}
+                        </div>
+                      </WizardSection>
+
+                      {node.serverMode === "new" && (
+                        <WizardSection
+                          title="Agent"
+                          sectionKey="agent"
+                          open={node.openSection === "agent"}
+                          onToggle={(s) => toggleNodeSection(node.key, s)}
+                        >
+                          <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
+                            <label>
+                              Host agent URL (opsiyonel)
+                              <input
+                                value={node.agent_url}
+                                onChange={(e) => updateNode(node.key, "agent_url", e.target.value)}
+                                placeholder="http://node.internal:9105"
+                              />
+                            </label>
+                            <label>
+                              Host agent token (opsiyonel)
+                              <input
+                                type="password"
+                                value={node.agent_token}
+                                onChange={(e) => updateNode(node.key, "agent_token", e.target.value)}
+                              />
+                            </label>
+                          </div>
+                        </WizardSection>
+                      )}
+
+                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
+                        <button type="button" className="btn btn-xs" disabled={node.testing} onClick={() => testNodeConnection(node.key)}>
+                          {node.testing ? "Test ediliyor…" : "Bağlantıyı test et"}
+                        </button>
+                        {node.agent_url && (
+                          <button type="button" className="btn btn-xs" disabled={node.agentTesting} onClick={() => testNodeAgent(node.key)}>
+                            {node.agentTesting ? "Test ediliyor…" : "Agent'ı test et"}
+                          </button>
+                        )}
+                        {node.testResult && (
+                          <span className={node.testResult.ok ? "ok-text" : "warn-text"}>{node.testResult.message}</span>
+                        )}
+                        {node.agentTestResult && (
+                          <span className={node.agentTestResult.ok ? "ok-text" : "warn-text"}>
+                            Agent: {node.agentTestResult.message}
+                          </span>
+                        )}
+                      </div>
+                    </>
                   )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
-            <div className="form-actions">
+            <div className="form-actions wizard-form-actions">
               {mode === "create-group" && <button type="button" className="btn" onClick={goBack}>Geri</button>}
               <button type="button" className="btn btn-primary" onClick={goNext}>İleri</button>
             </div>
@@ -1004,7 +1099,7 @@ export default function DatabaseWizardPage() {
               </div>
               );
             })}
-            <div className="form-actions">
+            <div className="form-actions wizard-form-actions">
               <button type="button" className="btn" onClick={goBack} disabled={saving}>Geri</button>
               <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>
                 {saving ? "Kaydediliyor…" : mode === "add-node" ? "Düğümleri ekle" : "Kaydet"}

@@ -977,6 +977,49 @@ okunduğu; başka bir müşterinin `existing_server_id`'sini kullanmaya
 çalışmanın `404` ile reddedildiği. Toplam 31 test yeşil. `tsc -b &&
 vite build` yeşil.
 
+**Faz 14 — İŞ 4: Form yerleşimi (yalnızca sihirbaz, kapsam notu
+aşağıda).** Backend/test değişikliği yok — sadece `DatabaseWizardPage`
+ve `index.css`.
+
+- **Sabit adım göstergesi + kendi içinde kayan içerik + sabit eylem
+  çubuğu:** `.wizard-steps` artık `position: sticky; top: 0` (yeni
+  `.sticky` class); adım içeriğini saran `.card` artık
+  `.wizard-scroll-body` da taşıyor (`max-height: calc(100vh - 320px);
+  overflow-y: auto` — sayfanın geri kalanı değil, sadece bu blok
+  kayıyor); her adımın kendi "İleri"/"Geri"/"Kaydet" satırı artık
+  `.wizard-form-actions` da taşıyor (`position: sticky; bottom: 0` —
+  scroll bölgesinin altına yapışık kalıyor, JSX'i adım başına
+  değiştirmeden salt CSS ile).
+- **Çok düğümlü kartlar katlanabilir:** `mode === "add-node" ||
+  isCluster` iken her düğüm kartı başlığa tıklanarak katlanıp
+  açılabiliyor (`NodeFormState.collapsed`); kapalıyken tek satırlık özet
+  gösteriliyor — sunucu adı (ya da seçili mevcut sunucunun adı) · site
+  (Ana DC/DR) · son bağlantı testi durumu. Varsayılan: bir preset/özel
+  sayı seçildiğinde ilk düğüm açık, geri kalanı kapalı başlıyor
+  (`collapseAllButFirst()`); "+ Düğüm ekle" ile sonradan eklenenler de
+  kapalı başlıyor (kullanıcı zaten kaç tane olduğunu biliyor, hepsini
+  açık tutmak yine uzun bir liste demek).
+- **Katlanabilir bölümler:** Her düğüm kartının içi üçe ayrıldı —
+  "Sunucu bilgileri" (yeni/mevcut sunucu seçimi + ilgili alanlar),
+  "Veritabanı bağlantısı" (port/database/kullanıcı/şifre + engine'e
+  özel SSL/auth/replica-set alanları), "Agent" (sadece yeni sunucu
+  modunda — mevcut sunucunun agent'ı zaten kendi kaydında). Tek seferde
+  sadece biri açık (basit accordion, `NodeFormState.openSection`),
+  varsayılan "Sunucu bilgileri". Rol seçimi bölümlerin dışında, hep
+  görünür (tek bir alan, katlamaya değmez).
+- **Kapsam notu:** Bu iş sadece sihirbaza uygulandı —
+  `InstancesPage`'in düz ekleme/düzenleme formu ve `ServersPage`'in
+  düzenleme satırı bilerek dokunulmadı (görev metni "ekleme paneli"
+  diyordu, tekil; en uzun/en çok alan içeren panel sihirbazın çok
+  düğümlü hâli, oradaki kazanç en büyük). Gerekçe SORULAR.md'de.
+
+**Doğrulama notu:** Bu ortamda tarayıcı otomasyon aracı yok — sticky/
+scroll/accordion davranışı görsel olarak tıklanarak doğrulanmadı; `tsc
+-b && vite build` (tip/derleme doğruluğu) ve Vite dev sunucusunun
+component'i hatasız transform ettiği (bkz. aşağıdaki dört-topoloji
+doğrulama bölümü) kontrol edildi. Kullanıcı `npm run dev` ile fırsat
+bulduğunda görsel olarak kontrol etmeli.
+
 ## Nasıl test edilir
 
 ### Backend

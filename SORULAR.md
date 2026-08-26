@@ -3,6 +3,19 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 14 — İŞ 4: Form yerleşimi kapsamı sadece sihirbaza uygulandı
+
+Görev "ekleme paneli aşağı doğru sonsuz akıyor" diyordu (tekil "panel") ve
+alt maddeleri hep "sihirbazda" diye başlıyordu (adım göstergesi, düğüm
+kartı). `InstancesPage.tsx`'in düz ekleme/düzenleme formu da uzun ama
+tek bir instance için (çok düğümlü değil) — sorunun en şiddetli hâli
+sihirbazın çok düğümlü cluster görünümü (3-8 düğüm × ~10 alan = gerçek
+"sonsuz akış"). Kapsamı oraya sınırladım; `InstancesPage`/`ServersPage`
+formlarına katlanabilir bölüm veya sticky eylem çubuğu eklemedim.
+İstenirse aynı `WizardSection` deseni oraya da taşınabilir — şu an
+`DatabaseWizardPage.tsx` içinde tanımlı, paylaşılan bir bileşen değil
+(tek kullanıcısı olduğu için ayrı dosyaya çıkarmadım).
+
 ## Faz 14 — İŞ 1: SSL modu sadece disable/require, tam sslmode değil
 
 PostgreSQL'in (libpq) `sslmode`'u 6 değerli: `disable`, `allow`,
