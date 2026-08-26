@@ -3,6 +3,23 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 13 — İŞ 2: "Bağlantıyı test et → kaydet" bir kapı değil, bir öneri
+
+Görev tarifinin standalone akışı bölümü "'Bağlantıyı test et' →
+başarılıysa kaydet" diyor — bunu MUTLAKA test geçmeden Kaydet'in kilitli
+olması gerektiği şeklinde OKUMADIM, mutlu yol sırası olarak okudum.
+Gerekçe: (1) mevcut Group Detail sayfasındaki "Yeni düğüm" formu zaten
+test etmeden kaydetmeye izin veriyor (Faz 10 İŞ 1'den beri) — sihirbazı
+daha katı yapmak tutarsız bir davranış farkı yaratırdı; (2) demo/gerçek
+kullanım senaryolarının çoğunda dbace'in demo verisi bilinçli olarak
+sahte/erişilemez host'lar kullanıyor (Faz 1-2'den beri belgeli), yani
+"test geçene kadar kaydedemezsin" kuralı test ortamında sihirbazı
+kullanılamaz hale getirirdi; (3) bir DBA sunucu henüz kurulmadan/ağ
+erişimi açılmadan ÖNCE de yapılandırmayı önceden girmek isteyebilir
+(ör. bir bakım penceresinde sırayla). Bunun yerine: her düğümün son
+test sonucu (veya "test edilmedi") özet adımında görünür durumda —
+kullanıcı bilgilendirilir ama engellenmez.
+
 ## Faz 13 — İŞ 2: Sihirbaz her zaman YENİ sunucu oluşturur
 
 Görev tarifinde "sunucu/veritabanı/cluster ekleme akışını tek bir

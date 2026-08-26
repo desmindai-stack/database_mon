@@ -6,6 +6,7 @@ import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
 import DatabaseGroupsPage from "./pages/DatabaseGroupsPage";
+import DatabaseWizardPage from "./pages/DatabaseWizardPage";
 import GroupDetailPage from "./pages/GroupDetailPage";
 import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
@@ -326,6 +327,7 @@ export default function App() {
           <Route path="/customers/:customerId/applications" element={<ApplicationsPage />} />
           <Route path="/customers/:customerId/servers" element={<ServersPage />} />
           <Route path="/applications/:applicationId/groups" element={<DatabaseGroupsPage />} />
+          <Route path="/applications/:applicationId/groups/wizard" element={<DatabaseWizardPage />} />
           <Route path="/groups/:groupId" element={<GroupDetailPage />} />
         </Routes>
       </main>

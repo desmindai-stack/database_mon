@@ -482,6 +482,147 @@ td code,
   font-size: 0.82rem;
 }
 
+.required-mark {
+  color: var(--danger);
+  margin-left: 0.15rem;
+}
+
+.field-error {
+  color: var(--danger);
+  font-size: 0.78rem;
+  font-weight: 400;
+}
+
+.form-grid input.field-invalid,
+.form-grid select.field-invalid {
+  border-color: var(--danger);
+}
+
+.wizard-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.wizard-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.wizard-step .wizard-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: var(--border);
+  color: var(--text);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.wizard-step.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.wizard-step.active .wizard-step-num {
+  background: var(--accent);
+}
+
+.wizard-step.done .wizard-step-num {
+  background: var(--success);
+}
+
+.wizard-topology-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+
+.wizard-topology-card {
+  text-align: left;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  padding: 1rem;
+  cursor: pointer;
+  color: var(--text);
+}
+
+.wizard-topology-card:hover {
+  border-color: var(--accent);
+}
+
+.wizard-topology-card.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.wizard-topology-card h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+
+.wizard-topology-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.wizard-node-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1rem;
+  margin-bottom: 1rem;
+  background: var(--surface-2);
+}
+
+.wizard-node-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.wizard-summary-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.wizard-summary-block h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wizard-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.wizard-summary-row:last-child {
+  border-bottom: none;
+}
+
 .conn-form input,
 .conn-form select {
   background: var(--surface-2);

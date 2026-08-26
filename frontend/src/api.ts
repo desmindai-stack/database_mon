@@ -430,6 +430,45 @@ export interface ClusterConversionRequest {
   vip_address?: string;
 }
 
+export interface WizardClusterOptions {
+  patroni_port?: number | null;
+  etcd_port?: number | null;
+  haproxy_stats_port?: number | null;
+  haproxy_stats_path?: string | null;
+  keepalived_vip?: string | null;
+}
+
+export interface WizardNodeInput {
+  server_name: string;
+  host: string;
+  ip_address?: string | null;
+  os: ServerOS;
+  site: NodeSite;
+  agent_url?: string | null;
+  agent_token?: string | null;
+  instance_name?: string | null;
+  port: number;
+  database?: string | null;
+  db_username: string;
+  db_password: string;
+  role_hint: NodeRoleHint;
+}
+
+export interface WizardCreateGroupRequest {
+  application_id: number;
+  group_name: string;
+  engine: DbEngine;
+  topology: GroupTopology;
+  environment?: GroupEnvironment;
+  access_name?: string | null;
+  cluster_name?: string | null;
+  vip_address?: string | null;
+  listener_port?: number | null;
+  notes?: string | null;
+  cluster_options?: WizardClusterOptions | null;
+  nodes: WizardNodeInput[];
+}
+
 export type ServerOS = "linux" | "windows";
 
 export interface DbServer {
@@ -789,6 +828,8 @@ export const api = {
   deleteGroup: (id: number) => request<void>(`/api/groups/${id}`, { method: "DELETE" }),
   convertGroupToCluster: (id: number, data: ClusterConversionRequest) =>
     request<DatabaseGroup>(`/api/groups/${id}/convert-to-cluster`, { method: "POST", body: JSON.stringify(data) }),
+  createGroupWizard: (data: WizardCreateGroupRequest) =>
+    request<DatabaseGroup>("/api/wizard/database-groups", { method: "POST", body: JSON.stringify(data) }),
 
   getGroupNodes: (groupId: number) => request<DbNode[]>(`/api/groups/${groupId}/nodes`),
   createNode: (data: NodeCreate) =>

@@ -108,7 +108,8 @@ export default function DatabaseGroupsPage() {
           </p>
         </div>
         <div className="header-actions">
-          <a href="#new-group-form" className="btn btn-primary">+ Grup Ekle</a>
+          <Link to={`/applications/${id}/groups/wizard`} className="btn btn-primary">+ Veritabanı Ekle (Sihirbaz)</Link>
+          <a href="#new-group-form" className="btn">Manuel grup ekle</a>
         </div>
       </header>
 

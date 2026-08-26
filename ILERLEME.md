@@ -768,6 +768,39 @@ Patroni) ve üç ek doğrulama senaryosu (1 düğümlü cluster reddi, 9
 düğümlü cluster reddi, engine/topology uyumsuzluğu reddi) ayrıca elle
 bir doğrulama scriptiyle de çalıştırıldı. Toplam 22 test yeşil.
 
+**Faz 13 — İŞ 2 (frontend): Tek ekranlı ekleme sihirbazı.** Yeni
+`DatabaseWizardPage.tsx` (`/applications/:applicationId/groups/wizard`),
+Database Groups sayfasındaki yeni birincil "+ Veritabanı Ekle (Sihirbaz)"
+butonundan açılıyor (eski "+ Grup Ekle" formu "Manuel grup ekle" olarak
+kalıyor — ana yol artık sihirbaz, ama tek tek ekleme akışları
+kaldırılmadı). Adımlar:
+1. **Topoloji** — motor (postgresql|sqlserver) + 4 topoloji kartından
+   biri (standalone / 2 düğüm aynı DC / 3 düğüm 2DC+1DR / özel 2-8
+   düğüm). Kart seçimi düğüm listesini doğru site/rol ön-dolduruyla
+   otomatik kuruyor (ör. 3 düğüm preseti: 2. düğüm aynı DC replica, 3.
+   düğüm disaster site replica).
+2. **Cluster bilgileri** (sadece cluster topolojilerinde) — grup adı,
+   cluster adı, erişim adı/listener IP/portu, ortam, PostgreSQL için
+   ayrıca Patroni/etcd/HAProxy portları + keepalived VIP.
+3. **Düğümler** (standalone'da tek bir "Sunucu ve instance" bloğu) —
+   her düğüm için sunucu adı/hostname/ip/OS/site(+cluster'da rol),
+   SQL Server'da instance adı, port/veritabanı/kullanıcı/şifre, opsiyonel
+   agent bilgisi; her düğümde ayrı "Bağlantıyı test et" (+ agent varsa
+   "Agent'ı test et") ve üstte "Tümünü test et"; özel topolojide "+
+   Düğüm ekle"/"Sil" (2-8 sınırı içinde).
+4. **Özet ve onay** — her alanın ve her düğümün (son test sonucuyla
+   birlikte) özeti, "Kaydet" tıklanınca tek bir `POST
+   /api/wizard/database-groups` çağrısı (Faz 13 İŞ 2 backend) ile
+   oluşturuluyor, başarılıysa yeni grubun detay sayfasına
+   yönlendiriliyor.
+
+Zorunlu alanlar `*` ile işaretli; "İleri"ye basıldığında o adımın
+zorunlu alanları eksikse geçiş engellenip alan bazında kırmızı hata
+metni gösteriliyor (aynı doğrulama Kaydet'te de tekrar çalışıyor, geri
+gidip düzeltmeden ilerlenemiyor). Bağlantı testi mevcut ve teşvik
+ediliyor ama Kaydet'i kilitlemiyor — mevcut sayfa-bazlı düğüm ekleme
+akışlarıyla aynı davranış (bkz. SORULAR.md).
+
 ## Nasıl test edilir
 
 ### Backend
