@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.domain.engines import DEFAULT_PORTS, DatabaseEngine
 from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite, ServerOS
@@ -77,6 +77,73 @@ class ClusterConversionRequest(BaseModel):
     access_name: str = Field(min_length=1, max_length=255)
     cluster_name: str = Field(min_length=1, max_length=128)
     vip_address: str | None = None
+
+
+class WizardClusterOptions(BaseModel):
+    """Patroni stack ports, entered once in the wizard and copied onto every node's
+    Node.options — see services/cluster_health.py's _node_opts()/probe_node()."""
+
+    patroni_port: int | None = None
+    etcd_port: int | None = None
+    haproxy_stats_port: int | None = None
+    haproxy_stats_path: str | None = None
+    keepalived_vip: str | None = None
+
+
+class WizardNodeInput(BaseModel):
+    server_name: str = Field(min_length=1, max_length=128)
+    host: str = Field(min_length=1, max_length=255)
+    ip_address: str | None = None
+    os: ServerOS = ServerOS.LINUX
+    site: NodeSite = NodeSite.PRIMARY
+    agent_url: str | None = None
+    agent_token: str | None = None
+    instance_name: str | None = None
+    port: int
+    database: str | None = None
+    db_username: str = Field(min_length=1)
+    db_password: str = ""
+    role_hint: NodeRoleHint = NodeRoleHint.UNKNOWN
+
+
+class WizardCreateGroupRequest(BaseModel):
+    """Everything the one-screen wizard needs to create a group + its servers + instances +
+    nodes in a single atomic operation (see routers/wizard.py) — either all of it is created,
+    or (on any failure) none of it is."""
+
+    application_id: int
+    group_name: str = Field(min_length=1, max_length=128)
+    engine: DatabaseEngine
+    topology: GroupTopology
+    environment: GroupEnvironment = GroupEnvironment.PROD
+    access_name: str | None = None
+    cluster_name: str | None = None
+    vip_address: str | None = None
+    listener_port: int | None = None
+    notes: str | None = None
+    cluster_options: WizardClusterOptions | None = None
+    nodes: list[WizardNodeInput] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _validate_topology_shape(self) -> "WizardCreateGroupRequest":
+        if self.engine == DatabaseEngine.MONGODB:
+            raise ValueError("Sihirbaz şu anda sadece PostgreSQL ve SQL Server için destekleniyor")
+        if self.topology == GroupTopology.PATRONI and self.engine != DatabaseEngine.POSTGRESQL:
+            raise ValueError("Patroni topolojisi sadece PostgreSQL için geçerli")
+        if self.topology == GroupTopology.ALWAYSON and self.engine != DatabaseEngine.SQLSERVER:
+            raise ValueError("Always On topolojisi sadece SQL Server için geçerli")
+
+        if self.topology == GroupTopology.STANDALONE:
+            if len(self.nodes) != 1:
+                raise ValueError("Standalone topoloji tam olarak 1 düğüm gerektirir")
+        else:
+            if not (2 <= len(self.nodes) <= 8):
+                raise ValueError("Cluster topolojisi 2-8 arası düğüm gerektirir")
+            if not self.access_name:
+                raise ValueError("Cluster grupları için erişim adı (listener/VIP) zorunludur")
+            if not self.cluster_name:
+                raise ValueError("Cluster grupları için cluster adı zorunludur")
+        return self
 
 
 class GroupStatusSummaryOut(BaseModel):

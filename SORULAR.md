@@ -3,6 +3,25 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 13 — İŞ 2: Sihirbaz her zaman YENİ sunucu oluşturur
+
+Görev tarifinde "sunucu/veritabanı/cluster ekleme akışını tek bir
+sihirbaza topla" deniyor — bunu "sıfırdan, yeşil saha ekleme" olarak
+yorumladım: sihirbaz her düğüm için her zaman yeni bir `Server` satırı
+oluşturuyor, var olan bir sunucuyu seçip ona ikinci bir instance
+bağlama seçeneği YOK. Bu, Faz 9'da kanıtlanmış gerçek bir senaryoyu
+(`boa-shared-winsvr` — bir Windows sunucusu, iki farklı Always On
+grubuna üye iki named instance) sihirbazdan değil, mevcut sayfa-bazlı
+akıştan (Group Detail → "Yeni düğüm" → var olan sunucuyu seç) geçirmeyi
+gerektiriyor. Gerekçe: sihirbazın tek-ekran/tek-akış doğası "bu sunucu
+zaten var mı, aransın mı, seçilsin mi" gibi bir arama/seçim adımı
+eklemeyi zorlaştırıyor ve görev tarifi de düğüm bloklarını hep "sunucu
+adı, hostname, ip, ..." gibi YENİ bir sunucu girme alanlarıyla
+tarif ediyor (var olanı seçme alanı yok). Mevcut akış zaten çalışıyor
+ve kaldırılmadı ("Mevcut tek tek ekleme sayfaları kalabilir" — görev
+tarifinde de açıkça izin verilmiş), bu yüzden bu ayrım kullanıcıya
+kapalı bir kapı bırakmıyor.
+
 ## Faz 12 — SQL Server'da statement_timeout karşılığı yok
 
 PostgreSQL'in `SET statement_timeout = 'Xms'`'i tek bir sorgunun toplam

@@ -738,6 +738,36 @@ güncellendi (`boa-sqlserver-ag` → `listener_port=1433`,
 `ip_address`). httpx ile doğrulandı: seed sonrası hem grup hem sunucu
 hem de türetilen node alanları API üzerinden doğru dönüyor.
 
+**Faz 13 — İŞ 2 (backend): Tek işlemli sihirbaz oluşturma uç noktası.**
+Yeni `POST /api/wizard/database-groups` (`routers/wizard.py`): tek bir
+istekte grup + her düğüm için yeni bir Server + Instance + Node
+oluşturuyor, hepsi TEK bir DB transaction'ında — `db.commit()` sadece
+en sonda, döngü içinde herhangi bir adım (ör. tekrar eden sunucu adı)
+`HTTPException` fırlatırsa `db.rollback()` çağrılıyor ve o ana kadar
+`flush()` edilmiş hiçbir şey (grup dahil) kalıcı olmuyor. `WizardCreateGroupRequest`
+şeması (`schemas.py`) bir `model_validator` ile: standalone tam 1 düğüm,
+cluster 2-8 düğüm; `patroni` sadece `postgresql`, `alwayson` sadece
+`sqlserver`; cluster gruplarında `access_name`/`cluster_name` zorunlu —
+hepsini istek DB'ye hiç dokunmadan (422 ile) reddediyor. Patroni
+`cluster_options` (patroni/etcd/haproxy portları + keepalived VIP) tek
+seferde girilip her düğümün `Node.options`'ına kopyalanıyor (mevcut
+`services/cluster_health.py::probe_node()` zaten `Node.options`'tan
+okuyor, değişiklik gerekmedi). Her zaman YENİ sunucu oluşturuyor —
+var olan bir sunucuya (ör. paylaşımlı bir Windows kutusuna ikinci named
+instance) bağlama senaryosu bilinçli olarak kapsam dışı, mevcut
+sayfa-bazlı akışlar hâlâ o işi yapıyor (bkz. SORULAR.md).
+
+**Test:** `backend/tests/test_wizard_atomicity.py` (3 test, gerçek
+httpx/ASGITransport ile): standalone akışı grup+sunucu+instance+node'u
+gerçekten birlikte oluşturuyor; listenin ikinci düğümünde tekrar eden
+bir sunucu adı TÜM isteği (ilk düğüm için zaten oluşturulmuş sunucu
+dahil) geri alıyor — hiçbir şey sızmıyor; engine/topology uyumsuzluğu
+DB'ye hiç dokunmadan reddediliyor. Ayrıca dört topolojinin hepsi
+(standalone, 2 düğümlü AG, 3 düğümlü Patroni + DR, 5 düğümlü özel
+Patroni) ve üç ek doğrulama senaryosu (1 düğümlü cluster reddi, 9
+düğümlü cluster reddi, engine/topology uyumsuzluğu reddi) ayrıca elle
+bir doğrulama scriptiyle de çalıştırıldı. Toplam 22 test yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

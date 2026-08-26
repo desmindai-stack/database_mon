@@ -20,6 +20,7 @@ from app.routers import (
     predictions,
     queries,
     servers,
+    wizard,
 )
 from app.schemas import ConfigOut, HealthResponse
 from app.services.bootstrap import ensure_default_customer
@@ -60,6 +61,7 @@ app.include_router(database_groups.router, prefix="/api")
 app.include_router(nodes.router, prefix="/api")
 app.include_router(servers.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(wizard.router, prefix="/api")
 
 
 @app.get("/api/health", response_model=HealthResponse)
