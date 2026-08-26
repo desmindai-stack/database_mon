@@ -120,8 +120,80 @@ For `pg_stat_statements`, add to `postgresql.conf`:
 
 ```
 shared_preload_libraries = 'pg_stat_statements'
-pg_stat_statements.track = all
+pg_stat_statements.track = top
 ```
+
+`track = top` (the default) only records top-level statements — exactly what
+dbace's collector reads. `track = all` additionally records every statement
+nested inside PL/pgSQL functions/triggers, which multiplies the number of
+tracked entries (and the bookkeeping overhead per execution) without adding
+anything dbace's slow-query view uses. Only switch to `all` if you're
+debugging inside a specific function and plan to switch back afterward.
+
+## Monitoring load (izleme yükü)
+
+dbace is designed so the *cost of being monitored* stays close to zero on a
+normal, healthy target server. This section is the audit: every query dbace
+runs against a monitored instance, how often, and roughly how expensive it
+is — so you can reason about the load on your own production database
+before turning monitoring on.
+
+### Collection loop — every `collect_interval_seconds` (default 15s, per-instance override supported)
+
+One connection per cycle (see `services/collection.py` / `collectors/postgresql.py`),
+`statement_timeout = 5000ms` on every query:
+
+| Query / source | What it reads | Cost |
+|---|---|---|
+| `current_setting('server_version_num')`, `version()` | in-memory | negligible |
+| `pg_stat_database` (one row) | in-memory cumulative counters | negligible |
+| `SHOW max_connections` | GUC read | negligible |
+| `pg_database_size(current_database())` | filesystem stat over the DB's relation files | low, scales with object count (not data volume) — a handful of ms even on large schemas |
+| `pg_last_wal_receive_lsn()` / `pg_last_wal_replay_lsn()` | function call | negligible |
+| `pg_stat_checkpointer` (17+) or `pg_stat_bgwriter` (<17) | in-memory cumulative counters | negligible |
+| `pg_stat_io` (16+ only, version-gated — not even queried below 16) | in-memory view | negligible |
+| `pg_stat_statements` (top ~20 by mean time) | extension's own in-memory ring buffer | negligible — this is exactly what the extension exists for |
+
+Total per cycle: roughly 8 lightweight queries over one connection, typically
+low single-digit milliseconds combined on a normal server. SQL Server's
+equivalent collector cycle is the DMV/perf-counter analog of the same list,
+guarded with `SET LOCK_TIMEOUT 5000` (SQL Server has no direct client-side
+`statement_timeout` equivalent — see `SORULAR.md` for why LOCK_TIMEOUT was
+chosen over guessing at an ODBC-driver-specific query-timeout attribute).
+
+### Dashboard refresh loop — every `dashboard_refresh_interval_seconds` (default 60s, as low as 10s)
+
+Per Patroni-topology group, against its target node:
+
+| Source | What it reads | Cost |
+|---|---|---|
+| `parameter_audit` (`pg_settings`, ~10 named parameters) | in-memory catalog view | negligible; `statement_timeout = 5000ms` |
+| `performance_insights` | pure in-memory analysis of already-collected `metrics_json` | zero — never touches the target database |
+| cluster health probes (Patroni/etcd/haproxy/keepalived) | TCP socket checks + HTTP to Patroni/agent REST APIs | zero DB load — never opens a PostgreSQL/SQL Server protocol connection at all |
+
+`index_advisor` recommendations used to run automatically here too (a live
+catalog scan per instance, every tick) — this was removed; see below.
+
+### On-demand only, user-triggered, cached (5 min TTL) — never in the periodic loop
+
+| Source | Endpoint | Cost | Notes |
+|---|---|---|---|
+| Index advice | `POST /api/queries/{id}/advice` | catalog scan (`pg_stats`/`pg_indexes`/`pg_class`) + optionally 2× `EXPLAIN (FORMAT JSON)` and a hypothetical index create/drop via `hypopg` | moderate; `statement_timeout = 8000ms`; only runs when a user opens a slow query's advice panel |
+| EXPLAIN plan | `POST /api/queries/{id}/explain` (`analyze=false`, the default) | plans only, never executes the query | low; `statement_timeout = 8000ms` |
+| EXPLAIN ANALYZE | same endpoint, `analyze=true` | **actually executes the query** | cost = the query's own real cost; the UI requires an explicit confirmation with a warning before sending this |
+| Activity / Schema Health tabs | `GET /api/instances/{id}/activity`, `/schema-health` | `pg_stat_activity` (in-memory) / `pg_stat_user_indexes`+`pg_stat_user_tables`+`pg_relation_size` (catalog scan) | low–moderate; only runs while that tab is open |
+
+### Practical takeaways
+
+- Leave `pg_stat_statements.track = top` (default) — see above.
+- The periodic collection loop is safe to run against production at the
+  default 15s/60s cadence; it's the on-demand tools (index advice, EXPLAIN
+  ANALYZE) that carry real cost, and those are gated behind an explicit user
+  action plus a cache.
+- If a specific server is lower-priority or you want to reduce load further,
+  set a longer **collection interval** for just that instance (Instances →
+  edit → "Toplama aralığı") instead of lowering the global default for
+  everyone.
 
 ## Roadmap
 

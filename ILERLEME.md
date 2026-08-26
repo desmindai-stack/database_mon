@@ -715,6 +715,15 @@ override ile) sadece varsayılan olanın gerçekten toplandığını, hiç
 toplanmamış bir instance'ın override'dan bağımsız her zaman due
 olduğunu kanıtlıyor. Toplam 19 test yeşil.
 
+**Faz 12 — README'ye "Monitoring load" bölümü.** Kök `README.md`'ye
+(mevcut dosya İngilizce, tutarlılık için bu bölüm de İngilizce yazıldı)
+üç tabloluk bir denetim eklendi: toplama döngüsü (her sorgu, sıklık,
+maliyet), dashboard refresh döngüsü, ve on-demand/cache'li araçlar
+(index advice, EXPLAIN/EXPLAIN ANALYZE, Activity/Schema Health). Ayrıca
+mevcut `pg_stat_statements.track = all` önerisi `track = top`'a
+düzeltildi (gerekçesiyle birlikte — `all` fonksiyon içi her ifadeyi de
+izler, dbace'nin okuduğu hiçbir şeye katkısı yok, sadece ek yük).
+
 ## Nasıl test edilir
 
 ### Backend
