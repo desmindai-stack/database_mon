@@ -104,6 +104,15 @@ class WizardNodeInput(BaseModel):
     db_username: str = Field(min_length=1)
     db_password: str = ""
     role_hint: NodeRoleHint = NodeRoleHint.UNKNOWN
+    # postgresql only — "disable" (default) or "require"; asyncpg doesn't expose libpq's finer
+    # verify-ca/verify-full modes without a manually-built SSLContext (see SORULAR.md).
+    ssl_mode: str | None = None
+    # sqlserver only — "sql" (default, username/password) or "windows" (integrated auth, only
+    # meaningful if the collector process itself runs on a trusted domain-joined Windows host).
+    auth_type: str | None = None
+    # mongodb only.
+    replica_set: str | None = None
+    auth_source: str | None = None
 
 
 class WizardCreateGroupRequest(BaseModel):
@@ -126,12 +135,14 @@ class WizardCreateGroupRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate_topology_shape(self) -> "WizardCreateGroupRequest":
-        if self.engine == DatabaseEngine.MONGODB:
-            raise ValueError("Sihirbaz şu anda sadece PostgreSQL ve SQL Server için destekleniyor")
         if self.topology == GroupTopology.PATRONI and self.engine != DatabaseEngine.POSTGRESQL:
             raise ValueError("Patroni topolojisi sadece PostgreSQL için geçerli")
         if self.topology == GroupTopology.ALWAYSON and self.engine != DatabaseEngine.SQLSERVER:
             raise ValueError("Always On topolojisi sadece SQL Server için geçerli")
+        # MongoDB has no cluster/replica-set topology modeled in dbace yet (GroupTopology is
+        # {standalone, patroni, alwayson}) — only a single-node group is meaningful today.
+        if self.engine == DatabaseEngine.MONGODB and self.topology != GroupTopology.STANDALONE:
+            raise ValueError("MongoDB için şu anda sadece standalone topoloji destekleniyor")
 
         if self.topology == GroupTopology.STANDALONE:
             if len(self.nodes) != 1:

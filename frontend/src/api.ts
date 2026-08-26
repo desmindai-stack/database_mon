@@ -10,6 +10,13 @@ export interface ClusterServiceOptions {
   patroni_tls?: boolean;
   agent_url?: string | null;
   agent_token?: string | null;
+  // postgresql only — see collectors/postgresql.py.
+  ssl_mode?: string | null;
+  // sqlserver only — see collectors/sqlserver_mongodb.py::build_odbc_connection_string.
+  auth_type?: string | null;
+  // mongodb only.
+  authSource?: string | null;
+  replica_set?: string | null;
 }
 
 export interface Instance {
@@ -452,6 +459,13 @@ export interface WizardNodeInput {
   db_username: string;
   db_password: string;
   role_hint: NodeRoleHint;
+  // postgresql only.
+  ssl_mode?: string | null;
+  // sqlserver only.
+  auth_type?: string | null;
+  // mongodb only.
+  replica_set?: string | null;
+  auth_source?: string | null;
 }
 
 export interface WizardCreateGroupRequest {

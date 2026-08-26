@@ -569,6 +569,15 @@ td code,
   box-shadow: 0 0 0 1px var(--accent);
 }
 
+.wizard-topology-card.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.wizard-topology-card.disabled:hover {
+  border-color: var(--border);
+}
+
 .wizard-topology-card h4 {
   margin: 0 0 0.35rem;
   font-size: 0.95rem;

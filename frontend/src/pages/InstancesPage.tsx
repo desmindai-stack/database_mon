@@ -150,11 +150,14 @@ export default function InstancesPage() {
 
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {};
+    const isWindowsAuth = form.engine === "sqlserver" && form.options?.auth_type === "windows";
     if (!form.name.trim()) errors.name = "Ad zorunlu";
     if (!form.host.trim()) errors.host = "Host zorunlu";
     if (!form.database.trim()) errors.database = "Veritabanı adı zorunlu";
-    if (!form.username.trim()) errors.username = "Kullanıcı adı zorunlu";
-    if (editingId === null && !form.password.trim()) errors.password = "Şifre zorunlu";
+    if (!isWindowsAuth) {
+      if (!form.username.trim()) errors.username = "Kullanıcı adı zorunlu";
+      if (editingId === null && !form.password.trim()) errors.password = "Şifre zorunlu";
+    }
     return errors;
   };
 
@@ -322,6 +325,48 @@ export default function InstancesPage() {
                 placeholder="shared secret"
               />
             </label>
+            <label>
+              SSL modu
+              <select
+                value={form.options?.ssl_mode ?? "disable"}
+                onChange={(e) => updateOption("ssl_mode", e.target.value)}
+              >
+                <option value="disable">Devre dışı</option>
+                <option value="require">Gerekli (require)</option>
+              </select>
+            </label>
+          </>
+        )}
+        {form.engine === "sqlserver" && (
+          <label>
+            Kimlik doğrulama tipi
+            <select
+              value={form.options?.auth_type ?? "sql"}
+              onChange={(e) => updateOption("auth_type", e.target.value)}
+            >
+              <option value="sql">SQL Server kimlik doğrulama</option>
+              <option value="windows">Windows (Integrated)</option>
+            </select>
+          </label>
+        )}
+        {form.engine === "mongodb" && (
+          <>
+            <label>
+              Replica set adı
+              <input
+                value={form.options?.replica_set ?? ""}
+                onChange={(e) => updateOption("replica_set", e.target.value)}
+                placeholder="rs0"
+              />
+            </label>
+            <label>
+              authSource
+              <input
+                value={form.options?.authSource ?? ""}
+                onChange={(e) => updateOption("authSource", e.target.value)}
+                placeholder="admin"
+              />
+            </label>
           </>
         )}
         <label>
@@ -346,26 +391,30 @@ export default function InstancesPage() {
           />
           {fieldErrors.database && <span className="field-error">{fieldErrors.database}</span>}
         </label>
-        <label>
-          Kullanıcı <span className="required-mark">*</span>
-          <input
-            value={form.username}
-            onChange={(e) => update("username", e.target.value)}
-            className={fieldErrors.username ? "field-invalid" : ""}
-          />
-          {fieldErrors.username && <span className="field-error">{fieldErrors.username}</span>}
-        </label>
-        <label>
-          Şifre {editingId === null && <span className="required-mark">*</span>}
-          <input
-            type="password"
-            value={form.password}
-            onChange={(e) => update("password", e.target.value)}
-            placeholder={editingId !== null ? "Değiştirmek için yazın" : ""}
-            className={fieldErrors.password ? "field-invalid" : ""}
-          />
-          {fieldErrors.password && <span className="field-error">{fieldErrors.password}</span>}
-        </label>
+        {!(form.engine === "sqlserver" && form.options?.auth_type === "windows") && (
+          <>
+            <label>
+              Kullanıcı <span className="required-mark">*</span>
+              <input
+                value={form.username}
+                onChange={(e) => update("username", e.target.value)}
+                className={fieldErrors.username ? "field-invalid" : ""}
+              />
+              {fieldErrors.username && <span className="field-error">{fieldErrors.username}</span>}
+            </label>
+            <label>
+              Şifre {editingId === null && <span className="required-mark">*</span>}
+              <input
+                type="password"
+                value={form.password}
+                onChange={(e) => update("password", e.target.value)}
+                placeholder={editingId !== null ? "Değiştirmek için yazın" : ""}
+                className={fieldErrors.password ? "field-invalid" : ""}
+              />
+              {fieldErrors.password && <span className="field-error">{fieldErrors.password}</span>}
+            </label>
+          </>
+        )}
         {testResult && (
           <div style={{ color: testResult.startsWith("OK") ? "var(--success)" : "var(--danger)" }}>
             {testResult}

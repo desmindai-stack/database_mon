@@ -22,6 +22,22 @@ async def _unique_instance_name(db: AsyncSession, base: str) -> str:
     return name
 
 
+def _instance_options(node_input, engine: DatabaseEngine) -> dict | None:
+    """Engine-specific connection knobs that don't have a dedicated Instance column — stored in
+    Instance.options and read straight through by the collectors (ConnectionTarget.options)."""
+    opts: dict = {}
+    if engine == DatabaseEngine.POSTGRESQL and node_input.ssl_mode:
+        opts["ssl_mode"] = node_input.ssl_mode
+    if engine == DatabaseEngine.SQLSERVER and node_input.auth_type:
+        opts["auth_type"] = node_input.auth_type
+    if engine == DatabaseEngine.MONGODB:
+        if node_input.auth_source:
+            opts["authSource"] = node_input.auth_source
+        if node_input.replica_set:
+            opts["replica_set"] = node_input.replica_set
+    return opts or None
+
+
 @router.post("/database-groups", response_model=DatabaseGroupOut, status_code=status.HTTP_201_CREATED)
 async def wizard_create_group(payload: WizardCreateGroupRequest, db: AsyncSession = Depends(get_db)) -> DatabaseGroup:
     """Creates a DatabaseGroup + a brand-new Server + Instance + Node for each of its nodes,
@@ -104,10 +120,14 @@ async def wizard_create_group(payload: WizardCreateGroupRequest, db: AsyncSessio
                 database=node_input.database or DEFAULT_DATABASES.get(payload.engine, "postgres"),
                 username=node_input.db_username,
                 password=encrypt_secret(node_input.db_password),
+                options=_instance_options(node_input, payload.engine),
                 customer_name=customer.name,
                 environment=customer.type,
                 application=application.name,
-                cluster_name=payload.cluster_name,
+                # A MongoDB standalone group has no group-level cluster_name (that field only
+                # gets entered for the Patroni/Always On cluster steps) — the per-node replica
+                # set name is the closest equivalent, so it fills the same slot when given.
+                cluster_name=payload.cluster_name or node_input.replica_set,
                 role=node_input.role_hint.value if node_input.role_hint != "unknown" else None,
                 services=[_ENGINE_SERVICE_NAME.get(payload.engine.value, payload.engine.value)],
                 group_id=group.id,

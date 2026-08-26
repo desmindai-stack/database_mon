@@ -31,6 +31,9 @@ function nextNodeKey(): string {
   return `node-${nodeKeySeq}`;
 }
 
+type SqlServerAuthType = "sql" | "windows";
+type PostgresSslMode = "disable" | "require";
+
 interface NodeFormState {
   key: string;
   server_name: string;
@@ -46,6 +49,13 @@ interface NodeFormState {
   db_username: string;
   db_password: string;
   role_hint: NodeRoleHint;
+  // postgresql only.
+  sslMode: PostgresSslMode;
+  // sqlserver only.
+  authType: SqlServerAuthType;
+  // mongodb only.
+  replicaSet: string;
+  authSource: string;
   testing: boolean;
   testResult: ConnectionTestResult | null;
   agentTesting: boolean;
@@ -65,9 +75,13 @@ function makeNode(engine: DbEngine, site: NodeSite, role_hint: NodeRoleHint): No
     instance_name: "",
     port: ENGINE_DEFAULTS[engine].port,
     database: ENGINE_DEFAULTS[engine].database,
-    db_username: engine === "sqlserver" ? "sa" : "postgres",
+    db_username: engine === "sqlserver" ? "sa" : engine === "mongodb" ? "admin" : "postgres",
     db_password: "",
     role_hint,
+    sslMode: "disable",
+    authType: "sql",
+    replicaSet: "",
+    authSource: engine === "mongodb" ? ENGINE_DEFAULTS[engine].database : "",
     testing: false,
     testResult: null,
     agentTesting: false,
@@ -93,7 +107,10 @@ function nodesForPreset(preset: TopologyPreset, engine: DbEngine): NodeFormState
 }
 
 function topologyFor(preset: TopologyPreset, engine: DbEngine): GroupTopology {
-  if (preset === "standalone") return "standalone";
+  // MongoDB has no cluster/replica-set topology modeled in dbace (GroupTopology is
+  // {standalone, patroni, alwayson}) — only standalone is meaningful, enforced both here and
+  // by hiding the cluster topology cards below.
+  if (preset === "standalone" || engine === "mongodb") return "standalone";
   return engine === "sqlserver" ? "alwayson" : "patroni";
 }
 
@@ -160,13 +177,19 @@ export default function DatabaseWizardPage() {
 
   const onSelectEngine = (nextEngine: DbEngine) => {
     setEngine(nextEngine);
+    if (nextEngine === "mongodb" && preset !== "standalone") {
+      setPreset("standalone");
+      setNodes(nodesForPreset("standalone", nextEngine));
+      return;
+    }
     setNodes((prev) =>
       prev.map((n) => ({
         ...n,
         os: nextEngine === "sqlserver" ? "windows" : "linux",
         port: ENGINE_DEFAULTS[nextEngine].port,
         database: ENGINE_DEFAULTS[nextEngine].database,
-        db_username: nextEngine === "sqlserver" ? "sa" : "postgres",
+        db_username: nextEngine === "sqlserver" ? "sa" : nextEngine === "mongodb" ? "admin" : "postgres",
+        authSource: nextEngine === "mongodb" ? ENGINE_DEFAULTS[nextEngine].database : n.authSource,
       }))
     );
   };
@@ -204,6 +227,14 @@ export default function DatabaseWizardPage() {
     updateNode(key, "testing", true);
     updateNode(key, "testResult", null);
     try {
+      const options =
+        engine === "postgresql"
+          ? { ssl_mode: node.sslMode }
+          : engine === "sqlserver"
+            ? { auth_type: node.authType }
+            : engine === "mongodb"
+              ? { authSource: node.authSource || undefined, replica_set: node.replicaSet || undefined }
+              : undefined;
       const result = await api.testConnection({
         name: `${groupName || "wizard"}-${node.server_name || "node"}-test`,
         engine,
@@ -212,6 +243,7 @@ export default function DatabaseWizardPage() {
         database: node.database || defaultDatabase(),
         username: node.db_username,
         password: node.db_password,
+        options,
       });
       updateNode(key, "testResult", result);
     } catch (err) {
@@ -265,7 +297,8 @@ export default function DatabaseWizardPage() {
       else if (seenNames.has(n.server_name.trim())) errors[`node-${idx}-server_name`] = "Bu sunucu adı listede tekrar ediyor";
       seenNames.add(n.server_name.trim());
       if (!n.host.trim()) errors[`node-${idx}-host`] = "Hostname zorunlu";
-      if (!n.db_username.trim()) errors[`node-${idx}-db_username`] = "Kullanıcı adı zorunlu";
+      const usernameNeeded = !(engine === "sqlserver" && n.authType === "windows");
+      if (usernameNeeded && !n.db_username.trim()) errors[`node-${idx}-db_username`] = "Kullanıcı adı zorunlu";
       if (!n.port || n.port <= 0) errors[`node-${idx}-port`] = "Geçerli bir port girin";
     });
     return errors;
@@ -323,6 +356,10 @@ export default function DatabaseWizardPage() {
           db_username: n.db_username.trim(),
           db_password: n.db_password,
           role_hint: n.role_hint,
+          ssl_mode: engine === "postgresql" ? n.sslMode : null,
+          auth_type: engine === "sqlserver" ? n.authType : null,
+          replica_set: engine === "mongodb" ? n.replicaSet.trim() || null : null,
+          auth_source: engine === "mongodb" ? n.authSource.trim() || null : null,
         })
       ),
     };
@@ -384,21 +421,27 @@ export default function DatabaseWizardPage() {
                 >
                   <option value="postgresql">PostgreSQL</option>
                   <option value="sqlserver">SQL Server</option>
+                  <option value="mongodb">MongoDB</option>
                 </select>
               </label>
             </div>
             <div className="wizard-topology-grid">
-              {TOPOLOGY_CARDS.map((card) => (
-                <button
-                  key={card.preset}
-                  type="button"
-                  className={`wizard-topology-card${preset === card.preset ? " selected" : ""}`}
-                  onClick={() => onSelectTopology(card.preset)}
-                >
-                  <h4>{card.title}</h4>
-                  <p>{card.description}</p>
-                </button>
-              ))}
+              {TOPOLOGY_CARDS.map((card) => {
+                const disabled = engine === "mongodb" && card.preset !== "standalone";
+                return (
+                  <button
+                    key={card.preset}
+                    type="button"
+                    disabled={disabled}
+                    title={disabled ? "MongoDB için şu anda sadece standalone destekleniyor" : undefined}
+                    className={`wizard-topology-card${preset === card.preset ? " selected" : ""}${disabled ? " disabled" : ""}`}
+                    onClick={() => onSelectTopology(card.preset)}
+                  >
+                    <h4>{card.title}</h4>
+                    <p>{card.description}</p>
+                  </button>
+                );
+              })}
             </div>
             {preset === "cluster-custom" && (
               <label style={{ maxWidth: 220 }}>
@@ -641,7 +684,7 @@ export default function DatabaseWizardPage() {
                     </label>
                   )}
                   <label>
-                    Instance portu {REQUIRED}
+                    {engine === "sqlserver" ? "Instance portu" : "Port"} {REQUIRED}
                     <input
                       type="number"
                       value={node.port}
@@ -652,33 +695,80 @@ export default function DatabaseWizardPage() {
                       <span className="field-error">{fieldErrors[`node-${idx}-port`]}</span>
                     )}
                   </label>
-                  <label>
-                    Veritabanı adı
-                    <input
-                      value={node.database}
-                      onChange={(e) => updateNode(node.key, "database", e.target.value)}
-                      placeholder={defaultDatabase()}
-                    />
-                  </label>
-                  <label>
-                    Kullanıcı adı {REQUIRED}
-                    <input
-                      value={node.db_username}
-                      onChange={(e) => updateNode(node.key, "db_username", e.target.value)}
-                      className={fieldErrors[`node-${idx}-db_username`] ? "field-invalid" : ""}
-                    />
-                    {fieldErrors[`node-${idx}-db_username`] && (
-                      <span className="field-error">{fieldErrors[`node-${idx}-db_username`]}</span>
-                    )}
-                  </label>
-                  <label>
-                    Şifre
-                    <input
-                      type="password"
-                      value={node.db_password}
-                      onChange={(e) => updateNode(node.key, "db_password", e.target.value)}
-                    />
-                  </label>
+                  {engine === "sqlserver" && (
+                    <label>
+                      Kimlik doğrulama tipi
+                      <select
+                        value={node.authType}
+                        onChange={(e) => updateNode(node.key, "authType", e.target.value as SqlServerAuthType)}
+                      >
+                        <option value="sql">SQL Server kimlik doğrulama</option>
+                        <option value="windows">Windows (Integrated)</option>
+                      </select>
+                    </label>
+                  )}
+                  {(engine === "postgresql" || engine === "sqlserver") && (
+                    <label>
+                      Veritabanı adı
+                      <input
+                        value={node.database}
+                        onChange={(e) => updateNode(node.key, "database", e.target.value)}
+                        placeholder={defaultDatabase()}
+                      />
+                    </label>
+                  )}
+                  {engine === "postgresql" && (
+                    <label>
+                      SSL modu
+                      <select value={node.sslMode} onChange={(e) => updateNode(node.key, "sslMode", e.target.value as PostgresSslMode)}>
+                        <option value="disable">Devre dışı</option>
+                        <option value="require">Gerekli (require)</option>
+                      </select>
+                    </label>
+                  )}
+                  {engine === "mongodb" && (
+                    <>
+                      <label>
+                        Replica set adı
+                        <input
+                          value={node.replicaSet}
+                          onChange={(e) => updateNode(node.key, "replicaSet", e.target.value)}
+                          placeholder="rs0"
+                        />
+                      </label>
+                      <label>
+                        authSource
+                        <input
+                          value={node.authSource}
+                          onChange={(e) => updateNode(node.key, "authSource", e.target.value)}
+                          placeholder="admin"
+                        />
+                      </label>
+                    </>
+                  )}
+                  {!(engine === "sqlserver" && node.authType === "windows") && (
+                    <>
+                      <label>
+                        Kullanıcı adı {REQUIRED}
+                        <input
+                          value={node.db_username}
+                          onChange={(e) => updateNode(node.key, "db_username", e.target.value)}
+                          className={fieldErrors[`node-${idx}-db_username`] ? "field-invalid" : ""}
+                        />
+                        {fieldErrors[`node-${idx}-db_username`] && (
+                          <span className="field-error">{fieldErrors[`node-${idx}-db_username`]}</span>
+                        )}
+                      </label>
+                      <label>
+                        Şifre
+                        <input
+                          type="password"
+                          value={node.db_password}
+                          onChange={(e) => updateNode(node.key, "db_password", e.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
                   <label>
                     Host agent URL (opsiyonel)
                     <input

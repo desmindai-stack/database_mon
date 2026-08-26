@@ -92,11 +92,17 @@ def build_odbc_connection_string(target: ConnectionTarget) -> str:
     driver = opts.get("odbc_driver", "ODBC Driver 18 for SQL Server")
     encrypt = "yes" if opts.get("encrypt", True) else "no"
     trust_cert = "yes" if opts.get("trust_server_certificate", True) else "no"
-    return (
+    base = (
         f"DRIVER={{{driver}}};SERVER={target.host},{target.port};"
-        f"DATABASE={target.database};UID={target.username};PWD={target.password};"
+        f"DATABASE={target.database};"
         f"Encrypt={encrypt};TrustServerCertificate={trust_cert};Connection Timeout=10"
     )
+    # "windows" = integrated auth (the ODBC driver runs under the worker's own OS identity —
+    # only meaningful if the collector process itself runs on a domain-joined Windows host with
+    # that identity trusted by the target; "sql" (default) is username/password auth.
+    if opts.get("auth_type") == "windows":
+        return f"{base};Trusted_Connection=yes"
+    return f"{base};UID={target.username};PWD={target.password}"
 
 
 class SqlServerCollector(BaseCollector):
@@ -427,10 +433,11 @@ class MongoDBCollector(BaseCollector):
         db = self.target.database or "admin"
         opts = self.target.options or {}
         auth_source = opts.get("authSource", db)
-        return (
-            f"mongodb://{auth}{self.target.host}:{self.target.port}/{db}"
-            f"?authSource={auth_source}"
-        )
+        query = f"authSource={auth_source}"
+        replica_set = opts.get("replica_set")
+        if replica_set:
+            query += f"&replicaSet={replica_set}"
+        return f"mongodb://{auth}{self.target.host}:{self.target.port}/{db}?{query}"
 
     async def collect_metrics(
         self, previous: dict[str, float] | None = None, conn: Any | None = None

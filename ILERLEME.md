@@ -849,6 +849,45 @@ edilmedi — bu ortamda tarayıcı otomasyon aracı yok. Yukarıdaki üç katman
 "component hatasız derleniyor/render ediliyor" iddialarını kanıtlıyor,
 "buton X'e tıklayınca Y oluyor" iddiasını değil.
 
+**Faz 14 — İŞ 1: Engine'e göre alan gösterimi.** Sihirbazın düğüm
+kartlarında ve `InstancesPage`'in ekleme/düzenleme formunda artık
+SADECE seçili engine'in alanları render ediliyor (gizli/disabled değil,
+DOM'da hiç yok): PostgreSQL → SSL modu (yeni); SQL Server → kimlik
+doğrulama tipi (SQL|Windows, yeni — Windows seçilince kullanıcı adı/
+şifre alanları TAMAMEN kayboluyor, gerçekten gerekmediği için); MongoDB
+→ replica set adı + authSource (yeni, `InstancesPage`'de zaten vardı,
+sihirbaza da eklendi) — engine=mongodb seçilince cluster topoloji
+kartları devre dışı kalıyor (dbace'de MongoDB replica-set topolojisi
+henüz modellenmiyor, sadece standalone anlamlı).
+
+Yeni alanlar dekoratif değil, gerçekten toplama döngüsünü etkiliyor:
+- `collectors/postgresql.py::_connect()` artık `options.ssl_mode ==
+  "require"` ise `asyncpg.connect(ssl=True)` çağırıyor (asyncpg'nin
+  `ssl` parametresi libpq'nun 6 değerli sslmode'u değil bool/SSLContext
+  — UI de sadece disable/require sunuyor, gerekçesi SORULAR.md'de).
+- `collectors/sqlserver_mongodb.py::build_odbc_connection_string()`
+  artık `options.auth_type == "windows"` ise `UID=`/`PWD=` yerine
+  `Trusted_Connection=yes` üretiyor.
+- `MongoDBCollector._build_uri()` artık `options.replica_set` varsa
+  bağlantı URI'sine `&replicaSet=<ad>` ekliyor.
+
+Sihirbazın backend'i (`WizardCreateGroupRequest`) artık MongoDB'yi de
+kabul ediyor (önceden tamamen reddediyordu) — ama sadece
+`topology=standalone` ile; `replica_set` girilirse grup seviyeli
+`cluster_name` boşsa onun yerine geçiyor (mongo standalone'da ayrı bir
+cluster-bilgileri adımı yok, replica set adı en yakın karşılığı).
+
+**Test:** Yeni `test_engine_specific_options.py` (4 test): Windows auth
+DSN'de `Trusted_Connection=yes` üretip UID/PWD'yi tamamen çıkarıyor; SQL
+auth (varsayılan) DSN'de kimlik bilgilerini kullanıyor; Mongo URI
+`replica_set` verildiğinde `replicaSet=` içeriyor, verilmediğinde
+içermiyor. Ayrıca httpx ile uçtan uca doğrulandı: MongoDB standalone
+sihirbazla oluşturuldu (`instance.options.authSource`/`replica_set` ve
+`instance.cluster_name` doğru); MongoDB + cluster topoloji denemesi
+`422` ile reddedildi; PostgreSQL `ssl_mode=require` ve SQL Server
+`auth_type=windows` ile oluşturulan instance'ların `options`'ı doğru
+şekilde saklandı. Toplam 26 test yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

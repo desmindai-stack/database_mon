@@ -32,6 +32,10 @@ class PostgreSQLCollector(BaseCollector):
         self.target = target
 
     async def _connect(self) -> asyncpg.Connection:
+        # asyncpg's `ssl` kwarg is bool/SSLContext, not libpq's 6-value sslmode string — the
+        # UI only offers "disable"/"require" (see SORULAR.md for why the finer verify-ca/
+        # verify-full modes aren't exposed), which maps directly onto that.
+        ssl_mode = (self.target.options or {}).get("ssl_mode")
         conn = await asyncpg.connect(
             host=self.target.host,
             port=self.target.port,
@@ -39,6 +43,7 @@ class PostgreSQLCollector(BaseCollector):
             user=self.target.username,
             password=self.target.password,
             timeout=10,
+            ssl=True if ssl_mode == "require" else None,
         )
         await conn.execute(f"SET statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'")
         return conn

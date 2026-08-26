@@ -3,6 +3,52 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 14 — İŞ 1: SSL modu sadece disable/require, tam sslmode değil
+
+PostgreSQL'in (libpq) `sslmode`'u 6 değerli: `disable`, `allow`,
+`prefer`, `require`, `verify-ca`, `verify-full`. asyncpg'nin `connect()`
+fonksiyonu bunu string olarak almıyor — `ssl` parametresi `bool` veya
+elle kurulmuş bir `ssl.SSLContext`. `verify-ca`/`verify-full` gibi sunucu
+sertifikası doğrulaması yapan modları desteklemek, bir CA sertifikası
+dosya yolu alıp `ssl.create_default_context(cafile=...)` ile bir
+`SSLContext` inşa etmeyi gerektirir — bu hem UI'da ek bir "CA sertifikası
+yükle" akışı hem de collector'da dosya yönetimi ister. Kapsamı `disable`/
+`require` (asyncpg'nin `ssl=None`/`ssl=True`'suna doğrudan karşılık gelen
+iki değer) ile sınırladım — "şifreli bağlantı iste ama sertifika
+doğrulama" ile "şifreli bağlantı iste VE sertifikayı doğrula" arasındaki
+farkı desteklemiyor. Gerçek bir üretim ortamında `verify-full` gerekiyorsa
+bu hâlâ eksik — ileride bir CA-sertifikası yükleme akışıyla genişletilebilir.
+
+## Faz 14 — İŞ 1: MongoDB sihirbazda sadece standalone
+
+`GroupTopology` enum'u `{standalone, patroni, alwayson}` — dbace'de
+MongoDB replica set'i temsil eden bir topoloji hiç yok (Faz 1'den beri).
+Bunu bu görevin kapsamında YENİ bir topoloji eklemek yerine (backend
+modelinde `Node.role_hint`/health prob'ları vb. her yerde "patroni" ve
+"alwayson"a özel dallanma var, üçüncü bir topoloji eklemek cluster_health.py,
+alwayson_health.py'ye benzer yeni bir `mongo_replicaset_health.py`
+gerektirirdi — bu görevin 4 maddesinin çok ötesinde bir genişleme)
+MongoDB'yi sihirbazda SADECE standalone olarak destekledim, cluster
+kartlarını UI'da devre dışı bıraktım ve backend'de de reddettim (422).
+"replica set adı" alanı gerçek bir MongoDB replica set'e BAĞLANMAK için
+var (`connection URI`'ye `replicaSet=` eklüyor) — dbace'in kendisinin
+o replica set'in üyelerini/health'ini TAKİP ETMESİ ayrı, yapılmamış bir
+özellik.
+
+## Faz 14 — İŞ 1: index_advisor/explain_service ssl_mode'u kullanmıyor
+
+`ssl_mode`, ana toplama döngüsünün collector'ında (`collectors/
+postgresql.py`) gerçekten uygulanıyor. `services/index_advisor.py` ve
+`services/explain_service.py`'nin kendi `_connect()`'leri (on-demand,
+kullanıcı tetikledikçe çalışan EXPLAIN/index önerisi araçları) bu
+parametreyi henüz okumuyor. Bilinçli bir kapsam daraltması: bu ikisi
+zaten "bağlantı kurulamadı" şeklinde temiz bir hatayla anında
+kullanıcıya görünür başarısız oluyor (sessiz bir yanlış davranış değil),
+ana periyodik toplama döngüsünün aksine — SSL gerektiren bir sunucuda
+bu ikisi görünür şekilde başarısız olur, kullanıcı hemen fark eder.
+İleride aynı `(self.target.options or {}).get("ssl_mode")` satırı oraya
+da eklenebilir.
+
 ## Faz 13 — İŞ 2: "Bağlantıyı test et → kaydet" bir kapı değil, bir öneri
 
 Görev tarifinin standalone akışı bölümü "'Bağlantıyı test et' →
