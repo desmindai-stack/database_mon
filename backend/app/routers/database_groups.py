@@ -142,6 +142,7 @@ async def list_group_nodes(group_id: int, db: AsyncSession = Depends(get_db)) ->
         out.options = redact_node_options(out.options)
         out.host = node.server.host if node.server else None
         out.site = node.server.site if node.server else None
+        out.ip_address = node.server.ip_address if node.server else None
     return outs
 
 

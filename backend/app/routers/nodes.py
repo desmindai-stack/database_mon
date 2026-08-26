@@ -20,6 +20,7 @@ async def _redacted(db: AsyncSession, node: Node) -> NodeOut:
     server = await db.get(Server, node.server_id) if node.server_id else None
     out.host = server.host if server else None
     out.site = server.site if server else None
+    out.ip_address = server.ip_address if server else None
     return out
 
 

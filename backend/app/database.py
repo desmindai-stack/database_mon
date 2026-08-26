@@ -165,6 +165,8 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(
             conn, "instances", "collect_interval_seconds", "collect_interval_seconds INTEGER"
         )
+        await _sqlite_add_column_if_missing(conn, "database_groups", "listener_port", "listener_port INTEGER")
+        await _sqlite_add_column_if_missing(conn, "servers", "ip_address", "ip_address VARCHAR(64)")
 
 
 async def init_db() -> None:

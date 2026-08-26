@@ -60,6 +60,10 @@ class DatabaseGroup(Base):
     access_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cluster_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     vip_address: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # SQL Server Always On listener port / PostgreSQL HAProxy-VIP port — independent of any
+    # individual node's instance port (a listener commonly uses a different port than the
+    # instances behind it, e.g. HAProxy on 5000 fronting Postgres on 5432).
+    listener_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -82,6 +86,9 @@ class Server(Base):
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), index=True, nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     host: Mapped[str] = mapped_column(String(255), nullable=False)
+    # In addition to the hostname — useful when DNS isn't reliable/set up yet, or to record the
+    # address separately from whatever name is used to reach it.
+    ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
     os: Mapped[str] = mapped_column(String(16), default="linux", nullable=False)
     site: Mapped[str] = mapped_column(String(16), default="primary", nullable=False)
     agent_url: Mapped[str | None] = mapped_column(String(255), nullable=True)

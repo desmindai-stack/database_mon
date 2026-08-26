@@ -1,0 +1,2 @@
+ALTER TABLE database_groups ADD COLUMN IF NOT EXISTS listener_port INTEGER;
+ALTER TABLE servers ADD COLUMN IF NOT EXISTS ip_address VARCHAR(64);

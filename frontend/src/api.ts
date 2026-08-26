@@ -404,6 +404,7 @@ export interface DatabaseGroup {
   access_name: string | null;
   cluster_name: string | null;
   vip_address: string | null;
+  listener_port: number | null;
   notes: string | null;
   created_at: string;
   status: GroupStatusSummary | null;
@@ -418,6 +419,7 @@ export interface DatabaseGroupCreate {
   access_name?: string;
   cluster_name?: string;
   vip_address?: string;
+  listener_port?: number | null;
   notes?: string;
 }
 
@@ -435,6 +437,7 @@ export interface DbServer {
   customer_id: number;
   name: string;
   host: string;
+  ip_address: string | null;
   os: ServerOS;
   site: NodeSite;
   agent_url: string | null;
@@ -446,6 +449,7 @@ export interface ServerCreate {
   customer_id: number;
   name: string;
   host: string;
+  ip_address?: string | null;
   os: ServerOS;
   site: NodeSite;
   agent_url?: string;
@@ -466,6 +470,7 @@ export interface DbNode {
   // Read-only, derived from the linked Server for display convenience.
   host: string | null;
   site: NodeSite | null;
+  ip_address: string | null;
 }
 
 export interface NodeCreate {

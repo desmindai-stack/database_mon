@@ -56,6 +56,7 @@ class DatabaseGroupCreate(BaseModel):
     access_name: str | None = None
     cluster_name: str | None = None
     vip_address: str | None = None
+    listener_port: int | None = None
     notes: str | None = None
 
 
@@ -67,6 +68,7 @@ class DatabaseGroupUpdate(BaseModel):
     access_name: str | None = None
     cluster_name: str | None = None
     vip_address: str | None = None
+    listener_port: int | None = None
     notes: str | None = None
 
 
@@ -96,6 +98,7 @@ class DatabaseGroupOut(BaseModel):
     access_name: str | None
     cluster_name: str | None
     vip_address: str | None
+    listener_port: int | None = None
     notes: str | None
     created_at: datetime
     status: GroupStatusSummaryOut | None = None
@@ -107,6 +110,7 @@ class ServerCreate(BaseModel):
     customer_id: int
     name: str = Field(min_length=1, max_length=128)
     host: str
+    ip_address: str | None = None
     os: ServerOS = ServerOS.LINUX
     site: NodeSite = NodeSite.PRIMARY
     agent_url: str | None = None
@@ -116,6 +120,7 @@ class ServerCreate(BaseModel):
 class ServerUpdate(BaseModel):
     name: str | None = None
     host: str | None = None
+    ip_address: str | None = None
     os: ServerOS | None = None
     site: NodeSite | None = None
     agent_url: str | None = None
@@ -132,6 +137,7 @@ class ServerOut(BaseModel):
     customer_id: int
     name: str
     host: str
+    ip_address: str | None = None
     os: str
     site: str
     agent_url: str | None
@@ -181,10 +187,11 @@ class NodeOut(BaseModel):
     options: dict[str, Any] | None = None
     instance_id: int | None = None
     created_at: datetime
-    # Read-only display convenience, derived from node.server (host/site now live on Server,
-    # not Node) — never accepted on create/update, just filled in by the router.
+    # Read-only display convenience, derived from node.server (host/site/ip_address now live
+    # on Server, not Node) — never accepted on create/update, just filled in by the router.
     host: str | None = None
     site: str | None = None
+    ip_address: str | None = None
 
     model_config = {"from_attributes": True}
 

@@ -61,6 +61,7 @@ async def _get_or_create_group(
     notes: str,
     environment: str = "prod",
     access_name: str | None = None,
+    listener_port: int | None = None,
 ) -> DatabaseGroup:
     existing = (
         await session.execute(
@@ -78,6 +79,7 @@ async def _get_or_create_group(
         topology=topology,
         environment=environment,
         access_name=access_name,
+        listener_port=listener_port,
         notes=notes,
     )
     session.add(group)
@@ -86,14 +88,14 @@ async def _get_or_create_group(
 
 
 async def _get_or_create_server(
-    session, customer: Customer, name: str, host: str, os: str, site: str = "primary"
+    session, customer: Customer, name: str, host: str, os: str, site: str = "primary", ip_address: str | None = None
 ) -> Server:
     existing = (
         await session.execute(select(Server).where(Server.customer_id == customer.id, Server.name == name))
     ).scalar_one_or_none()
     if existing:
         return existing
-    server = Server(customer_id=customer.id, name=name, host=host, os=os, site=site)
+    server = Server(customer_id=customer.id, name=name, host=host, os=os, site=site, ip_address=ip_address)
     session.add(server)
     await session.flush()
     return server
@@ -166,9 +168,14 @@ async def seed() -> None:
             notes="4 düğüm Always On AG, düğüm 4 disaster site'ta.",
             environment="prod",
             access_name="boa-ag-listener.internal",
+            listener_port=1433,
         )
-        boa_srv_1 = await _get_or_create_server(session, customer, "boa-winsvr-01", "boa-node-1.internal", "windows")
-        boa_srv_2 = await _get_or_create_server(session, customer, "boa-winsvr-02", "boa-node-2.internal", "windows")
+        boa_srv_1 = await _get_or_create_server(
+            session, customer, "boa-winsvr-01", "boa-node-1.internal", "windows", ip_address="10.10.1.11"
+        )
+        boa_srv_2 = await _get_or_create_server(
+            session, customer, "boa-winsvr-02", "boa-node-2.internal", "windows", ip_address="10.10.1.12"
+        )
         boa_srv_3 = await _get_or_create_server(session, customer, "boa-winsvr-03", "boa-node-3.internal", "windows")
         boa_srv_4 = await _get_or_create_server(
             session, customer, "boa-winsvr-04-dr", "boa-node-4.dr.internal", "windows", site="disaster"
@@ -239,10 +246,15 @@ async def seed() -> None:
             notes="3 düğüm Patroni cluster, düğüm 3 disaster site'ta.",
             environment="prod",
             access_name="aapara-patroni-vip.internal",
+            listener_port=5000,
         )
         # Linux/PostgreSQL: bir sunucuda tek servis, yani 1 sunucu = 1 Node.
-        aapara_srv_1 = await _get_or_create_server(session, customer, "aapara-node-1", "aapara-node-1.internal", "linux")
-        aapara_srv_2 = await _get_or_create_server(session, customer, "aapara-node-2", "aapara-node-2.internal", "linux")
+        aapara_srv_1 = await _get_or_create_server(
+            session, customer, "aapara-node-1", "aapara-node-1.internal", "linux", ip_address="10.20.1.11"
+        )
+        aapara_srv_2 = await _get_or_create_server(
+            session, customer, "aapara-node-2", "aapara-node-2.internal", "linux", ip_address="10.20.1.12"
+        )
         aapara_srv_3 = await _get_or_create_server(
             session, customer, "aapara-node-3-dr", "aapara-node-3.dr.internal", "linux", site="disaster"
         )

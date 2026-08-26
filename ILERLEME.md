@@ -724,6 +724,20 @@ mevcut `pg_stat_statements.track = all` önerisi `track = top`'a
 düzeltildi (gerekçesiyle birlikte — `all` fonksiyon içi her ifadeyi de
 izler, dbace'nin okuduğu hiçbir şeye katkısı yok, sadece ek yük).
 
+**Faz 13 — İŞ 1: Sihirbaz için model eksikleri.** `DatabaseGroup.listener_port`
+eklendi (SQL Server Always On listener portu / PostgreSQL HAProxy-VIP
+portu — bir node'un instance portundan bağımsız, ör. HAProxy 5000'de
+dinlerken arkadaki PostgreSQL 5432'de olabilir). `Server.ip_address`
+eklendi (hostname'e ek olarak, DNS henüz kurulu değilken de sunucuya
+işaret edilebilsin diye). `NodeOut.ip_address` da host/site gibi
+`node.server`'dan türetilen salt-okunur bir alan olarak eklendi.
+Migration (SQLite auto-migration + Supabase), şema (`ServerCreate/
+Update/Out`, `DatabaseGroupCreate/Update/Out`) ve `seed_demo.py`
+güncellendi (`boa-sqlserver-ag` → `listener_port=1433`,
+`aapara-patroni` → `listener_port=5000`, birkaç sunucuya örnek
+`ip_address`). httpx ile doğrulandı: seed sonrası hem grup hem sunucu
+hem de türetilen node alanları API üzerinden doğru dönüyor.
+
 ## Nasıl test edilir
 
 ### Backend
