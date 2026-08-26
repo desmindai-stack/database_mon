@@ -1020,6 +1020,69 @@ component'i hatasız transform ettiği (bkz. aşağıdaki dört-topoloji
 doğrulama bölümü) kontrol edildi. Kullanıcı `npm run dev` ile fırsat
 bulduğunda görsel olarak kontrol etmeli.
 
+## Faz 14 sonu — dört topoloji + yeni akışlar gerçekten çalıştırılarak doğrulandı
+
+Dört İŞ de bitince, gerçek bir uvicorn (`--port 8123`, temiz bir SQLite
+dosyasına karşı) + gerçek bir Vite dev sunucusuna karşı, curl ile
+uçtan uca çalıştırıldı (in-process test client değil):
+
+1. **(a) Standalone** — PostgreSQL, 1 düğüm:
+   `POST /api/wizard/database-groups` → `201`, `GET /api/groups/{id}/nodes`
+   doğru server/host/instance eşlemesini döndürdü.
+2. **(b) 2 düğümlü Always On** — SQL Server, biri `auth_type: windows`:
+   `201`; `GET /api/instances/{id}` ile Windows auth düğümünün
+   `options.auth_type == "windows"` olarak gerçekten saklandığı
+   (dekoratif değil) doğrulandı.
+3. **(c) 3 düğümlü Patroni + DR** — 2 ana DC + 1 disaster site, biri
+   `ssl_mode: require`, `cluster_options` (patroni/etcd portları) her
+   düğümün `options`'ına doğru yayıldı; `GET /api/groups/{id}/health`
+   `200` döndü (host'lar sahte olduğundan `down` bekleniyor, öyle de
+   oldu).
+4. **(d) Özel 5 düğümlü Always On** — oluşturuldu, sonra üstüne İŞ 2/3'ün
+   yeni akışları bu grupta canlı test edildi:
+   - `POST /api/wizard/groups/{id}/nodes` ile 6. düğüm eklendi (`201`) —
+     tek başına grup oluşturmadan sonradan ekleme gerçekten çalışıyor.
+   - Aynı grupta, `winsvr-d1`'in `server_id`'siyle `existing_server_id`
+     kullanılarak 2. bir named instance (`NAMEDINST`, port 1434)
+     eklendi (`201`) — `GET /api/servers?customer_id=1` sunucu sayısının
+     ARTMADIĞINI doğruladı (aynı Server row'u yeniden kullanıldı), yeni
+     düğümün adı `Node.name` çakışmasını önlemek için otomatik
+     `winsvr-d1-NAMEDINST` oldu (`_unique_node_name` fix'i canlı
+     doğrulandı), host'u doğru şekilde `winsvr-d1.internal`'dan okundu.
+   - O iki düğüm (`winsvr-d1` + `winsvr-d1-NAMEDINST`) silindi,
+     `GET /api/servers/7/node-count` `0` döndü (sahiplenme kontrolü
+     çalışıyor), `DELETE /api/servers/7` `204` ile temizlendi — İŞ 3'ün
+     "son düğüm silinince ne olacak" akışının backend yarısı uçtan uca
+     doğrulandı (frontend'deki `confirm()` diyaloğu görsel olarak
+     denenmedi, ama çağırdığı iki uç nokta gerçekten böyle davranıyor).
+   - Standalone bir gruba (`a`) `POST /api/wizard/groups/{id}/nodes`
+     denendi → `400` (beklenen ret).
+
+**Frontend (Vite dev sunucusu, gerçek `npm run dev`, curl ile):**
+`/groups/4/wizard` (yeni add-node route) ve
+`/applications/1/groups/wizard` (create-group route) SPA shell'i `200`
+döndürdü; `DatabaseWizardPage.tsx`'in Vite transform çıktısı
+`export default function DatabaseWizardPage` işaretini ve 6 adet
+`WizardSection` kullanımını içeriyordu (İŞ 4'ün bölümlere ayırma
+mantığı gerçekten derleniyor); `ServersPage.tsx`/`DatabaseGroupsPage.tsx`/
+`GroupDetailPage.tsx`'in transform çıktısında kaldırılan eski form
+id'leri (`new-server-form`/`new-group-form`/`new-node-form`) artık HİÇ
+geçmiyor (grep 0 sonuç) — mükerrer formların gerçekten kaldırıldığı
+kaynak/derlenmiş kod seviyesinde doğrulandı, sadece statik okumayla
+değil.
+
+**Doğrulanamayan şey, açıkça belirtiliyor:** Sihirbazın 4 adımını
+gerçek bir tarayıcıda tıklayarak (İleri/Geri, katlanabilir bölüm/düğüm
+kartı açma-kapama, sticky çubukların gerçekten yapışık kaldığını
+görme, "Mevcut sunucu" dropdown'unun UI'da doğru dolduğunu görme) test
+etmek bu ortamda mümkün değildi — tarayıcı otomasyon aracı yok. Yukarıdaki
+doğrulama "sihirbazın ürettiği istekler backend tarafından doğru
+işleniyor" ve "yeni component'ler hatasız derleniyor/transform ediliyor"
+iddialarını kanıtlıyor, "kullanıcı X'e tıklayınca ekranda Y görünüyor"
+iddiasını değil. Kullanıcı `npm run dev` ile fırsat bulduğunda dört
+akışı da (özellikle "Mevcut sunucu" seçimi ve katlanabilir kartlar)
+görsel olarak denemeli.
+
 ## Nasıl test edilir
 
 ### Backend
