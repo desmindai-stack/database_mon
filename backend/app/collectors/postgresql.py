@@ -18,13 +18,21 @@ PG_VERSION_STAT_IO = 160_000  # 16+: pg_stat_io view exists
 PG_VERSION_CHECKPOINTER = 170_000  # 17+: pg_stat_checkpointer split out of pg_stat_bgwriter
 PG_MIN_SUPPORTED_VERSION = 120_000
 
+# Every query this collector runs is either an in-memory cumulative-counter view
+# (pg_stat_database/bgwriter/checkpointer/io) or an extension view designed for near-zero-cost
+# sampling (pg_stat_statements) — none of it should ever legitimately take seconds. A generous
+# but firm ceiling protects the monitored server from a collector cycle piling up (this runs
+# every collect_interval_seconds, 15s by default) if something is unexpectedly slow (lock
+# contention, an overloaded server) rather than letting the query run indefinitely.
+COLLECTOR_STATEMENT_TIMEOUT_MS = 5_000
+
 
 class PostgreSQLCollector(BaseCollector):
     def __init__(self, target: ConnectionTarget) -> None:
         self.target = target
 
     async def _connect(self) -> asyncpg.Connection:
-        return await asyncpg.connect(
+        conn = await asyncpg.connect(
             host=self.target.host,
             port=self.target.port,
             database=self.target.database,
@@ -32,6 +40,8 @@ class PostgreSQLCollector(BaseCollector):
             password=self.target.password,
             timeout=10,
         )
+        await conn.execute(f"SET statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'")
+        return conn
 
     async def _detect_version(self, conn: asyncpg.Connection) -> tuple[int, str]:
         """Returns (server_version_num, human-readable version string). Called once per

@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 
 from app.collectors.base import ConnectionTarget
-from app.collectors.postgresql import PostgreSQLCollector
+from app.collectors.postgresql import COLLECTOR_STATEMENT_TIMEOUT_MS, PostgreSQLCollector
 from tests.fakes import FakeAsyncConnection
 
 _DB_STATS_ROW = {
@@ -185,3 +185,23 @@ def _fake_connect(conn: FakeAsyncConnection):
         return conn
 
     return _inner
+
+
+async def test_connect_applies_statement_timeout(monkeypatch):
+    """Exercises the real _connect() body (not monkeypatched away) to prove the collector
+    actually sends a statement_timeout — every collection-loop query must be bounded so a
+    slow/locked target can't pile up connections at collect_interval_seconds cadence."""
+    fake_conn = FakeAsyncConnection({})
+
+    async def fake_asyncpg_connect(**kwargs):
+        return fake_conn
+
+    import app.collectors.postgresql as pg_module
+
+    monkeypatch.setattr(pg_module.asyncpg, "connect", fake_asyncpg_connect)
+
+    collector = _collector()
+    conn = await collector._connect()
+
+    assert conn is fake_conn
+    assert any(f"statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'" in q for q in fake_conn.queries)

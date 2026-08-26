@@ -3,6 +3,36 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 12 — SQL Server'da statement_timeout karşılığı yok
+
+PostgreSQL'in `SET statement_timeout = 'Xms'`'i tek bir sorgunun toplam
+yürütme süresini (CPU+IO, kilit beklemesi dahil her şeyi) sınırlıyor —
+düz SQL ile, sürücüden bağımsız, her zaman çalışan bir mekanizma. SQL
+Server'da bunun birebir karşılığı yok:
+- `SET LOCK_TIMEOUT <ms>` — sadece kilit beklemesini sınırlıyor (bir
+  başka session'ın tuttuğu kilidin açılmasını bekleme süresi). Bu,
+  pratikte bir "toplama sorgusu takıldı" durumunun EN YAYGIN sebebi
+  olduğu için gerçek bir koruma sağlıyor, ama CPU-bound/IO-bound saf
+  yürütme süresini sınırlamıyor.
+- `SQL_ATTR_QUERY_TIMEOUT` (ODBC seviyesinde, pyodbc/aioodbc'de
+  genellikle cursor'ın `.timeout` özelliği üzerinden) gerçek bir
+  yürütme süresi sınırı olurdu, ama bu ortamda gerçek bir ODBC
+  sürücüsü/SQL Server erişimi olmadığından aioodbc'nin bu özelliği
+  hangi sürümde/nasıl expose ettiğini güvenilir şekilde doğrulayamadım
+  — yanlış bir attribute adı yazıp sessizce hiçbir şey yapmaması (ya da
+  gerçek bir sürücüye karşı patlaması) riskini almak yerine, sadece
+  SQL seviyesinde her zaman çalışacağını bildiğim `LOCK_TIMEOUT`'u
+  ekledim.
+- `sp_configure 'query governor cost limit'` instance-wide bir ayar
+  (ALTER SERVER CONFIGURATION gerektiriyor, session-scoped değil) —
+  bir izleme aracının bunu hedef sunucuda global olarak değiştirmesi
+  uygun değil, kapsam dışı bırakıldı.
+
+Sonuç: SQL Server tarafında koruma PostgreSQL'dekiyle aynı güçte değil
+— bu bilinçli, dokümante edilmiş bir sınır (ILERLEME.md'de de not
+edildi), gelecekte gerçek bir SQL Server'a karşı doğrulanıp
+`cur.timeout` eklenebilir.
+
 ## Faz 11 — PostgreSQL sürüm-uyumlu collector
 
 **pg_stat_activity / pg_stat_replication taraması sonucu: kod değişikliği

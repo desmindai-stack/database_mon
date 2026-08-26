@@ -7,8 +7,11 @@ raising and taking the whole collector down.
 
 from __future__ import annotations
 
+import sys
+import types
+
 from app.collectors.base import ConnectionTarget
-from app.collectors.sqlserver_mongodb import SqlServerCollector
+from app.collectors.sqlserver_mongodb import COLLECTOR_LOCK_TIMEOUT_MS, SqlServerCollector
 from tests.fakes import FakeSqlServerConnection
 
 _VERSION_ROW = ([(13, "Microsoft SQL Server 2016 (SP3) - 13.0.6300.2")], [("major",), ("version",)])
@@ -100,6 +103,26 @@ async def test_tempdb_query_failure_marks_only_temp_bytes_unsupported():
     assert "temp_bytes" not in metrics
     assert "permission denied" in metrics["_unsupported_metrics"]["temp_bytes"]
     assert metrics["cache_hit_ratio"] == 95.0  # unrelated metric unaffected
+
+
+async def test_connect_applies_lock_timeout(monkeypatch):
+    """Exercises the real _connect() body (not monkeypatched away) to prove the collector
+    actually sends SET LOCK_TIMEOUT — SQL Server has no plain-SQL statement_timeout
+    equivalent, LOCK_TIMEOUT is the closest portable protection (see SORULAR.md)."""
+    responses = {"SET LOCK_TIMEOUT": ([], [])}
+    fake_conn = FakeSqlServerConnection(responses)
+
+    async def fake_aioodbc_connect(**kwargs):
+        return fake_conn
+
+    fake_aioodbc_module = types.SimpleNamespace(connect=fake_aioodbc_connect)
+    monkeypatch.setitem(sys.modules, "aioodbc", fake_aioodbc_module)
+
+    collector = _collector()
+    conn = await collector._connect()
+
+    assert conn is fake_conn
+    assert any(f"SET LOCK_TIMEOUT {COLLECTOR_LOCK_TIMEOUT_MS}" in q for q in fake_conn.queries)
 
 
 async def test_slow_queries_falls_back_when_total_rows_column_missing():

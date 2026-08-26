@@ -13,6 +13,9 @@ logger = logging.getLogger(__name__)
 # collector still tries — DMV shapes are far more stable than exact SP/CU column additions).
 SQLSERVER_MIN_SUPPORTED_MAJOR = 13
 
+# See _connect()'s docstring comment — bounds lock-wait time on every collector query.
+COLLECTOR_LOCK_TIMEOUT_MS = 5_000
+
 _PERF_COUNTER_QUERY = """
 SELECT RTRIM(counter_name), cntr_value
 FROM sys.dm_os_performance_counters
@@ -110,7 +113,14 @@ class SqlServerCollector(BaseCollector):
                 "SQL Server collector requires aioodbc + an ODBC driver "
                 "(e.g. 'ODBC Driver 18 for SQL Server') on the worker image."
             ) from exc
-        return await aioodbc.connect(dsn=build_odbc_connection_string(self.target), timeout=10, autocommit=True)
+        conn = await aioodbc.connect(dsn=build_odbc_connection_string(self.target), timeout=10, autocommit=True)
+        # SQL Server has no direct, client-agnostic equivalent of PostgreSQL's
+        # statement_timeout settable via plain SQL — LOCK_TIMEOUT bounds the most common real
+        # cause of a monitoring query hanging (waiting on a lock held by another session), but
+        # does NOT bound raw CPU/IO-bound execution time (see SORULAR.md).
+        async with conn.cursor() as cur:
+            await cur.execute(f"SET LOCK_TIMEOUT {COLLECTOR_LOCK_TIMEOUT_MS}")
+        return conn
 
     async def _detect_version(self, conn) -> tuple[int, str]:
         """Returns (ProductMajorVersion, @@VERSION text). 2016=13, 2017=14, 2019=15, 2022=16."""

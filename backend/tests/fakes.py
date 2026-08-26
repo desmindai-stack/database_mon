@@ -37,6 +37,12 @@ class FakeAsyncConnection:
         row = self._match(sql)
         return row if row is not None else []
 
+    async def execute(self, sql: str, *args: Any) -> str:
+        # Fire-and-forget statements (SET ...) — no configured response needed, always
+        # "succeeds" (matching asyncpg.Connection.execute's plain command-tag return).
+        self.queries.append(sql)
+        return "SET"
+
     async def close(self) -> None:
         return None
 

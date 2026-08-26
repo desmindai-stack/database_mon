@@ -637,6 +637,34 @@ uyarısıyla `confirm()` çıkıyor, onaylanmadan istek gönderilmiyor.
 Sonuç panelinde zaten var olan `ExplainPlanTree`'nin mod etiketi
 ("EXPLAIN"/"ANALYZE") hangi sonucun hangi modda üretildiğini gösteriyor.
 
+**Faz 12 — Her toplama sorgusuna statement_timeout.**
+`PostgreSQLCollector._connect()` artık her bağlantıda
+`SET statement_timeout = '5000ms'` çalıştırıyor — `collect_metrics`/
+`collect_slow_queries`'in kullandığı her sorgu (in-memory view'lar,
+`pg_stat_statements`) zaten milisaniyeler sürmeli, bu sadece kilitli/
+aşırı yüklü bir hedefte bağlantının 15sn'lik toplama döngüsü boyunca
+sınırsız açık kalmasını engelleyen bir güvenlik ağı. Aynısı
+`services/parameter_audit.py::_pg_connect()`'e de eklendi (dashboard
+refresh tick'inde, 10sn'ye kadar sık çalışabiliyor).
+`PostgreSQLIndexAdvisor` zaten bir önceki commit'te aldı,
+`PostgreSQLExplainService`'te de zaten vardı (8sn) — artık hedef
+veritabanına dokunan her PostgreSQL sorgusu (periyodik veya on-demand)
+sınırlı.
+
+SQL Server'da PostgreSQL'in `statement_timeout`'una birebir karşılık
+gelen, düz SQL ile ayarlanabilen bir mekanizma yok —
+`SqlServerCollector._connect()` artık `SET LOCK_TIMEOUT 5000` çalıştırıyor
+(en yaygın gerçek "toplama sorgusu takıldı" sebebi olan kilit beklemesini
+sınırlıyor), ama bu ham CPU/IO-bound yürütme süresini SINIRLAMIYOR — bu
+bilinen bir fark, SORULAR.md'de gerekçesiyle not edildi.
+
+**Test:** İki yeni test (`test_connect_applies_statement_timeout`,
+`test_connect_applies_lock_timeout`) önceki testlerin aksine `_connect()`
+metodunu MONKEYPATCH'lemiyor — gerçek `_connect()` gövdesini
+(`asyncpg.connect`/`aioodbc.connect`'i sahteleyerek) çalıştırıp
+gönderilen `SET` ifadesinin gerçekten içeride olduğunu doğruluyor.
+Toplam 16 test yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

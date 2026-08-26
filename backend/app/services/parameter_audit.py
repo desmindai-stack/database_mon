@@ -222,7 +222,7 @@ async def _pg_connect(node: Node) -> asyncpg.Connection:
         raise ValueError(
             f"Node '{node.name}' bir Instance'a bağlı değil (parametre denetimi bağlantı gerektirir)"
         )
-    return await asyncpg.connect(
+    conn = await asyncpg.connect(
         host=instance.host,
         port=instance.port,
         database=instance.database,
@@ -230,6 +230,12 @@ async def _pg_connect(node: Node) -> asyncpg.Connection:
         password=decrypt_secret(instance.password),
         timeout=10,
     )
+    # This runs on the dashboard-refresh tick (every dashboard_refresh_interval_seconds, as
+    # often as 10s — see ALLOWED_REFRESH_INTERVALS) for every Patroni-topology group's target
+    # node — pg_settings is an in-memory catalog view, near-zero cost, but still bounded so a
+    # locked/overloaded target can't hold a connection open indefinitely across ticks.
+    await conn.execute("SET statement_timeout = '5000ms'")
+    return conn
 
 
 async def _fetch_pg_settings(node: Node) -> dict[str, dict[str, Any]]:
