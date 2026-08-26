@@ -4,9 +4,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.domain.engines import DEFAULT_DATABASES, DatabaseEngine
+from app.domain.topology import GroupTopology
 from app.models import Application, Customer, DatabaseGroup, Instance, Node, Server
-from app.schemas import DatabaseGroupOut, WizardCreateGroupRequest
-from app.services.credentials import encrypt_secret
+from app.schemas import (
+    DatabaseGroupOut,
+    NodeOut,
+    WizardAddNodesRequest,
+    WizardCreateGroupRequest,
+    WizardNodeInput,
+)
+from app.services.credentials import encrypt_secret, redact_node_options
 
 router = APIRouter(prefix="/wizard", tags=["wizard"])
 
@@ -22,7 +29,7 @@ async def _unique_instance_name(db: AsyncSession, base: str) -> str:
     return name
 
 
-def _instance_options(node_input, engine: DatabaseEngine) -> dict | None:
+def _instance_options(node_input: WizardNodeInput, engine: DatabaseEngine) -> dict | None:
     """Engine-specific connection knobs that don't have a dedicated Instance column — stored in
     Instance.options and read straight through by the collectors (ConnectionTarget.options)."""
     opts: dict = {}
@@ -36,6 +43,93 @@ def _instance_options(node_input, engine: DatabaseEngine) -> dict | None:
         if node_input.replica_set:
             opts["replica_set"] = node_input.replica_set
     return opts or None
+
+
+async def _create_server_instance_node(
+    db: AsyncSession,
+    *,
+    customer: Customer,
+    application: Application,
+    group: DatabaseGroup,
+    node_input: WizardNodeInput,
+    name_prefix: str,
+    cluster_options: dict | None,
+) -> Node:
+    """Creates one Server + Instance + Node for a single wizard node entry, all `flush()`ed
+    (not committed) onto the caller's transaction — shared by "create a new group" and "add
+    node(s) to an existing group", both of which wrap this in the same commit-everything-or-
+    roll-back-everything pattern."""
+    engine = DatabaseEngine(group.engine)
+
+    existing_server = await db.execute(
+        select(Server).where(Server.customer_id == customer.id, Server.name == node_input.server_name)
+    )
+    if existing_server.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409, detail=f"'{node_input.server_name}' adında bir sunucu bu müşteride zaten var"
+        )
+
+    server = Server(
+        customer_id=customer.id,
+        name=node_input.server_name,
+        host=node_input.host,
+        ip_address=node_input.ip_address or None,
+        os=node_input.os.value,
+        site=node_input.site.value,
+        agent_url=node_input.agent_url or None,
+        agent_token=node_input.agent_token or None,
+    )
+    db.add(server)
+    await db.flush()
+
+    instance_name = await _unique_instance_name(db, f"{name_prefix}-{node_input.server_name}")
+    instance = Instance(
+        name=instance_name,
+        engine=engine.value,
+        host=node_input.host,
+        port=node_input.port,
+        database=node_input.database or DEFAULT_DATABASES.get(engine, "postgres"),
+        username=node_input.db_username,
+        password=encrypt_secret(node_input.db_password),
+        options=_instance_options(node_input, engine),
+        customer_name=customer.name,
+        environment=customer.type,
+        application=application.name,
+        # A MongoDB standalone group has no group-level cluster_name (that field only gets
+        # entered for the Patroni/Always On cluster steps) — the per-node replica set name is
+        # the closest equivalent, so it fills the same slot when given.
+        cluster_name=group.cluster_name or node_input.replica_set,
+        role=node_input.role_hint.value if node_input.role_hint != "unknown" else None,
+        services=[_ENGINE_SERVICE_NAME.get(engine.value, engine.value)],
+        group_id=group.id,
+        enabled=True,
+    )
+    db.add(instance)
+    await db.flush()
+
+    node = Node(
+        group_id=group.id,
+        server_id=server.id,
+        name=node_input.server_name,
+        instance_name=node_input.instance_name or None,
+        port=node_input.port,
+        role_hint=node_input.role_hint.value,
+        options=cluster_options or None,
+        instance_id=instance.id,
+    )
+    db.add(node)
+    await db.flush()
+    return node
+
+
+async def _node_out(db: AsyncSession, node: Node) -> NodeOut:
+    out = NodeOut.model_validate(node)
+    out.options = redact_node_options(out.options)
+    server = await db.get(Server, node.server_id) if node.server_id else None
+    out.host = server.host if server else None
+    out.site = server.site if server else None
+    out.ip_address = server.ip_address if server else None
+    return out
 
 
 @router.post("/database-groups", response_model=DatabaseGroupOut, status_code=status.HTTP_201_CREATED)
@@ -90,63 +184,15 @@ async def wizard_create_group(payload: WizardCreateGroupRequest, db: AsyncSessio
         )
 
         for node_input in payload.nodes:
-            existing_server = await db.execute(
-                select(Server).where(Server.customer_id == customer.id, Server.name == node_input.server_name)
+            await _create_server_instance_node(
+                db,
+                customer=customer,
+                application=application,
+                group=group,
+                node_input=node_input,
+                name_prefix=payload.group_name,
+                cluster_options=cluster_options or None,
             )
-            if existing_server.scalar_one_or_none():
-                raise HTTPException(
-                    status_code=409, detail=f"'{node_input.server_name}' adında bir sunucu bu müşteride zaten var"
-                )
-
-            server = Server(
-                customer_id=customer.id,
-                name=node_input.server_name,
-                host=node_input.host,
-                ip_address=node_input.ip_address or None,
-                os=node_input.os.value,
-                site=node_input.site.value,
-                agent_url=node_input.agent_url or None,
-                agent_token=node_input.agent_token or None,
-            )
-            db.add(server)
-            await db.flush()
-
-            instance_name = await _unique_instance_name(db, f"{payload.group_name}-{node_input.server_name}")
-            instance = Instance(
-                name=instance_name,
-                engine=payload.engine.value,
-                host=node_input.host,
-                port=node_input.port,
-                database=node_input.database or DEFAULT_DATABASES.get(payload.engine, "postgres"),
-                username=node_input.db_username,
-                password=encrypt_secret(node_input.db_password),
-                options=_instance_options(node_input, payload.engine),
-                customer_name=customer.name,
-                environment=customer.type,
-                application=application.name,
-                # A MongoDB standalone group has no group-level cluster_name (that field only
-                # gets entered for the Patroni/Always On cluster steps) — the per-node replica
-                # set name is the closest equivalent, so it fills the same slot when given.
-                cluster_name=payload.cluster_name or node_input.replica_set,
-                role=node_input.role_hint.value if node_input.role_hint != "unknown" else None,
-                services=[_ENGINE_SERVICE_NAME.get(payload.engine.value, payload.engine.value)],
-                group_id=group.id,
-                enabled=True,
-            )
-            db.add(instance)
-            await db.flush()
-
-            node = Node(
-                group_id=group.id,
-                server_id=server.id,
-                name=node_input.server_name,
-                instance_name=node_input.instance_name or None,
-                port=node_input.port,
-                role_hint=node_input.role_hint.value,
-                options=cluster_options or None,
-                instance_id=instance.id,
-            )
-            db.add(node)
 
         await db.commit()
     except HTTPException:
@@ -158,3 +204,66 @@ async def wizard_create_group(payload: WizardCreateGroupRequest, db: AsyncSessio
 
     await db.refresh(group)
     return group
+
+
+@router.post("/groups/{group_id}/nodes", response_model=list[NodeOut], status_code=status.HTTP_201_CREATED)
+async def wizard_add_nodes(
+    group_id: int, payload: WizardAddNodesRequest, db: AsyncSession = Depends(get_db)
+) -> list[NodeOut]:
+    """Same wizard, opened in "add node(s) to an existing group" mode — engine/topology/cluster
+    info all come from the group already; only new Server + Instance + Node rows are created,
+    atomically (same commit-everything-or-roll-back-everything guarantee as group creation)."""
+    group = await db.get(DatabaseGroup, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Database group not found")
+    if group.topology == GroupTopology.STANDALONE:
+        raise HTTPException(
+            status_code=400,
+            detail="Standalone bir gruba düğüm eklenemez — önce 'Cluster'a dönüştür' ile cluster topolojisine geçirin",
+        )
+    application = await db.get(Application, group.application_id)
+    customer = await db.get(Customer, application.customer_id) if application else None
+    if not application or not customer:
+        raise HTTPException(status_code=404, detail="Application/customer not found for this group")
+
+    existing_count_result = await db.execute(select(Node).where(Node.group_id == group_id))
+    existing_nodes = list(existing_count_result.scalars().all())
+    if len(existing_nodes) + len(payload.nodes) > 8:
+        raise HTTPException(status_code=400, detail="Bir grupta en fazla 8 düğüm olabilir")
+
+    new_names = [n.server_name for n in payload.nodes]
+    if len(new_names) != len(set(new_names)):
+        raise HTTPException(status_code=400, detail="Düğüm listesinde tekrar eden sunucu adı var")
+
+    cluster_options = payload.cluster_options.model_dump(exclude_none=True) if payload.cluster_options else None
+    if cluster_options is None and existing_nodes:
+        # Inherit the sibling nodes' Patroni-stack settings so adding one more replica doesn't
+        # require re-entering cluster-wide ports the user already configured for this group.
+        cluster_options = existing_nodes[0].options
+
+    try:
+        created: list[Node] = []
+        for node_input in payload.nodes:
+            node = await _create_server_instance_node(
+                db,
+                customer=customer,
+                application=application,
+                group=group,
+                node_input=node_input,
+                name_prefix=group.name,
+                cluster_options=cluster_options,
+            )
+            created.append(node)
+        await db.commit()
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(status_code=400, detail=f"Düğüm ekleme başarısız, hiçbir şey oluşturulmadı: {exc}") from exc
+
+    # commit() expires every attribute on the just-created ORM objects — refresh before
+    # reading them back (same pattern wizard_create_group uses for the group it returns).
+    for node in created:
+        await db.refresh(node)
+    return [await _node_out(db, node) for node in created]

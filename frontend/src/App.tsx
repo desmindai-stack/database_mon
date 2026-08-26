@@ -49,7 +49,9 @@ function groupNode(g: DatabaseGroup): NavTreeNode {
     href: `/groups/${g.id}`,
     meta: isCluster ? g.topology : undefined,
     loadChildren: () => api.getGroupNodes(g.id).then((nodes) => nodes.map(nodeLeaf)),
-    emptyHref: `/groups/${g.id}`,
+    // Standalone groups can't take a second node via the wizard (see wizard_add_nodes's 400) —
+    // omit the "+" entry point entirely for them instead of linking to a dead end.
+    emptyHref: isCluster ? `/groups/${g.id}/wizard` : undefined,
     emptyLabel: "+ Düğüm ekle",
   };
 }
@@ -59,7 +61,7 @@ function applicationNode(a: Application): NavTreeNode {
     id: `app-${a.id}`,
     name: a.name,
     loadChildren: () => api.getGroups(a.id).then((groups) => groups.map(groupNode)),
-    emptyHref: `/applications/${a.id}/groups`,
+    emptyHref: `/applications/${a.id}/groups/wizard`,
     emptyLabel: "+ Grup ekle",
   };
 }
@@ -329,6 +331,7 @@ export default function App() {
           <Route path="/applications/:applicationId/groups" element={<DatabaseGroupsPage />} />
           <Route path="/applications/:applicationId/groups/wizard" element={<DatabaseWizardPage />} />
           <Route path="/groups/:groupId" element={<GroupDetailPage />} />
+          <Route path="/groups/:groupId/wizard" element={<DatabaseWizardPage />} />
         </Routes>
       </main>
     </div>

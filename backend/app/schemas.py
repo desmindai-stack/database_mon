@@ -157,6 +157,17 @@ class WizardCreateGroupRequest(BaseModel):
         return self
 
 
+class WizardAddNodesRequest(BaseModel):
+    """Same one-screen wizard, opened in "add node(s) to an existing group" mode instead of
+    "create a new group" — engine/topology/cluster info all come from the group already, only
+    the node list is new. See POST /api/wizard/groups/{group_id}/nodes."""
+
+    nodes: list[WizardNodeInput] = Field(min_length=1, max_length=8)
+    # If omitted, an existing sibling node's options (Patroni ports etc.) are reused so the
+    # user doesn't have to re-enter cluster-wide settings just to add one more replica.
+    cluster_options: WizardClusterOptions | None = None
+
+
 class GroupStatusSummaryOut(BaseModel):
     overall: str = "unknown"
     nodes_up: int = 0

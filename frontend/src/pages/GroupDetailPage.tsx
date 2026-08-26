@@ -10,24 +10,11 @@ import {
   DbServer,
   GroupHealth,
   Instance,
-  NodeCreate,
   NodeRoleHint,
   ParameterAudit,
 } from "../api";
 
 type Tab = "nodes" | "parameters" | "alwayson";
-
-const emptyNodeForm = (groupId: number): NodeCreate => ({
-  group_id: groupId,
-  server_id: 0,
-  name: "",
-  instance_name: "",
-  port: 5432,
-  role_hint: "unknown",
-  db_username: "",
-  db_password: "",
-  db_database: "",
-});
 
 const STATUS_TR: Record<string, string> = { up: "UP", down: "DOWN", unknown: "UNKNOWN", skipped: "SKIP" };
 
@@ -38,15 +25,10 @@ export default function GroupDetailPage() {
   const [group, setGroup] = useState<DatabaseGroup | null>(null);
   const [application, setApplication] = useState<Application | null>(null);
   const [nodes, setNodes] = useState<DbNode[]>([]);
-  const [nodeForm, setNodeForm] = useState<NodeCreate>(emptyNodeForm(id));
-  const [instanceMode, setInstanceMode] = useState<"new" | "existing" | "none">("new");
   const [existingInstances, setExistingInstances] = useState<Instance[]>([]);
   const [servers, setServers] = useState<DbServer[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("nodes");
-  const [newNodeTesting, setNewNodeTesting] = useState(false);
-  const [newNodeTestResult, setNewNodeTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const [health, setHealth] = useState<GroupHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -94,79 +76,16 @@ export default function GroupDetailPage() {
   useEffect(() => {
     api.getGroup(id).then((g) => {
       setGroup(g);
-      setNodeForm((prev) => ({ ...prev, port: g.engine === "sqlserver" ? 1433 : g.engine === "mongodb" ? 27017 : 5432 }));
       setConvertForm((prev) => ({ ...prev, topology: g.engine === "sqlserver" ? "alwayson" : "patroni" }));
       api.getApplication(g.application_id).then((app) => {
         setApplication(app);
-        api.getServers(app.customer_id).then((all) => {
-          setServers(all);
-          if (all.length > 0) setNodeForm((prev) => ({ ...prev, server_id: prev.server_id || all[0].id }));
-        }).catch(() => undefined);
+        api.getServers(app.customer_id).then(setServers).catch(() => undefined);
       }).catch(() => undefined);
     }).catch((e) => setError(String(e.message || e)));
     loadNodes();
     api.getInstances().then(setExistingInstances).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
-
-  const onTestNewNodeConnection = async () => {
-    const server = servers.find((s) => s.id === nodeForm.server_id);
-    if (!group || !server) {
-      setError("Önce bir sunucu seçin");
-      return;
-    }
-    setNewNodeTesting(true);
-    setNewNodeTestResult(null);
-    try {
-      const result = await api.testConnection({
-        name: `${group.name}-${nodeForm.name || "yeni-dugum"}-test`,
-        engine: group.engine,
-        host: server.host,
-        port: nodeForm.port,
-        database: nodeForm.db_database || (group.engine === "sqlserver" ? "master" : group.engine === "mongodb" ? "admin" : "postgres"),
-        username: nodeForm.db_username || "",
-        password: nodeForm.db_password || "",
-      });
-      setNewNodeTestResult({ ok: result.ok, message: result.message });
-    } catch (err) {
-      setNewNodeTestResult({ ok: false, message: String((err as Error).message) });
-    } finally {
-      setNewNodeTesting(false);
-    }
-  };
-
-  const onAddNode = async (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    if (instanceMode === "new" && !nodeForm.db_username) {
-      setError("Yeni instance için kullanıcı adı zorunlu — ya kullanıcı adı girin ya da 'Bağlama' seçeneğini kullanın.");
-      return;
-    }
-    if (instanceMode === "existing" && !nodeForm.instance_id) {
-      setError("Mevcut instance'a bağlamak için listeden bir instance seçin.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.createNode({
-        ...nodeForm,
-        group_id: id,
-        instance_name: nodeForm.instance_name || undefined,
-        instance_id: instanceMode === "existing" ? nodeForm.instance_id : undefined,
-        db_username: instanceMode === "new" ? nodeForm.db_username || undefined : undefined,
-        db_password: instanceMode === "new" ? nodeForm.db_password || undefined : undefined,
-        db_database: instanceMode === "new" ? nodeForm.db_database || undefined : undefined,
-      });
-      setNodeForm(emptyNodeForm(id));
-      setNewNodeTestResult(null);
-      await loadNodes();
-      await api.getInstances().then(setExistingInstances);
-    } catch (err) {
-      setError(String((err as Error).message));
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const onDeleteNode = async (nodeId: number) => {
     if (!confirm("Düğüm silinsin mi?")) return;
@@ -356,9 +275,9 @@ export default function GroupDetailPage() {
             {group?.vip_address && <span className="detail-meta"> · VIP: {group.vip_address}</span>}
           </p>
         </div>
-        {tab === "nodes" && (
+        {tab === "nodes" && group && group.topology !== "standalone" && (
           <div className="header-actions">
-            <a href="#new-node-form" className="btn btn-primary">+ Düğüm Ekle</a>
+            <Link to={`/groups/${id}/wizard`} className="btn btn-primary">+ Düğüm Ekle</Link>
           </div>
         )}
       </header>
@@ -390,7 +309,7 @@ export default function GroupDetailPage() {
             </button>
           </div>
           <p className="muted-note">
-            Mevcut düğüm ilk düğüm olarak korunur; dönüştürdükten sonra "Yeni düğüm" formuyla diğer düğümleri ekleyin.
+            Mevcut düğüm ilk düğüm olarak korunur; dönüştürdükten sonra "+ Düğüm Ekle" sihirbazıyla diğer düğümleri ekleyin.
           </p>
           {convertError && <div className="error">{convertError}</div>}
           {showConvertForm && (
@@ -690,128 +609,6 @@ export default function GroupDetailPage() {
             </div>
           </div>
 
-          <div className="card" id="new-node-form">
-            <h3 className="chart-title">Yeni düğüm</h3>
-            {servers.length === 0 ? (
-              <p className="muted-note">
-                Önce bir sunucu ekleyin —{" "}
-                {application && <Link to={`/customers/${application.customer_id}/servers`}>Sunucular sayfasına git</Link>}.
-              </p>
-            ) : (
-            <form className="form-grid" onSubmit={onAddNode}>
-              <label>
-                Ad
-                <input value={nodeForm.name} onChange={(e) => setNodeForm({ ...nodeForm, name: e.target.value })} required />
-              </label>
-              <label>
-                Sunucu
-                <select
-                  value={nodeForm.server_id}
-                  onChange={(e) => setNodeForm({ ...nodeForm, server_id: Number(e.target.value) })}
-                  required
-                >
-                  {servers.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
-                  ))}
-                </select>
-              </label>
-              {group?.engine === "sqlserver" && (
-                <label>
-                  SQL Server instance adı (opsiyonel)
-                  <input
-                    value={nodeForm.instance_name}
-                    onChange={(e) => setNodeForm({ ...nodeForm, instance_name: e.target.value })}
-                    placeholder="MSSQLSERVER (varsayılan) veya named instance adı"
-                  />
-                </label>
-              )}
-              <label>
-                Port
-                <input
-                  type="number"
-                  value={nodeForm.port}
-                  onChange={(e) => setNodeForm({ ...nodeForm, port: Number(e.target.value) })}
-                />
-              </label>
-              <label>
-                Rol
-                <select
-                  value={nodeForm.role_hint}
-                  onChange={(e) => setNodeForm({ ...nodeForm, role_hint: e.target.value as NodeRoleHint })}
-                >
-                  <option value="unknown">Bilinmiyor</option>
-                  <option value="primary">Primary</option>
-                  <option value="replica">Replica</option>
-                </select>
-              </label>
-              <label>
-                Instance bağlantısı
-                <select value={instanceMode} onChange={(e) => setInstanceMode(e.target.value as typeof instanceMode)}>
-                  <option value="new">Yeni instance oluştur</option>
-                  <option value="existing">Mevcut instance'a bağla</option>
-                  <option value="none">Bağlama (kimlik bilgisi yok)</option>
-                </select>
-              </label>
-              {instanceMode === "new" && (
-                <>
-                  <label>
-                    DB kullanıcı adı
-                    <input
-                      value={nodeForm.db_username}
-                      onChange={(e) => setNodeForm({ ...nodeForm, db_username: e.target.value })}
-                      placeholder="postgres, sa..."
-                      required
-                    />
-                  </label>
-                  <label>
-                    DB parola
-                    <input
-                      type="password"
-                      value={nodeForm.db_password}
-                      onChange={(e) => setNodeForm({ ...nodeForm, db_password: e.target.value })}
-                    />
-                  </label>
-                  <label>
-                    DB adı (opsiyonel)
-                    <input
-                      value={nodeForm.db_database}
-                      onChange={(e) => setNodeForm({ ...nodeForm, db_database: e.target.value })}
-                      placeholder="postgres, master..."
-                    />
-                  </label>
-                </>
-              )}
-              {instanceMode === "existing" && (
-                <label>
-                  Instance
-                  <select
-                    value={nodeForm.instance_id ?? ""}
-                    onChange={(e) => setNodeForm({ ...nodeForm, instance_id: e.target.value ? Number(e.target.value) : null })}
-                    required
-                  >
-                    <option value="">— seçin —</option>
-                    {existingInstances.map((i) => (
-                      <option key={i.id} value={i.id}>{i.name}</option>
-                    ))}
-                  </select>
-                </label>
-              )}
-              {instanceMode === "new" && newNodeTestResult && (
-                <div className={newNodeTestResult.ok ? "ok-text" : "warn-text"}>{newNodeTestResult.message}</div>
-              )}
-              <div className="form-actions">
-                {instanceMode === "new" && (
-                  <button type="button" className="btn" disabled={newNodeTesting} onClick={onTestNewNodeConnection}>
-                    {newNodeTesting ? "Test ediliyor…" : "Bağlantıyı test et"}
-                  </button>
-                )}
-                <button type="submit" className="btn btn-primary" disabled={busy}>
-                  Ekle
-                </button>
-              </div>
-            </form>
-            )}
-          </div>
         </div>
       )}
 

@@ -49,6 +49,33 @@ bu ikisi görünür şekilde başarısız olur, kullanıcı hemen fark eder.
 İleride aynı `(self.target.options or {}).get("ssl_mode")` satırı oraya
 da eklenebilir.
 
+## Faz 14 — İŞ 2: Sahipsiz-node kalan standalone gruplarda ekleme yolu yok
+
+`GroupDetailPage`'in eski "Yeni düğüm" formunu kaldırıp yerine sihirbaz
+linki koydum, ama bu link `group.topology !== "standalone"` olmadıkça
+render edilmiyor (standalone bir gruba wizard'ın `wizard_add_nodes` uç
+noktası zaten 400 döndürüyor — bkz. Faz 14 İŞ 1'in backend değişikliği).
+Normalde bir standalone grubun tam olarak 1 düğümü olur ve bu asla boşa
+düşmez. Ama biri o tek düğümü manuel silerse (node düzenleme sayfasından
+"Sil"), grup 0 düğümlü ve artık **hiçbir UI yolundan** yeni düğüm
+eklenemez hale geliyor — ne "+ Düğüm Ekle" (gizli, standalone), ne de
+sol menünün "+" düğmesi (`App.tsx::groupNode`'da aynı sebeple gizli).
+Tek çıkış "Cluster'a dönüştür" (topology standalone iken her zaman
+görünür) ile clustera geçip sihirbazla düğüm eklemek — ama bu, kullanıcı
+sadece "eski düğümü sil, yenisini ekle" istiyorsa gereksiz bir adım.
+Kapsam dışı bıraktım (bu görev "dört ekleme akışı" içindi, "boş grup
+kurtarma" değildi); istenirse `GroupDetailPage`'e "grubu sil" veya
+"standalone'a tek düğüm ekle" için wizard'ın 400'ünü gevşeten ayrı bir
+küçük iş açılabilir.
+
+## Faz 14 — İŞ 2: Sunucusuz düğüm silindiğinde sunucu ne olacak (İŞ 3'e devredildi)
+
+Görevin İŞ 3 maddesi şunu soruyor: bir sunucunun son instance'ı
+silinince sunucu sahipsiz kalmasın. İŞ 2 sırasında bu konuya
+dokunmadım — mevcut `deleteNode`/`deleteServer` davranışı değişmedi
+(node silinince server silinmiyor, server ayrı sayfadan silinene kadar
+duruyor). Karar İŞ 3'te veriliyor, orada ayrıca yazılacak.
+
 ## Faz 13 — İŞ 2: "Bağlantıyı test et → kaydet" bir kapı değil, bir öneri
 
 Görev tarifinin standalone akışı bölümü "'Bağlantıyı test et' →

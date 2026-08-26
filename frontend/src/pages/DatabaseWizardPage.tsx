@@ -4,6 +4,7 @@ import {
   api,
   Application,
   ConnectionTestResult,
+  DatabaseGroup,
   DbEngine,
   ENGINE_DEFAULTS,
   GroupEnvironment,
@@ -17,6 +18,7 @@ import {
 } from "../api";
 
 type TopologyPreset = "standalone" | "cluster-2" | "cluster-3" | "cluster-custom";
+type WizardMode = "create-group" | "add-node";
 
 const TOPOLOGY_CARDS: { preset: TopologyPreset; title: string; description: string }[] = [
   { preset: "standalone", title: "Standalone", description: "Tek sunucu, tek instance." },
@@ -116,12 +118,39 @@ function topologyFor(preset: TopologyPreset, engine: DbEngine): GroupTopology {
 
 const REQUIRED = <span className="required-mark">*</span>;
 
+function nodeToWizardInput(n: NodeFormState, engine: DbEngine): WizardNodeInput {
+  return {
+    server_name: n.server_name.trim(),
+    host: n.host.trim(),
+    ip_address: n.ip_address.trim() || null,
+    os: n.os,
+    site: n.site,
+    agent_url: n.agent_url.trim() || null,
+    agent_token: n.agent_token.trim() || null,
+    instance_name: engine === "sqlserver" ? n.instance_name.trim() || null : null,
+    port: n.port,
+    database: n.database.trim() || null,
+    db_username: n.db_username.trim(),
+    db_password: n.db_password,
+    role_hint: n.role_hint,
+    ssl_mode: engine === "postgresql" ? n.sslMode : null,
+    auth_type: engine === "sqlserver" ? n.authType : null,
+    replica_set: engine === "mongodb" ? n.replicaSet.trim() || null : null,
+    auth_source: engine === "mongodb" ? n.authSource.trim() || null : null,
+  };
+}
+
 export default function DatabaseWizardPage() {
-  const { applicationId } = useParams<{ applicationId: string }>();
+  const { applicationId, groupId } = useParams<{ applicationId?: string; groupId?: string }>();
   const appId = Number(applicationId);
+  const gId = Number(groupId);
+  const mode: WizardMode = groupId ? "add-node" : "create-group";
   const navigate = useNavigate();
 
   const [application, setApplication] = useState<Application | null>(null);
+  const [existingGroup, setExistingGroup] = useState<DatabaseGroup | null>(null);
+  const [existingNodeCount, setExistingNodeCount] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [step, setStep] = useState(0);
   const [engine, setEngine] = useState<DbEngine>("postgresql");
@@ -141,26 +170,52 @@ export default function DatabaseWizardPage() {
   const [haproxyStatsPort, setHaproxyStatsPort] = useState<number | "">(8404);
   const [keepalivedVip, setKeepalivedVip] = useState("");
 
-  const [nodes, setNodes] = useState<NodeFormState[]>(() => nodesForPreset("standalone", "postgresql"));
+  const [nodes, setNodes] = useState<NodeFormState[]>(() =>
+    mode === "add-node" ? [makeNode("postgresql", "primary", "replica")] : nodesForPreset("standalone", "postgresql")
+  );
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const isCluster = preset !== "standalone";
-  const topology = topologyFor(preset, engine);
+  // In add-node mode, topology/engine are fixed by the group being added to; the topology
+  // preset system (used only for the create-group flow's Step 1) is bypassed entirely.
+  const topology: GroupTopology =
+    mode === "add-node" && existingGroup ? (existingGroup.topology as GroupTopology) : topologyFor(preset, engine);
+  const isCluster = topology !== "standalone";
+  const minNodesInStep = mode === "add-node" ? 1 : 2;
+  const maxNewNodes = mode === "add-node" ? Math.max(1, 8 - existingNodeCount) : 8;
 
   useEffect(() => {
-    if (!appId) return;
-    api.getApplication(appId).then(setApplication).catch(() => undefined);
-  }, [appId]);
+    if (mode === "create-group") {
+      if (!appId) return;
+      api.getApplication(appId).then(setApplication).catch(() => undefined);
+      return;
+    }
+    if (!gId) return;
+    Promise.all([api.getGroup(gId), api.getGroupNodes(gId)])
+      .then(([group, groupNodes]) => {
+        setExistingGroup(group);
+        setExistingNodeCount(groupNodes.length);
+        setEngine(group.engine);
+        setNodes([makeNode(group.engine, "primary", "replica")]);
+      })
+      .catch((e) => setLoadError(String((e as Error).message || e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, appId, gId]);
 
   const steps = useMemo(() => {
+    if (mode === "add-node") {
+      return [
+        { key: "nodes", label: "Yeni düğümler" },
+        { key: "summary", label: "Özet ve onay" },
+      ];
+    }
     const list = [{ key: "topology", label: "Topoloji" }];
     if (isCluster) list.push({ key: "cluster", label: "Cluster bilgileri" });
     list.push({ key: "nodes", label: isCluster ? "Düğümler" : "Sunucu ve instance" });
     list.push({ key: "summary", label: "Özet ve onay" });
     return list;
-  }, [isCluster]);
+  }, [isCluster, mode]);
 
   const onSelectTopology = (nextPreset: TopologyPreset) => {
     setPreset(nextPreset);
@@ -206,13 +261,15 @@ export default function DatabaseWizardPage() {
     });
   };
 
+  const canAddNode = mode === "add-node" || (isCluster && preset === "cluster-custom");
+
   const addNode = () => {
-    if (nodes.length >= 8) return;
+    if (nodes.length >= maxNewNodes) return;
     setNodes((prev) => [...prev, makeNode(engine, "primary", "replica")]);
   };
 
   const removeNode = (key: string) => {
-    setNodes((prev) => (prev.length <= 2 ? prev : prev.filter((n) => n.key !== key)));
+    setNodes((prev) => (prev.length <= minNodesInStep ? prev : prev.filter((n) => n.key !== key)));
   };
 
   const updateNode = <K extends keyof NodeFormState>(key: string, field: K, value: NodeFormState[K]) => {
@@ -236,7 +293,7 @@ export default function DatabaseWizardPage() {
               ? { authSource: node.authSource || undefined, replica_set: node.replicaSet || undefined }
               : undefined;
       const result = await api.testConnection({
-        name: `${groupName || "wizard"}-${node.server_name || "node"}-test`,
+        name: `${groupName || existingGroup?.name || "wizard"}-${node.server_name || "node"}-test`,
         engine,
         host: node.host,
         port: node.port,
@@ -309,7 +366,7 @@ export default function DatabaseWizardPage() {
     let errors: Record<string, string> = {};
     if (currentKey === "cluster") errors = validateClusterStep();
     if (currentKey === "nodes") {
-      errors = { ...(isCluster ? {} : validateClusterStep()), ...validateNodesStep() };
+      errors = mode === "add-node" ? validateNodesStep() : { ...(isCluster ? {} : validateClusterStep()), ...validateNodesStep() };
     }
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
@@ -318,7 +375,7 @@ export default function DatabaseWizardPage() {
 
   const goBack = () => setStep((s) => Math.max(s - 1, 0));
 
-  const buildPayload = (): WizardCreateGroupRequest => {
+  const buildCreateGroupPayload = (): WizardCreateGroupRequest => {
     const clusterOptions: WizardClusterOptions | null =
       topology === "patroni"
         ? {
@@ -341,31 +398,31 @@ export default function DatabaseWizardPage() {
       listener_port: isCluster && listenerPort !== "" ? Number(listenerPort) : undefined,
       notes: notes.trim() || undefined,
       cluster_options: clusterOptions,
-      nodes: nodes.map(
-        (n): WizardNodeInput => ({
-          server_name: n.server_name.trim(),
-          host: n.host.trim(),
-          ip_address: n.ip_address.trim() || null,
-          os: n.os,
-          site: n.site,
-          agent_url: n.agent_url.trim() || null,
-          agent_token: n.agent_token.trim() || null,
-          instance_name: engine === "sqlserver" ? n.instance_name.trim() || null : null,
-          port: n.port,
-          database: n.database.trim() || null,
-          db_username: n.db_username.trim(),
-          db_password: n.db_password,
-          role_hint: n.role_hint,
-          ssl_mode: engine === "postgresql" ? n.sslMode : null,
-          auth_type: engine === "sqlserver" ? n.authType : null,
-          replica_set: engine === "mongodb" ? n.replicaSet.trim() || null : null,
-          auth_source: engine === "mongodb" ? n.authSource.trim() || null : null,
-        })
-      ),
+      nodes: nodes.map((n) => nodeToWizardInput(n, engine)),
     };
   };
 
   const onSave = async () => {
+    if (mode === "add-node") {
+      const errors = validateNodesStep();
+      setFieldErrors(errors);
+      if (Object.keys(errors).length > 0) {
+        setSaveError("Eksik alanlar var — önceki adıma dönüp tamamlayın.");
+        return;
+      }
+      setSaving(true);
+      setSaveError(null);
+      try {
+        await api.addNodesWizard(gId, { nodes: nodes.map((n) => nodeToWizardInput(n, engine)) });
+        navigate(`/groups/${gId}`);
+      } catch (err) {
+        setSaveError(String((err as Error).message));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
     const errors = { ...validateClusterStep(), ...validateNodesStep() };
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) {
@@ -375,7 +432,7 @@ export default function DatabaseWizardPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      const group = await api.createGroupWizard(buildPayload());
+      const group = await api.createGroupWizard(buildCreateGroupPayload());
       navigate(`/groups/${group.id}`);
     } catch (err) {
       setSaveError(String((err as Error).message));
@@ -386,16 +443,25 @@ export default function DatabaseWizardPage() {
 
   const currentKey = steps[step]?.key;
 
+  if (mode === "add-node" && !existingGroup && !loadError) {
+    return <div className="empty">Yükleniyor…</div>;
+  }
+
   return (
     <>
       <header className="page-header">
         <div>
-          <h2>Veritabanı ekle — sihirbaz</h2>
+          <h2>{mode === "add-node" ? `Düğüm ekle — ${existingGroup?.name ?? ""}` : "Veritabanı ekle — sihirbaz"}</h2>
           <p>
-            {application && <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>}
+            {mode === "add-node" && existingGroup && <Link to={`/groups/${existingGroup.id}`}>← {existingGroup.name}</Link>}
+            {mode === "create-group" && application && (
+              <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>
+            )}
           </p>
         </div>
       </header>
+
+      {loadError && <div className="error">{loadError}</div>}
 
       <div className="wizard-steps">
         {steps.map((s, idx) => (
@@ -570,16 +636,18 @@ export default function DatabaseWizardPage() {
         {currentKey === "nodes" && (
           <>
             <div className="activity-toolbar">
-              <h3 className="chart-title" style={{ margin: 0 }}>{isCluster ? "Düğümler" : "Sunucu ve instance"}</h3>
+              <h3 className="chart-title" style={{ margin: 0 }}>
+                {mode === "add-node" ? "Yeni düğümler" : isCluster ? "Düğümler" : "Sunucu ve instance"}
+              </h3>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button type="button" className="btn" onClick={testAllNodes}>Tümünü test et</button>
-                {isCluster && preset === "cluster-custom" && nodes.length < 8 && (
+                {canAddNode && nodes.length < maxNewNodes && (
                   <button type="button" className="btn btn-primary" onClick={addNode}>+ Düğüm ekle</button>
                 )}
               </div>
             </div>
 
-            {!isCluster && (
+            {mode === "create-group" && !isCluster && (
               <div className="form-grid" style={{ maxWidth: 480, marginBottom: "1rem" }}>
                 <label>
                   Grup adı {REQUIRED}
@@ -606,8 +674,8 @@ export default function DatabaseWizardPage() {
             {nodes.map((node, idx) => (
               <div className="wizard-node-card" key={node.key}>
                 <div className="wizard-node-card-head">
-                  <strong>{isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</strong>
-                  {isCluster && preset === "cluster-custom" && nodes.length > 2 && (
+                  <strong>{mode === "add-node" || isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</strong>
+                  {canAddNode && nodes.length > minNodesInStep && (
                     <button type="button" className="btn btn-danger btn-xs" onClick={() => removeNode(node.key)}>
                       Sil
                     </button>
@@ -660,7 +728,7 @@ export default function DatabaseWizardPage() {
                       <option value="disaster">Disaster (DR)</option>
                     </select>
                   </label>
-                  {isCluster && (
+                  {(mode === "add-node" || isCluster) && (
                     <label>
                       Rol
                       <select
@@ -808,7 +876,7 @@ export default function DatabaseWizardPage() {
             ))}
 
             <div className="form-actions">
-              <button type="button" className="btn" onClick={goBack}>Geri</button>
+              {mode === "create-group" && <button type="button" className="btn" onClick={goBack}>Geri</button>}
               <button type="button" className="btn btn-primary" onClick={goNext}>İleri</button>
             </div>
           </>
@@ -817,24 +885,34 @@ export default function DatabaseWizardPage() {
         {currentKey === "summary" && (
           <>
             <h3 className="chart-title">Özet</h3>
-            <div className="wizard-summary-block">
-              <h4>Grup</h4>
-              <div className="wizard-summary-row"><span>Ad</span><strong>{groupName || "—"}</strong></div>
-              <div className="wizard-summary-row"><span>Motor</span><strong>{engine}</strong></div>
-              <div className="wizard-summary-row"><span>Topoloji</span><strong>{topology}</strong></div>
-              <div className="wizard-summary-row"><span>Ortam</span><strong>{environment}</strong></div>
-              {isCluster && (
-                <>
-                  <div className="wizard-summary-row"><span>Cluster adı</span><strong>{clusterName || "—"}</strong></div>
-                  <div className="wizard-summary-row"><span>Erişim adı</span><strong>{accessName || "—"}</strong></div>
-                  <div className="wizard-summary-row"><span>VIP</span><strong>{vipAddress || "—"}</strong></div>
-                  <div className="wizard-summary-row"><span>Listener port</span><strong>{listenerPort || "—"}</strong></div>
-                </>
-              )}
-            </div>
+            {mode === "add-node" ? (
+              <div className="wizard-summary-block">
+                <h4>Var olan gruba ekleniyor</h4>
+                <div className="wizard-summary-row"><span>Grup</span><strong>{existingGroup?.name}</strong></div>
+                <div className="wizard-summary-row"><span>Motor</span><strong>{engine}</strong></div>
+                <div className="wizard-summary-row"><span>Topoloji</span><strong>{topology}</strong></div>
+                <div className="wizard-summary-row"><span>Mevcut düğüm sayısı</span><strong>{existingNodeCount}</strong></div>
+              </div>
+            ) : (
+              <div className="wizard-summary-block">
+                <h4>Grup</h4>
+                <div className="wizard-summary-row"><span>Ad</span><strong>{groupName || "—"}</strong></div>
+                <div className="wizard-summary-row"><span>Motor</span><strong>{engine}</strong></div>
+                <div className="wizard-summary-row"><span>Topoloji</span><strong>{topology}</strong></div>
+                <div className="wizard-summary-row"><span>Ortam</span><strong>{environment}</strong></div>
+                {isCluster && (
+                  <>
+                    <div className="wizard-summary-row"><span>Cluster adı</span><strong>{clusterName || "—"}</strong></div>
+                    <div className="wizard-summary-row"><span>Erişim adı</span><strong>{accessName || "—"}</strong></div>
+                    <div className="wizard-summary-row"><span>VIP</span><strong>{vipAddress || "—"}</strong></div>
+                    <div className="wizard-summary-row"><span>Listener port</span><strong>{listenerPort || "—"}</strong></div>
+                  </>
+                )}
+              </div>
+            )}
             {nodes.map((node, idx) => (
               <div className="wizard-summary-block" key={node.key}>
-                <h4>{isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</h4>
+                <h4>{mode === "add-node" || isCluster ? `Düğüm ${idx + 1}` : "Sunucu"}</h4>
                 <div className="wizard-summary-row"><span>Sunucu adı</span><strong>{node.server_name || "—"}</strong></div>
                 <div className="wizard-summary-row"><span>Host</span><strong>{node.host || "—"}{node.ip_address ? ` (${node.ip_address})` : ""}</strong></div>
                 <div className="wizard-summary-row"><span>Site / Rol</span><strong>{node.site} / {node.role_hint}</strong></div>
@@ -851,7 +929,7 @@ export default function DatabaseWizardPage() {
             <div className="form-actions">
               <button type="button" className="btn" onClick={goBack} disabled={saving}>Geri</button>
               <button type="button" className="btn btn-primary" onClick={onSave} disabled={saving}>
-                {saving ? "Kaydediliyor…" : "Kaydet"}
+                {saving ? "Kaydediliyor…" : mode === "add-node" ? "Düğümleri ekle" : "Kaydet"}
               </button>
             </div>
           </>

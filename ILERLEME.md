@@ -888,6 +888,50 @@ sihirbazla oluşturuldu (`instance.options.authSource`/`replica_set` ve
 `auth_type=windows` ile oluşturulan instance'ların `options`'ı doğru
 şekilde saklandı. Toplam 26 test yeşil.
 
+**Faz 14 — İŞ 2: Tek ekleme giriş noktası.** `DatabaseWizardPage` artık
+iki modda çalışan tek bir bileşen: route `/applications/:applicationId/
+groups/wizard` (mevcut "create-group" modu, değişmedi) ve yeni route
+`/groups/:groupId/wizard` ("add-node" modu — mevcut bir cluster grubuna
+düğüm eklemek için). Mod, `useParams`'tan `groupId` gelip gelmediğine
+göre türetiliyor (`groupId` varsa `add-node`). Add-node modunda:
+- Engine/topoloji sihirbaza sorulmuyor, grup zaten belirliyor — "Topoloji"
+  ve "Cluster bilgileri" adımları listeden tamamen çıkarılıyor (`steps`
+  hesaplamasında), sihirbaz doğrudan "Yeni düğümler" adımıyla açılıyor.
+- Kayıt, `POST /api/wizard/database-groups` yerine yeni `POST /api/
+  wizard/groups/{group_id}/nodes` (bkz. aşağıdaki backend bölümü) çağırıyor.
+- Standalone bir grup için bu moda hiç girilemiyor: `GroupDetailPage`'in
+  "+ Düğüm Ekle" butonu `group.topology !== "standalone"` olmadıkça hiç
+  render edilmiyor, sol menüdeki ağaçtaki "+" düğme aynı şekilde
+  standalone gruplarda gizli (`App.tsx::groupNode`) — backend'in kendi
+  400 reddiyle (bkz. İŞ 2 backend) iki katmanlı koruma.
+
+**Backend (yeni uç nokta):** `POST /api/wizard/groups/{group_id}/nodes`
+(`routers/wizard.py::wizard_add_nodes`) — `wizard_create_group` ile aynı
+atomiklik garantisi (hepsi ya da hiçbiri; ortadaki bir düğüm ismi
+çakışırsa öncekiler de rollback olur). Sunucu/instance/node oluşturma
+mantığı iki uç nokta arasında `_create_server_instance_node()` helper'ına
+çıkarıldı (davranış-koruyan refactor). Grup zaten standalone ise `400`;
+8 düğüm sınırı aşılırsa `400`; `cluster_options` verilmezse kardeş
+düğümlerden birinin `options`'ı miras alınıyor (Patroni portlarını her
+düğüm eklemede yeniden girmemek için).
+
+Mükerrer ekleme formları kaldırıldı: `DatabaseGroupsPage`'in inline
+"Manuel grup ekle" formu (`api.createGroup` ile düğümsüz, çıplak bir
+grup oluşturuyordu — sihirbazla üretilenden farklı/eksik bir yol) ve
+`GroupDetailPage`'in inline "Yeni düğüm" formu (var olan bir sunucuya
+manuel node bağlıyordu) silindi; her ikisinin "+" aksiyonu artık
+sihirbaza yönlendiriyor. Düzenleme formları (`DatabaseGroupsPage`'in
+satır-içi grup düzenleme, `GroupDetailPage`'in düğüm düzenleme ve "var
+olan instance'a bağlan" akışı) korundu — İŞ 2 sadece ekleme yollarını
+tekilleştiriyor, düzenlemeyi değil.
+
+**Test:** Backend'e 3 yeni test eklendi
+(`test_wizard_add_nodes.py`): kardeş `cluster_options` miras alma,
+standalone grup reddi, mükerrer sunucu adında tam rollback (2. düğümün
+ismi ilk düğümle çakışınca, o istekte flush edilmiş 1. düğümün sunucusu
+da geri alınıyor — sızmadığı sunucu sayısıyla doğrulandı). Toplam 29
+test yeşil. `tsc -b && vite build` yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

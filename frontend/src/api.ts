@@ -483,6 +483,11 @@ export interface WizardCreateGroupRequest {
   nodes: WizardNodeInput[];
 }
 
+export interface WizardAddNodesRequest {
+  nodes: WizardNodeInput[];
+  cluster_options?: WizardClusterOptions | null;
+}
+
 export type ServerOS = "linux" | "windows";
 
 export interface DbServer {
@@ -844,6 +849,8 @@ export const api = {
     request<DatabaseGroup>(`/api/groups/${id}/convert-to-cluster`, { method: "POST", body: JSON.stringify(data) }),
   createGroupWizard: (data: WizardCreateGroupRequest) =>
     request<DatabaseGroup>("/api/wizard/database-groups", { method: "POST", body: JSON.stringify(data) }),
+  addNodesWizard: (groupId: number, data: WizardAddNodesRequest) =>
+    request<DbNode[]>(`/api/wizard/groups/${groupId}/nodes`, { method: "POST", body: JSON.stringify(data) }),
 
   getGroupNodes: (groupId: number) => request<DbNode[]>(`/api/groups/${groupId}/nodes`),
   createNode: (data: NodeCreate) =>
