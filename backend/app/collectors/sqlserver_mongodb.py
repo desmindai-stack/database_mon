@@ -122,6 +122,9 @@ class SqlServerCollector(BaseCollector):
             await cur.execute(f"SET LOCK_TIMEOUT {COLLECTOR_LOCK_TIMEOUT_MS}")
         return conn
 
+    async def open_connection(self):
+        return await self._connect()
+
     async def _detect_version(self, conn) -> tuple[int, str]:
         """Returns (ProductMajorVersion, @@VERSION text). 2016=13, 2017=14, 2019=15, 2022=16."""
         async with conn.cursor() as cur:
@@ -164,8 +167,12 @@ class SqlServerCollector(BaseCollector):
         finally:
             await conn.close()
 
-    async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
-        conn = await self._connect()
+    async def collect_metrics(
+        self, previous: dict[str, float] | None = None, conn: Any | None = None
+    ) -> dict[str, Any]:
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
         # metric_key -> Turkish reason it couldn't be collected this cycle — same channel as
         # PostgreSQLCollector, surfaced via Instance.unsupported_metrics.
         unsupported: dict[str, str] = {}
@@ -225,7 +232,8 @@ class SqlServerCollector(BaseCollector):
                 logger.warning("SQL Server tempdb size query failed (permissions?): %s", exc)
                 unsupported["temp_bytes"] = f"Toplama hatası: {exc}"
         finally:
-            await conn.close()
+            if owns_conn:
+                await conn.close()
 
         batch_requests_cum = counters.get("Batch Requests/sec", 0.0)
         transactions_per_sec = 0.0
@@ -264,8 +272,10 @@ class SqlServerCollector(BaseCollector):
 
         return metrics
 
-    async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
-        conn = await self._connect()
+    async def collect_slow_queries(self, limit: int = 20, conn: Any | None = None) -> list[dict[str, Any]]:
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
         try:
             try:
                 async with conn.cursor() as cur:
@@ -286,7 +296,8 @@ class SqlServerCollector(BaseCollector):
                     rows = await cur.fetchall()
             return [dict(zip(columns, row)) for row in rows]
         finally:
-            await conn.close()
+            if owns_conn:
+                await conn.close()
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()
@@ -421,7 +432,13 @@ class MongoDBCollector(BaseCollector):
             f"?authSource={auth_source}"
         )
 
-    async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
+    async def collect_metrics(
+        self, previous: dict[str, float] | None = None, conn: Any | None = None
+    ) -> dict[str, Any]:
+        # MongoDBCollector doesn't override open_connection() (motor's AsyncIOMotorClient
+        # pools internally rather than needing an explicit shared connection across calls), so
+        # `conn` is always None here — accepted for interface consistency with
+        # collect_instance()'s uniform call, otherwise unused.
         from motor.motor_asyncio import AsyncIOMotorClient
 
         client = AsyncIOMotorClient(self._build_uri(), serverSelectionTimeoutMS=8000)

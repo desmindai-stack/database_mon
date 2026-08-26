@@ -65,11 +65,27 @@ class BaseCollector(ABC):
     async def test_connection(self) -> tuple[bool, str, dict[str, Any]]:
         raise NotImplementedError
 
-    @abstractmethod
-    async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
-        """Return normalized metrics dict + optional _state for deltas."""
+    async def open_connection(self) -> Any | None:
+        """Opens one connection to share across collect_metrics()/collect_slow_queries() for a
+        single collection cycle (see services/collection.py::collect_instance) — avoids opening
+        2+ separate connections to the target every collect_interval_seconds. Returns None if
+        the collector doesn't support this (each method then opens/closes its own, as before);
+        override in collectors whose methods accept an optional `conn` kwarg."""
+        return None
 
-    async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
+    async def close_connection(self, conn: Any | None) -> None:
+        if conn is not None:
+            await conn.close()
+
+    @abstractmethod
+    async def collect_metrics(
+        self, previous: dict[str, float] | None = None, conn: Any | None = None
+    ) -> dict[str, Any]:
+        """Return normalized metrics dict + optional _state for deltas. `conn`: reuse a
+        connection from open_connection() when given; collectors that don't support sharing
+        (open_connection() returns None) simply ignore it and open their own as before."""
+
+    async def collect_slow_queries(self, limit: int = 20, conn: Any | None = None) -> list[dict[str, Any]]:
         return []
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:

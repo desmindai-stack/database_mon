@@ -43,6 +43,9 @@ class PostgreSQLCollector(BaseCollector):
         await conn.execute(f"SET statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'")
         return conn
 
+    async def open_connection(self) -> asyncpg.Connection:
+        return await self._connect()
+
     async def _detect_version(self, conn: asyncpg.Connection) -> tuple[int, str]:
         """Returns (server_version_num, human-readable version string). Called once per
         collector method (each opens its own connection) — a single lightweight round trip,
@@ -77,8 +80,12 @@ class PostgreSQLCollector(BaseCollector):
             logger.exception("PostgreSQL connection test failed")
             return False, classify_connection_error(exc), {}
 
-    async def collect_metrics(self, previous: dict[str, float] | None = None) -> dict[str, Any]:
-        conn = await self._connect()
+    async def collect_metrics(
+        self, previous: dict[str, float] | None = None, conn: asyncpg.Connection | None = None
+    ) -> dict[str, Any]:
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
         try:
             version_num, version_string = await self._detect_version(conn)
             # metric_key -> Turkish reason it couldn't be collected on this server version —
@@ -328,10 +335,15 @@ class PostgreSQLCollector(BaseCollector):
 
             return metrics
         finally:
-            await conn.close()
+            if owns_conn:
+                await conn.close()
 
-    async def collect_slow_queries(self, limit: int = 20) -> list[dict[str, Any]]:
-        conn = await self._connect()
+    async def collect_slow_queries(
+        self, limit: int = 20, conn: asyncpg.Connection | None = None
+    ) -> list[dict[str, Any]]:
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
         try:
             version_num, _ = await self._detect_version(conn)
 
@@ -398,7 +410,8 @@ class PostgreSQLCollector(BaseCollector):
             rows = await conn.fetch(sql, limit)
             return [dict(row) for row in rows]
         finally:
-            await conn.close()
+            if owns_conn:
+                await conn.close()
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()

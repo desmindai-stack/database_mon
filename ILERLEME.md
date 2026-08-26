@@ -665,6 +665,33 @@ metodunu MONKEYPATCH'lemiyor — gerçek `_connect()` gövdesini
 gönderilen `SET` ifadesinin gerçekten içeride olduğunu doğruluyor.
 Toplam 16 test yeşil.
 
+**Faz 12 — Metrik toplamada tek bağlantı (N+1 azaltıldı).**
+`collect_instance()` her 15sn'lik döngüde `collect_metrics()` ve
+`collect_slow_queries()` için AYRI AYRI bağlantı açıyordu (her ikisi de
+kendi `_connect()`'ini çağırıyordu) — hedef sunucuya cycle başına en az
+2 ayrı TCP+auth el sıkışması demekti. `BaseCollector`'a
+`open_connection()`/`close_connection()` eklendi (varsayılan `None`
+döner — desteklemeyen collector'lar eskisi gibi kendi bağlantısını açar/
+kapatır); `PostgreSQLCollector`/`SqlServerCollector` bunu `_connect()`'e
+yönlendiriyor. `collect_metrics`/`collect_slow_queries` artık opsiyonel
+bir `conn` parametresi kabul ediyor — verilirse onu kullanıp
+kapatmıyor (`owns_conn` bayrağı), verilmezse eskisi gibi kendi
+bağlantısını açıp kapatıyor (geriye dönük uyumlu — mevcut testler hiç
+değişmeden geçiyor). `collect_instance()` artık BİR bağlantı açıp
+ikisine de veriyor. MongoDB `open_connection()`'ı override etmiyor
+(motor zaten kendi içinde connection pooling yapıyor) — `conn=None`
+alıp yok sayıyor, davranışı değişmedi.
+
+**Test:** Yeni `test_collection_connection_sharing.py`, gerçek
+`collect_instance()`'ı sahte bir hedef bağlantısıyla (`FakeAsyncConnection`)
+ve GERÇEK bir SQLite app-DB'ye karşı çalıştırıp `_connect()`'in
+tam olarak 1 kez çağrıldığını (önceden 2 olurdu) doğruluyor — bu
+öncekilerden farklı olarak collector'ı izole test etmiyor, uçtan uca
+`collect_instance()` akışını kanıtlıyor. Yeni bir `tests/conftest.py`
+eklendi (test DB yolunu `app.config.Settings()` ilk import edilmeden
+önce ayarlıyor — dosya sırasına bağlı kırılgan bir env-var hilesi
+yerine pytest'in standart mekanizması). Toplam 17 test yeşil.
+
 ## Nasıl test edilir
 
 ### Backend

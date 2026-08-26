@@ -55,7 +55,17 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     if prev:
         prev["delta_time"] = settings.collect_interval_seconds
 
-    metrics = await collector.collect_metrics(previous=prev)
+    # One connection shared across collect_metrics()/collect_slow_queries() instead of each
+    # opening its own — halves the connections-per-cycle for engines that support it
+    # (PostgreSQL, SQL Server; returns None for engines that don't, e.g. MongoDB, which then
+    # fall back to managing their own connection per call exactly as before).
+    conn = await collector.open_connection()
+    try:
+        metrics = await collector.collect_metrics(previous=prev, conn=conn)
+        slow_query_rows = await collector.collect_slow_queries(conn=conn)
+    finally:
+        await collector.close_connection(conn)
+
     state = metrics.pop("_state", {})
     state["collected_at"] = datetime.now(UTC)
     _previous_state[instance.id] = state
@@ -74,7 +84,7 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     session.add(sample)
     await session.flush()
 
-    for row in await collector.collect_slow_queries():
+    for row in slow_query_rows:
         session.add(
             SlowQuerySample(
                 instance_id=instance.id,
