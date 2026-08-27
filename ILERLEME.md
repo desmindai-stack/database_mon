@@ -1486,6 +1486,35 @@ davranışı tarayıcıda tıklanarak denenmedi (bu ortamda tarayıcı
 otomasyonu yok) — Vite dev sunucusunun component'i hatasız transform
 ettiği ve `tsc -b && vite build`'in geçtiği doğrulandı.
 
+## Faz 15 — İŞ 5: Kopyala butonu taşıyor
+
+**Bulgu:** Kod tabanında komut-kutusu + kopyala-butonu deseni tek bir
+yerde var — `DashboardPage.tsx`'in `CopyableAction` component'i (Faz
+15 İŞ 4'te de bu component kullanıldı). Eski düzen: `.rec-action-row`
+flex satırında kod kutusu (`flex: 1`) ile "Kopyala" metin butonu YAN
+YANA sibling'lerdi — uzun bir komutta kutu `overflow-x: auto` ile
+kendi içinde kaymak yerine (bazı tarayıcı/konteyner genişlik
+kombinasyonlarında) satırın tamamı taşıp butonu ekran dışına itiyordu.
+
+**Düzeltme:** Buton artık kutunun İÇİNDE, sağ üst köşesine
+`position: absolute` ile sabitlenmiş küçük bir ikon (`.rec-action-copy-btn`,
+22×22px, metin yok — inline SVG kopyala/onay ikonları). Kod kutusu
+(`<pre className="rec-action-code">`) `max-width: 100%` ve
+`overflow-x: auto` ile kendi içinde yatay kayıyor, sağdan
+`padding: 2rem` ile ikonun altında metin kalmıyor. Kopyalanınca ikon
+1.5 saniyeliğine bir onay (✓) ikonuna dönüşüyor (`title`/`aria-label`
+de "Kopyalandı" oluyor) — önceki "Kopyalandı" metin değişimiyle aynı
+süre, sadece görsel olarak ikon.
+
+**Kapsam notu:** Bu component `DashboardPage.tsx` dışında hiçbir
+yerde kullanılmıyor (grep ile doğrulandı) — başka bir sayfada ayrı bir
+komut-kutusu deseni yok, bu yüzden değişiklik tek dosyaya sınırlı
+kaldı.
+
+**Doğrulama:** `tsc -b && vite build` yeşil; backend değişmedi (saf
+frontend/CSS değişikliği), 47 test yeşil kaldı. Görsel taşma/kayma
+davranışı tarayıcıda tıklanarak denenmedi (otomasyon yok).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -1703,25 +1703,52 @@ td code,
   color: var(--muted);
 }
 
-.rec-action-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
+.rec-action-box {
+  position: relative;
   margin-top: 0.35rem;
+  max-width: 100%;
 }
 
 .rec-action-code {
-  flex: 1;
-  min-width: 0;
+  margin: 0;
+  max-width: 100%;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.78rem;
   background: rgba(15, 23, 42, 0.5);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.3rem 0.5rem;
+  /* Right padding reserves room for the copy icon so it never overlaps the last characters. */
+  padding: 0.35rem 2rem 0.35rem 0.5rem;
   overflow-x: auto;
   white-space: pre;
   color: var(--text);
+}
+
+.rec-action-copy-btn {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: rgba(18, 26, 43, 0.92);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.rec-action-copy-btn:hover {
+  color: var(--text);
+  border-color: var(--accent-2);
+}
+
+.rec-action-copy-btn.copied {
+  color: var(--success);
+  border-color: var(--success);
 }
 
 .insight-metric {
