@@ -589,6 +589,8 @@ class PredictionOut(BaseModel):
     confidence: float
     severity: str
     message: str
+    recommendation: str | None = None
+    action: str | None = None
     acknowledged_at: datetime | None
 
     model_config = {"from_attributes": True}

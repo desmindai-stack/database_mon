@@ -324,6 +324,12 @@ class PredictionInsight(Base):
     confidence: Mapped[float] = mapped_column(Float, default=0.5)
     severity: Mapped[str] = mapped_column(String(16), default="info")
     message: Mapped[str] = mapped_column(Text, nullable=False)
+    # Suggested next step (Faz 15 İŞ 6) — prose, deliberately non-numeric where a specific
+    # setting is involved so it can't contradict parameter_audit's own value-aware finding for
+    # that same setting. action is an optional copy-pasteable command, same pattern as the
+    # dashboard's recommendation cards.
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    action: Mapped[str | None] = mapped_column(String(255), nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="predictions")

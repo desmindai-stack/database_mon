@@ -1506,14 +1506,65 @@ kombinasyonlarında) satırın tamamı taşıp butonu ekran dışına itiyordu.
 de "Kopyalandı" oluyor) — önceki "Kopyalandı" metin değişimiyle aynı
 süre, sadece görsel olarak ikon.
 
-**Kapsam notu:** Bu component `DashboardPage.tsx` dışında hiçbir
-yerde kullanılmıyor (grep ile doğrulandı) — başka bir sayfada ayrı bir
-komut-kutusu deseni yok, bu yüzden değişiklik tek dosyaya sınırlı
-kaldı.
+**Kapsam notu:** Yazıldığı anda bu component `DashboardPage.tsx`
+dışında hiçbir yerde kullanılmıyordu (grep ile doğrulandı). İŞ 6'da
+`PredictionsPage`'in de aynı deseni kullanması gerekince
+`components/CopyableAction.tsx`'e taşındı (bkz. İŞ 6) — o zaman tek
+dosyaya özeldi, artık paylaşılan bir component.
 
 **Doğrulama:** `tsc -b && vite build` yeşil; backend değişmedi (saf
 frontend/CSS değişikliği), 47 test yeşil kaldı. Görsel taşma/kayma
 davranışı tarayıcıda tıklanarak denenmedi (otomasyon yok).
+
+## Faz 15 — İŞ 6: Predictions çözüm önerisi versin
+
+**Backend:** `PredictionInsight`'a iki yeni sütun —
+`recommendation: str | None` (öneri metni) ve `action: str | None`
+(varsa kopyalanabilir tek satırlık komut, Dashboard'un öneri
+kartlarıyla aynı desen). `services/prediction.py`:
+- Bağlantı sayısı artış tahminlerine (`connection_utilization_pct`/
+  `active_connections`) artık engine'e göre değişen bir öneri
+  iliştiriliyor: PostgreSQL → `max_connections`/pooler (PgBouncer/
+  pgpool-II) + `SHOW max_connections;` komutu; SQL Server → bağlantı
+  havuzlama ayarları; MongoDB → sürücü `maxPoolSize`.
+- **Yeni bir tahmin türü eklendi:** `database_size_bytes` artık trend
+  izleniyor (öncesinde hiç tahmin edilmiyordu). Büyüme hızından
+  ("iki katına çıkma tarihi") bir tahmin üretiyor, önerisi arşivleme/
+  partitioning/VACUUM/disk büyütme kombinasyonu — İŞ 6'nın istediği
+  "disk dolma tahmini" ve "tablo büyüme trendi" maddelerinin ikisini
+  de tek sinyalle (dbace'in gerçekten topladığı tek büyüme verisi)
+  karşılıyor; kapsam sınırı SORULAR.md'de.
+- Cache hit oranı düşüşü ve replication lag tahminlerine de genel
+  (parametre-spesifik OLMAYAN) öneri metinleri eklendi — "Öneriler
+  mevcut parameter_audit ve index_advisor çıktılarıyla çelişmesin"
+  şartı gereği, cache hit önerisi spesifik bir `shared_buffers` değeri
+  önermek yerine "Parametreler sekmesine bakın" diyerek
+  parameter_audit'in kendi (canlı değer bilen, daha kesin) bulgusuna
+  yönlendiriyor — aynı ayarı iki farklı sayıyla önermenin çelişki
+  riski böylece yok ediliyor.
+
+**Frontend:** `CopyableAction`, `DashboardPage.tsx`'ten
+`components/CopyableAction.tsx`'e taşınıp paylaşılan bir component
+oldu. `PredictionsPage.tsx`'in tablosuna yeni bir "Önerilen aksiyon"
+sütunu eklendi — öneri metni + varsa kopyalanabilir komut kutusu.
+
+**Test:** Yeni `tests/test_prediction.py` (4 test, `run_predictions()`
+çağrılarak doğrudan test edildi — canlı bir hedef veritabanına
+bağlanmayı gerektirmez): PostgreSQL bağlantı artışı önerisinde
+"pooler"/"max_connections" geçiyor + `action="SHOW max_connections;"`;
+SQL Server'da farklı (havuzlama) öneri, `action=None`; veritabanı
+boyutu büyüme trendinde mesajda "iki katına" ve önerisinde "arşiv"/
+"partit" + "vacuum" geçiyor; düz/sabit boyutta hiç tahmin
+üretilmiyor. Toplam 51 test yeşil.
+
+**Doğrulanamayan şey:** Gerçek bir hedef veritabanına karşı uçtan uca
+(collector → gerçek metrik toplama → tahmin → API → UI) canlı doğrulama
+yapılmadı — bu ortamda gerçek bir PostgreSQL/SQL Server/MongoDB yok
+(önceki fazlarda da aynı sınır not edildi). `run_predictions()`'ın
+kendisi doğrudan, gerçekçi girdilerle test edildi; eksik olan sadece
+"gerçek bir collector döngüsünün bu fonksiyonu doğru çağırdığı" ucu
+(kod okunarak doğrulandı: `services/collection.py` artık
+`engine=instance.engine` geçiyor).
 
 ## API uyumluluğu
 

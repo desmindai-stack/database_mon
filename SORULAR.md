@@ -3,6 +3,26 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 15 — İŞ 6: "Tahmini dolma tarihi" gerçek disk kapasitesine değil, veri büyüme hızına dayanıyor
+
+Görev "disk dolma tahmini... tahmini dolma tarihi" istiyordu ama
+dbace'in topladığı metrikler arasında host-seviyesi disk kapasitesi/
+boş alan (`disk_total_bytes`/`disk_free_bytes` gibi) YOK — sadece
+`database_size_bytes` (veritabanının kendi boyutu) var. Gerçek bir
+"disk şu tarihte dolar" tahmini, bilinmeyen bir kapasiteye karşı
+sahte bir kesinlik iddia etmek olurdu. Bunun yerine büyüme hızından
+dürüst bir projeksiyon üretiyorum: "bu hızla ~tarih civarında iki
+katına çıkabilir" — mesajda açıkça "gerçek disk kapasitesi dbace'de
+izlenmiyor, bu sadece veri büyüme trendi" notu var. Aynı sinyali hem
+"disk dolma" hem "tablo büyüme trendi" maddeleri için kullandım çünkü
+dbace per-tablo büyüme geçmişi de tutmuyor (`SchemaHealth`'in
+`bloated_tables`'ı an-be-an bir görüntü, trend değil) — tek gerçek
+büyüme verisi `database_size_bytes` (DB-geneli). Önerisi bu yüzden
+hem arşivleme/partitioning (tablo-seviye eylem) hem VACUUM/disk
+büyütme (DB-seviye eylem) kombinasyonunu içeriyor, ikisini ayıramadığım
+için. Gerçek disk kapasitesi izlemek istenirse host-agent'a yeni bir
+metrik eklenmesi gerekir — bu görevin kapsamında değildi.
+
 ## Faz 15 — İŞ 2: Saklama süresi kapsamı ve hard-delete (arşivleme yok)
 
 Görev "metrik ve olay verileri" dedi — bunu dört tabloya genişlettim:

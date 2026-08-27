@@ -343,6 +343,8 @@ export interface Prediction {
   confidence: number;
   severity: string;
   message: string;
+  recommendation: string | null;
+  action: string | null;
   acknowledged_at: string | null;
 }
 

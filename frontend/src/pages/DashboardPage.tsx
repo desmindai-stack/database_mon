@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, AppConfig, DashboardSummary, formatRelativeTime, GroupOverallStatus, HealthResponse } from "../api";
 import { useAuth } from "../auth";
+import CopyableAction from "../components/CopyableAction";
 
 const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
   critical: "Kritik",
@@ -9,49 +10,6 @@ const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
   healthy: "Sağlıklı",
   unknown: "Bilinmiyor",
 };
-
-// Description ("mesaj") and the concrete follow-up command ("aksiyon") render on separate
-// lines — the command is monospace and one click away from the clipboard, since it's meant to
-// be pasted straight into a terminal/psql session rather than read as prose. The copy button is
-// a small icon pinned to the box's own top-right corner (not a flex sibling that could get
-// pushed off-screen by a long command) — the box itself scrolls horizontally instead of
-// growing past its container (İŞ 5).
-function CopyableAction({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-  const onCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      // Clipboard API unavailable (permissions/non-secure context) — the command is still
-      // visible and selectable by hand, so this is a silent no-op rather than an error.
-    }
-  };
-  return (
-    <div className="rec-action-box">
-      <pre className="rec-action-code"><code>{command}</code></pre>
-      <button
-        type="button"
-        className={`rec-action-copy-btn${copied ? " copied" : ""}`}
-        onClick={onCopy}
-        title={copied ? "Kopyalandı" : "Kopyala"}
-        aria-label={copied ? "Kopyalandı" : "Kopyala"}
-      >
-        {copied ? (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-        ) : (
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" />
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-          </svg>
-        )}
-      </button>
-    </div>
-  );
-}
 
 interface ProblemCard {
   key: string;

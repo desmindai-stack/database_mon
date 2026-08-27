@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, formatTime, Prediction } from "../api";
 import { useAuth } from "../auth";
+import CopyableAction from "../components/CopyableAction";
 
 export default function PredictionsPage() {
   const canWrite = useAuth().user?.role === "admin";
@@ -36,13 +37,14 @@ export default function PredictionsPage() {
               <th>Şimdi → Tahmin</th>
               <th>Önem</th>
               <th>Mesaj</th>
+              <th>Önerilen aksiyon</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
               <tr>
-                <td colSpan={7} className="empty">
+                <td colSpan={8} className="empty">
                   Açık tahmin yok. Worker metrik topladıkça trendler burada görünür.
                 </td>
               </tr>
@@ -62,6 +64,16 @@ export default function PredictionsPage() {
                   </td>
                   <td><span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>{p.severity}</span></td>
                   <td>{p.message}</td>
+                  <td style={{ minWidth: "220px" }}>
+                    {p.recommendation ? (
+                      <>
+                        <div className="muted-note">{p.recommendation}</div>
+                        {p.action && <CopyableAction command={p.action} />}
+                      </>
+                    ) : (
+                      <span className="muted-note">—</span>
+                    )}
+                  </td>
                   <td>
                     {canWrite && (
                       <button className="btn" onClick={() => api.ackPrediction(p.id).then(load)}>

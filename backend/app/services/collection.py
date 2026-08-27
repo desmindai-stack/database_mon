@@ -147,5 +147,6 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
         session,
         instance.id,
         normalized,
+        engine=instance.engine,
         sample_interval_seconds=interval,
     )
