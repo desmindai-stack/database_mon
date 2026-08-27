@@ -1,10 +1,12 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Application, Customer } from "../api";
+import { useAuth } from "../auth";
 
 export default function ApplicationsPage() {
   const { customerId } = useParams<{ customerId: string }>();
   const id = Number(customerId);
+  const canWrite = useAuth().user?.role === "admin";
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -78,7 +80,7 @@ export default function ApplicationsPage() {
         </div>
         <div className="header-actions">
           <Link to={`/customers/${id}/servers`} className="btn">Sunucular</Link>
-          <a href="#new-application-form" className="btn btn-primary">+ Uygulama Ekle</a>
+          {canWrite && <a href="#new-application-form" className="btn btn-primary">+ Uygulama Ekle</a>}
         </div>
       </header>
 
@@ -124,10 +126,12 @@ export default function ApplicationsPage() {
                         </td>
                         <td>{a.description || "—"}</td>
                         <td>
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
-                            <button className="btn" onClick={() => startEdit(a)}>Düzenle</button>
-                            <button className="btn btn-danger" onClick={() => onDelete(a.id)}>Sil</button>
-                          </div>
+                          {canWrite && (
+                            <div style={{ display: "flex", gap: "0.3rem" }}>
+                              <button className="btn" onClick={() => startEdit(a)}>Düzenle</button>
+                              <button className="btn btn-danger" onClick={() => onDelete(a.id)}>Sil</button>
+                            </div>
+                          )}
                         </td>
                       </>
                     )}
@@ -138,24 +142,26 @@ export default function ApplicationsPage() {
           </table>
         </div>
 
-        <div className="card" id="new-application-form">
-          <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni uygulama</h3>
-          <form className="form-grid" onSubmit={onSubmit}>
-            <label>
-              Ad
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="boa, aapara..." required />
-            </label>
-            <label>
-              Açıklama
-              <input value={description} onChange={(e) => setDescription(e.target.value)} />
-            </label>
-            <div className="form-actions">
-              <button type="submit" className="btn btn-primary" disabled={busy}>
-                Ekle
-              </button>
-            </div>
-          </form>
-        </div>
+        {canWrite && (
+          <div className="card" id="new-application-form">
+            <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni uygulama</h3>
+            <form className="form-grid" onSubmit={onSubmit}>
+              <label>
+                Ad
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="boa, aapara..." required />
+              </label>
+              <label>
+                Açıklama
+                <input value={description} onChange={(e) => setDescription(e.target.value)} />
+              </label>
+              <div className="form-actions">
+                <button type="submit" className="btn btn-primary" disabled={busy}>
+                  Ekle
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </>
   );

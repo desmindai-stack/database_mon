@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, AppConfig, DashboardSummary, formatRelativeTime, HealthResponse } from "../api";
+import { useAuth } from "../auth";
 
 // Description ("mesaj") and the concrete follow-up command ("aksiyon") render on separate
 // lines — the command is monospace and one click away from the clipboard, since it's meant to
@@ -46,6 +47,7 @@ const INTERVAL_LABELS: Record<number, string> = {
 };
 
 export default function DashboardPage() {
+  const canWrite = useAuth().user?.role === "admin";
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<HealthResponse | null>(null);
 
@@ -131,7 +133,7 @@ export default function DashboardPage() {
         </div>
         <div className="header-actions">
           <Link to="/instances" className="btn">Tüm instance’lar</Link>
-          <Link to="/customers" className="btn btn-primary">+ Yeni instance</Link>
+          {canWrite && <Link to="/customers" className="btn btn-primary">+ Yeni instance</Link>}
         </div>
       </header>
 

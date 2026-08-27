@@ -10,6 +10,7 @@ import {
   formatTime,
   Instance,
 } from "../api";
+import { useAuth } from "../auth";
 
 const METRICS = [
   "active_connections",
@@ -43,6 +44,7 @@ const emptyForm = (): AlertRuleCreate => ({
 });
 
 export default function AlertsPage() {
+  const canWrite = useAuth().user?.role === "admin";
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -157,6 +159,7 @@ export default function AlertsPage() {
       {error && <div className="error">{error}</div>}
 
       <div className="grid grid-2">
+        {canWrite && (
         <div className="card">
           <h3 style={{ color: "var(--text)", marginBottom: "1rem" }}>Özel kural ekle</h3>
           <form className="form-grid" onSubmit={onSubmit}>
@@ -254,6 +257,7 @@ export default function AlertsPage() {
             <button type="submit" className="btn btn-primary" disabled={busy}>Kural ekle</button>
           </form>
         </div>
+        )}
 
         <div className="table-wrap">
           <table>
@@ -303,7 +307,7 @@ export default function AlertsPage() {
                       )}
                     </td>
                     <td>
-                      {editingId === rule.id ? (
+                      {!canWrite ? null : editingId === rule.id ? (
                         <div style={{ display: "flex", gap: "0.3rem" }}>
                           <button className="btn btn-primary" onClick={() => saveEdit(rule)}>Kaydet</button>
                           <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
@@ -357,9 +361,11 @@ export default function AlertsPage() {
                     </td>
                     <td>{event.message}</td>
                     <td>
-                      <button className="btn" onClick={() => api.resolveAlert(event.id).then(load)}>
-                        Resolve
-                      </button>
+                      {canWrite && (
+                        <button className="btn" onClick={() => api.resolveAlert(event.id).then(load)}>
+                          Resolve
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))

@@ -17,6 +17,7 @@ import {
   WizardCreateGroupRequest,
   WizardNodeInput,
 } from "../api";
+import { useAuth } from "../auth";
 
 type TopologyPreset = "standalone" | "cluster-2" | "cluster-3" | "cluster-custom";
 type WizardMode = "create-group" | "add-node";
@@ -189,6 +190,7 @@ export default function DatabaseWizardPage() {
   const gId = Number(groupId);
   const mode: WizardMode = groupId ? "add-node" : "create-group";
   const navigate = useNavigate();
+  const canWrite = useAuth().user?.role === "admin";
 
   const [application, setApplication] = useState<Application | null>(null);
   const [existingGroup, setExistingGroup] = useState<DatabaseGroup | null>(null);
@@ -512,6 +514,10 @@ export default function DatabaseWizardPage() {
   };
 
   const currentKey = steps[step]?.key;
+
+  if (!canWrite) {
+    return <div className="error">Bu işlem için admin yetkisi gerekiyor — viewer rolü salt-okunur.</div>;
+  }
 
   if (mode === "add-node" && !existingGroup && !loadError) {
     return <div className="empty">Yükleniyor…</div>;

@@ -4,7 +4,64 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.domain.engines import DEFAULT_PORTS, DatabaseEngine
-from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite, ServerOS
+from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite, ServerOS, UserRole
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    email: str | None
+    role: str
+    is_active: bool
+    must_change_password: bool
+    created_at: datetime
+    last_login_at: datetime | None
+
+    model_config = {"from_attributes": True}
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: Literal["bearer"] = "bearer"
+    user: UserOut
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(min_length=1)
+
+
+class AccessTokenOut(BaseModel):
+    access_token: str
+    token_type: Literal["bearer"] = "bearer"
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=255)
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=3, max_length=64)
+    email: str | None = None
+    password: str = Field(min_length=8, max_length=255)
+    role: UserRole = UserRole.VIEWER
+
+
+class UserUpdate(BaseModel):
+    role: UserRole | None = None
+    is_active: bool | None = None
+
+
+class AdminPasswordResetOut(BaseModel):
+    """Returns the generated temporary password once — the user must change it on next login."""
+
+    temporary_password: str
 
 
 class CustomerCreate(BaseModel):

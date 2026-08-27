@@ -9,6 +9,7 @@ import {
   Instance,
   InstanceCreate,
 } from "../api";
+import { useAuth } from "../auth";
 
 const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
 
@@ -61,6 +62,7 @@ const instanceToForm = (inst: Instance): InstanceCreate => ({
 });
 
 export default function InstancesPage() {
+  const canWrite = useAuth().user?.role === "admin";
   const [instances, setInstances] = useState<Instance[]>([]);
   const [form, setForm] = useState<InstanceCreate>(emptyForm());
   const [error, setError] = useState<string | null>(null);
@@ -431,7 +433,7 @@ export default function InstancesPage() {
           <h2>Instances</h2>
           <p>PostgreSQL, SQL Server ve MongoDB sunucularını kaydedin</p>
         </div>
-        <Link to="/customers" className="btn btn-primary">+ Veritabanı Ekle</Link>
+        {canWrite && <Link to="/customers" className="btn btn-primary">+ Veritabanı Ekle</Link>}
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -465,10 +467,12 @@ export default function InstancesPage() {
                     <td>{inst.role || "—"}</td>
                     <td>{inst.engine}</td>
                     <td>
-                      <div style={{ display: "flex", gap: "0.4rem" }}>
-                        <button className="btn" onClick={() => startEdit(inst)}>Düzenle</button>
-                        <button className="btn btn-danger" onClick={() => onDelete(inst.id)}>Sil</button>
-                      </div>
+                      {canWrite && (
+                        <div style={{ display: "flex", gap: "0.4rem" }}>
+                          <button className="btn" onClick={() => startEdit(inst)}>Düzenle</button>
+                          <button className="btn btn-danger" onClick={() => onDelete(inst.id)}>Sil</button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))

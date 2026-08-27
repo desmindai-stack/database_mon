@@ -28,6 +28,17 @@ class Settings(BaseSettings):
     supabase_anon_key: str | None = None
     supabase_service_role_key: str | None = None
 
+    # Auth (Faz 15 İŞ 1). jwt_secret MUST be overridden in production via .env — the default
+    # is only safe for local dev (see services/security.py's startup warning).
+    jwt_secret: str = "dev-insecure-secret-change-me-in-production"
+    access_token_expire_minutes: int = 60
+    refresh_token_expire_days: int = 7
+    # First-boot admin bootstrap (services/bootstrap.py::ensure_default_admin) — only used
+    # when the users table is empty. If admin_password is left unset, a random one is
+    # generated and logged once so the deployment doesn't ship a guessable default credential.
+    admin_username: str = "admin"
+    admin_password: str | None = None
+
     def get_cors_origins(self) -> list[str]:
         value = self.cors_origins.strip()
         # Railway bazen değeri çift tırnak içine alır; temizle

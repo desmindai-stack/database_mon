@@ -3,7 +3,64 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
-## Faz 14 — İŞ 4: Form yerleşimi kapsamı sadece sihirbaza uygulandı
+## Faz 15 — İŞ 1: "viewer salt-okunur" blanket POST/PUT/PATCH/DELETE=admin olarak uygulandı
+
+Görev "viewer... ekleme/düzenleme/silme ve özel SQL kuralı çalıştırma
+yapamasın" diyordu — "özel SQL kuralı çalıştırma" dışındakiler için
+GET-dışı her metodu admin'e kilitleyen tek bir `require_write_access`
+dependency'si yazdım (`app/services/auth_deps.py`), her router'ın
+`include_router()` çağrısına ekledim. Bunun bilinçli sonucu: viewer
+sadece gerçek create/update/delete uçlarından değil, teknik olarak
+mutasyon OLMAYAN ama POST olan uçlardan da (bağlantı testi, EXPLAIN,
+index önerisi, dashboard manuel refresh) engelleniyor. Alternatif,
+her "tanısal" POST'u ayrı ayrı allowlist'e almaktı (daha ince taneli
+ama ~10 endpoint'i tek tek işaretlemek + gelecekte yeni bir tanısal
+POST eklenince onu da allowlist'e eklemeyi hatırlamak gerektirirdi).
+"Salt-okunur" kelimesini en katı hâliyle uyguladım: viewer sadece GET
+yapabilir. İstenirse ileride belirli tanısal uçlar
+(`/api/instances/test`, `/api/queries/{id}/explain` gibi) için ayrı bir
+"viewer okuyabilir ama create/update/delete yapamaz" ara kategorisi
+eklenebilir — şu an bu ayrım yok.
+
+## Faz 15 — İŞ 1: Logout sunucu tarafında oturum iptal etmiyor (stateless JWT)
+
+`POST /api/auth/logout` gerçek bir endpoint ama bir no-op — JWT'ler
+stateless olduğundan (imzalı, sunucuda saklanmıyor) "iptal etme" diye
+bir şey yok; frontend token'ları `localStorage`'dan silip login
+ekranına dönüyor. Bunun pratik sonucu: çalınan bir refresh token
+(7 gün geçerli) süresi dolana kadar geçerli kalır, "logout" onu
+iptal etmez. Üretim sertleştirmesi için sunucu tarafında bir refresh
+token blacklist/revocation tablosu eklenebilir (her refresh'te
+kontrol edilir) — bu görevin kapsamı dışında bıraktım, dahili bir DBA
+aracı için (halka açık bir SaaS değil) makul bir basitleştirme.
+`ACCESS_TOKEN_EXPIRE_MINUTES` varsayılanı 60dk — çalınan bir ACCESS
+token'ın ömrü kısa, esas risk 7 günlük refresh token'da.
+
+## Faz 15 — İŞ 1: ADMIN_PASSWORD verilmezse rastgele şifre üretiliyor
+
+Görev ".env'den ilk açılışta oluşturulsun" diyordu ama `ADMIN_PASSWORD`
+boşsa ne olacağını belirtmiyordu. Sabit bir varsayılan (`"admin"`,
+`"changeme"` gibi) her deployment'ta aynı, tahmin edilebilir bir
+kimlik bilgisi anlamına gelirdi — bunun yerine `secrets.token_urlsafe(12)`
+ile rastgele bir şifre üretip bir kerelik log'a yazıyorum
+(`services/bootstrap.py::ensure_default_admin`). Kullanıcı .env'de
+`ADMIN_PASSWORD` ayarlarsa bu hiç devreye girmez (kendi şifresi
+kullanılır). `must_change_password=True` her iki durumda da set
+edildiğinden, üretilen şifre zaten tek kullanımlık.
+
+## Faz 15 — İŞ 1: Rol gizleme (frontend) tam kapsamlı değil, backend her zaman otoriter
+
+Viewer için en görünür ekleme/düzenleme/silme butonlarını gizledim
+(sol menü, Customers/Applications/DatabaseGroups/GroupDetail/Servers/
+Instances/Dashboard/Alerts/Predictions) ama her sayfadaki HER tikanik
+kontrolü (ör. bazı satır-içi "test et" butonları, AlertsPage'in
+"Resolve"u zaten gizlendi ama bazı ikincil aksiyonlar gözden kaçmış
+olabilir) tek tek denetlemedim — zaman kısıtı nedeniyle en görünür/
+sık kullanılan yolları önceliklendirdim. Bu bir güvenlik açığı değil:
+`require_write_access` backend'de HER yazma isteğini rol fark etmeksizin
+engelliyor (403), frontend gizleme sadece UX cilası. Gözden kaçan bir
+buton varsa tıklandığında kullanıcı sadece bir hata mesajı görür, veri
+değişmez.
 
 Görev "ekleme paneli aşağı doğru sonsuz akıyor" diyordu (tekil "panel") ve
 alt maddeleri hep "sihirbazda" diye başlıyordu (adım göstergesi, düğüm

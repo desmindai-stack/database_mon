@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, formatTime, Prediction } from "../api";
+import { useAuth } from "../auth";
 
 export default function PredictionsPage() {
+  const canWrite = useAuth().user?.role === "admin";
   const [items, setItems] = useState<Prediction[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,9 +63,11 @@ export default function PredictionsPage() {
                   <td><span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>{p.severity}</span></td>
                   <td>{p.message}</td>
                   <td>
-                    <button className="btn" onClick={() => api.ackPrediction(p.id).then(load)}>
-                      Onayla
-                    </button>
+                    {canWrite && (
+                      <button className="btn" onClick={() => api.ackPrediction(p.id).then(load)}>
+                        Onayla
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))

@@ -33,3 +33,8 @@ class NodeRoleHint(StrEnum):
     PRIMARY = "primary"
     REPLICA = "replica"
     UNKNOWN = "unknown"
+
+
+class UserRole(StrEnum):
+    ADMIN = "admin"
+    VIEWER = "viewer"

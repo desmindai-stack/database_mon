@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, Application, Customer, DatabaseGroup, DbNode } from "./api";
+import { AuthProvider, useAuth } from "./auth";
 import AlertsPage from "./pages/AlertsPage";
 import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
 import DatabaseGroupsPage from "./pages/DatabaseGroupsPage";
 import DatabaseWizardPage from "./pages/DatabaseWizardPage";
+import ForcedPasswordChangePage from "./pages/ForcedPasswordChangePage";
 import GroupDetailPage from "./pages/GroupDetailPage";
 import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
+import LoginPage from "./pages/LoginPage";
 import PredictionsPage from "./pages/PredictionsPage";
 import ServersPage from "./pages/ServersPage";
 
@@ -90,7 +93,7 @@ function customerNode(c: Customer): NavTreeNode {
   };
 }
 
-function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: string }) {
+function NavTreeBranch({ node, activePath, canWrite }: { node: NavTreeNode; activePath: string; canWrite: boolean }) {
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<NavTreeNode[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -139,7 +142,7 @@ function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: st
             {node.name}
           </button>
         )}
-        {node.emptyHref && (
+        {canWrite && node.emptyHref && (
           <Link to={node.emptyHref} className="nav-tree-add-btn" title={node.emptyLabel ?? "Ekle"}>
             +
           </Link>
@@ -152,14 +155,14 @@ function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: st
         <div className="nav-tree-apps">
           {loading && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
           {!loading && children?.length === 0 && (
-            node.emptyHref ? (
+            canWrite && node.emptyHref ? (
               <Link to={node.emptyHref} className="nav-tree-instance">{node.emptyLabel ?? "Ekle"}</Link>
             ) : (
               <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Kayıt yok</span>
             )
           )}
           {children?.map((child) => (
-            <NavTreeBranch key={child.id} node={child} activePath={activePath} />
+            <NavTreeBranch key={child.id} node={child} activePath={activePath} canWrite={canWrite} />
           ))}
         </div>
       )}
@@ -167,7 +170,15 @@ function NavTreeBranch({ node, activePath }: { node: NavTreeNode; activePath: st
   );
 }
 
-function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; privateCustomerId: number | null }) {
+function MainNavTree({
+  isPrivate,
+  privateCustomerId,
+  canWrite,
+}: {
+  isPrivate: boolean;
+  privateCustomerId: number | null;
+  canWrite: boolean;
+}) {
   const [isOpen, setIsOpen] = useState(false);
   const [roots, setRoots] = useState<NavTreeNode[] | null>(null);
   const [loadingRoots, setLoadingRoots] = useState(false);
@@ -226,7 +237,7 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
       {isOpen && (
         <div className="nav-tree">
           {loadingRoots && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
-          {!loadingRoots && roots?.length === 0 && (
+          {!loadingRoots && roots?.length === 0 && canWrite && (
             <Link
               to={isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers"}
               className="nav-tree-instance"
@@ -235,7 +246,7 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
             </Link>
           )}
           {roots?.map((node) => (
-            <NavTreeBranch key={node.id} node={node} activePath={activePath} />
+            <NavTreeBranch key={node.id} node={node} activePath={activePath} canWrite={canWrite} />
           ))}
         </div>
       )}
@@ -243,7 +254,9 @@ function MainNavTree({ isPrivate, privateCustomerId }: { isPrivate: boolean; pri
   );
 }
 
-export default function App() {
+function AppShell() {
+  const { user, logout } = useAuth();
+  const canWrite = user?.role === "admin";
   const [isPrivate, setIsPrivate] = useState(false);
   const [privateCustomerId, setPrivateCustomerId] = useState<number | null>(null);
   // "Selected" customer for the always-visible "Uygulamalar" sidebar link (İŞ 3): in private
@@ -287,7 +300,7 @@ export default function App() {
           <NavLink to="/" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Dashboard
           </NavLink>
-          <MainNavTree isPrivate={isPrivate} privateCustomerId={privateCustomerId} />
+          <MainNavTree isPrivate={isPrivate} privateCustomerId={privateCustomerId} canWrite={canWrite} />
           {/* Private mode's tree root already links straight to the one tenant's Uygulamalar
               page (see MainNavTree) — this fixed link only adds value in public mode, where the
               root links to Müşteriler instead and "which customer" varies by what's selected. */}
@@ -317,6 +330,15 @@ export default function App() {
             Alerts
           </NavLink>
         </nav>
+        <div className="sidebar-user">
+          <div className="sidebar-user-info">
+            <strong>{user?.username}</strong>
+            <span className={`tag ${user?.role === "admin" ? "public" : "private"}`}>{user?.role}</span>
+          </div>
+          <button type="button" className="btn btn-xs" onClick={logout}>
+            Çıkış yap
+          </button>
+        </div>
       </aside>
       <main className="main">
         <Routes>
@@ -335,5 +357,21 @@ export default function App() {
         </Routes>
       </main>
     </div>
+  );
+}
+
+function AuthGate() {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="auth-loading">Yükleniyor…</div>;
+  if (!user) return <LoginPage />;
+  if (user.must_change_password) return <ForcedPasswordChangePage />;
+  return <AppShell />;
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
   );
 }

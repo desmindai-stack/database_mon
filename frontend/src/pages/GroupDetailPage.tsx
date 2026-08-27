@@ -13,6 +13,7 @@ import {
   NodeRoleHint,
   ParameterAudit,
 } from "../api";
+import { useAuth } from "../auth";
 
 type Tab = "nodes" | "parameters" | "alwayson";
 
@@ -21,6 +22,7 @@ const STATUS_TR: Record<string, string> = { up: "UP", down: "DOWN", unknown: "UN
 export default function GroupDetailPage() {
   const { groupId } = useParams<{ groupId: string }>();
   const id = Number(groupId);
+  const canWrite = useAuth().user?.role === "admin";
 
   const [group, setGroup] = useState<DatabaseGroup | null>(null);
   const [application, setApplication] = useState<Application | null>(null);
@@ -288,7 +290,7 @@ export default function GroupDetailPage() {
             {group?.vip_address && <span className="detail-meta"> · VIP: {group.vip_address}</span>}
           </p>
         </div>
-        {tab === "nodes" && group && group.topology !== "standalone" && (
+        {tab === "nodes" && canWrite && group && group.topology !== "standalone" && (
           <div className="header-actions">
             <Link to={`/groups/${id}/wizard`} className="btn btn-primary">+ Düğüm Ekle</Link>
           </div>
@@ -313,7 +315,7 @@ export default function GroupDetailPage() {
         )}
       </div>
 
-      {tab === "nodes" && group?.topology === "standalone" && (
+      {tab === "nodes" && canWrite && group?.topology === "standalone" && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <div className="activity-toolbar">
             <h3 className="chart-title" style={{ margin: 0 }}>Cluster'a dönüştür</h3>
@@ -595,10 +597,15 @@ export default function GroupDetailPage() {
                       </div>
                     ) : (
                       <p className="muted-note">
-                        Bağlı instance yok — kimlik bilgisi girilmedi.{" "}
-                        <button type="button" className="btn btn-xs" onClick={() => startConnect(node)}>
-                          Bağlantı bilgisi gir
-                        </button>
+                        Bağlı instance yok — kimlik bilgisi girilmedi.
+                        {canWrite && (
+                          <>
+                            {" "}
+                            <button type="button" className="btn btn-xs" onClick={() => startConnect(node)}>
+                              Bağlantı bilgisi gir
+                            </button>
+                          </>
+                        )}
                       </p>
                     )}
                     {nodeHealth ? (
@@ -612,10 +619,12 @@ export default function GroupDetailPage() {
                     ) : (
                       <p className="muted-note">Sağlık verisi için üstteki butonu kullanın.</p>
                     )}
-                    <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.5rem" }}>
-                      <button className="btn" onClick={() => startEditNode(node)}>Düzenle</button>
-                      <button className="btn btn-danger" onClick={() => onDeleteNode(node)}>Sil</button>
-                    </div>
+                    {canWrite && (
+                      <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.5rem" }}>
+                        <button className="btn" onClick={() => startEditNode(node)}>Düzenle</button>
+                        <button className="btn btn-danger" onClick={() => onDeleteNode(node)}>Sil</button>
+                      </div>
+                    )}
                   </div>
                 );
               })}

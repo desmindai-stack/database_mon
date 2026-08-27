@@ -1249,8 +1249,98 @@ getir" butonlarını deneyin.
   içinde korunduğundan bilgi kaybı yok, sadece kategori tahmini
   başarısız olabilir.
 
+## Faz 15 — İŞ 1: Kimlik doğrulama
+
+**Bu, API uyumluluğunu bilerek kırıyor** (aşağıdaki "API uyumluluğu"
+bölümüne bakın) — görevin kendisi "şu an API'de hiç kimlik doğrulama
+yok" tespitiyle başlıyordu ve bunu düzeltmek doğası gereği önceden
+anonim erişilebilen her uca artık bir token şartı koymak demek.
+
+**Backend:**
+- Yeni `User` modeli: `username` (unique), `email` (opsiyonel),
+  `password_hash` (bcrypt), `role` (`admin`|`viewer`), `is_active`,
+  `must_change_password`, `last_login_at`.
+- `services/security.py`: bcrypt hash/verify + PyJWT access/refresh
+  token üretimi ve çözümü. `JWT_SECRET` ayarlanmazsa dev-only bir
+  varsayılanla çalışır ve her başlangıçta uyarı loglar (mevcut
+  `CREDENTIALS_MASTER_KEY` uyarı desenini tekrarlıyor).
+- `services/auth_deps.py`: `get_current_user` (Bearer token doğrulama),
+  `require_admin`, ve `require_write_access` — sonuncusu `request.method`
+  GET değilse (`POST/PUT/PATCH/DELETE`) admin şartı koyuyor, GET'lerde
+  sadece oturum yeterli. Bu TEK dependency, `main.py`'de her router'ın
+  `include_router(..., dependencies=[Depends(require_write_access)])`
+  ile sarılmasıyla hem "tüm /api/* korunsun" hem "viewer salt-okunur"
+  kuralını tek seferde karşılıyor — 9 router dosyasının hiçbirine tek
+  tek dokunmadan (SORULAR.md'de bu tasarım kararının gerekçesi var).
+- `routers/auth.py`: `POST /login`, `POST /refresh`, `POST /logout`
+  (stateless JWT — sunucu tarafında iptal yok, bkz. SORULAR.md),
+  `GET /me`, `POST /change-password`.
+- `services/bootstrap.py::ensure_default_admin()`: `users` tablosu
+  boşsa `ADMIN_USERNAME`/`ADMIN_PASSWORD`'dan bir admin oluşturuyor;
+  `ADMIN_PASSWORD` verilmezse rastgele bir şifre üretilip BİR KEZ log'a
+  yazılıyor (tahmin edilebilir bir varsayılan yerine). Yeni admin her
+  zaman `must_change_password=True` ile oluşuyor.
+- `/api/health` ve `/api/auth/login` (+`/refresh`) hariç HER `/api/*`
+  ucu artık oturum gerektiriyor; `/api/config` de dahil (plain
+  `@app.get`, router'a dahil değildi — ayrıca `Depends(get_current_user)`
+  eklendi).
+
+**Frontend:**
+- `auth.tsx`: `AuthProvider`/`useAuth()` — token'ları `localStorage`'da
+  (`dbace_auth` anahtarı) saklıyor, `api.ts`'in modül-seviyesi
+  `authToken`/`refreshTokenValue` değişkenlerini güncelliyor (React
+  state değil — `api.ts` bir component değil, her isteğin senkron token
+  okuması gerekiyor). `api.ts`'in `request()` fonksiyonu artık 401
+  aldığında (login/refresh/health hariç) otomatik olarak refresh
+  token'la yeni bir access token almayı deniyor, başarısızsa
+  `onUnauthorized` callback'ini tetikleyip oturumu temizliyor.
+- `App.tsx`: `AuthProvider` + `AuthGate` ile sarıldı —
+  `loading` → yükleniyor ekranı, `!user` → `LoginPage`,
+  `user.must_change_password` → `ForcedPasswordChangePage` (şifre
+  değiştirmeden asıl uygulamaya geçilemiyor), aksi halde eski `App`
+  gövdesi (`AppShell` olarak yeniden adlandırıldı). Sidebar'a
+  kullanıcı adı + rol rozeti + "Çıkış yap" eklendi.
+- **Viewer için UI gizleme:** Sol menü ağacındaki "+" giriş noktaları
+  (`canWrite` prop'u ile `NavTreeBranch`/`MainNavTree`'ye kadar
+  taşındı) ve ana CRUD sayfalarındaki (Customers, Applications,
+  DatabaseGroups, GroupDetail, Servers, Instances, Dashboard, Alerts,
+  Predictions) ekle/düzenle/sil/onayla butonları `useAuth().user?.role
+  === "admin"` koşuluyla gizlendi; sihirbaz artık admin olmayan bir
+  kullanıcıya "Bu işlem için admin yetkisi gerekiyor" gösterip formu
+  hiç render etmiyor. Bu gizleme UX içindir — gerçek yetki sınırı her
+  zaman backend'de (`require_write_access`, 403).
+
+**Test:** Yeni `tests/test_auth.py` (10 test): health/login herkese
+açık, korumalı uç token'sız 401, login başarı/başarısız, viewer
+GET-200/POST-403, admin POST-201, refresh token akışı, access token
+refresh endpoint'inde reddediliyor (tip karışıklığı önleniyor),
+change-password akışı (yanlış mevcut şifre 400, doğrusu 200, eski şifre
+artık çalışmıyor), pasif kullanıcı login edemiyor. Mevcut 3 test
+dosyası (`test_wizard_add_nodes.py`, `test_wizard_atomicity.py`,
+`test_wizard_existing_server.py`) artık korumalı uçlara gittiğinden
+yeni paylaşılan `tests/auth_helper.py::authed_client()` ile
+güncellendi (tek satırlık değişiklik, her dosyanın `_client()`
+helper'ı artık login olup token ekliyor). Toplam 41 test yeşil.
+
+**Canlı doğrulama:** Gerçek uvicorn'a (`ADMIN_USERNAME`/`ADMIN_PASSWORD`
+/`JWT_SECRET` env'leriyle) karşı curl ile: `/api/health` token'sız 200;
+`/api/customers` token'sız 401; login ile admin bootstrap doğru
+kimlik bilgileriyle çalışıyor ve `must_change_password: true`
+dönüyor; token'lı istek 200; yanlış mevcut şifreyle change-password
+400, doğrusuyla 200 ve `must_change_password: false`'a dönüyor; admin
+token'ıyla `POST /api/customers` 201.
+
 ## API uyumluluğu
 
-Mevcut hiçbir endpoint kırılmadı; `Instance` ile ilgili tüm uçlar ve
-davranışları (cluster-health dahil) aynı kaldı. Sadece ek, yeni uçlar
-eklendi.
+Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
+ilgili tüm uçlar ve davranışları (cluster-health dahil) aynı kaldı.
+
+**Faz 15 İŞ 1 kırıyor (bilerek, gerekçesi görevin kendisi):** `/api/health`
+ve `/api/auth/login`/`/refresh` DIŞINDA her `/api/*` ucu artık
+`Authorization: Bearer <token>` şart koşuyor — token'sız her istek artık
+`401` dönüyor (öncesinde tamamen anonim erişilebiliyordu).
+`POST`/`PUT`/`PATCH`/`DELETE` istekleri ayrıca `role=admin` şart koşuyor
+(`403` viewer için). Bu, kimlik doğrulaması olmayan hiçbir eski
+istemcinin (script, entegrasyon vb.) artık çalışmayacağı anlamına
+geliyor — beklenen ve istenen davranış, ama var olan otomasyon varsa
+önce bir token alıp `Authorization` header'ı eklemesi gerekecek.

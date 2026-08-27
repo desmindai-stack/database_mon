@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Customer, DbServer, NodeSite, ServerOS } from "../api";
+import { useAuth } from "../auth";
 
 const OS_LABELS: Record<ServerOS, string> = { linux: "Linux", windows: "Windows" };
 const SITE_LABELS: Record<NodeSite, string> = { primary: "Ana DC", disaster: "Disaster (DR)" };
@@ -8,6 +9,7 @@ const SITE_LABELS: Record<NodeSite, string> = { primary: "Ana DC", disaster: "Di
 export default function ServersPage() {
   const { customerId } = useParams<{ customerId: string }>();
   const id = Number(customerId);
+  const canWrite = useAuth().user?.role === "admin";
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [servers, setServers] = useState<DbServer[]>([]);
@@ -163,8 +165,12 @@ export default function ServersPage() {
                           >
                             Agent testi
                           </button>
-                          <button className="btn" onClick={() => startEdit(s)}>Düzenle</button>
-                          <button className="btn btn-danger" onClick={() => onDelete(s.id)}>Sil</button>
+                          {canWrite && (
+                            <>
+                              <button className="btn" onClick={() => startEdit(s)}>Düzenle</button>
+                              <button className="btn btn-danger" onClick={() => onDelete(s.id)}>Sil</button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>

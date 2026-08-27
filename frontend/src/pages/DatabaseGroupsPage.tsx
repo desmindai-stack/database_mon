@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Application, DatabaseGroup, GroupEnvironment } from "../api";
+import { useAuth } from "../auth";
 
 const ENV_LABELS: Record<GroupEnvironment, string> = {
   prod: "Prod",
@@ -12,6 +13,7 @@ const ENV_LABELS: Record<GroupEnvironment, string> = {
 export default function DatabaseGroupsPage() {
   const { applicationId } = useParams<{ applicationId: string }>();
   const id = Number(applicationId);
+  const canWrite = useAuth().user?.role === "admin";
 
   const [application, setApplication] = useState<Application | null>(null);
   const [groups, setGroups] = useState<DatabaseGroup[]>([]);
@@ -74,9 +76,11 @@ export default function DatabaseGroupsPage() {
             {application && <Link to={`/customers/${application.customer_id}/applications`}>← Uygulamalar</Link>}
           </p>
         </div>
-        <div className="header-actions">
-          <Link to={`/applications/${id}/groups/wizard`} className="btn btn-primary">+ Veritabanı Ekle</Link>
-        </div>
+        {canWrite && (
+          <div className="header-actions">
+            <Link to={`/applications/${id}/groups/wizard`} className="btn btn-primary">+ Veritabanı Ekle</Link>
+          </div>
+        )}
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -167,10 +171,12 @@ export default function DatabaseGroupsPage() {
                         <span className={`env-badge ${g.environment}`}>{ENV_LABELS[g.environment]}</span>
                       </td>
                       <td>
-                        <div style={{ display: "flex", gap: "0.3rem" }}>
-                          <button className="btn" onClick={() => startEdit(g)}>Düzenle</button>
-                          <button className="btn btn-danger" onClick={() => onDelete(g.id)}>Sil</button>
-                        </div>
+                        {canWrite && (
+                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <button className="btn" onClick={() => startEdit(g)}>Düzenle</button>
+                            <button className="btn btn-danger" onClick={() => onDelete(g.id)}>Sil</button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );

@@ -1,9 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, Customer, CustomerType } from "../api";
+import { useAuth } from "../auth";
 
 export default function CustomersPage() {
   const navigate = useNavigate();
+  const canWrite = useAuth().user?.role === "admin";
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [isPrivate, setIsPrivate] = useState(false);
   const [name, setName] = useState("");
@@ -74,7 +76,7 @@ export default function CustomersPage() {
           <h2>Müşteriler</h2>
           <p>Customer → Application → Database Group → Node hiyerarşisinin kökü</p>
         </div>
-        {!isPrivate && (
+        {!isPrivate && canWrite && (
           <div className="header-actions">
             <a href="#new-customer-form" className="btn btn-primary">+ Müşteri Ekle</a>
           </div>
@@ -128,7 +130,7 @@ export default function CustomersPage() {
                           <span className={`tag ${c.type}`}>{c.type}</span>
                         </td>
                         <td>
-                          {!isPrivate && (
+                          {!isPrivate && canWrite && (
                             <div style={{ display: "flex", gap: "0.3rem" }}>
                               <button className="btn" onClick={() => startEdit(c)}>Düzenle</button>
                               <button className="btn btn-danger" onClick={() => onDelete(c.id)}>Sil</button>
@@ -144,7 +146,7 @@ export default function CustomersPage() {
           </table>
         </div>
 
-        {!isPrivate && (
+        {!isPrivate && canWrite && (
           <div className="card" id="new-customer-form">
             <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni müşteri</h3>
             <form className="form-grid" onSubmit={onSubmit}>

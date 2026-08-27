@@ -10,13 +10,11 @@ import uuid
 
 import httpx
 
-from app.database import init_db
-from app.main import app
+from tests.auth_helper import authed_client
 
 
 async def _client() -> httpx.AsyncClient:
-    await init_db()
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+    return await authed_client()
 
 
 async def _make_application(c: httpx.AsyncClient, suffix: str) -> dict:

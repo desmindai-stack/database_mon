@@ -755,13 +755,86 @@ export interface ConnectionTestResult {
   details: Record<string, unknown>;
 }
 
+export type UserRoleType = "admin" | "viewer";
+
+export interface UserOut {
+  id: number;
+  username: string;
+  email: string | null;
+  role: UserRoleType;
+  is_active: boolean;
+  must_change_password: boolean;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+export interface TokenOut {
+  access_token: string;
+  refresh_token: string;
+  token_type: "bearer";
+  user: UserOut;
+}
+
+export interface AccessTokenOut {
+  access_token: string;
+  token_type: "bearer";
+}
+
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...init?.headers },
-    ...init,
-  });
+// Set by AuthProvider (auth.tsx) on login/logout/refresh — kept as module state rather than
+// React state because api.ts is a plain module, not a component, and every request needs the
+// current token synchronously.
+let authToken: string | null = null;
+let refreshTokenValue: string | null = null;
+let onUnauthorized: (() => void) | null = null;
+let refreshInFlight: Promise<boolean> | null = null;
+
+export function setAuthTokens(access: string | null, refresh: string | null): void {
+  authToken = access;
+  refreshTokenValue = refresh;
+}
+
+export function setUnauthorizedHandler(fn: (() => void) | null): void {
+  onUnauthorized = fn;
+}
+
+async function tryRefresh(): Promise<boolean> {
+  if (!refreshTokenValue) return false;
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/refresh`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshTokenValue }),
+        });
+        if (!res.ok) return false;
+        const data: AccessTokenOut = await res.json();
+        authToken = data.access_token;
+        return true;
+      } catch {
+        return false;
+      } finally {
+        refreshInFlight = null;
+      }
+    })();
+  }
+  return refreshInFlight;
+}
+
+const _PUBLIC_PATHS = new Set(["/api/auth/login", "/api/auth/refresh", "/api/health"]);
+
+async function request<T>(path: string, init?: RequestInit, _retried = false): Promise<T> {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string> | undefined) };
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+
+  if (res.status === 401 && !_retried && !_PUBLIC_PATHS.has(path)) {
+    if (await tryRefresh()) return request<T>(path, init, true);
+    onUnauthorized?.();
+    throw new Error("Oturum süresi doldu — tekrar giriş yapın.");
+  }
   if (!res.ok) {
     const body = await res.text();
     throw new Error(body || res.statusText);
@@ -771,6 +844,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  login: (username: string, password: string) =>
+    request<TokenOut>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password }) }),
+  logoutRequest: () => request<void>("/api/auth/logout", { method: "POST" }),
+  me: () => request<UserOut>("/api/auth/me"),
+  changePassword: (current_password: string, new_password: string) =>
+    request<UserOut>("/api/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify({ current_password, new_password }),
+    }),
+
   getHealth: () => request<HealthResponse>("/api/health"),
   getConfig: () => request<AppConfig>("/api/config"),
   getSummaries: () => request<InstanceSummary[]>("/api/instances/summary"),
