@@ -144,6 +144,41 @@ kaldırır — script'i çalıştırabilen kişinin zaten sunucuya doğrudan eri
 olduğundan, web arayüzünde ayrıca bir şifre-değiştir adımına zorlamanın
 güvenlik faydası yoktur.
 
+## PgBouncer / connection pooler arkasında çalışma
+
+dbace'in izlediği bir PostgreSQL sunucusu (veya dbace'in kendi meta veri tabanı — Supabase dahil)
+PgBouncer ya da Supabase'in pooler'ı gibi bir bağlantı havuzlayıcısının arkasındaysa ve havuzlayıcı
+`transaction` veya `statement` pool_mode'da çalışıyorsa, aşağıdaki gibi bir hata görebilirdiniz:
+
+```
+prepared statement "__asyncpg_stmt_21__" already exists
+pgbouncer cannot support prepared statements in transaction/statement pooling mode
+```
+
+Sebep: asyncpg (dbace'in PostgreSQL sürücüsü) varsayılan olarak sorguları isimli bir "prepared
+statement" olarak sunucuda önbelleğe alır. Transaction/statement modundaki bir havuzlayıcı, aynı
+istemci bağlantısındaki ardışık sorguları farklı gerçek sunucu bağlantılarına yönlendirebilir —
+bu yüzden bir sorgu, kendisini hiç görmemiş bir bağlantıda "EXECUTE" edilmeye çalışılır.
+
+dbace bunu artık her asyncpg bağlantısında (collector, activity, schema health, parametre
+denetimi, EXPLAIN, index advisor ve dbace'in kendi meta veri tabanı bağlantısı dahil)
+`statement_cache_size=0` ile koşulsuz olarak devre dışı bırakarak çözer — havuzlayıcı olsun ya da
+olmasın, ek bir maliyeti yoktur.
+
+Bu hata yine de bir yerden sızarsa (ör. tespit edilemeyen özel bir kurulum), API anlaşılır bir
+Türkçe mesaj döner ve pooler'ı işaretlemenizi önerir. Instance/Node ekleme formunda ve sihirbazda
+**"Pooler kullanılıyor"** seçeneği bulunur:
+
+- **Otomatik algıla** (varsayılan) — host adı `pooler`/`pgbouncer` içeriyorsa veya port
+  `6432`/`6543` ise (Supabase'in pooled portu 6543, PgBouncer'ın paket varsayılanı 6432) pooler
+  olarak kabul edilir.
+- **Evet / Hayır** — otomatik tespiti geçersiz kılar; standart olmayan bir host/port üzerinde
+  çalışan bir PgBouncer için elle işaretleyin.
+
+dbace'in kendi meta veri tabanı için (`DATABASE_URL` bir Supabase/PgBouncer bağlantısıysa) ayrı
+bir ayar gerekmez — `postgresql+asyncpg://` şemasını gördüğünde SQLAlchemy motoru otomatik olarak
+aynı korumayı uygular.
+
 ## Docker (all services)
 
 ```bash

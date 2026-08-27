@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.collectors.base import classify_connection_error
 from app.database import get_db
 from app.models import Application, DatabaseGroup, Node
 from app.domain.topology import GroupTopology
@@ -204,7 +205,7 @@ async def get_group_parameters(group_id: int, db: AsyncSession = Depends(get_db)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Parameter audit failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     return ParameterAuditOut.model_validate(report)
 
 

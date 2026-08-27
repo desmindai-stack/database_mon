@@ -83,6 +83,9 @@ interface NodeFormState {
   role_hint: NodeRoleHint;
   // postgresql only.
   sslMode: PostgresSslMode;
+  // postgresql only — null = auto-detect a connection pooler (PgBouncer/Supabase pooler)
+  // from host/port.
+  usesPooler: boolean | null;
   // sqlserver only.
   authType: SqlServerAuthType;
   // mongodb only.
@@ -115,6 +118,7 @@ function makeNode(engine: DbEngine, site: NodeSite, role_hint: NodeRoleHint): No
     db_password: "",
     role_hint,
     sslMode: "disable",
+    usesPooler: null,
     authType: "sql",
     replicaSet: "",
     authSource: engine === "mongodb" ? ENGINE_DEFAULTS[engine].database : "",
@@ -178,6 +182,7 @@ function nodeToWizardInput(n: NodeFormState, engine: DbEngine): WizardNodeInput 
     db_password: n.db_password,
     role_hint: n.role_hint,
     ssl_mode: engine === "postgresql" ? n.sslMode : null,
+    uses_pooler: engine === "postgresql" ? n.usesPooler : null,
     auth_type: engine === "sqlserver" ? n.authType : null,
     replica_set: engine === "mongodb" ? n.replicaSet.trim() || null : null,
     auth_source: engine === "mongodb" ? n.authSource.trim() || null : null,
@@ -354,7 +359,7 @@ export default function DatabaseWizardPage() {
     try {
       const options =
         engine === "postgresql"
-          ? { ssl_mode: node.sslMode }
+          ? { ssl_mode: node.sslMode, uses_pooler: node.usesPooler }
           : engine === "sqlserver"
             ? { auth_type: node.authType }
             : engine === "mongodb"
@@ -940,6 +945,25 @@ export default function DatabaseWizardPage() {
                               <select value={node.sslMode} onChange={(e) => updateNode(node.key, "sslMode", e.target.value as PostgresSslMode)}>
                                 <option value="disable">Devre dışı</option>
                                 <option value="require">Gerekli (require)</option>
+                              </select>
+                            </label>
+                          )}
+                          {engine === "postgresql" && (
+                            <label>
+                              Pooler kullanılıyor (PgBouncer / Supabase pooler)
+                              <select
+                                value={node.usesPooler === true ? "true" : node.usesPooler === false ? "false" : "auto"}
+                                onChange={(e) =>
+                                  updateNode(
+                                    node.key,
+                                    "usesPooler",
+                                    e.target.value === "auto" ? null : e.target.value === "true"
+                                  )
+                                }
+                              >
+                                <option value="auto">Otomatik algıla</option>
+                                <option value="true">Evet</option>
+                                <option value="false">Hayır</option>
                               </select>
                             </label>
                           )}

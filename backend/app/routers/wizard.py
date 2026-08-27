@@ -49,6 +49,8 @@ def _instance_options(node_input: WizardNodeInput, engine: DatabaseEngine) -> di
     opts: dict = {}
     if engine == DatabaseEngine.POSTGRESQL and node_input.ssl_mode:
         opts["ssl_mode"] = node_input.ssl_mode
+    if engine == DatabaseEngine.POSTGRESQL and node_input.uses_pooler is not None:
+        opts["uses_pooler"] = node_input.uses_pooler
     if engine == DatabaseEngine.SQLSERVER and node_input.auth_type:
         opts["auth_type"] = node_input.auth_type
     if engine == DatabaseEngine.MONGODB:

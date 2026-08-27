@@ -116,6 +116,9 @@ async def _run_query(instance: Instance, query: str) -> float | None:
             user=target.username,
             password=target.password,
             timeout=QUERY_TIMEOUT_SECONDS,
+            # See collectors/postgresql.py::_connect for why this is unconditional (PgBouncer
+            # transaction/statement pooling breaks asyncpg's named prepared statements).
+            statement_cache_size=0,
         )
         try:
             await conn.execute(f"SET statement_timeout = '{QUERY_TIMEOUT_SECONDS}s'")

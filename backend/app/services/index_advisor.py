@@ -47,6 +47,9 @@ class PostgreSQLIndexAdvisor:
             user=self.target.username,
             password=self.target.password,
             timeout=15,
+            # See collectors/postgresql.py::_connect for why this is unconditional (PgBouncer
+            # transaction/statement pooling breaks asyncpg's named prepared statements).
+            statement_cache_size=0,
         )
         # Catalog scans + hypopg re-planning (_hypopg_estimate) are still on-demand/user
         # triggered, but should never be able to hang a connection open indefinitely against
@@ -419,19 +422,26 @@ class PostgreSQLIndexAdvisor:
         # hypopg index DDL
         hypopg_ddl = f"CREATE INDEX ON {schema_name}.{table_name} ({', '.join(columns)})"
 
-        # Run EXPLAIN before
-        before = await conn.fetchval("EXPLAIN (FORMAT JSON) " + query_text)
-        before_cost = self._total_cost(before)
+        # hypopg's hypothetical index lives only in the backend session that created it. Each
+        # conn.fetchval/execute() call is its own auto-committed round trip by default; under a
+        # transaction/statement-mode pooler that means the "create" and the following "explain"
+        # could each be routed to a *different* real backend connection, silently losing the
+        # hypothetical index between them. An explicit transaction pins the whole sequence to one
+        # backend connection regardless of pooling mode.
+        async with conn.transaction():
+            # Run EXPLAIN before
+            before = await conn.fetchval("EXPLAIN (FORMAT JSON) " + query_text)
+            before_cost = self._total_cost(before)
 
-        # Create hypothetical index and re-explain
-        hypopg_index = await conn.fetchval(
-            "SELECT indexrelid FROM hypopg_create_index($1)", hypopg_ddl
-        )
-        try:
-            after = await conn.fetchval("EXPLAIN (FORMAT JSON) " + query_text)
-            after_cost = self._total_cost(after)
-        finally:
-            await conn.execute("SELECT hypopg_drop_index($1)", hypopg_index)
+            # Create hypothetical index and re-explain
+            hypopg_index = await conn.fetchval(
+                "SELECT indexrelid FROM hypopg_create_index($1)", hypopg_ddl
+            )
+            try:
+                after = await conn.fetchval("EXPLAIN (FORMAT JSON) " + query_text)
+                after_cost = self._total_cost(after)
+            finally:
+                await conn.execute("SELECT hypopg_drop_index($1)", hypopg_index)
 
         return before_cost, after_cost
 

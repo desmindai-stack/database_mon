@@ -229,6 +229,9 @@ async def _pg_connect(node: Node) -> asyncpg.Connection:
         user=instance.username,
         password=decrypt_secret(instance.password),
         timeout=10,
+        # See collectors/postgresql.py::_connect for why this is unconditional (PgBouncer
+        # transaction/statement pooling breaks asyncpg's named prepared statements).
+        statement_cache_size=0,
     )
     # This runs on the dashboard-refresh tick (every dashboard_refresh_interval_seconds, as
     # often as 10s — see ALLOWED_REFRESH_INTERVALS) for every Patroni-topology group's target

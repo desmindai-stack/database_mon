@@ -3,6 +3,27 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 15 sonrası düzeltme — PgBouncer pooler tespiti sadece host/port sezgisi, hepsi override edilebilir
+
+`detect_pooler()` sadece host adında `pooler`/`pgbouncer` geçmesine veya
+portun `6432` (PgBouncer'ın paket varsayılanı) / `6543` (Supabase'in
+pooled portu) olmasına bakıyor — gerçek bir protokol/handshake tespiti
+değil, bilinen isimlendirme kalıplarına dayanan bir sezgi. Standart
+olmayan bir host/portta çalışan (ör. dahili bir PgBouncer 5432'de
+dinliyorsa) kurulumlar YANLIŞ NEGATİF verebilir. Bunu bilerek kabul
+ettim çünkü asıl düzeltme (her bağlantıda `statement_cache_size=0`)
+zaten KOŞULSUZ ve tespitten bağımsız — sezgi sadece UI'da "(pooler
+algılandı)" notu ve `options.uses_pooler` alanının varsayılan değeri
+için kullanılıyor, hiçbir davranışı YANLIŞ ayarlamıyor. Yanlış negatif
+durumda kullanıcı Instance/Node ayarlarında "Pooler kullanılıyor: Evet"
+seçip elle düzeltebilir; bu alan her zaman sezgiyi geçersiz kılıyor.
+
+`index_advisor.py`'deki hypopg tahmini için pooler bayrağına HİÇ
+bakmadım — `async with conn.transaction():` sarmalaması pooler olsun ya
+da olmasın her zaman doğru ve ucuz (tek bir ekstra round-trip), bu
+yüzden koşulsuz uyguladım; ekstra bir "sadece pooler modunda sarmala"
+dalı gereksiz karmaşıklık olurdu.
+
 ## Faz 15 sonrası düzeltme — reset_admin_password.py must_change_password'ü otomatik temizliyor
 
 Script'i çalıştırırken `must_change_password` bilerek `False`'a

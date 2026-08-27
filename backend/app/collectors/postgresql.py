@@ -5,7 +5,7 @@ from typing import Any
 
 import asyncpg
 
-from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error
+from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error, resolve_uses_pooler
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,15 @@ class PostgreSQLCollector(BaseCollector):
             password=self.target.password,
             timeout=10,
             ssl=True if ssl_mode == "require" else None,
+            # PgBouncer transaction/statement-mode pooling (Supabase's pooler included) breaks
+            # asyncpg's named prepared statements — consecutive statements on one client
+            # connection can land on different backend connections, so a later "EXECUTE" can hit
+            # a backend that never saw the matching "PREPARE" ("prepared statement
+            # __asyncpg_stmt_N__ already exists"/"does not exist"). Disabling the cache costs
+            # nothing measurable for these short monitoring queries and is harmless against a
+            # direct (non-pooled) connection too, so it's unconditional rather than gated behind
+            # pooler detection — see resolve_uses_pooler() for where that detection is still used.
+            statement_cache_size=0,
         )
         await conn.execute(f"SET statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'")
         return conn
@@ -78,6 +87,9 @@ class PostgreSQLCollector(BaseCollector):
                     "version": version,
                     "server_version_num": version_num,
                     "pg_stat_statements": bool(pg_stat),
+                    "pooler_detected": resolve_uses_pooler(
+                        self.target.options, self.target.host, self.target.port
+                    ),
                 }
             finally:
                 await conn.close()

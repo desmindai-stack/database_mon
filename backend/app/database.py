@@ -22,7 +22,20 @@ def _async_url(url: str) -> str:
     return url
 
 
-engine = create_async_engine(_async_url(settings.database_url), echo=False)
+def _engine_kwargs_for(url: str) -> dict:
+    kwargs: dict = {"echo": False}
+    if url.startswith("postgresql+asyncpg://"):
+        # dbace's own metadata DB (Customers/Instances/Users/...) can itself be a
+        # Supabase/PgBouncer database in production — same prepared-statement incompatibility
+        # as the collector connections against monitored targets (see
+        # collectors/base.py::resolve_uses_pooler). SQLAlchemy's asyncpg dialect forwards
+        # connect_args straight through to asyncpg.connect().
+        kwargs["connect_args"] = {"statement_cache_size": 0}
+    return kwargs
+
+
+_database_url = _async_url(settings.database_url)
+engine = create_async_engine(_database_url, **_engine_kwargs_for(_database_url))
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

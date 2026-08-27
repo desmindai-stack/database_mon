@@ -15,6 +15,36 @@ class ConnectionTarget:
     options: dict[str, Any] | None = None
 
 
+# Hostname/port fragments strongly associated with a connection pooler sitting in front of the
+# real PostgreSQL server. Best-effort only — an explicit options["uses_pooler"] always wins (see
+# resolve_uses_pooler) since no heuristic can know about a self-hosted PgBouncer on a custom
+# host/port.
+_POOLER_HOST_HINTS = ("pooler", "pgbouncer")
+# Supabase's pooled endpoint always listens on 6543 (its direct connection is 5432); 6432 is
+# PgBouncer's own packaged default port, common in on-prem/enterprise deployments.
+_POOLER_PORT_HINTS = {6432, 6543}
+
+
+def detect_pooler(host: str, port: int) -> bool:
+    """Best-effort auto-detection of a connection pooler (PgBouncer, Supabase's pooler) in
+    front of a PostgreSQL target, from nothing but host/port — see resolve_uses_pooler for how
+    this combines with an explicit per-instance override."""
+    host_lower = (host or "").lower()
+    if any(hint in host_lower for hint in _POOLER_HOST_HINTS):
+        return True
+    return port in _POOLER_PORT_HINTS
+
+
+def resolve_uses_pooler(options: dict[str, Any] | None, host: str, port: int) -> bool:
+    """True when this target should be treated as sitting behind a transaction/statement-mode
+    pooler. `options["uses_pooler"]` (Instance/Node options JSON, set explicitly in the UI)
+    always wins when present; otherwise falls back to detect_pooler()'s host/port heuristic."""
+    explicit = (options or {}).get("uses_pooler")
+    if explicit is not None:
+        return bool(explicit)
+    return detect_pooler(host, port)
+
+
 def classify_connection_error(exc: Exception) -> str:
     """Turns a raw driver exception into a Turkish message that names the likely cause —
     wrong password, unreachable host, wrong/closed port, timeout — instead of leaking an
@@ -26,6 +56,12 @@ def classify_connection_error(exc: Exception) -> str:
     def wrap(prefix: str) -> str:
         return f"{prefix} ({text})"
 
+    if "prepared statement" in lower and ("already exists" in lower or "does not exist" in lower):
+        return wrap(
+            "Bağlantı bir havuzlayıcı (PgBouncer / Supabase pooler) üzerinden yapılıyor ve "
+            "prepared statement hatası alındı. Instance/Node ayarlarında 'Pooler kullanılıyor' "
+            "seçeneğini açık olarak işaretleyin."
+        )
     if any(
         k in lower
         for k in (

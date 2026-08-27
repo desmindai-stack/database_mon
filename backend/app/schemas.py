@@ -179,6 +179,10 @@ class WizardNodeInput(BaseModel):
     # postgresql only — "disable" (default) or "require"; asyncpg doesn't expose libpq's finer
     # verify-ca/verify-full modes without a manually-built SSLContext (see SORULAR.md).
     ssl_mode: str | None = None
+    # postgresql only — None (default) auto-detects a connection pooler (PgBouncer/Supabase
+    # pooler) from host/port, True/False overrides the detection explicitly. See
+    # collectors/base.py::resolve_uses_pooler.
+    uses_pooler: bool | None = None
     # sqlserver only — "sql" (default, username/password) or "windows" (integrated auth, only
     # meaningful if the collector process itself runs on a trusted domain-joined Windows host).
     auth_type: str | None = None

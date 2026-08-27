@@ -1738,6 +1738,59 @@ temizleniyor.
 sonradan eklediyseniz" senaryosu, ve `reset_admin_password.py` ile
 kurtarma adımları.
 
+## Faz 15 sonrası düzeltme — PgBouncer/Supabase pooler prepared statement hatası (DPA/Activity/Schema)
+
+**Teşhis:** DPA sayfasındaki Activity ve Schema Health panellerinde
+`prepared statement "__asyncpg_stmt_21__" already exists` hatası —
+asyncpg varsayılan olarak sorguları isimli bir prepared statement
+olarak sunucuya önbelleğe alıyor; PgBouncer (Supabase'in pooler'ı
+dahil) `transaction`/`statement` pool_mode'da aynı istemci
+bağlantısındaki ardışık sorguları farklı gerçek sunucu bağlantılarına
+yönlendirebiliyor, bu yüzden bir EXECUTE hiç görmediği bir bağlantıda
+çalıştırılmaya çalışılıyor.
+
+**Düzeltme — tüm asyncpg bağlantılarında `statement_cache_size=0`
+(koşulsuz, tek bir merkezi fabrika yoktu, tek tek bulunup düzeltildi):**
+`collectors/postgresql.py` (collector + activity + schema health, hepsi
+aynı `_connect()`'i paylaşıyor), `services/parameter_audit.py`,
+`services/index_advisor.py`, `services/explain_service.py`,
+`services/custom_alert_rules.py`. Ayrıca `index_advisor.py`'deki hypopg
+tahmini (`_hypopg_estimate`) artık `async with conn.transaction():` ile
+sarmalanıyor — hypopg'nin hipotetik indeksi sadece onu oluşturan
+backend oturumunda yaşıyor, açık bir transaction olmadan havuzlayıcı
+"CREATE" ile "EXPLAIN"i farklı backend'lere yönlendirebilirdi.
+
+**SQLAlchemy tarafı (`database.py`):** dbace'in kendi meta veri tabanı
+da (Supabase dahil) aynı soruna açık — `_engine_kwargs_for()` artık
+`postgresql+asyncpg://` URL'lerinde `connect_args={"statement_cache_size": 0}`
+ekliyor (SQLite/aiosqlite yoluna dokunmuyor).
+
+**Pooler tespiti (`collectors/base.py::detect_pooler`/`resolve_uses_pooler`):**
+Host adı `pooler`/`pgbouncer` içeriyorsa veya port `6432`/`6543` ise
+otomatik pooler kabul ediliyor; Instance/Node `options.uses_pooler`
+(sihirbaz + doğrudan instance formunda "Pooler kullanılıyor" seçimi:
+Otomatik/Evet/Hayır) her zaman otomatik tespiti geçersiz kılıyor.
+Bağlantı testi sonucuna (`ConnectionTestResult.details.pooler_detected`)
+da yansıtılıyor, UI'da "(pooler algılandı)" notu olarak görünüyor.
+
+**Hata mesajı:** `classify_connection_error` artık "prepared statement
+... already exists/does not exist" metnini tanıyıp anlaşılır Türkçe bir
+mesaja çeviriyor (ham asyncpg metni yerine); bu, activity/schema-health/
+parametre denetimi/EXPLAIN/index advisor uçlarının hepsinde kullanılıyor
+— `advise_indexes` ucunda daha önce hiç try/except yoktu, o da eklendi.
+
+**Test:** Yeni `tests/test_pgbouncer_compat.py` (13 test) — 5 bağlantı
+fabrikasının hepsinin `statement_cache_size=0` gönderdiğini (asyncpg.connect
+monkeypatch'lenip kwargs yakalanarak), SQLAlchemy motorunun asyncpg
+URL'lerinde `connect_args` eklediğini/SQLite'a dokunmadığını, pooler
+tespitinin host/port sezgisini ve açık override'ın kazandığını,
+`classify_connection_error`'ın prepared-statement mesajını çevirdiğini
+kanıtlıyor. Toplam 72 test yeşil.
+
+**README:** Yeni "PgBouncer / connection pooler arkasında çalışma"
+bölümü: hatanın sebebi, dbace'in koşulsuz çözümü, ve "Pooler kullanılıyor"
+seçeneğinin nasıl çalıştığı.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

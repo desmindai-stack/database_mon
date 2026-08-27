@@ -162,6 +162,9 @@ class PostgreSQLExplainService:
             user=self.target.username,
             password=self.target.password,
             timeout=15,
+            # See collectors/postgresql.py::_connect for why this is unconditional (PgBouncer
+            # transaction/statement pooling breaks asyncpg's named prepared statements).
+            statement_cache_size=0,
         )
 
     async def explain(self, query: str, *, analyze: bool = False) -> ExplainResult:

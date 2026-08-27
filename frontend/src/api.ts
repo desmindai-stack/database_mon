@@ -12,6 +12,10 @@ export interface ClusterServiceOptions {
   agent_token?: string | null;
   // postgresql only — see collectors/postgresql.py.
   ssl_mode?: string | null;
+  // postgresql only — undefined/null = auto-detect a connection pooler (PgBouncer/Supabase
+  // pooler) from host/port, true/false overrides it explicitly. See
+  // collectors/base.py::resolve_uses_pooler.
+  uses_pooler?: boolean | null;
   // sqlserver only — see collectors/sqlserver_mongodb.py::build_odbc_connection_string.
   auth_type?: string | null;
   // mongodb only.
@@ -467,6 +471,8 @@ export interface WizardNodeInput {
   role_hint: NodeRoleHint;
   // postgresql only.
   ssl_mode?: string | null;
+  // postgresql only — undefined/null = auto-detect.
+  uses_pooler?: boolean | null;
   // sqlserver only.
   auth_type?: string | null;
   // mongodb only.

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collectors.base import ConnectionTarget
+from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.collectors.registry import get_collector
 from app.database import get_db
 from app.domain.engines import DatabaseEngine
@@ -237,7 +237,7 @@ async def get_instance_activity(instance_id: int, db: AsyncSession = Depends(get
     try:
         data = await collector.collect_activity(limit=100)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Activity collection failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     return ActivityOut.model_validate(data)
 
 
@@ -300,7 +300,7 @@ async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)
     try:
         data = await collector.collect_schema_health(limit=50)
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Schema health collection failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     return SchemaHealthOut.model_validate(data)
 
 

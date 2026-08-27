@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.collectors.base import ConnectionTarget
+from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
 from app.models import Instance, SlowQuerySample
 from app.schemas import (
@@ -160,7 +160,7 @@ async def explain_query(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"EXPLAIN failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     out = ExplainOut.model_validate(PostgreSQLExplainService.to_payload(result))
     query_cache.set(cache_key, out, ttl_seconds=_EXPLAIN_CACHE_TTL_SECONDS)
     return out
@@ -192,7 +192,10 @@ async def advise_indexes(
         options=instance.options,
     )
     advisor = PostgreSQLIndexAdvisor(target)
-    recommendations = await advisor.advise(body.query)
+    try:
+        recommendations = await advisor.advise(body.query)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     out = [
         IndexAdviceOut(
             table_name=r.table_name,

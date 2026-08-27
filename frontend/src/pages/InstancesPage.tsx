@@ -134,7 +134,8 @@ export default function InstancesPage() {
     setTestResult(null);
     try {
       const result = await api.testConnection(form);
-      setTestResult(result.ok ? `OK — ${String(result.details.version ?? result.message)}` : result.message);
+      const poolerNote = result.details.pooler_detected ? " (pooler algılandı)" : "";
+      setTestResult(result.ok ? `OK — ${String(result.details.version ?? result.message)}${poolerNote}` : result.message);
     } catch (e) {
       setTestResult(String((e as Error).message));
     } finally {
@@ -324,6 +325,22 @@ export default function InstancesPage() {
               >
                 <option value="disable">Devre dışı</option>
                 <option value="require">Gerekli (require)</option>
+              </select>
+            </label>
+            <label>
+              Pooler kullanılıyor (PgBouncer / Supabase pooler)
+              <select
+                value={form.options?.uses_pooler === true ? "true" : form.options?.uses_pooler === false ? "false" : "auto"}
+                onChange={(e) =>
+                  updateOption(
+                    "uses_pooler",
+                    e.target.value === "auto" ? null : e.target.value === "true"
+                  )
+                }
+              >
+                <option value="auto">Otomatik algıla</option>
+                <option value="true">Evet</option>
+                <option value="false">Hayır</option>
               </select>
             </label>
           </>
