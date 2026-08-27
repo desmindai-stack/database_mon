@@ -10,6 +10,11 @@ from app.models import Application, Customer, DatabaseGroup, GroupHealthSnapshot
 
 _ENV_RANK = {"prod": 0, "preprod": 1, "test": 2, "dev": 3}
 _SEVERITY_RANK = {"critical": 0, "high": 1, "warning": 2, "medium": 3, "low": 4, "info": 5}
+_STATUS_RANK = {"critical": 0, "warning": 1, "unknown": 2, "healthy": 3}
+
+
+def _group_row_sort_key(row: dict[str, Any]) -> tuple[int, int]:
+    return (_STATUS_RANK.get(row["status"], 9), _ENV_RANK.get(row["environment"], 9))
 
 
 def _issue_sort_key(issue: dict[str, Any]) -> tuple[int, int]:
@@ -98,15 +103,42 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
     all_recommendations: list[dict[str, Any]] = []
     recs_by_group: dict[int, list[dict[str, Any]]] = {}
     checked_ats: list[datetime] = []
+    # One row per group regardless of status — top_issues only ever contains groups with an
+    # active problem, so it can't be the target of the dashboard's stat-card filter (Faz 15 İŞ
+    # 3): clicking "Sağlıklı"/"Bilinmiyor" needs somewhere to show something.
+    group_rows: list[dict[str, Any]] = []
 
     for group_id, ctx in context_by_group.items():
         snapshot = snapshot_by_group.get(group_id)
+        group = ctx["group"]
         if snapshot is None:
             health_counts["unknown"] += 1
+            group_rows.append(
+                {
+                    "group_id": group_id,
+                    "group": group.name,
+                    "customer": ctx["customer"].name,
+                    "application": ctx["application"].name,
+                    "environment": group.environment,
+                    "status": "unknown",
+                    "link_hint": f"/groups/{group_id}",
+                }
+            )
             continue
 
         checked_ats.append(snapshot.checked_at)
         health_counts[snapshot.overall] = health_counts.get(snapshot.overall, 0) + 1
+        group_rows.append(
+            {
+                "group_id": group_id,
+                "group": group.name,
+                "customer": ctx["customer"].name,
+                "application": ctx["application"].name,
+                "environment": group.environment,
+                "status": snapshot.overall,
+                "link_hint": f"/groups/{group_id}",
+            }
+        )
         if snapshot.report_json:
             all_issues.extend(_issues_from_group_health(ctx, snapshot.report_json))
 
@@ -120,6 +152,7 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
 
     all_issues.sort(key=_issue_sort_key)
     all_recommendations.sort(key=_rec_sort_key)
+    group_rows.sort(key=_group_row_sort_key)
 
     # Attach each issue's own group's best (highest-severity) recommendation, if it has one —
     # dbace has no causal link between a specific issue and a specific recommendation (they
@@ -144,5 +177,6 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
         "health": health_counts,
         "top_issues": all_issues[:10],
         "recommendations": all_recommendations[:10],
+        "groups": group_rows,
         "last_checked": min(checked_ats) if checked_ats else None,
     }

@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, AppConfig, DashboardSummary, formatRelativeTime, HealthResponse } from "../api";
+import { api, AppConfig, DashboardSummary, formatRelativeTime, GroupOverallStatus, HealthResponse } from "../api";
 import { useAuth } from "../auth";
+
+const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
+  critical: "Kritik",
+  warning: "Uyarı",
+  healthy: "Sağlıklı",
+  unknown: "Bilinmiyor",
+};
 
 // Description ("mesaj") and the concrete follow-up command ("aksiyon") render on separate
 // lines — the command is monospace and one click away from the clipboard, since it's meant to
@@ -50,6 +57,7 @@ export default function DashboardPage() {
   // The interval value itself is now only changeable from the admin screen (Faz 15 İŞ 2) —
   // still read here so the auto-refresh timer below uses whatever's currently configured.
   const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
+  const [statusFilter, setStatusFilter] = useState<GroupOverallStatus | null>(null);
 
   useEffect(() => {
     api.getHealth().then(setConfig).catch((err) => setError(String(err.message || err)));
@@ -89,20 +97,37 @@ export default function DashboardPage() {
     value,
     color,
     sub,
+    status,
   }: {
     label: string;
     value: string | number;
     color?: string;
     sub?: string;
-  }) => (
-    <div className="card stat-card" style={{ borderLeftColor: color || "var(--accent)" }}>
-      <div className="stat-meta">
-        <h3>{label}</h3>
-        {sub && <span>{sub}</span>}
+    status?: GroupOverallStatus;
+  }) => {
+    const content = (
+      <div
+        className={`card stat-card${status ? " clickable" : ""}${status && statusFilter === status ? " active" : ""}`}
+        style={{ borderLeftColor: color || "var(--accent)" }}
+      >
+        <div className="stat-meta">
+          <h3>{label}</h3>
+          {sub && <span>{sub}</span>}
+        </div>
+        <div className="value" style={{ color: color || "var(--text)" }}>{value}</div>
       </div>
-      <div className="value" style={{ color: color || "var(--text)" }}>{value}</div>
-    </div>
-  );
+    );
+    if (!status) return content;
+    return (
+      <button
+        type="button"
+        className="stat-card-btn"
+        onClick={() => setStatusFilter((prev) => (prev === status ? null : status))}
+      >
+        {content}
+      </button>
+    );
+  };
 
   return (
     <>
@@ -153,10 +178,29 @@ export default function DashboardPage() {
               value={groupSummary?.health.critical ?? 0}
               color="var(--danger)"
               sub="grup bazında"
+              status="critical"
             />
-            <StatCard label="Uyarı" value={groupSummary?.health.warning ?? 0} color="var(--warning)" sub="grup bazında" />
-            <StatCard label="Sağlıklı" value={groupSummary?.health.healthy ?? 0} color="var(--success)" sub="grup bazında" />
-            <StatCard label="Bilinmiyor" value={groupSummary?.health.unknown ?? 0} color="var(--muted)" sub="veri yok / düğümsüz" />
+            <StatCard
+              label="Uyarı"
+              value={groupSummary?.health.warning ?? 0}
+              color="var(--warning)"
+              sub="grup bazında"
+              status="warning"
+            />
+            <StatCard
+              label="Sağlıklı"
+              value={groupSummary?.health.healthy ?? 0}
+              color="var(--success)"
+              sub="grup bazında"
+              status="healthy"
+            />
+            <StatCard
+              label="Bilinmiyor"
+              value={groupSummary?.health.unknown ?? 0}
+              color="var(--muted)"
+              sub="veri yok / düğümsüz"
+              status="unknown"
+            />
             <StatCard
               label="Database groups"
               value={groupSummary?.totals.groups ?? 0}
@@ -167,6 +211,52 @@ export default function DashboardPage() {
               <StatCard label="Müşteriler" value={groupSummary?.totals.customers ?? 0} color="#a78bfa" />
             )}
           </div>
+
+          {statusFilter && (
+            <div className="card" style={{ marginBottom: "1.5rem" }}>
+              <div className="activity-toolbar">
+                <h3 className="chart-title" style={{ margin: 0 }}>
+                  {STATUS_LABELS_TR[statusFilter]} gruplar
+                  <span className="muted-note" style={{ marginLeft: "0.5rem" }}>
+                    ({(groupSummary?.groups ?? []).filter((g) => g.status === statusFilter).length})
+                  </span>
+                </h3>
+                <button type="button" className="btn btn-xs" onClick={() => setStatusFilter(null)}>
+                  Filtreyi temizle
+                </button>
+              </div>
+              {(groupSummary?.groups ?? []).filter((g) => g.status === statusFilter).length === 0 ? (
+                <p className="muted-note">Bu durumda grup yok.</p>
+              ) : (
+                <ul className="event-list">
+                  {(groupSummary?.groups ?? [])
+                    .filter((g) => g.status === statusFilter)
+                    .map((g) => (
+                      <li key={g.group_id}>
+                        <span
+                          className="event-dot"
+                          style={{
+                            background:
+                              g.status === "critical"
+                                ? "var(--danger)"
+                                : g.status === "warning"
+                                  ? "var(--warning)"
+                                  : g.status === "healthy"
+                                    ? "var(--success)"
+                                    : "var(--muted)",
+                          }}
+                        />
+                        <div>
+                          <Link to={g.link_hint}>{g.group}</Link>
+                          {!isPrivateGroups && <span className="muted-note"> · {g.customer} / {g.application}</span>}{" "}
+                          <span className={`env-badge ${g.environment}`}>{g.environment}</span>
+                        </div>
+                      </li>
+                    ))}
+                </ul>
+              )}
+            </div>
+          )}
 
           <div className="grid grid-2" style={{ marginBottom: "1.5rem" }}>
             <div className="card">

@@ -1386,6 +1386,37 @@ test yeşil.
 doluyor) → kullanıcı oluşturma (`must_change_password: true` ile) →
 liste iki kullanıcıyı da gösteriyor.
 
+## Faz 15 — İŞ 3: Dashboard sayaç kartları tıklanabilir
+
+**Bulgu:** `top_issues` (dashboard'un mevcut tek itemize listesi)
+sadece aktif sorunu olan grupları içeriyor — "Sağlıklı" veya
+"Bilinmiyor" kartına tıklayınca filtrelenecek hiçbir satır yoktu (o
+gruplar zaten `top_issues`'a hiç girmiyor). Bunun için backend'e
+`GroupStatusRowOut` eklendi: `collect_dashboard_summary()` artık HER
+grup için (durumu ne olursa olsun) bir satır üretiyor
+(`DashboardSummaryOut.groups`) — snapshot yoksa `status: "unknown"`
+olarak, varsa snapshot'ın `overall`'ı olarak.
+
+**Frontend:** `StatCard` artık `status` prop'u verilen dört sağlık
+kartı (Kritik/Uyarı/Sağlıklı/Bilinmiyor) için tıklanabilir — mevcut ama
+kullanılmayan `.stat-card.clickable`/`.stat-card.active`/`.stat-card-btn`
+CSS'i (kod tabanında zaten duruyordu, hiçbir yerde referans edilmiyordu)
+kullanıldı. Tıklamak `statusFilter` state'ini set ediyor (tekrar
+tıklamak temizliyor); aktif filtre kartın etrafında bir highlight
+(`.active` — `box-shadow`) olarak görünüyor. Filtre aktifken sayaç
+kartlarının hemen altında yeni bir "{Durum} gruplar" kartı açılıyor —
+`groupSummary.groups`'u `statusFilter`'a göre filtreleyip listeliyor
+(grup adı → `/groups/{id}` linki, müşteri/uygulama, ortam rozeti), boşsa
+"Bu durumda grup yok" gösteriyor; "Filtreyi temizle" butonu filtreyi
+sıfırlıyor. "Database groups"/"Müşteriler" toplam kartları `status`
+almıyor, tıklanabilir değil (bir "durum" temsil etmiyorlar).
+
+**Test:** Yeni `tests/test_dashboard_summary.py` — taze oluşturulan bir
+grubun (henüz hiç probe çalışmamış, `GroupHealthSnapshot` yok)
+`groups` listesinde `status: "unknown"` ile göründüğünü kanıtlıyor
+(önceki `top_issues`-only şekilde bu grup hiçbir yerde görünmezdi).
+Toplam 46 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

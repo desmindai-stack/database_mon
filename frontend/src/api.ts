@@ -736,11 +736,24 @@ export interface DashboardIssue {
   recommendation: DashboardRecommendation | null;
 }
 
+export type GroupOverallStatus = "critical" | "warning" | "healthy" | "unknown";
+
+export interface GroupStatusRow {
+  group_id: number;
+  group: string;
+  customer: string;
+  application: string;
+  environment: GroupEnvironment;
+  status: GroupOverallStatus;
+  link_hint: string;
+}
+
 export interface DashboardSummary {
   totals: DashboardTotals;
   health: DashboardHealth;
   top_issues: DashboardIssue[];
   recommendations: DashboardRecommendation[];
+  groups: GroupStatusRow[];
   last_checked: string | null;
 }
 

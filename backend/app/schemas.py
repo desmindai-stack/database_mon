@@ -651,11 +651,26 @@ class DashboardIssueOut(BaseModel):
     recommendation: DashboardRecommendationOut | None = None
 
 
+class GroupStatusRowOut(BaseModel):
+    """One row per database group regardless of status — unlike top_issues (only groups with
+    an active problem), this is what the dashboard's clickable stat-card filter (Faz 15 İŞ 3)
+    actually filters, since "healthy"/"unknown" groups have no issue to show otherwise."""
+
+    group_id: int
+    group: str
+    customer: str
+    application: str
+    environment: str
+    status: str
+    link_hint: str
+
+
 class DashboardSummaryOut(BaseModel):
     totals: DashboardTotalsOut
     health: DashboardHealthOut
     top_issues: list[DashboardIssueOut]
     recommendations: list[DashboardRecommendationOut]
+    groups: list[GroupStatusRowOut] = []
     last_checked: datetime | None = None
 
 
