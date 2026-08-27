@@ -3,6 +3,19 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 15 sonrası düzeltme — reset_admin_password.py must_change_password'ü otomatik temizliyor
+
+Script'i çalıştırırken `must_change_password` bilerek `False`'a
+çekiliyor (yeni şifreyi "geçici" değil "gerçek" şifre gibi
+davranıyor). Gerekçe: bu script'i çalıştırabilen kişinin zaten
+sunucuya/veritabanına doğrudan erişimi var — web arayüzünde ayrıca bir
+"ilk girişte şifre değiştir" adımına zorlamanın güvenlik faydası yok,
+sadece ekstra bir adım. Alternatif (her zaman `must_change_password=True`
+bırakmak, "sıfırlanan şifre geçicidir" mantığıyla) da makul olurdu;
+tercih ettiğim yön CLI'yi mümkün olduğunca sürtünmesiz bir kurtarma
+yolu yapmaktı — `--activate` bayrağıyla birlikte, tek komutla hem
+kilidi açıp hem hemen kullanılabilir bir şifre vermek.
+
 ## Faz 15 — İŞ 8: "Olası nedenler" sadece elde olan veriden — wait-event/lock iddiası yok
 
 Görev sorgu satırında "olası nedenler listesi" istiyordu. dbace'in

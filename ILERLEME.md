@@ -1669,6 +1669,75 @@ test yeşil kaldı; Vite dev sunucusu component'i hatasız transform etti
 mevcut). Tıklama/sıçrama-işaretleme davranışının görsel doğrulaması
 tarayıcıda yapılmadı (bu ortamda tarayıcı otomasyonu yok).
 
+## Faz 15 sonrası düzeltme — admin login kilitlenmesi (ADMIN_PASSWORD geç eklendiğinde)
+
+**Teşhis:** `ensure_default_admin()` sadece `users` tablosu TAMAMEN
+BOŞKEN çalışıyordu (`if existing: return`). Senaryo: backend
+`ADMIN_PASSWORD` `.env`'de tanımlı OLMADAN bir kere açılmış → admin
+rastgele bir şifreyle oluşturulmuş (ve bir kez loglanmış, sonra
+kaybedilmiş) → kullanıcı sonradan `.env`'e `ADMIN_PASSWORD` eklemiş →
+her sonraki açılışta fonksiyon "tablo boş değil" deyip hiçbir şey
+yapmadan dönüyordu — `.env`'deki şifre HİÇBİR ZAMAN uygulanmıyordu.
+`users` tablosunda `('admin','admin',1)` benzeri bir kayıt varken
+"Kullanıcı adı veya şifre hatalı" hatası bu yüzden oluşuyordu.
+
+**Düzeltme (`services/bootstrap.py::ensure_default_admin`):** Artık
+HER açılışta çalışıyor, tablo boş olma şartı kaldırıldı:
+- `ADMIN_USERNAME` ile eşleşen kullanıcı yoksa → eskisi gibi oluştur.
+- Kullanıcı var ve `must_change_password=True` (yani hiç giriş
+  yapmamış/kendi şifresini hiç belirlememiş) ve `.env`'de
+  `ADMIN_PASSWORD` tanımlıysa → şifre `.env`'deki değere senkronize
+  edilir. Bu, "ADMIN_PASSWORD'u sonradan ekledim" senaryosunu
+  kurtarıyor.
+- Kullanıcı `must_change_password=False` (kendi şifresini gerçekten
+  değiştirmiş) ise → `.env` bir daha ASLA dokunmuyor, kullanıcının
+  kendi seçtiği şifre her zaman kazanıyor.
+- Kullanıcı `must_change_password=True` ama `.env`'de `ADMIN_PASSWORD`
+  de yoksa → senkronize edilecek bir şey yok, mevcut (muhtemelen
+  rastgele üretilmiş) şifreye dokunulmuyor, çökmüyor.
+- Her dal açıkça logluyor: `"Admin oluşturuldu: ..."` /
+  `"Admin şifresi .env'den güncellendi: ..."` /
+  `"Admin mevcut, şifre değiştirilmiş, dokunulmadı: ..."` / (4.
+  durum için) `"Admin mevcut, ilk şifresini henüz değiştirmemiş ve
+  .env'de ADMIN_PASSWORD tanımlı değil..."`.
+
+**Yeni CLI script — `backend/scripts/reset_admin_password.py`:**
+Kullanıcı adı + yeni şifre alıp hash'leyip güncelliyor;
+`must_change_password`'ü otomatik `False`'a çekiyor (script'i
+çalıştırabilen zaten sunucuya doğrudan erişimli); `--activate` ile
+pasifleştirilmiş bir kullanıcıyı da aynı anda aktifleştirebiliyor —
+"kullanıcı kilitli kalırsa" durumunun çıkış yolu. Kullanıcı adı
+bulunamazsa kayıtlı kullanıcı adlarını listeleyip anlamlı bir hata ile
+çıkıyor (sessizce yeni bir kullanıcı OLUŞTURMUYOR — bu, bir yazım
+hatasıyla kazara ikinci bir admin açmayı önlüyor).
+
+**Test:** Yeni `tests/test_admin_bootstrap.py` (5 test, `monkeypatch`
+ile `settings.admin_username`/`admin_password` kontrol edilerek):
+ADMIN_PASSWORD'suz ilk açılışta rastgele şifre üretiliyor;
+ADMIN_PASSWORD'lu ilk açılışta o şifre kullanılıyor; **asıl regresyon
+senaryosu** — ADMIN_PASSWORD'suz ilk açılıştan sonra `.env`'e
+sonradan eklenen ADMIN_PASSWORD bir sonraki açılışta gerçekten
+uygulanıyor; kullanıcı kendi şifresini değiştirdikten sonra `.env`
+bir daha asla üzerine yazmıyor; ADMIN_PASSWORD hiç tanımlanmamışsa
+mevcut şifreye dokunulmuyor ve çökmüyor. Toplam 59 test yeşil.
+
+**Canlı doğrulama:** Gerçek senaryo elle simüle edildi (ayrı ayrı
+Python çağrılarıyla, gerçek SQLite dosyasına karşı): (1) ADMIN_PASSWORD
+olmadan ilk açılış → rastgele şifre üretildi ve loglandı; (2)
+ADMIN_PASSWORD `.env`'e eklenip yeniden açılış → şifre gerçekten o
+değere güncellendi, login artık çalışıyor (`verify_password` ile
+doğrulandı); (3) kullanıcının `must_change_password`'ü elle `False`'a
+çekilip üçüncü açılış → farklı bir ADMIN_PASSWORD verilmesine rağmen
+şifre DEĞİŞMEDİ (self-chosen password kazandı); (4)
+`reset_admin_password.py` tam akışı — boş tabloda anlamlı hata,
+başarılı sıfırlamada yeni şifre çalışıyor ve `must_change_password`
+temizleniyor.
+
+**README:** Yeni "İlk kurulum — kimlik doğrulama" bölümü: zorunlu/
+önerilen `.env` değişkenleri tablosu, ilk giriş adımları, "ADMIN_PASSWORD'u
+sonradan eklediyseniz" senaryosu, ve `reset_admin_password.py` ile
+kurtarma adımları.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

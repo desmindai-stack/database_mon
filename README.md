@@ -84,6 +84,66 @@ In the UI go to **Instances → Add instance**, or POST to `/api/instances`:
 }
 ```
 
+## İlk kurulum — kimlik doğrulama
+
+`/api/health` ve `/api/auth/login` (+`/refresh`) dışında her API ucu bir
+oturum (JWT) gerektirir — dashboard'a girmeden önce bir admin hesabıyla
+giriş yapmanız gerekir.
+
+### Zorunlu / önerilen `.env` değişkenleri
+
+| Değişken | Zorunlu mu | Açıklama |
+|---|---|---|
+| `JWT_SECRET` | Prod'da zorunlu (dev'de bir varsayılanı var, kullanılırsa her açılışta uyarı loglanır) | Token imzalama anahtarı — uzun, rastgele bir değer olmalı |
+| `ADMIN_USERNAME` | Hayır (varsayılan `admin`) | İlk açılışta oluşturulacak admin kullanıcının adı |
+| `ADMIN_PASSWORD` | Hayır ama önerilir | Belirtilmezse rastgele bir şifre üretilip **sadece bir kez** loglanır — kaçırırsanız aşağıdaki "şifre unutuldu" adımına bakın |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Hayır (varsayılan 60) | Access token ömrü |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | Hayır (varsayılan 7) | Refresh token ömrü |
+
+Örnek değerler için `.env.example`'a bakın.
+
+### İlk giriş
+
+1. Backend'i `ADMIN_USERNAME`/`ADMIN_PASSWORD` `.env`'de tanımlıyken ilk kez
+   başlatın. Açılışta `users` tablosunda bu kullanıcı adıyla kayıt yoksa bir
+   admin oluşturulur (log: `Admin oluşturuldu: <kullanıcı adı>`).
+   `ADMIN_PASSWORD` tanımlı değilse rastgele bir şifre üretilip **bir kez**
+   loglanır (`ADMIN_PASSWORD not set — generated initial admin credentials: ...`)
+   — bu satırı kaydedin, bir daha gösterilmez.
+2. Dashboard'ı açıp bu kullanıcı adı/şifreyle giriş yapın.
+3. İlk girişte şifre değiştirme zorunludur — sistem sizi otomatik olarak
+   şifre değiştirme ekranına yönlendirir.
+
+### `.env`'e `ADMIN_PASSWORD`'u sonradan eklediyseniz
+
+Admin kullanıcısı `ADMIN_PASSWORD` `.env`'e eklenmeden ÖNCE bir açılışta
+oluşturulmuşsa (rastgele şifre üretilip loglanmış, kaybedilmiş olabilir),
+şifreyi `.env`'e eklemek tek başına yeterlidir: kullanıcı henüz ilk şifre
+değişikliğini yapmamışsa, bir sonraki backend açılışında şifre otomatik
+olarak `.env`'deki değere senkronize edilir (log:
+`Admin şifresi .env'den güncellendi: <kullanıcı adı>`). Kullanıcı zaten
+kendi şifresini belirlemişse, `.env`'deki değer bir daha ASLA üzerine
+yazmaz — bu durumda aşağıdaki CLI script'ini kullanın.
+
+### Şifre unutulursa / hesap kilitlenirse
+
+Veritabanına/sunucuya doğrudan erişiminiz varsa, `backend/` dizininden:
+
+```bash
+python scripts/reset_admin_password.py <kullanici_adi> <yeni_sifre>
+```
+
+Kullanıcı pasifleştirilmişse (`is_active=false`) aynı anda aktifleştirmek için:
+
+```bash
+python scripts/reset_admin_password.py <kullanici_adi> <yeni_sifre> --activate
+```
+
+Script şifreyi hemen ayarlar ve "ilk girişte şifre değiştir" zorunluluğunu
+kaldırır — script'i çalıştırabilen kişinin zaten sunucuya doğrudan erişimi
+olduğundan, web arayüzünde ayrıca bir şifre-değiştir adımına zorlamanın
+güvenlik faydası yoktur.
+
 ## Docker (all services)
 
 ```bash
