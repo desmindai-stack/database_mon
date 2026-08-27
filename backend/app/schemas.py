@@ -635,9 +635,17 @@ class DashboardRecommendationOut(BaseModel):
     source: str
     group: str
     message: str
+    # Numbered walk-through shown when the card's "çözüm önerisi" section is expanded (Faz 15
+    # İŞ 4) — falls back to an empty list for any recommendation generated before this existed.
+    steps: list[str] = []
     # Separate, single-line, copy-pasteable follow-up command — not every recommendation has
     # one (e.g. prose-only performance_insights findings), so this stays optional.
     action: str | None = None
+    customer: str = ""
+    application: str = ""
+    environment: str = ""
+    link_hint: str = ""
+    checked_at: datetime | None = None
 
 
 class DashboardIssueOut(BaseModel):
@@ -645,9 +653,11 @@ class DashboardIssueOut(BaseModel):
     customer: str
     application: str
     group: str
+    node: str | None = None
     environment: str
     message: str
     link_hint: str
+    checked_at: datetime | None = None
     recommendation: DashboardRecommendationOut | None = None
 
 

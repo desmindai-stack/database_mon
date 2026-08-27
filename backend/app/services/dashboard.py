@@ -38,44 +38,46 @@ async def _group_context(session: AsyncSession) -> dict[int, dict[str, Any]]:
     return {g.id: {"group": g, "application": a, "customer": c} for g, a, c in rows}
 
 
-def _issue(ctx: dict[str, Any], severity: str, message: str) -> dict[str, Any]:
+def _issue(ctx: dict[str, Any], severity: str, message: str, checked_at: datetime | None, node: str | None = None) -> dict[str, Any]:
     group = ctx["group"]
     return {
         "severity": severity,
         "customer": ctx["customer"].name,
         "application": ctx["application"].name,
         "group": group.name,
+        "node": node,
         "environment": group.environment,
         "message": message,
         "link_hint": f"/groups/{group.id}",
+        "checked_at": checked_at,
         "_group_id": group.id,
     }
 
 
-def _issues_from_group_health(ctx: dict[str, Any], report: dict[str, Any]) -> list[dict[str, Any]]:
+def _issues_from_group_health(ctx: dict[str, Any], report: dict[str, Any], checked_at: datetime) -> list[dict[str, Any]]:
     """One issue per concrete problem — but a cluster's down nodes are reported as a single
     grup-level issue (not one row per node) so a multi-node outage doesn't flood top_issues."""
     issues: list[dict[str, Any]] = []
 
     if report.get("split_brain"):
         nodes_str = ", ".join(report.get("split_brain_nodes") or [])
-        issues.append(_issue(ctx, "critical", f"Split-brain şüphesi: VIP'i tutan düğümler — {nodes_str}"))
+        issues.append(_issue(ctx, "critical", f"Split-brain şüphesi: VIP'i tutan düğümler — {nodes_str}", checked_at, node=nodes_str))
 
     etcd = report.get("etcd_quorum") or {}
     if etcd.get("total") and not etcd.get("has_quorum", True):
-        issues.append(_issue(ctx, "critical", f"etcd quorum kaybedildi ({etcd.get('up')}/{etcd.get('total')})"))
+        issues.append(_issue(ctx, "critical", f"etcd quorum kaybedildi ({etcd.get('up')}/{etcd.get('total')})", checked_at))
 
     down_nodes = report.get("down_nodes") or []
     if down_nodes:
         names = ", ".join(f"{d['node_name']} ({d['site']})" for d in down_nodes)
-        issues.append(_issue(ctx, "critical", f"{len(down_nodes)} düğüm erişilemez: {names}"))
+        issues.append(_issue(ctx, "critical", f"{len(down_nodes)} düğüm erişilemez: {names}", checked_at, node=names))
 
     cluster = report.get("cluster")
     if cluster is not None and not cluster.get("has_leader", True):
-        issues.append(_issue(ctx, "critical", "Cluster lider yok (no leader)"))
+        issues.append(_issue(ctx, "critical", "Cluster lider yok (no leader)", checked_at))
 
     if report.get("overall") == "warning" and not issues:
-        issues.append(_issue(ctx, "warning", "Servis durumu warning (bazı servisler doğrulanamadı)"))
+        issues.append(_issue(ctx, "warning", "Servis durumu warning (bazı servisler doğrulanamadı)", checked_at))
 
     return issues
 
@@ -126,7 +128,12 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
             )
             continue
 
-        checked_ats.append(snapshot.checked_at)
+        # SQLite doesn't actually persist tzinfo — a row re-queried fresh comes back naive, but
+        # one still cached in this session's identity map (e.g. right after this same session
+        # wrote it) keeps whatever tzinfo Python set. min() can't compare the two, so normalize
+        # to naive here; every value is UTC-instant either way, only the label differs.
+        checked_at = snapshot.checked_at
+        checked_ats.append(checked_at.replace(tzinfo=None) if checked_at.tzinfo else checked_at)
         health_counts[snapshot.overall] = health_counts.get(snapshot.overall, 0) + 1
         group_rows.append(
             {
@@ -140,11 +147,20 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
             }
         )
         if snapshot.report_json:
-            all_issues.extend(_issues_from_group_health(ctx, snapshot.report_json))
+            all_issues.extend(_issues_from_group_health(ctx, snapshot.report_json, snapshot.checked_at))
 
         group_recs = []
         for rec in snapshot.recommendations_json or []:
-            enriched = {**rec, "_environment": ctx["group"].environment}
+            enriched = {
+                **rec,
+                "_environment": ctx["group"].environment,
+                "customer": ctx["customer"].name,
+                "application": ctx["application"].name,
+                "environment": ctx["group"].environment,
+                "link_hint": f"/groups/{group_id}",
+                "checked_at": snapshot.checked_at,
+                "steps": rec.get("steps") or [],
+            }
             all_recommendations.append(enriched)
             group_recs.append(enriched)
         group_recs.sort(key=_rec_sort_key)

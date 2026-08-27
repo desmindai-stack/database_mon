@@ -1417,6 +1417,75 @@ grubun (henüz hiç probe çalışmamış, `GroupHealthSnapshot` yok)
 (önceki `top_issues`-only şekilde bu grup hiçbir yerde görünmezdi).
 Toplam 46 test yeşil.
 
+## Faz 15 — İŞ 4: Dashboard bilgi düzeni
+
+"En kritik sorunlar" ve "Öneriler" iki ayrı, birbirine gevşekçe bağlı
+liste kartıydı (bir sorunun altında rastgele "grubun en iyi önerisi"
+gösteriliyordu, öneriler listesi ayrıca tekrar aynı bilgiyi içeriyordu).
+Tek bir "Sorunlar ve öneriler" kartına, kart-başına-satır düzenine
+indirgendi.
+
+**Backend zenginleştirme (İŞ 4'ün gerektirdiği):**
+- `DashboardIssueOut`'a `node: str | None` (down_nodes/split-brain
+  olaylarında etkilenen düğüm adları) ve `checked_at: datetime | None`
+  (o grubun health snapshot'ının alındığı an) eklendi.
+- `DashboardRecommendationOut`'a `steps: list[str]` (katlanabilir
+  bölüm açıldığında numaralı liste olarak gösterilecek adımlar) ve
+  `customer`/`application`/`environment`/`link_hint`/`checked_at`
+  eklendi — önceden bir öneri sadece `group` (ad, string) taşıyordu,
+  bağımsız bir öneri kartı olarak (bir "issue"ya iliştirilmeden)
+  gösterilebilmesi için tam kaynak bilgisine ihtiyaç vardı.
+  `services/dashboard_snapshot.py`'nin üç öneri üreticisi
+  (`_connectivity_recommendations`, `_parameter_recommendations`,
+  `_instance_recommendations`) artık gerçek, birden fazla adımlı
+  `steps` listeleri dolduruyor (tek cümlelik `message`'ı olduğu gibi
+  bırakıp yanına ekliyor, uydurma adım eklemiyor — performance_insights
+  kaynaklı öneriler hâlâ tek adımlı, çünkü altta yatan veri (bir
+  `PerformanceInsight`'ın `recommendation`'ı) zaten tek bir düz-yazı
+  cümlesi).
+- Bunu yazarken gerçek bir bug bulundu ve yeni test onu yakaladı:
+  `min(checked_ats)` bazen "can't compare offset-naive and
+  offset-aware datetimes" ile patlıyordu — SQLite tzinfo'yu kalıcı
+  olarak saklamıyor, aynı session'da yeni yazılmış bir satırın Python
+  nesnesi (identity map'te, aware) ile başka bir session'da yazılıp bu
+  session'da taze sorgulanan satırlar (naive) karışınca `min()`
+  karşılaştıramıyordu. `collect_dashboard_summary`'de `checked_ats`
+  listesine eklerken artık `tzinfo` varsa çıkarılıyor (hepsi zaten UTC
+  anı, sadece etiket farkı).
+
+**Frontend:** `DashboardPage.tsx`'e `buildProblemCards()` —
+`top_issues` + `recommendations`'ı TEK bir kart listesine birleştirip
+tekrarları eliyor (bir issue'ya iliştirilmiş öneri, ayrıca kendi
+kartı olarak tekrar gösterilmiyor — `group|message` anahtarıyla
+dedup). Her kart: kapalıyken sadece severity rozeti + başlık (üstte,
+tıklanabilir toggle) + kaynak satırı (grup linki, müşteri/uygulama,
+düğüm varsa, ortam rozeti, "X dakika önce") görünüyor; açılınca
+katlanabilir gövdede numaralı adım listesi (`<ol>`) ve varsa komut
+(`CopyableAction` ile ayrı satırda, kopyala butonlu) çıkıyor. Adımı/
+komutu olmayan kartların toggle'ı devre dışı (`·` işareti, katlanacak
+bir şey yok).
+
+**Test:** Yeni `tests/test_dashboard_issue_enrichment.py` — canlı ağ
+prob'u gerektirmeden (sahte host'lara bağlanmayı beklemek yerine)
+doğrudan bir `GroupHealthSnapshot` satırı yazıp `collect_dashboard_
+summary()`'yi çağırarak `checked_at`/`node`/`steps`/kaynak alanlarının
+hem issue hem recommendation tarafında doğru dolduğunu kanıtlıyor. Bu
+testi yazarken bir de test-izolasyonu sorunu bulundu: `top_issues`/
+`recommendations` `[:10]`'a kırpılıyor, ve `tests/conftest.py`'nin
+SQLite dosyası pytest çalıştırmaları arasında KALICI (temizlenmiyor) —
+testi tekrar tekrar çalıştırırken (debug sırasında) biriken "critical"
+snapshot'lar top 10'u doldurup testin kendi satırını dışarı itti.
+Test artık kendi oluşturduğu `GroupHealthSnapshot`'ı sonunda siliyor;
+kalıcı dosyadaki eski birikim de bir kere temizlendi
+(`data/dbace_pytest.db` silinip yeniden oluşturulmaya bırakıldı —
+gerçek `data/dbace.db` değil, sadece test fixture'ı). Toplam 47 test
+yeşil, art arda çalıştırıldı, kararlı.
+
+**Doğrulama notu:** Kart açma/kapama ve "Kopyala" butonunun görsel
+davranışı tarayıcıda tıklanarak denenmedi (bu ortamda tarayıcı
+otomasyonu yok) — Vite dev sunucusunun component'i hatasız transform
+ettiği ve `tsc -b && vite build`'in geçtiği doğrulandı.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

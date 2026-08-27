@@ -42,6 +42,11 @@ def _connectivity_recommendations(group: DatabaseGroup, report: dict[str, Any] |
             "source": "connectivity",
             "group": group.name,
             "message": f"{len(down_nodes)} düğüme erişilemiyor ({names}): servis durumunu ve ağ erişimini kontrol edin.",
+            "steps": [
+                "Sunucunun ayakta ve ağdan erişilebilir olduğunu doğrulayın (ping / ssh).",
+                f"{group.engine} servisinin durumunu kontrol edin (systemctl status / sc query).",
+                "Servis loglarını inceleyin (aşağıdaki komut).",
+            ],
             "action": hint,
         }
     ]
@@ -74,6 +79,10 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
                 "source": "parameter_audit",
                 "group": group.name,
                 "message": f"{finding['name']}: {finding['recommendation']}",
+                "steps": [
+                    finding["recommendation"],
+                    "Mevcut değeri canlı olarak doğrulayın (aşağıdaki komut).",
+                ],
                 # A safe, real next step (check the live value) — the exact target value depends
                 # on server sizing dbace doesn't collect, so we don't fabricate an ALTER SYSTEM.
                 "action": f"SHOW {finding['name']};",
@@ -135,6 +144,7 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                         # here) — insight.action is a UI tab hint ("queries"/"metrics"), not a
                         # command, so it's deliberately not reused as the action field.
                         "message": f"{snap['name']}: {insight.title} — {insight.recommendation}",
+                        "steps": [f"{snap['name']} instance'ında: {insight.recommendation}"],
                     }
                 )
 

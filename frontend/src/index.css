@@ -1608,10 +1608,90 @@ td code,
 }
 
 .insight-severity.critical { background: var(--danger); }
-.insight-severity.high { background: var(--warning); }
+.insight-severity.high,
+.insight-severity.warning { background: var(--warning); }
 .insight-severity.medium { background: #f59e0b; }
 .insight-severity.low,
 .insight-severity.info { background: var(--success); }
+
+.problem-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.problem-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.problem-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.75rem 0.9rem;
+}
+
+.problem-card-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.problem-card-toggle:disabled {
+  cursor: default;
+}
+
+.problem-card-chevron {
+  color: var(--muted);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}
+
+.problem-card-title {
+  font-size: 0.9rem;
+}
+
+.problem-card-source {
+  font-size: 0.8rem;
+  padding-left: 1.9rem;
+}
+
+.problem-card-source .env-badge {
+  margin-left: 0.4rem;
+}
+
+.problem-card-body {
+  padding: 0 0.9rem 0.9rem 2.9rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+}
+
+.problem-card-body h4 {
+  margin: 0 0 0.4rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.problem-card-body ol {
+  margin: 0 0 0.5rem;
+  padding-left: 1.2rem;
+  font-size: 0.85rem;
+}
+
+.problem-card-body li {
+  margin-bottom: 0.3rem;
+}
 
 .insight-recommendation {
   margin-top: 0.4rem;

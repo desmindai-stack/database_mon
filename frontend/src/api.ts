@@ -722,7 +722,13 @@ export interface DashboardRecommendation {
   source: string;
   group: string;
   message: string;
+  steps: string[];
   action: string | null;
+  customer: string;
+  application: string;
+  environment: string;
+  link_hint: string;
+  checked_at: string | null;
 }
 
 export interface DashboardIssue {
@@ -730,9 +736,11 @@ export interface DashboardIssue {
   customer: string;
   application: string;
   group: string;
+  node: string | null;
   environment: GroupEnvironment;
   message: string;
   link_hint: string;
+  checked_at: string | null;
   recommendation: DashboardRecommendation | null;
 }
 

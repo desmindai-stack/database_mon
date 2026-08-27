@@ -35,14 +35,70 @@ function CopyableAction({ command }: { command: string }) {
   );
 }
 
-const SEVERITY_COLOR: Record<string, string> = {
-  critical: "var(--danger)",
-  high: "var(--danger)",
-  warning: "var(--warning)",
-  medium: "var(--warning)",
-  low: "var(--success)",
-  info: "var(--success)",
-};
+interface ProblemCard {
+  key: string;
+  severity: string;
+  title: string;
+  customer: string;
+  application: string;
+  group: string;
+  node: string | null;
+  environment: string;
+  linkHint: string;
+  checkedAt: string | null;
+  steps: string[];
+  action: string | null;
+}
+
+// Merges top_issues (a concrete problem, may carry the group's best-matching recommendation)
+// and recommendations (may exist for a group with no active "issue" — e.g. a parameter_audit
+// finding on an otherwise healthy group) into one deduplicated, card-per-row list (Faz 15 İŞ
+// 4) — a recommendation already attached to an issue isn't repeated as its own card.
+function buildProblemCards(summary: DashboardSummary): ProblemCard[] {
+  const seen = new Set<string>();
+  const cards: ProblemCard[] = [];
+
+  summary.top_issues.forEach((issue, idx) => {
+    const rec = issue.recommendation;
+    if (rec) seen.add(`${rec.group}|${rec.message}`);
+    cards.push({
+      key: `issue-${idx}`,
+      severity: issue.severity,
+      title: issue.message,
+      customer: issue.customer,
+      application: issue.application,
+      group: issue.group,
+      node: issue.node,
+      environment: issue.environment,
+      linkHint: issue.link_hint,
+      checkedAt: issue.checked_at,
+      steps: rec?.steps ?? [],
+      action: rec?.action ?? null,
+    });
+  });
+
+  summary.recommendations.forEach((rec, idx) => {
+    const key = `${rec.group}|${rec.message}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    cards.push({
+      key: `rec-${idx}`,
+      severity: rec.severity,
+      title: rec.message,
+      customer: rec.customer,
+      application: rec.application,
+      group: rec.group,
+      node: null,
+      environment: rec.environment,
+      linkHint: rec.link_hint,
+      checkedAt: rec.checked_at,
+      steps: rec.steps,
+      action: rec.action,
+    });
+  });
+
+  return cards;
+}
 
 export default function DashboardPage() {
   const canWrite = useAuth().user?.role === "admin";
@@ -58,6 +114,7 @@ export default function DashboardPage() {
   // still read here so the auto-refresh timer below uses whatever's currently configured.
   const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<GroupOverallStatus | null>(null);
+  const [openCards, setOpenCards] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api.getHealth().then(setConfig).catch((err) => setError(String(err.message || err)));
@@ -91,6 +148,16 @@ export default function DashboardPage() {
 
   const isPrivate = config?.deployment_mode === "private";
   const isPrivateGroups = appConfig?.deployment_mode === "private";
+  const problemCards = groupSummary ? buildProblemCards(groupSummary) : [];
+
+  const toggleCard = (key: string) => {
+    setOpenCards((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   const StatCard = ({
     label,
@@ -258,65 +325,58 @@ export default function DashboardPage() {
             </div>
           )}
 
-          <div className="grid grid-2" style={{ marginBottom: "1.5rem" }}>
-            <div className="card">
-              <h3 className="chart-title">En kritik sorunlar</h3>
-              {groupSummaryLoading ? (
-                <p className="muted-note">Yükleniyor…</p>
-              ) : !groupSummary || groupSummary.top_issues.length === 0 ? (
-                <p className="muted-note">Şu anda açık bir sorun yok.</p>
-              ) : (
-                <ul className="event-list">
-                  {groupSummary.top_issues.map((issue, idx) => (
-                    <li key={idx}>
-                      <span
-                        className="event-dot"
-                        style={{ background: SEVERITY_COLOR[issue.severity] || "var(--muted)" }}
-                      />
-                      <div>
-                        <Link to={issue.link_hint}>{issue.group}</Link>
-                        {!isPrivateGroups && <span className="muted-note"> · {issue.customer}</span>}{" "}
-                        <span className={`env-badge ${issue.environment}`}>{issue.environment}</span>
-                        <div className="muted-note">{issue.message}</div>
-                        {issue.recommendation && (
-                          <div className="insight-recommendation">
-                            <div>
-                              <span className={`insight-severity ${issue.recommendation.severity}`}>
-                                öneri
-                              </span>{" "}
-                              {issue.recommendation.message}
-                            </div>
-                            {issue.recommendation.action && <CopyableAction command={issue.recommendation.action} />}
-                          </div>
-                        )}
+          <div className="card" style={{ marginBottom: "1.5rem" }}>
+            <h3 className="chart-title">Sorunlar ve öneriler</h3>
+            {groupSummaryLoading ? (
+              <p className="muted-note">Yükleniyor…</p>
+            ) : problemCards.length === 0 ? (
+              <p className="muted-note">Şu anda açık bir sorun veya öneri yok.</p>
+            ) : (
+              <div className="problem-card-list">
+                {problemCards.map((card) => {
+                  const isOpen = openCards.has(card.key);
+                  const hasBody = card.steps.length > 0 || !!card.action;
+                  return (
+                    <div className="problem-card" key={card.key}>
+                      <div className="problem-card-head">
+                        <button
+                          type="button"
+                          className="problem-card-toggle"
+                          disabled={!hasBody}
+                          onClick={() => hasBody && toggleCard(card.key)}
+                        >
+                          <span className="problem-card-chevron">{hasBody ? (isOpen ? "▾" : "▸") : "·"}</span>
+                          <span className={`insight-severity ${card.severity}`}>{card.severity}</span>
+                          <span className="problem-card-title">{card.title}</span>
+                        </button>
+                        <div className="problem-card-source muted-note">
+                          <Link to={card.linkHint}>{card.group}</Link>
+                          {!isPrivateGroups && card.customer && (
+                            <span> · {card.customer} / {card.application}</span>
+                          )}
+                          {card.node && <span> · düğüm: {card.node}</span>}
+                          {card.environment && <span className={`env-badge ${card.environment}`}>{card.environment}</span>}
+                          {card.checkedAt && <span> · {formatRelativeTime(card.checkedAt)}</span>}
+                        </div>
                       </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            <div className="card">
-              <h3 className="chart-title">Öneriler</h3>
-              {groupSummaryLoading ? (
-                <p className="muted-note">Yükleniyor…</p>
-              ) : !groupSummary || groupSummary.recommendations.length === 0 ? (
-                <p className="muted-note">Şu anda öneri yok.</p>
-              ) : (
-                <ul className="event-list">
-                  {groupSummary.recommendations.map((rec, idx) => (
-                    <li key={idx}>
-                      <span className={`insight-severity ${rec.severity}`}>{rec.severity}</span>
-                      <div>
-                        <strong>{rec.group}</strong> <span className="muted-note">({rec.source})</span>
-                        <div className="muted-note">{rec.message}</div>
-                        {rec.action && <CopyableAction command={rec.action} />}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+                      {isOpen && hasBody && (
+                        <div className="problem-card-body">
+                          <h4>Çözüm önerisi</h4>
+                          {card.steps.length > 0 && (
+                            <ol>
+                              {card.steps.map((step, i) => (
+                                <li key={i}>{step}</li>
+                              ))}
+                            </ol>
+                          )}
+                          {card.action && <CopyableAction command={card.action} />}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </>
       )}
