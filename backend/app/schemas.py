@@ -64,6 +64,17 @@ class AdminPasswordResetOut(BaseModel):
     temporary_password: str
 
 
+class RetentionStatusOut(BaseModel):
+    retention_days: int
+    options: list[int]
+    last_run_at: str | None = None
+    last_deleted_count: int | None = None
+
+
+class RetentionDaysIn(BaseModel):
+    retention_days: int
+
+
 class CustomerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     type: CustomerType = CustomerType.PUBLIC

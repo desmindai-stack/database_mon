@@ -19,9 +19,9 @@ from app.services.security import hash_password
 _TEST_PASSWORD = "test-pass-not-for-prod-123"
 
 
-async def authed_client() -> httpx.AsyncClient:
+async def authed_client(role: str = "admin") -> httpx.AsyncClient:
     await init_db()
-    username = f"test-admin-{uuid.uuid4().hex[:8]}"
+    username = f"test-{role}-{uuid.uuid4().hex[:8]}"
     async with SessionLocal() as session:
         existing = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
         if existing is None:
@@ -29,7 +29,7 @@ async def authed_client() -> httpx.AsyncClient:
                 User(
                     username=username,
                     password_hash=hash_password(_TEST_PASSWORD),
-                    role="admin",
+                    role=role,
                     is_active=True,
                     must_change_password=False,
                 )

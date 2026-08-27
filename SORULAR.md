@@ -3,6 +3,22 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 15 — İŞ 2: Saklama süresi kapsamı ve hard-delete (arşivleme yok)
+
+Görev "metrik ve olay verileri" dedi — bunu dört tabloya genişlettim:
+`MetricSample`, `SlowQuerySample` (ikisi de "metrik"), `AlertEvent`
+("olay"), ve `PredictionInsight` (tahmin geçmişi — teknik olarak ne
+metrik ne olay ama aynı şekilde sınırsız büyüyen zaman-damgalı bir
+tablo, aynı temizliğe dahil ettim). `GroupHealthSnapshot` HARİÇ
+bıraktım — o bir "geçmiş" tablosu değil, her grup için TEK bir satırı
+`UPDATE` ile güncelleyen bir önbellek (`unique=True` group_id), zaten
+büyümüyor.
+
+Silme gerçek `DELETE` (hard delete) — arşivleme/soğuk depolamaya
+taşıma yok. Görev sadece "silsin" dedi, arşivleme istemedi; bir DBA
+izleme aracında bu verinin uzun vadeli saklanması zaten beklenmez
+(canlı operasyonel telemetri, denetim kaydı değil).
+
 ## Faz 15 — İŞ 1: "viewer salt-okunur" blanket POST/PUT/PATCH/DELETE=admin olarak uygulandı
 
 Görev "viewer... ekleme/düzenleme/silme ve özel SQL kuralı çalıştırma

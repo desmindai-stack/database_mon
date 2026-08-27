@@ -37,15 +37,6 @@ const SEVERITY_COLOR: Record<string, string> = {
   info: "var(--success)",
 };
 
-const INTERVAL_LABELS: Record<number, string> = {
-  10: "10 saniye",
-  30: "30 saniye",
-  60: "1 dakika",
-  300: "5 dakika",
-  900: "15 dakika",
-  3600: "1 saat",
-};
-
 export default function DashboardPage() {
   const canWrite = useAuth().user?.role === "admin";
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +47,8 @@ export default function DashboardPage() {
   const [groupSummaryLoading, setGroupSummaryLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
-  const [refreshOptions, setRefreshOptions] = useState<number[]>([10, 30, 60, 300, 900, 3600]);
+  // The interval value itself is now only changeable from the admin screen (Faz 15 İŞ 2) —
+  // still read here so the auto-refresh timer below uses whatever's currently configured.
   const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
 
   useEffect(() => {
@@ -67,10 +59,7 @@ export default function DashboardPage() {
       .then(setGroupSummary)
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setGroupSummaryLoading(false));
-    api.getRefreshInterval().then((r) => {
-      setRefreshOptions(r.options);
-      setRefreshSeconds(r.seconds);
-    }).catch(() => undefined);
+    api.getRefreshInterval().then((r) => setRefreshSeconds(r.seconds)).catch(() => undefined);
   }, []);
 
   // Dashboard'ı seçilen aralıkta kendini otomatik güncelle — sadece önbellekten okur
@@ -90,11 +79,6 @@ export default function DashboardPage() {
       .then(setGroupSummary)
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setRefreshing(false));
-  };
-
-  const onChangeInterval = (seconds: number) => {
-    setRefreshSeconds(seconds);
-    api.setRefreshInterval(seconds).catch(() => undefined);
   };
 
   const isPrivate = config?.deployment_mode === "private";
@@ -149,17 +133,6 @@ export default function DashboardPage() {
               : "Henüz sağlık verisi toplanmadı"}
         </span>
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-          <label className="muted-note" style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
-            Otomatik yenileme
-            <select
-              value={refreshSeconds ?? ""}
-              onChange={(e) => onChangeInterval(Number(e.target.value))}
-            >
-              {refreshOptions.map((s) => (
-                <option key={s} value={s}>{INTERVAL_LABELS[s] ?? `${s}sn`}</option>
-              ))}
-            </select>
-          </label>
           <button className="btn" onClick={onRefresh} disabled={refreshing}>
             {refreshing ? "Yenileniyor…" : "Yenile"}
           </button>

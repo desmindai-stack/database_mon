@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, Application, Customer, DatabaseGroup, DbNode } from "./api";
 import { AuthProvider, useAuth } from "./auth";
+import AdminPage from "./pages/AdminPage";
 import AlertsPage from "./pages/AlertsPage";
 import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
@@ -329,6 +330,11 @@ function AppShell() {
           <NavLink to="/alerts" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Alerts
           </NavLink>
+          {canWrite && (
+            <NavLink to="/admin" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+              Yönetim
+            </NavLink>
+          )}
         </nav>
         <div className="sidebar-user">
           <div className="sidebar-user-info">
@@ -347,6 +353,7 @@ function AppShell() {
           <Route path="/instances/:id" element={<InstanceDetailPage />} />
           <Route path="/predictions" element={<PredictionsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/admin" element={<AdminPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/customers/:customerId/applications" element={<ApplicationsPage />} />
           <Route path="/customers/:customerId/servers" element={<ServersPage />} />

@@ -749,6 +749,13 @@ export interface RefreshInterval {
   options: number[];
 }
 
+export interface RetentionStatus {
+  retention_days: number;
+  options: number[];
+  last_run_at: string | null;
+  last_deleted_count: number | null;
+}
+
 export interface ConnectionTestResult {
   ok: boolean;
   message: string;
@@ -972,6 +979,20 @@ export const api = {
   getGroupHealth: (groupId: number) => request<GroupHealth>(`/api/groups/${groupId}/health`),
   getGroupParameters: (groupId: number) => request<ParameterAudit>(`/api/groups/${groupId}/parameters`),
   getGroupAlwaysOn: (groupId: number) => request<AlwaysOnHealth>(`/api/groups/${groupId}/alwayson`),
+
+  getRetention: () => request<RetentionStatus>("/api/admin/retention"),
+  setRetention: (retention_days: number) =>
+    request<RetentionStatus>("/api/admin/retention", { method: "PUT", body: JSON.stringify({ retention_days }) }),
+  runRetentionNow: () => request<RetentionStatus>("/api/admin/retention/run", { method: "POST" }),
+
+  getUsers: () => request<UserOut[]>("/api/admin/users"),
+  createUser: (data: { username: string; email?: string; password: string; role: UserRoleType }) =>
+    request<UserOut>("/api/admin/users", { method: "POST", body: JSON.stringify(data) }),
+  updateUser: (id: number, data: { role?: UserRoleType; is_active?: boolean }) =>
+    request<UserOut>(`/api/admin/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  deleteUser: (id: number) => request<void>(`/api/admin/users/${id}`, { method: "DELETE" }),
+  resetUserPassword: (id: number) =>
+    request<{ temporary_password: string }>(`/api/admin/users/${id}/reset-password`, { method: "POST" }),
 };
 
 export function formatBytes(bytes: number): string {

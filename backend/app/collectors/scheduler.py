@@ -12,6 +12,7 @@ from app.models import Instance
 from app.services.collection import collect_instance, effective_collect_interval, last_collected_at
 from app.services.custom_alert_rules import evaluate_custom_alert_rules
 from app.services.dashboard_snapshot import refresh_all_group_snapshots
+from app.services.retention import run_retention_cleanup
 from app.services.settings import get_dashboard_refresh_interval
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,7 @@ logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
 REFRESH_JOB_ID = "refresh_dashboard_snapshots"
+RETENTION_JOB_ID = "retention_cleanup"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -64,6 +66,13 @@ async def evaluate_custom_rules_tick() -> None:
             logger.exception("Failed evaluating custom alert rules")
 
 
+async def retention_cleanup_tick() -> None:
+    try:
+        await run_retention_cleanup()
+    except Exception:
+        logger.exception("Failed running retention cleanup")
+
+
 async def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -90,6 +99,13 @@ async def start_scheduler() -> None:
         "interval",
         seconds=CUSTOM_RULES_TICK_SECONDS,
         id="evaluate_custom_rules",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        retention_cleanup_tick,
+        "interval",
+        days=1,
+        id=RETENTION_JOB_ID,
         replace_existing=True,
     )
     scheduler.start()

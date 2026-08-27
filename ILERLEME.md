@@ -1330,6 +1330,62 @@ dönüyor; token'lı istek 200; yanlış mevcut şifreyle change-password
 400, doğrusuyla 200 ve `must_change_password: false`'a dönüyor; admin
 token'ıyla `POST /api/customers` 201.
 
+## Faz 15 — İŞ 2: Veri saklama ve admin ekranı
+
+**Backend:**
+- `services/retention.py` — `AppSetting` tabanlı basit anahtar/değer
+  deposu (mevcut `dashboard_refresh_interval_seconds` deseniyle aynı):
+  `metrics_retention_days` (7/14/30/60/90, varsayılan 30 — "1 ay"),
+  `retention_last_run_at`, `retention_last_deleted_count`.
+  `run_retention_cleanup()` `MetricSample.collected_at`,
+  `SlowQuerySample.collected_at`, `AlertEvent.triggered_at`,
+  `PredictionInsight.created_at` sütunlarına göre kesim tarihinden eski
+  satırları tek seferde `DELETE ... WHERE` ile siliyor (ORM nesnesi
+  nesne yükleyip tek tek silmiyor — büyük tablolarda ölçeklenir),
+  silinen toplam satır sayısını ve zamanı `AppSetting`'e yazıyor.
+- `collectors/scheduler.py`'ye günlük (`interval, days=1`) yeni bir iş
+  eklendi (`retention_cleanup_tick`) — mevcut tek `AsyncIOScheduler`
+  örneğine katıldı, ayrı bir scheduler açılmadı.
+- Yeni `routers/admin.py` — `/api/admin/retention` (GET/PUT),
+  `/api/admin/retention/run` (POST, elle tetikleme),
+  `/api/admin/users` (GET liste, POST oluştur),
+  `/api/admin/users/{id}` (PATCH rol/aktiflik, DELETE),
+  `/api/admin/users/{id}/reset-password` (POST — rastgele geçici şifre
+  üretip bir kerelik döndürür, `must_change_password=True` set eder).
+  Bu router `main.py`'de `dependencies=[Depends(require_admin)]` ile
+  dahil edildi — İŞ 1'in `require_write_access`'inden farklı olarak
+  GET dahil HER metod admin gerektiriyor (kullanıcı listesi/saklama
+  ayarı viewer'a bile görünmüyor).
+- Kendi kendini pasifleştirme/silme/yetki düşürme engellendi
+  (`update_user`/`delete_user` içinde `current.id == user_id` kontrolü)
+  — son admin'in kazara kendini kilitleyip dışarıda kalması önlendi.
+
+**Frontend:**
+- Yeni `AdminPage.tsx` (`/admin`, sadece admin — sidebar linki
+  `canWrite` ile gizli, sayfanın kendisi de `currentUser.role !==
+  "admin"` ise "admin yetkisi gerekiyor" gösteriyor) — üç sekme:
+  **Veri saklama** (süre seçimi + son çalışma zamanı/silinen kayıt +
+  "Şimdi temizle"), **Kullanıcılar** (liste + rol değiştir/pasifleştir/
+  şifre sıfırla/sil + yeni kullanıcı formu), **Genel ayarlar**
+  (dashboard otomatik yenileme aralığı — DashboardPage'den buraya
+  taşındı).
+- `DashboardPage.tsx`'in eski "Otomatik yenileme" `<select>`'i
+  kaldırıldı; sayfa hâlâ `GET /api/dashboard/refresh-interval`'i okuyup
+  kendi otomatik yenileme timer'ında kullanıyor, sadece DEĞİŞTİRME
+  kontrolü artık Admin'de. Elle "Yenile" butonu (aksiyon, ayar değil)
+  Dashboard'da kaldı.
+
+**Test:** Yeni `tests/test_admin.py` (4 test): viewer admin uçlarına GET
+dahil giremiyor (403), saklama süresi GET/PUT (geçersiz değer 400),
+elle temizlik tetikleme son-çalışma alanlarını dolduruyor, kullanıcı
+CRUD + kendi kendini pasifleştirme/silmenin reddedildiği. Toplam 45
+test yeşil.
+
+**Canlı doğrulama:** Gerçek uvicorn'a karşı curl ile: retention GET
+(varsayılan 30) → PUT 60 → POST /run (`last_run_at`/`last_deleted_count`
+doluyor) → kullanıcı oluşturma (`must_change_password: true` ile) →
+liste iki kullanıcıyı da gösteriyor.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

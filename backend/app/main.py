@@ -9,6 +9,7 @@ from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample, User
 from app.routers import (
+    admin,
     alerts,
     applications,
     auth,
@@ -24,7 +25,7 @@ from app.routers import (
     wizard,
 )
 from app.schemas import ConfigOut, HealthResponse
-from app.services.auth_deps import get_current_user, require_write_access
+from app.services.auth_deps import get_current_user, require_admin, require_write_access
 from app.services.bootstrap import ensure_default_admin, ensure_default_customer
 
 
@@ -72,6 +73,9 @@ app.include_router(nodes.router, prefix="/api", dependencies=_protected)
 app.include_router(servers.router, prefix="/api", dependencies=_protected)
 app.include_router(dashboard.router, prefix="/api", dependencies=_protected)
 app.include_router(wizard.router, prefix="/api", dependencies=_protected)
+
+# Admin screen (Faz 15 İŞ 2) — every route here needs role=admin, not just a valid session.
+app.include_router(admin.router, prefix="/api", dependencies=[Depends(require_admin)])
 
 
 @app.get("/api/health", response_model=HealthResponse)
