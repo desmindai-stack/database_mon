@@ -1566,6 +1566,58 @@ kendisi doğrudan, gerçekçi girdilerle test edildi; eksik olan sadece
 (kod okunarak doğrulandı: `services/collection.py` artık
 `engine=instance.engine` geçiyor).
 
+## Faz 15 — İŞ 7: Alerts sayfası düzenlemesi
+
+**Backend:** `services/custom_alert_rules.py::_resolve_target_instance`
+artık bir `AlertRule` nesnesi yerine doğrudan `instance_id`/`group_id`
+alıyor (tek çağrı yeri — `evaluate_custom_alert_rules` — güncellendi) —
+bu, kural henüz KAYDEDİLMEDEN test edilebilmesini sağlıyor. Yeni
+`test_custom_query()`: read-only doğrulama → hedef instance çözümleme
+→ `_run_query()` (mevcut, kuralların gerçek çalıştırma yolu) ile
+çalıştırma → `classify_connection_error` ile Türkçe hata sınıflandırma.
+Yeni uç nokta `POST /api/alerts/rules/test-query` (mevcut
+`ConnectionTestResult` şemasını yeniden kullanıyor — yeni bir şema
+icat etmeye gerek kalmadı).
+
+**Frontend:**
+- **Ayrı sayfa:** Yeni `CustomAlertRuleFormPage.tsx` (`/alerts/new`) —
+  eski satır-içi "Özel kural ekle" kartı kaldırıldı, `AlertsPage`'in
+  sağ üstündeki "+ Özel kural ekle" butonu artık buraya yönlendiriyor.
+  SQL editörü artık tam sayfa genişliğinde, 10 satır
+  (`.sql-editor` — monospace, `min-height: 220px`), yanında "Sorguyu
+  test et" butonu sonucu (`ok`/hata mesajı) gösteriyor. Bunu yazarken
+  fark edildi: kod tabanında `textarea` elementleri hiç
+  stillendirilmemiş (sadece `font: inherit`) — karanlık temada beyaz
+  arka planla render oluyorlardı. `.form-grid textarea` artık
+  input/select ile aynı temel stili alıyor (bu, SQL editörüne özel
+  değil, uygulamadaki HER textarea'yı düzeltiyor — ör. "Notlar"
+  alanları).
+- **Sekmeler:** `AlertsPage.tsx` artık "Aktif alarmlar" (aktif rozet
+  sayısıyla) | "Kural listesi" | "Geçmiş" (çözülmüş event'ler,
+  `resolved_at`'e göre) üç sekme. Tek bir `Promise.all` ile hem aktif
+  (`active_only=true`) hem tüm (`active_only=false`, client-side
+  `resolved_at != null` filtresiyle geçmişe ayrılıyor) event'ler
+  çekiliyor.
+- **Kural listesi:** Ad araması (`input`), önem derecesi ve engine
+  filtre `<select>`'leri (`useMemo` ile client-side filtreleniyor —
+  kural sayısı küçük, ayrı bir backend filtre ucu gerekmedi). Varsayılan/
+  özel ayrımı artık renkli rozetle net (`tag public` = Varsayılan,
+  `tag private` = Özel — mevcut `.tag.public`/`.tag.private` CSS'i
+  yeniden kullanıldı).
+
+**Test:** Yeni `tests/test_alert_rule_query_test.py` (3 test): tam
+olarak bir hedef gerektiği (ikisi de/hiçbiri 400), DELETE gibi
+salt-okunur-olmayan bir sorgunun `200` ama `ok:false` ile reddedildiği,
+erişilemeyen bir hedefin çökme yerine `ok:false` + anlamlı mesajla
+döndüğü. Toplam 54 test yeşil.
+
+**Canlı doğrulama:** Gerçek uvicorn'a karşı curl ile: hedefsiz
+test-query `400`; `DELETE FROM foo` → `ok:false`, "salt-okunur"
+mesajı; sahte host'a `SELECT 1` → `ok:false`, DNS hatası Türkçe
+sınıflandırılmış; özel kural gerçekten oluşturuluyor ve listede
+`is_default:false` ile görünüyor; `active_only=true`/`false` ikisi de
+çalışıyor.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

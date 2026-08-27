@@ -577,6 +577,12 @@ class AlertEventOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class CustomRuleTestRequest(BaseModel):
+    sql_query: str = Field(min_length=1)
+    instance_id: int | None = None
+    group_id: int | None = None
+
+
 class PredictionOut(BaseModel):
     id: int
     instance_id: int

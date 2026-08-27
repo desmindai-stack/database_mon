@@ -4,6 +4,7 @@ import { api, Application, Customer, DatabaseGroup, DbNode } from "./api";
 import { AuthProvider, useAuth } from "./auth";
 import AdminPage from "./pages/AdminPage";
 import AlertsPage from "./pages/AlertsPage";
+import CustomAlertRuleFormPage from "./pages/CustomAlertRuleFormPage";
 import ApplicationsPage from "./pages/ApplicationsPage";
 import CustomersPage from "./pages/CustomersPage";
 import DashboardPage from "./pages/DashboardPage";
@@ -353,6 +354,7 @@ function AppShell() {
           <Route path="/instances/:id" element={<InstanceDetailPage />} />
           <Route path="/predictions" element={<PredictionsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/alerts/new" element={<CustomAlertRuleFormPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="/customers" element={<CustomersPage />} />
           <Route path="/customers/:customerId/applications" element={<ApplicationsPage />} />

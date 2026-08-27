@@ -931,7 +931,10 @@ export const api = {
     request<AlertRule>(`/api/alerts/rules/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteAlertRule: (id: number) =>
     request<void>(`/api/alerts/rules/${id}`, { method: "DELETE" }),
-  getAlertEvents: () => request<AlertEvent[]>("/api/alerts/events"),
+  testAlertRuleQuery: (data: { sql_query: string; instance_id?: number; group_id?: number }) =>
+    request<ConnectionTestResult>("/api/alerts/rules/test-query", { method: "POST", body: JSON.stringify(data) }),
+  getAlertEvents: (activeOnly = true) =>
+    request<AlertEvent[]>(`/api/alerts/events?active_only=${activeOnly}`),
   resolveAlert: (id: number) =>
     request<AlertEvent>(`/api/alerts/events/${id}/resolve`, { method: "POST" }),
   getPredictions: () => request<Prediction[]>("/api/predictions"),

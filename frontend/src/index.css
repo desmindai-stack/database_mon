@@ -502,12 +502,25 @@ td code,
 }
 
 .form-grid input,
-.form-grid select {
+.form-grid select,
+.form-grid textarea {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
   padding: 0.6rem 0.75rem;
+}
+
+.form-grid textarea {
+  resize: vertical;
+}
+
+.sql-editor {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+  width: 100%;
+  min-height: 220px;
+  line-height: 1.5;
 }
 
 .form-actions {

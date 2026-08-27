@@ -4,8 +4,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AlertEvent, AlertRule
-from app.schemas import AlertEventOut, AlertRuleCreate, AlertRuleOut, AlertRuleUpdate
-from app.services.custom_alert_rules import validate_readonly_sql
+from app.schemas import (
+    AlertEventOut,
+    AlertRuleCreate,
+    AlertRuleOut,
+    AlertRuleUpdate,
+    ConnectionTestResult,
+    CustomRuleTestRequest,
+)
+from app.services.custom_alert_rules import test_custom_query, validate_readonly_sql
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -14,6 +21,18 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 async def list_rules(db: AsyncSession = Depends(get_db)) -> list[AlertRule]:
     result = await db.execute(select(AlertRule).order_by(AlertRule.created_at.desc()))
     return list(result.scalars().all())
+
+
+@router.post("/rules/test-query", response_model=ConnectionTestResult)
+async def test_rule_query(payload: CustomRuleTestRequest, db: AsyncSession = Depends(get_db)) -> ConnectionTestResult:
+    """Runs a candidate custom-rule query against its target right now (Faz 15 İŞ 7's "sorguyu
+    test et") — doesn't require the rule to be saved first."""
+    if bool(payload.instance_id) == bool(payload.group_id):
+        raise HTTPException(status_code=400, detail="Tam olarak bir hedef gerekli: instance_id veya group_id")
+    ok, message, value = await test_custom_query(
+        db, sql_query=payload.sql_query, instance_id=payload.instance_id, group_id=payload.group_id
+    )
+    return ConnectionTestResult(ok=ok, message=message, details={"value": value} if value is not None else {})
 
 
 @router.post("/rules", response_model=AlertRuleOut, status_code=status.HTTP_201_CREATED)

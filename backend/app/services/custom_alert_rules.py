@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.collectors.base import ConnectionTarget
+from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.models import AlertEvent, AlertRule, Instance, Node
 from app.services.alert_engine import _compare
 from app.services.credentials import decrypt_secret
@@ -53,13 +53,15 @@ def validate_readonly_sql(query: str) -> None:
         raise ValueError("Sorgu izin verilmeyen bir anahtar kelime içeriyor (veri/şema değiştiren komutlar yasak)")
 
 
-async def _resolve_target_instance(session: AsyncSession, rule: AlertRule) -> Instance | None:
-    if rule.instance_id:
-        return await session.get(Instance, rule.instance_id)
-    if rule.group_id:
+async def _resolve_target_instance(
+    session: AsyncSession, instance_id: int | None, group_id: int | None
+) -> Instance | None:
+    if instance_id:
+        return await session.get(Instance, instance_id)
+    if group_id:
         nodes = (
             await session.execute(
-                select(Node).options(selectinload(Node.instance)).where(Node.group_id == rule.group_id)
+                select(Node).options(selectinload(Node.instance)).where(Node.group_id == group_id)
             )
         ).scalars().all()
         if not nodes:
@@ -67,6 +69,31 @@ async def _resolve_target_instance(session: AsyncSession, rule: AlertRule) -> In
         target_node = next((n for n in nodes if n.role_hint == "primary"), nodes[0])
         return target_node.instance
     return None
+
+
+async def test_custom_query(
+    session: AsyncSession, *, sql_query: str, instance_id: int | None, group_id: int | None
+) -> tuple[bool, str, float | None]:
+    """Runs a candidate custom-rule query against its target right now, outside of any saved
+    AlertRule row — backs the wizard's "sorguyu test et" button (Faz 15 İŞ 7) so a rule can be
+    validated before it's saved, not just after the fact via the scheduler tick."""
+    try:
+        validate_readonly_sql(sql_query)
+    except ValueError as exc:
+        return False, str(exc), None
+
+    instance = await _resolve_target_instance(session, instance_id, group_id)
+    if instance is None:
+        return False, "Hedef instance bulunamadı (grup için düğüm/instance eksik olabilir)", None
+
+    try:
+        value = await asyncio.wait_for(_run_query(instance, sql_query), timeout=QUERY_TIMEOUT_SECONDS + 5)
+    except Exception as exc:
+        return False, classify_connection_error(exc), None
+
+    if value is None:
+        return True, "Sorgu çalıştı, sonuç NULL döndü", None
+    return True, f"Sorgu başarılı — sonuç: {value}", value
 
 
 async def _run_query(instance: Instance, query: str) -> float | None:
@@ -139,7 +166,7 @@ async def evaluate_custom_alert_rules(session: AsyncSession) -> None:
 
         try:
             validate_readonly_sql(rule.sql_query or "")
-            instance = await _resolve_target_instance(session, rule)
+            instance = await _resolve_target_instance(session, rule.instance_id, rule.group_id)
             if instance is None:
                 logger.warning("custom alert rule %s (%s): hedef instance bulunamadı", rule.id, rule.name)
                 continue
