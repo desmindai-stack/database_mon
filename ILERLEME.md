@@ -1083,6 +1083,65 @@ iddiasını değil. Kullanıcı `npm run dev` ile fırsat bulduğunda dört
 akışı da (özellikle "Mevcut sunucu" seçimi ve katlanabilir kartlar)
 görsel olarak denemeli.
 
+## Faz 14 sonrası düzeltme — kullanıcı geri bildirimiyle bulunan kalıntı eski ekleme yolları
+
+Yukarıdaki curl/Vite-transform doğrulaması "yeni yollar çalışıyor mu"yu
+kanıtladı ama "eski yollar gerçekten kayboldu mu"yu tarayıcıda
+denemeden yakalayamadı — kullanıcı tarayıcıda hâlâ görünen iki eski
+giriş noktası bildirdi, ikisi de bu fazın kapsamındaydı ama gözden
+kaçmıştı:
+
+- **`InstancesPage`'in "+ Yeni Instance" butonu ve açtığı eski
+  formu.** Bu, Faz 1 öncesinden kalma "çıplak Instance" oluşturma
+  yolu — Customer/Application/Group/Node modelinden tamamen bağımsız,
+  `POST /api/instances`'a doğrudan gidiyordu (sihirbazın her zaman
+  Server+Instance+Node'u birlikte oluşturduğu akıştan tamamen ayrı).
+  Buton kaldırıldı, form artık SADECE düzenleme modunda açılıyor
+  (`startAdd()` silindi, `onSubmit`'in create dalı kaldırıldı,
+  `validate()`'in "editingId===null" şart dalı kaldırıldı — form artık
+  tek moda indirgendi). Boş durumda gösterilen metin ve buton artık
+  `/customers`'a (sihirbaz hiyerarşisinin köküne) yönlendiriyor.
+  `DashboardPage`'in "+ Yeni instance" CTA'sı da aynı sebeple
+  `/instances`'tan `/customers`'a çevrildi (eskiden bu ölü add-butonuna
+  gidiyordu).
+- **`ServersPage`'in "Sunucu ekle" butonu.** Kaynak kodda zaten İŞ 3
+  commit'inde (0b23836) kaldırılmıştı — bu, muhtemelen tarayıcının
+  eski bir build'i (stale dev server / cache) göstermesinden kaynaklı
+  bir yanlış pozitifti. Dosya yeniden okunup teyit edildi: buton/form
+  yok, sadece sihirbaza yönlendiren bir not var. Kod değişikliği
+  gerekmedi.
+
+**Tüm UI tarandı** (`Ekle|Yeni |Oluştur|+ [harf]` deseniyle grep) —
+bulunan her "ekle" işlevli buton/link aşağıdaki "Kalan ekleme yolları"
+listesinde. Veritabanı/instance/sunucu/düğüm/grup domain'i dışında
+kalanlar (Müşteri, Uygulama, Alert kuralı ekleme) bilerek dokunulmadı —
+bunların hiçbiri sihirbazın kapsamına girmiyor (motor/topoloji kavramı
+yok, tekil basit CRUD formları, mükerrer bir yolları da yok).
+
+**Kaldırılan buton/form:**
+- `InstancesPage.tsx` — "+ Yeni Instance" butonu + formun create modu.
+
+**Düzeltilen ölü yönlendirme (buton kalktı ama hedef güncellenmedi):**
+- `DashboardPage.tsx` — "+ Yeni instance" artık `/customers`'a gidiyor
+  (`/instances`'a değil).
+
+**Kalan ekleme yolları (tam liste):**
+| Yer | Buton/link | Hedef |
+|---|---|---|
+| Sol menü, uygulama satırı "+" | + Grup ekle | sihirbaz (`/applications/{id}/groups/wizard`) |
+| Sol menü, grup satırı "+" (sadece cluster) | + Düğüm ekle | sihirbaz (`/groups/{id}/wizard`) |
+| `DatabaseGroupsPage` üst bar | + Veritabanı Ekle | sihirbaz (`/applications/{id}/groups/wizard`) |
+| `GroupDetailPage` üst bar (sadece cluster) | + Düğüm Ekle | sihirbaz (`/groups/{id}/wizard`) |
+| `InstancesPage` üst bar | + Veritabanı Ekle | `/customers` (sihirbaz hiyerarşisinin kökü) |
+| `DashboardPage` üst bar | + Yeni instance | `/customers` |
+| Sihirbazın kendi içi | + Düğüm ekle (cluster-custom/add-node) | aynı sihirbaz formunda yeni satır |
+| Sol menü kökü / `CustomersPage` | + Müşteri Ekle | inline form (sihirbaz kapsamı dışı — Customer'ın motoru/topolojisi yok) |
+| Sol menü, müşteri altı / `ApplicationsPage` | + Uygulama Ekle | inline form (aynı gerekçe) |
+| `AlertsPage` | Kural ekle | inline form (ayrı domain — alert rule, veritabanı/sunucu değil) |
+
+`ServersPage` ve `GroupDetailPage`'in eski "sunucu ekle"/"düğüm ekle"
+inline formları (İŞ 2/İŞ 3) hâlâ kaldırılmış durumda — listede yok.
+
 ## Nasıl test edilir
 
 ### Backend

@@ -112,14 +112,6 @@ export default function InstancesPage() {
     update("services", next);
   };
 
-  const startAdd = () => {
-    setForm(emptyForm("postgresql", isPrivate ? defaultCustomer : undefined));
-    setEditingId(null);
-    setTestResult(null);
-    setFieldErrors({});
-    setIsFormOpen(true);
-  };
-
   const startEdit = (inst: Instance) => {
     setForm(instanceToForm(inst));
     setEditingId(inst.id);
@@ -156,7 +148,6 @@ export default function InstancesPage() {
     if (!form.database.trim()) errors.database = "Veritabanı adı zorunlu";
     if (!isWindowsAuth) {
       if (!form.username.trim()) errors.username = "Kullanıcı adı zorunlu";
-      if (editingId === null && !form.password.trim()) errors.password = "Şifre zorunlu";
     }
     return errors;
   };
@@ -171,8 +162,6 @@ export default function InstancesPage() {
     try {
       if (editingId !== null) {
         await api.updateInstance(editingId, form);
-      } else {
-        await api.createInstance(form);
       }
       setForm(emptyForm(form.engine, isPrivate ? defaultCustomer : undefined));
       setTestResult(null);
@@ -196,7 +185,7 @@ export default function InstancesPage() {
   const formPanel = (
     <div className="card">
       <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>
-        {editingId !== null ? "Instance düzenle" : "Yeni instance parametreleri"}
+        Instance düzenle
       </h3>
       <form className="form-grid" onSubmit={onSubmit}>
         <label>
@@ -403,12 +392,12 @@ export default function InstancesPage() {
               {fieldErrors.username && <span className="field-error">{fieldErrors.username}</span>}
             </label>
             <label>
-              Şifre {editingId === null && <span className="required-mark">*</span>}
+              Şifre
               <input
                 type="password"
                 value={form.password}
                 onChange={(e) => update("password", e.target.value)}
-                placeholder={editingId !== null ? "Değiştirmek için yazın" : ""}
+                placeholder="Değiştirmek için yazın"
                 className={fieldErrors.password ? "field-invalid" : ""}
               />
               {fieldErrors.password && <span className="field-error">{fieldErrors.password}</span>}
@@ -425,7 +414,7 @@ export default function InstancesPage() {
             Bağlantı testi
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
-            {editingId !== null ? "Güncelle" : "Ekle"}
+            Güncelle
           </button>
           <button type="button" className="btn" onClick={cancelForm}>
             İptal
@@ -442,9 +431,7 @@ export default function InstancesPage() {
           <h2>Instances</h2>
           <p>PostgreSQL, SQL Server ve MongoDB sunucularını kaydedin</p>
         </div>
-        <button className="btn btn-primary" onClick={startAdd}>
-          + Yeni Instance
-        </button>
+        <Link to="/customers" className="btn btn-primary">+ Veritabanı Ekle</Link>
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -495,7 +482,9 @@ export default function InstancesPage() {
         ) : (
           <div className="card" style={{ display: "grid", placeItems: "center", minHeight: 200 }}>
             <p style={{ color: "var(--muted)", textAlign: "center" }}>
-              Instance eklemek veya düzenlemek için<br />sol üstteki <strong>+ Yeni Instance</strong> veya listedeki <strong>Düzenle</strong> butonuna tıklayın.
+              Yeni instance eklemek için <Link to="/customers">Müşteriler</Link> → Uygulamalar →
+              bir veritabanı grubuna sihirbazla düğüm ekleyin. Burada listedeki{" "}
+              <strong>Düzenle</strong> butonuyla var olan instance'ları düzenleyebilirsiniz.
             </p>
           </div>
         )}

@@ -131,7 +131,7 @@ export default function DashboardPage() {
         </div>
         <div className="header-actions">
           <Link to="/instances" className="btn">Tüm instance’lar</Link>
-          <Link to="/instances" className="btn btn-primary">+ Yeni instance</Link>
+          <Link to="/customers" className="btn btn-primary">+ Yeni instance</Link>
         </div>
       </header>
 
