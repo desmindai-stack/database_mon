@@ -3,6 +3,23 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 15 — İŞ 8: "Olası nedenler" sadece elde olan veriden — wait-event/lock iddiası yok
+
+Görev sorgu satırında "olası nedenler listesi" istiyordu. dbace'in
+`query_history` verisi `queryid` başına `calls`/`total_time_ms`/
+`mean_time_ms`/`calls_delta` tutuyor — wait-event türü, lock bekleme
+süresi, veya hangi tablo/index'e dokunduğu gibi bir bilgi YOK (o
+seviyedeki veri sadece canlı `Activity` sekmesinde anlık bir görüntü
+olarak var, geçmişe dönük tutulmuyor). Bu yüzden "olası nedenler"
+listesini SADECE gerçekten gözlemlenebilen iki sinyalle sınırladım:
+çağrı sayısı artışı ve yüksek ortalama süre — ikisi de "olabilir"
+diliyle, kesin bir teşhis olarak değil. "Kilit bekliyordu" veya
+"sıralı tarama yapıyordu" gibi VERİYE DAYANMAYAN bir iddiada
+bulunmadım; kullanıcıyı EXPLAIN'e yönlendirmek (zaten var olan bir
+buton) gerçek teşhisi sağlıyor. Daha zengin bir "olası neden" listesi
+istenirse, `Activity` anlık görüntüsünün de zaman damgalı olarak
+saklanması gerekir — bu görevin kapsamı dışında.
+
 ## Faz 15 — İŞ 6: "Tahmini dolma tarihi" gerçek disk kapasitesine değil, veri büyüme hızına dayanıyor
 
 Görev "disk dolma tahmini... tahmini dolma tarihi" istiyordu ama

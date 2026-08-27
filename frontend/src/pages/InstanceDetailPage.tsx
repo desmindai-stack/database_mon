@@ -10,6 +10,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -57,6 +58,30 @@ function queryFingerprint(q: string): string {
   return q.length > 120 ? q.slice(0, 120) + "…" : q;
 }
 
+interface LoadTimelinePoint {
+  time: string;
+  totalMs: number;
+  contributors: { queryid: string; query: string; total_time_ms: number; mean_time_ms: number; calls: number; calls_delta: number | null }[];
+}
+
+// Honest, non-fabricated heuristics only — dbace doesn't have wait-event/lock data attached to
+// a historical query_history point, so this deliberately stops at "here's the signal that made
+// this query stand out" rather than guessing a root cause it can't actually see (Faz 15 İŞ 8,
+// see SORULAR.md).
+function possibleCauses(c: { calls_delta: number | null; mean_time_ms: number }): string[] {
+  const causes: string[] = [];
+  if (c.calls_delta !== null && c.calls_delta > 0) {
+    causes.push(`Bu aralıkta çağrı sayısı arttı (+${c.calls_delta}) — artan trafik/yük olabilir.`);
+  }
+  if (c.mean_time_ms > 100) {
+    causes.push("Ortalama çalışma süresi yüksek — eksik index, sıralı tarama (seq scan) veya kilit beklemesi olabilir. EXPLAIN plana bakın.");
+  }
+  if (causes.length === 0) {
+    causes.push("Bu sorgu bu aralıkta toplam yüke önemli katkı yaptı — detay için EXPLAIN/index önerisine bakın.");
+  }
+  return causes;
+}
+
 export default function InstanceDetailPage() {
   const { id } = useParams();
   const instanceId = Number(id);
@@ -95,6 +120,8 @@ export default function InstanceDetailPage() {
   const [explainLoading, setExplainLoading] = useState<Record<number, boolean>>({});
   const [explainError, setExplainError] = useState<Record<number, string>>({});
   const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
+  const [selectedTime, setSelectedTime] = useState<string | null>(null);
+  const [expandedCorrelated, setExpandedCorrelated] = useState<Set<string>>(new Set());
 
   const status = summary?.status || "pending";
   const insights = tuning?.insights || [];
@@ -352,6 +379,81 @@ export default function InstanceDetailPage() {
       })),
     [sortedQueries],
   );
+
+  // Graph–query correlation (İŞ 8): one aggregate "query load" point per timestamp, built from
+  // queryHistoryTop (already fetched for the trend mini-cards above) — the per-interval mean
+  // latency (interval_mean_ms, same field QueryHistoryChart already uses) summed across the
+  // top queries, so a click on any point can show exactly which queries were contributing then.
+  const loadTimeline = useMemo<LoadTimelinePoint[]>(() => {
+    if (queryHistoryTop.length === 0) return [];
+    const byTime = new Map<string, LoadTimelinePoint>();
+    for (const series of queryHistoryTop) {
+      for (const p of series.points) {
+        const time = timeLabel(p.collected_at);
+        let bucket = byTime.get(time);
+        if (!bucket) {
+          bucket = { time, totalMs: 0, contributors: [] };
+          byTime.set(time, bucket);
+        }
+        const meanMs = p.interval_mean_ms ?? p.mean_time_ms;
+        bucket.totalMs += meanMs;
+        bucket.contributors.push({
+          queryid: series.queryid,
+          query: series.query,
+          total_time_ms: p.total_time_ms,
+          mean_time_ms: meanMs,
+          calls: p.calls,
+          calls_delta: p.calls_delta,
+        });
+      }
+    }
+    return Array.from(byTime.values()).sort((a, b) => a.time.localeCompare(b.time));
+  }, [queryHistoryTop]);
+
+  // Spikes: points whose aggregate load is well above the timeline's own mean — needs a few
+  // points to mean anything, so it's simply empty (no false positives) on a thin timeline.
+  const spikeTimes = useMemo(() => {
+    if (loadTimeline.length < 4) return new Set<string>();
+    const values = loadTimeline.map((p) => p.totalMs);
+    const meanLoad = values.reduce((a, b) => a + b, 0) / values.length;
+    const variance = values.reduce((a, b) => a + (b - meanLoad) ** 2, 0) / values.length;
+    const stdLoad = Math.sqrt(variance);
+    if (stdLoad <= 0) return new Set<string>();
+    return new Set(loadTimeline.filter((p) => p.totalMs > meanLoad + 1.5 * stdLoad).map((p) => p.time));
+  }, [loadTimeline]);
+
+  // Default focus: the biggest spike if there is one, otherwise the single highest point —
+  // the correlated-queries section below is never empty just because nothing's been clicked yet.
+  const defaultSelectedTime = useMemo(() => {
+    if (loadTimeline.length === 0) return null;
+    const candidates = spikeTimes.size > 0 ? loadTimeline.filter((p) => spikeTimes.has(p.time)) : loadTimeline;
+    return candidates.reduce((a, b) => (b.totalMs > a.totalMs ? b : a)).time;
+  }, [loadTimeline, spikeTimes]);
+
+  const effectiveSelectedTime = selectedTime ?? defaultSelectedTime;
+  const selectedLoadPoint = loadTimeline.find((p) => p.time === effectiveSelectedTime) ?? null;
+  const correlatedQueries = useMemo(
+    () => (selectedLoadPoint ? [...selectedLoadPoint.contributors].sort((a, b) => b.mean_time_ms - a.mean_time_ms) : []),
+    [selectedLoadPoint],
+  );
+  const slowQueryByQueryid = useMemo(() => {
+    const map = new Map<string, SlowQuery>();
+    for (const q of queries) if (q.queryid) map.set(q.queryid, q);
+    return map;
+  }, [queries]);
+
+  const toggleCorrelated = (key: string) => {
+    setExpandedCorrelated((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    setSelectedTime(null);
+  }, [instanceId, range]);
 
   const connectionUtil = latest && latest.max_connections ? (latest.active_connections / latest.max_connections) * 100 : 0;
 
@@ -771,6 +873,145 @@ export default function InstanceDetailPage() {
               </div>
             </div>
           )}
+
+          {loadTimeline.length > 1 && (
+            <div className="card">
+              <h3 className="chart-title">Sorgu yükü zaman çizelgesi</h3>
+              <p className="muted-note">
+                Grafikte bir noktaya tıklayın — altta o ana denk gelen sorgular listelenir. Kırmızı
+                noktalar otomatik işaretlenen sıçramalar (ortalamanın belirgin üzerinde).
+              </p>
+              <div style={{ height: 220 }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart
+                    data={loadTimeline}
+                    onClick={(e) => {
+                      if (e && typeof e.activeLabel === "string") setSelectedTime(e.activeLabel);
+                    }}
+                  >
+                    <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
+                    <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
+                    <YAxis stroke="#8b9bb8" fontSize={11} />
+                    <Tooltip
+                      contentStyle={{ background: "#121a2b", border: "1px solid #243049" }}
+                      formatter={(v) => [`${Number(v).toFixed(1)} ms`, "Toplam yük"]}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="totalMs"
+                      name="Sorgu yükü (ort. ms toplamı)"
+                      stroke="#3b82f6"
+                      strokeWidth={2}
+                      dot={{ r: 3, cursor: "pointer" }}
+                      activeDot={{ r: 6, cursor: "pointer" }}
+                    />
+                    {loadTimeline
+                      .filter((p) => spikeTimes.has(p.time))
+                      .map((p) => (
+                        <ReferenceDot key={p.time} x={p.time} y={p.totalMs} r={6} fill="var(--danger)" stroke="none" />
+                      ))}
+                    {effectiveSelectedTime && (
+                      <ReferenceLine x={effectiveSelectedTime} stroke="var(--accent-2)" strokeDasharray="4 4" />
+                    )}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div style={{ marginTop: "1rem" }}>
+                <div className="activity-toolbar">
+                  <h4 style={{ margin: 0, color: "var(--text)" }}>
+                    {effectiveSelectedTime ? `${effectiveSelectedTime} civarında öne çıkan sorgular` : "Sorgu seçin"}
+                    {effectiveSelectedTime && spikeTimes.has(effectiveSelectedTime) && (
+                      <span className="tag" style={{ marginLeft: "0.5rem", background: "var(--danger)" }}>sıçrama</span>
+                    )}
+                  </h4>
+                </div>
+                {correlatedQueries.length === 0 ? (
+                  <p className="muted-note">Bu zaman noktasında ilişkilendirilecek sorgu verisi yok.</p>
+                ) : (
+                  <div className="problem-card-list">
+                    {correlatedQueries.map((c) => {
+                      const sq = slowQueryByQueryid.get(c.queryid);
+                      const key = `corr-${effectiveSelectedTime}-${c.queryid}`;
+                      const isOpen = expandedCorrelated.has(key);
+                      return (
+                        <div className="problem-card" key={key}>
+                          <div className="problem-card-head">
+                            <button type="button" className="problem-card-toggle" onClick={() => toggleCorrelated(key)}>
+                              <span className="problem-card-chevron">{isOpen ? "▾" : "▸"}</span>
+                              <span className="problem-card-title">{queryFingerprint(c.query)}</span>
+                            </button>
+                            <div className="problem-card-source muted-note">
+                              {c.calls.toLocaleString()} çağrı · toplam {c.total_time_ms.toFixed(1)} ms · bu aralıkta ort. {c.mean_time_ms.toFixed(1)} ms
+                            </div>
+                          </div>
+                          {isOpen && (
+                            <div className="problem-card-body">
+                              <pre style={{ whiteSpace: "pre-wrap", margin: "0 0 0.6rem" }}>{c.query}</pre>
+                              <h4>Olası nedenler</h4>
+                              <ul>
+                                {possibleCauses(c).map((cause, i) => <li key={i}>{cause}</li>)}
+                              </ul>
+                              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
+                                {sq ? (
+                                  <>
+                                    <button
+                                      className="btn btn-xs"
+                                      onClick={() => loadExplain(sq, false)}
+                                      disabled={explainLoading[sq.id]}
+                                      title="Sadece planı gösterir, sorguyu çalıştırmaz"
+                                    >
+                                      {explainLoading[sq.id] ? "EXPLAIN…" : "EXPLAIN plan"}
+                                    </button>
+                                    <button
+                                      className="btn btn-primary btn-xs"
+                                      onClick={() => loadAdvice(sq)}
+                                      disabled={adviceLoading[sq.id]}
+                                    >
+                                      {adviceLoading[sq.id] ? "İnceleniyor…" : "Index önerisi"}
+                                    </button>
+                                  </>
+                                ) : (
+                                  <span className="muted-note">
+                                    Bu sorgu artık güncel yavaş sorgu listesinde değil — EXPLAIN/index önerisi
+                                    için tekrar tetiklenmesi gerekir.
+                                  </span>
+                                )}
+                              </div>
+                              {sq && explainError[sq.id] && <p className="advice-empty">{explainError[sq.id]}</p>}
+                              {sq && explain[sq.id] && <ExplainPlanTree result={explain[sq.id]!} />}
+                              {sq && advice[sq.id] && (
+                                <div className="advice-results">
+                                  {advice[sq.id].length === 0 ? (
+                                    <p className="advice-empty">Index önerisi bulunamadı.</p>
+                                  ) : (
+                                    advice[sq.id].map((a) => (
+                                      <div className="advice-card" key={a.index_ddl}>
+                                        <div className="advice-header">
+                                          <span className="advice-table">{a.schema_name}.{a.table_name}</span>
+                                          <span className="advice-pill">
+                                            Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong>
+                                            {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
+                                          </span>
+                                        </div>
+                                        <p className="advice-reason">{a.reason}</p>
+                                        <code className="advice-ddl">{a.index_ddl}</code>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="card">
             <div className="queries-header">
               <h3 className="chart-title">Yavaş sorgu dağılımı (ilk 10)</h3>

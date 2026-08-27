@@ -1618,6 +1618,57 @@ sınıflandırılmış; özel kural gerçekten oluşturuluyor ve listede
 `is_default:false` ile görünüyor; `active_only=true`/`false` ikisi de
 çalışıyor.
 
+## Faz 15 — İŞ 8: DPA sayfası — grafik-sorgu ilişkilendirmesi
+
+**Backend değişikliği yok** — `GET /api/queries/{id}/history` (mevcut,
+`QueryHistorySeries.points`'te `collected_at`/`calls`/`total_time_ms`/
+`interval_mean_ms`/`calls_delta` zaten vardı) bu özelliğe yetiyordu;
+`InstanceDetailPage`'in "Sorgu geçmişi (trend)" bölümü için zaten
+çekilen `queryHistoryTop` verisi yeniden kullanıldı.
+
+**Yeni "Sorgu yükü zaman çizelgesi"** (Yavaş Sorgular sekmesi, "Sorgu
+geçmişi (trend)" mini-kartlarının altında, "Yavaş sorgu dağılımı" bar
+grafiğinin üstünde):
+- `loadTimeline`: `queryHistoryTop`'taki tüm sorguların noktalarını
+  zaman damgasına (`HH:MM`) göre grupluyor, her sorgunun o andaki
+  `interval_mean_ms`'ini (mevcut `QueryHistoryChart`'ın kullandığı
+  aynı alan) toplayıp tek bir "toplam yük" değeri üretiyor —
+  gerçek bir dalgalanma grafiği.
+- **Sıçrama tespiti:** zaman çizelgesinin ortalama + standart sapması
+  hesaplanıp `ortalama + 1.5×std` üzerindeki noktalar kırmızı
+  `ReferenceDot` ile işaretleniyor (en az 4 nokta yoksa hiç
+  işaretlemiyor — yanlış pozitif riski almıyor).
+- **Tıklama:** Grafiğin `onClick`'i recharts'ın `activeLabel`'ini
+  kullanıp `selectedTime` state'ini set ediyor; hiç tıklanmamışsa
+  varsayılan olarak en büyük sıçrama (yoksa en yüksek nokta) otomatik
+  seçili geliyor — bölüm hiçbir zaman boş başlamıyor.
+- **İlişkilendirilmiş sorgular:** Seçili zaman noktasındaki tüm
+  katkıda bulunan sorgular (o andaki ortalama süreye göre sıralı)
+  katlanabilir kartlarda listeleniyor — kapalıyken sorgu özeti + çağrı
+  sayısı/toplam süre/o andaki ortalama süre; açılınca tam sorgu metni,
+  "Olası nedenler" (aşağıya bakın), ve EXPLAIN/Index önerisi butonları
+  (mevcut `loadExplain`/`loadAdvice`/`ExplainPlanTree`/advice-card
+  render mantığı yeniden kullanıldı — yeni bir kopya yazılmadı). Sorgu
+  artık güncel yavaş-sorgu snapshot'ında yoksa (queryid eşleşmiyor)
+  EXPLAIN/advice butonları yerine bir açıklama notu gösteriliyor.
+- **Olası nedenler:** dürüst, veriye dayalı iki sinyal — çağrı sayısı
+  bu aralıkta arttıysa, ve/veya o andaki ortalama süre yüksekse
+  (>100ms) — hiçbiri yoksa genel bir "toplam yüke katkı yaptı" notu.
+  Wait-event/lock verisi dbace'de yok, bu yüzden "kilit bekliyordu"
+  gibi kesin bir neden İDDİA EDİLMİYOR, sadece "olabilir" deniyor
+  (gerekçe SORULAR.md'de).
+
+**Sayfa dağılmadı:** Grafik + ilişkilendirilmiş sorgu listesi TEK bir
+kartta, tek bölümde; detaylar (sorgu metni, nedenler, EXPLAIN, advice)
+katlanabilir kartların içinde — sayfanın başka bir yerine dağılmıyor.
+
+**Doğrulama:** `tsc -b && vite build` yeşil (recharts'ın `onClick`
+event tipiyle ilk denemede sorunsuz derlendi); backend değişmedi, 54
+test yeşil kaldı; Vite dev sunucusu component'i hatasız transform etti
+(`loadTimeline`/`possibleCauses` işaretleri servis edilen kaynakta
+mevcut). Tıklama/sıçrama-işaretleme davranışının görsel doğrulaması
+tarayıcıda yapılmadı (bu ortamda tarayıcı otomasyonu yok).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
