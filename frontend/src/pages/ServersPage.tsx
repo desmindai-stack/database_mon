@@ -22,6 +22,10 @@ export default function ServersPage() {
   const [editIpAddress, setEditIpAddress] = useState("");
   const [editOs, setEditOs] = useState<ServerOS>("linux");
   const [editSite, setEditSite] = useState<NodeSite>("primary");
+  // Faz 16-B İŞ 2: agent bilgileri de düzenlenebilsin — daha önce sadece sihirbazda
+  // girilebiliyordu, sonradan değiştirmek için sunucuyu silmek gerekiyordu.
+  const [editAgentUrl, setEditAgentUrl] = useState("");
+  const [editAgentToken, setEditAgentToken] = useState("");
 
   const load = () => api.getServers(id).then(setServers).catch((e) => setError(String(e.message || e)));
 
@@ -57,6 +61,8 @@ export default function ServersPage() {
     setEditIpAddress(s.ip_address ?? "");
     setEditOs(s.os);
     setEditSite(s.site);
+    setEditAgentUrl(s.agent_url ?? "");
+    setEditAgentToken(s.agent_token ?? "");
     setError(null);
   };
 
@@ -67,7 +73,13 @@ export default function ServersPage() {
     }
     try {
       await api.updateServer(serverId, {
-        name: editName, host: editHost, ip_address: editIpAddress || null, os: editOs, site: editSite,
+        name: editName,
+        host: editHost,
+        ip_address: editIpAddress || null,
+        os: editOs,
+        site: editSite,
+        agent_url: editAgentUrl || null,
+        agent_token: editAgentToken || null,
       });
       setEditingId(null);
       setError(null);
@@ -110,13 +122,14 @@ export default function ServersPage() {
                 <th>IP</th>
                 <th>OS</th>
                 <th>Site</th>
+                <th>Agent</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {servers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="empty">Kayıtlı sunucu yok</td>
+                  <td colSpan={7} className="empty">Kayıtlı sunucu yok</td>
                 </tr>
               ) : (
                 servers.map((s) =>
@@ -138,6 +151,21 @@ export default function ServersPage() {
                         </select>
                       </td>
                       <td>
+                        <div style={{ display: "grid", gap: "0.25rem" }}>
+                          <input
+                            value={editAgentUrl}
+                            onChange={(e) => setEditAgentUrl(e.target.value)}
+                            placeholder="http://host:9105"
+                          />
+                          <input
+                            type="password"
+                            value={editAgentToken}
+                            onChange={(e) => setEditAgentToken(e.target.value)}
+                            placeholder="agent token"
+                          />
+                        </div>
+                      </td>
+                      <td>
                         <div style={{ display: "flex", gap: "0.3rem" }}>
                           <button className="btn btn-primary" onClick={() => saveEdit(s.id)}>Kaydet</button>
                           <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
@@ -155,6 +183,7 @@ export default function ServersPage() {
                           {SITE_LABELS[s.site]}
                         </span>
                       </td>
+                      <td className="muted-note">{s.agent_url || "—"}</td>
                       <td>
                         <div style={{ display: "flex", gap: "0.3rem" }}>
                           <button

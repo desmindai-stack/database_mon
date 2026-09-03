@@ -819,6 +819,27 @@ td code,
   background: rgba(245, 158, 11, 0.06);
 }
 
+/* Faz 16-B İŞ 2: silme onay paneli — neyin birlikte gideceğini gösterir. */
+.delete-confirm {
+  border-color: rgba(239, 68, 68, 0.4);
+}
+
+.dependency-list {
+  margin: 0.5rem 0 0.8rem;
+  padding-left: 1.2rem;
+  color: var(--muted);
+}
+
+.dependency-list strong {
+  color: var(--text);
+}
+
+.detail-meta-link {
+  color: var(--accent);
+  font-size: 0.8rem;
+  margin-left: 0.6rem;
+}
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);

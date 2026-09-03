@@ -370,6 +370,35 @@ class NodeOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class LinkedNodeOut(BaseModel):
+    """Instance'a bağlı bir cluster düğümü — silme onayında gösterilir (Faz 16-B İŞ 2)."""
+
+    id: int
+    name: str
+    group_id: int
+    port: int
+
+
+class InstanceDependenciesOut(BaseModel):
+    """Instance silinirken birlikte silinecek kayıtların sayımı.
+
+    Silme daha önce foreign key kısıtlarına takılıp hata veriyordu; artık kullanıcı neyi
+    kaybedeceğini görüp "birlikte sil" (cascade) diyebiliyor.
+    """
+
+    instance_id: int
+    metric_samples: int = 0
+    slow_query_samples: int = 0
+    alert_rules: int = 0
+    alert_events: int = 0
+    predictions: int = 0
+    metric_rollups: int = 0
+    schema_object_samples: int = 0
+    total_records: int = 0
+    # Düğümler silinmez, sadece bağlantıları koparılır — ayrı listelenmelerinin sebebi bu.
+    linked_nodes: list[LinkedNodeOut] = []
+
+
 class InstanceCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     engine: DatabaseEngine = DatabaseEngine.POSTGRESQL

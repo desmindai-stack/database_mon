@@ -537,6 +537,16 @@ export default function GroupDetailPage() {
                         <Link to={`/instances/${node.instance_id}?tab=tuning`} className="detail-link tuning">
                           Ön koşullar
                         </Link>
+                        {canWrite && (
+                          <>
+                            {" · "}
+                            {/* Faz 16-B İŞ 2: bağlantı bilgilerini (host/port/db/kullanıcı/şifre/
+                                SSL/pooler) düzenlemek için silip yeniden eklemek gerekmesin. */}
+                            <Link to={`/instances?edit=${node.instance_id}`} className="detail-link tuning">
+                              Bağlantı ayarlarını düzenle
+                            </Link>
+                          </>
+                        )}
                       </p>
                     ) : connectingNodeId === node.id ? (
                       <div className="conn-form">

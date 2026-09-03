@@ -603,6 +603,11 @@ export default function InstanceDetailPage() {
               {instance.application ? ` · ${instance.application}` : ""}
               {instance.server_version ? ` · ${instance.server_version}` : ""}
             </span>
+            {/* Faz 16-B İŞ 2: düzenleme ekranı buradan bulunabilir olsun — kullanıcılar
+                instance'ı silip yeniden eklemek zorunda kalıyordu. */}
+            <Link className="detail-meta-link" to={`/instances?edit=${instance.id}`}>
+              Bağlantı ayarlarını düzenle
+            </Link>
           </p>
         </div>
         <div className="range-selector">

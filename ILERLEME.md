@@ -2194,6 +2194,64 @@ view'ı şemayla niteliyor", "maskeli satırlar saklanmıyor".
 `tests/test_prerequisites.py`'ye 2 yeni test (+search_path dışı eklenti,
 +partial görünürlük). Toplam: 134 test yeşil.
 
+## Faz 16-B — İŞ 2: Instance yönetimi eksikleri
+
+**Silme neden çalışmıyordu.** `DELETE /api/instances/{id}` düz
+`db.delete(instance)` çağırıyordu. Instance'a işaret eden 7 tablo
+(`metric_samples`, `slow_query_samples`, `alert_rules`, `alert_events`,
+`prediction_insights`, `metric_rollup_daily`,
+`schema_object_daily_samples`) ve `nodes.instance_id` foreign key kısıtı
+var — hiç kullanılmamış görünen bir instance'ta bile (ör. birkaç metrik
+örneği toplanmışsa) silme veritabanı hatasıyla düşüyordu.
+
+**Yeni akış:**
+
+1. `GET /api/instances/{id}/dependencies` — bağlı kayıtların sayımı +
+   bağlı düğüm listesi.
+2. `DELETE /api/instances/{id}` — bağlı kayıt yoksa siler; varsa **409**
+   döner ve neyin bağlı olduğunu sayılarıyla söyler.
+3. `DELETE /api/instances/{id}?cascade=true` — bağlı kayıtları da siler.
+
+Düğümler (Node) cascade'de **silinmiyor**, sadece `instance_id = NULL`
+yapılıyor: düğüm cluster topolojisinin parçası, veritabanı kaydının
+değil — silmek topolojiyi bozardı, sonradan yeniden bağlanabilir.
+
+Frontend'de "Instance ve tüm metrikleri silinsin mi?" tarzı bir
+`confirm()` yerine artık bir onay paneli var: hangi kayıttan kaç tane
+silineceğini ve hangi düğümlerin bağlantısının kopacağını listeliyor.
+
+**Bağlantı testi düzenleme sırasında hep başarısızdı.** Düzenleme formu
+var olan şifreyi (haklı olarak) göstermiyor, ama "Bağlantı testi" butonu
+formu olduğu gibi `POST /api/instances/test`'e gönderiyordu — yani boş
+şifreyle. Yeni `POST /api/instances/{id}/test-config`: gönderilmeyen
+alanlar kayıtlı değerlerden tamamlanıyor (şifre boşsa saklanan şifre,
+doluysa yeni şifre denenir), hiçbir şey kaydedilmiyor. Form, var olan bir
+instance düzenlenirken bu ucu kullanıyor.
+
+**Düzenleme ekranı bulunabilir hale geldi.** Tam düzenleme formu
+(host, port, veritabanı, kullanıcı, şifre, SSL modu, pooler ayarı,
+Patroni/etcd/HAProxy portları, agent URL/token, toplama aralığı) zaten
+Instances sayfasında vardı ama kullanıcılar oraya ulaşamıyordu. Artık iki
+yeni giriş noktası var, ikisi de `?edit=<id>` ile formu doğrudan açıyor:
+
+- Instance detay sayfası başlığında "Bağlantı ayarlarını düzenle".
+- Grup detayındaki düğüm kartında, instance bağlıysa aynı bağlantı.
+
+**Sunucu (Server) düzenleme tamamlandı.** Satır içi düzenleme formuna
+`agent_url` ve `agent_token` eklendi — daha önce yalnızca sihirbazda
+girilebiliyor, sonradan değiştirmek için sunucuyu silmek gerekiyordu.
+Tabloya bir "Agent" sütunu da eklendi.
+
+**Düğüm (Node) düzenleme** grup detayında zaten vardı (ad, SQL Server
+instance adı, port, rol, sunucu) — bu iş kapsamında ona dokunulmadı,
+üzerine instance bağlantı ayarlarına giden yol eklendi.
+
+**Testler:** `tests/test_instance_delete.py` (5 test) — bağlantısız
+instance temiz siliniyor, bağlı kayıt varken 409 + reddedilen silme
+yarım iş bırakmıyor, cascade siliyor, cascade düğümü silmeyip
+bağlantısını koparıyor, test-config şifreyi kayıtlıdan tamamlıyor /
+verilen şifreyi tercih ediyor. Toplam: 139 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

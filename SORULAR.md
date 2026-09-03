@@ -3,6 +3,32 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 2: Cascade silme düğümü silmiyor, sadece bağlantısını koparıyor
+
+Instance cascade ile silinirken `nodes.instance_id`'yi ne yapacağımız
+belirsizdi: düğümü de silmek mi, bağlantıyı koparmak mı? Düğümü silmeyi
+seçmedim — Node bir cluster topolojisi kaydı (hangi sunucuda, hangi
+grupta, hangi rolde), veritabanı kimlik bilgisinin kendisi değil.
+Instance'ı silmek "bu veritabanına artık bağlanmıyorum" demek; düğümün
+kümeden çıktığı anlamına gelmiyor. Bağlantı koparıldığında düğüm kartı
+zaten var olan "Bağlantı bilgisi gir" akışını gösteriyor, yani kullanıcı
+yeni kimlik bilgisiyle tekrar bağlayabiliyor.
+
+İkinci karar: `cascade` varsayılan olarak `false`. Sessizce her şeyi
+silen bir DELETE tehlikeli olurdu; kullanıcı önce 409 + sayıları görüyor,
+sonra bilinçli olarak "bağlı kayıtlarla birlikte sil" diyor.
+
+## Faz 16-B — İŞ 2: Instance düzenleme formu Instances sayfasında kaldı, kopyalanmadı
+
+Kullanıcı "düzenleme ekranı yok" dedi; aslında tam form (host, port,
+veritabanı, kullanıcı, şifre, SSL, pooler, cluster portları, agent) zaten
+Instances sayfasında vardı — ulaşılamıyordu. Formu ikinci bir yere
+(instance detayı veya grup detayı) kopyalamak yerine `?edit=<id>` derin
+bağlantısıyla var olan forma yönlendirdim: iki ayrı yerde yaşayan iki
+form kaçınılmaz olarak birbirinden ayrışır (Faz 16 İŞ 5'teki "aynı şey
+her yerde aynı adla anılsın" ilkesi). Bunun bedeli bir sayfa geçişi;
+karşılığında tek bakım noktası.
+
 ## Faz 16-B — İŞ 1: Kısıtlı görünürlük "hata" değil "kısıtlı" sayıldı
 
 pg_stat_statements kurulu, önyüklü ve okunabilir olduğunda ama bağlanan

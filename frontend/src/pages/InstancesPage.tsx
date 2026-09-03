@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   api,
   ClusterServiceOptions,
@@ -8,6 +8,7 @@ import {
   HealthResponse,
   Instance,
   InstanceCreate,
+  InstanceDependencies,
 } from "../api";
 import { useAuth } from "../auth";
 
@@ -72,6 +73,12 @@ export default function InstancesPage() {
   const [config, setConfig] = useState<HealthResponse | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
+  // Faz 16-B İŞ 2: silme onayı artık "emin misin?" değil, "şunlar da silinecek" diyor.
+  const [deleteTarget, setDeleteTarget] = useState<Instance | null>(null);
+  const [deleteDeps, setDeleteDeps] = useState<InstanceDependencies | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const isPrivate = config?.deployment_mode === "private";
   const defaultCustomer = config?.default_customer_name ?? undefined;
@@ -85,6 +92,21 @@ export default function InstancesPage() {
       setForm((prev) => ({ ...prev, customer_name: c.default_customer_name ?? prev.customer_name }));
     }).catch(() => undefined);
   }, []);
+
+  // Instance detay sayfasından "Bağlantı ayarlarını düzenle" ile gelindiğinde formu doğrudan aç
+  // (Faz 16-B İŞ 2: kullanıcı düzenleme ekranını bulamıyordu).
+  useEffect(() => {
+    const editId = Number(searchParams.get("edit"));
+    if (!editId || instances.length === 0) return;
+    const target = instances.find((i) => i.id === editId);
+    if (!target) return;
+    setForm(instanceToForm(target));
+    setEditingId(target.id);
+    setIsFormOpen(true);
+    searchParams.delete("edit");
+    setSearchParams(searchParams, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instances, searchParams]);
 
   const setEngine = (engine: DbEngine) => {
     setForm((prev) => ({ ...prev, engine, port: ENGINE_DEFAULTS[engine].port, database: ENGINE_DEFAULTS[engine].database }));
@@ -133,7 +155,11 @@ export default function InstancesPage() {
     setBusy(true);
     setTestResult(null);
     try {
-      const result = await api.testConnection(form);
+      // Var olan bir instance düzenleniyorsa /test-config kullanılır: form şifreyi hiç
+      // göstermediği için düz /instances/test boş şifreyle deneyip hep başarısız oluyordu.
+      const result = editingId !== null
+        ? await api.testInstanceConfig(editingId, form)
+        : await api.testConnection(form);
       const poolerNote = result.details.pooler_detected ? " (pooler algılandı)" : "";
       setTestResult(result.ok ? `OK — ${String(result.details.version ?? result.message)}${poolerNote}` : result.message);
     } catch (e) {
@@ -179,11 +205,92 @@ export default function InstancesPage() {
     }
   };
 
-  const onDelete = async (id: number) => {
-    if (!confirm("Instance ve tüm metrikleri silinsin mi?")) return;
-    await api.deleteInstance(id);
-    await load();
+  const askDelete = async (inst: Instance) => {
+    setDeleteTarget(inst);
+    setDeleteDeps(null);
+    setDeleteError(null);
+    try {
+      setDeleteDeps(await api.getInstanceDependencies(inst.id));
+    } catch (e) {
+      setDeleteError(String((e as Error).message));
+    }
   };
+
+  const confirmDelete = async (cascade: boolean) => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      await api.deleteInstance(deleteTarget.id, cascade);
+      setDeleteTarget(null);
+      setDeleteDeps(null);
+      if (editingId === deleteTarget.id) cancelForm();
+      await load();
+    } catch (e) {
+      setDeleteError(String((e as Error).message));
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
+  const DEPENDENCY_LABELS: [keyof InstanceDependencies, string][] = [
+    ["metric_samples", "Metrik örneği"],
+    ["slow_query_samples", "Yavaş sorgu örneği"],
+    ["alert_rules", "Alarm kuralı"],
+    ["alert_events", "Alarm olayı"],
+    ["predictions", "Tahmin"],
+    ["metric_rollups", "Günlük metrik özeti"],
+    ["schema_object_samples", "Şema nesnesi örneği"],
+  ];
+
+  const deletePanel = deleteTarget && (
+    <div className="card delete-confirm">
+      <h3 className="chart-title">"{deleteTarget.name}" silinsin mi?</h3>
+      {deleteError && <div className="error">{deleteError}</div>}
+      {!deleteDeps && !deleteError && <p className="muted-note">Bağlı kayıtlar kontrol ediliyor…</p>}
+      {deleteDeps && (
+        <>
+          {deleteDeps.total_records === 0 && deleteDeps.linked_nodes.length === 0 ? (
+            <p>Bu instance'a bağlı hiçbir kayıt yok — güvenle silinebilir.</p>
+          ) : (
+            <>
+              <p>Bu instance'a bağlı kayıtlar var. Silerseniz bunlar da silinir:</p>
+              <ul className="dependency-list">
+                {DEPENDENCY_LABELS.filter(([key]) => (deleteDeps[key] as number) > 0).map(([key, label]) => (
+                  <li key={key}>
+                    {label}: <strong>{(deleteDeps[key] as number).toLocaleString()}</strong>
+                  </li>
+                ))}
+              </ul>
+              {deleteDeps.linked_nodes.length > 0 && (
+                <p className="muted-note">
+                  {deleteDeps.linked_nodes.length} cluster düğümü bu instance'a bağlı (
+                  {deleteDeps.linked_nodes.map((n) => n.name).join(", ")}). Düğümler{" "}
+                  <strong>silinmez</strong>, sadece bu veritabanı bağlantıları kopar.
+                </p>
+              )}
+            </>
+          )}
+        </>
+      )}
+      <div className="form-actions">
+        <button
+          className="btn btn-danger"
+          disabled={deleteBusy || !deleteDeps}
+          onClick={() => confirmDelete((deleteDeps?.total_records ?? 0) > 0 || (deleteDeps?.linked_nodes.length ?? 0) > 0)}
+        >
+          {deleteBusy
+            ? "Siliniyor…"
+            : (deleteDeps?.total_records ?? 0) > 0 || (deleteDeps?.linked_nodes.length ?? 0) > 0
+              ? "Bağlı kayıtlarla birlikte sil"
+              : "Sil"}
+        </button>
+        <button className="btn" disabled={deleteBusy} onClick={() => { setDeleteTarget(null); setDeleteDeps(null); }}>
+          Vazgeç
+        </button>
+      </div>
+    </div>
+  );
 
   const formPanel = (
     <div className="card">
@@ -487,7 +594,7 @@ export default function InstancesPage() {
                       {canWrite && (
                         <div style={{ display: "flex", gap: "0.4rem" }}>
                           <button className="btn" onClick={() => startEdit(inst)}>Düzenle</button>
-                          <button className="btn btn-danger" onClick={() => onDelete(inst.id)}>Sil</button>
+                          <button className="btn btn-danger" onClick={() => askDelete(inst)}>Sil</button>
                         </div>
                       )}
                     </td>
@@ -498,7 +605,9 @@ export default function InstancesPage() {
           </table>
         </div>
 
-        {isFormOpen ? (
+        {deleteTarget ? (
+          deletePanel
+        ) : isFormOpen ? (
           formPanel
         ) : (
           <div className="card" style={{ display: "grid", placeItems: "center", minHeight: 200 }}>

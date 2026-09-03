@@ -308,6 +308,20 @@ export interface SlowQueryAvailability {
   redacted_rows: number | null;
 }
 
+/** Faz 16-B İŞ 2: instance silinirken birlikte silinecek kayıtlar. */
+export interface InstanceDependencies {
+  instance_id: number;
+  metric_samples: number;
+  slow_query_samples: number;
+  alert_rules: number;
+  alert_events: number;
+  predictions: number;
+  metric_rollups: number;
+  schema_object_samples: number;
+  total_records: number;
+  linked_nodes: { id: number; name: string; group_id: number; port: number }[];
+}
+
 export interface SchemaHealth {
   unused_indexes: {
     schema_name: string;
@@ -613,8 +627,9 @@ export interface ServerCreate {
   ip_address?: string | null;
   os: ServerOS;
   site: NodeSite;
-  agent_url?: string;
-  agent_token?: string;
+  // null gönderilebilir: düzenleme formunda alan boşaltılınca kaydı temizler (Faz 16-B İŞ 2).
+  agent_url?: string | null;
+  agent_token?: string | null;
 }
 
 export interface DbNode {
@@ -991,8 +1006,16 @@ export const api = {
     request<Instance>("/api/instances", { method: "POST", body: JSON.stringify(data) }),
   updateInstance: (id: number, data: Partial<InstanceCreate>) =>
     request<Instance>(`/api/instances/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-  deleteInstance: (id: number) =>
-    request<void>(`/api/instances/${id}`, { method: "DELETE" }),
+  deleteInstance: (id: number, cascade = false) =>
+    request<void>(`/api/instances/${id}${cascade ? "?cascade=true" : ""}`, { method: "DELETE" }),
+  getInstanceDependencies: (id: number) =>
+    request<InstanceDependencies>(`/api/instances/${id}/dependencies`),
+  /** Kaydetmeden bağlantı testi: gönderilmeyen alanlar (şifre dahil) kayıtlı değerlerden tamamlanır. */
+  testInstanceConfig: (id: number, data: Partial<InstanceCreate>) =>
+    request<ConnectionTestResult>(`/api/instances/${id}/test-config`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
   testConnection: (data: InstanceCreate) =>
     request<ConnectionTestResult>("/api/instances/test", { method: "POST", body: JSON.stringify(data) }),
   testExistingInstance: (id: number) =>

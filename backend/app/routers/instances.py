@@ -1,7 +1,9 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget, classify_connection_error
@@ -9,16 +11,28 @@ from app.collectors.registry import get_collector
 from app.database import get_db
 from app.domain.engines import DatabaseEngine
 from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
-from app.models import AlertEvent, Instance, MetricSample, PredictionInsight, SlowQuerySample
+from app.models import (
+    AlertEvent,
+    AlertRule,
+    Instance,
+    MetricRollupDaily,
+    MetricSample,
+    Node,
+    PredictionInsight,
+    SchemaObjectDailySample,
+    SlowQuerySample,
+)
 from app.schemas import (
     ActivityOut,
     ClusterHealthOut,
     ClusterLogsOut,
     ConnectionTestResult,
     InstanceCreate,
+    InstanceDependenciesOut,
     InstanceOut,
     InstanceSummary,
     InstanceUpdate,
+    LinkedNodeOut,
     MetricDefinitionOut,
     MetricSampleOut,
     PerformanceInsightOut,
@@ -190,13 +204,129 @@ async def update_instance(
     return instance
 
 
-@router.delete("/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_instance(instance_id: int, db: AsyncSession = Depends(get_db)) -> None:
+async def _collect_dependencies(db: AsyncSession, instance_id: int) -> InstanceDependenciesOut:
+    """Instance'a bağlı kayıtların sayımı — silme onayında kullanıcıya gösterilir."""
+
+    async def count_of(model, column) -> int:
+        return int(
+            (await db.execute(select(func.count()).select_from(model).where(column == instance_id))).scalar_one()
+        )
+
+    nodes = list((await db.execute(select(Node).where(Node.instance_id == instance_id))).scalars().all())
+    counts = {
+        "metric_samples": await count_of(MetricSample, MetricSample.instance_id),
+        "slow_query_samples": await count_of(SlowQuerySample, SlowQuerySample.instance_id),
+        "alert_rules": await count_of(AlertRule, AlertRule.instance_id),
+        "alert_events": await count_of(AlertEvent, AlertEvent.instance_id),
+        "predictions": await count_of(PredictionInsight, PredictionInsight.instance_id),
+        "metric_rollups": await count_of(MetricRollupDaily, MetricRollupDaily.instance_id),
+        "schema_object_samples": await count_of(SchemaObjectDailySample, SchemaObjectDailySample.instance_id),
+    }
+    return InstanceDependenciesOut(
+        instance_id=instance_id,
+        **counts,
+        total_records=sum(counts.values()),
+        linked_nodes=[LinkedNodeOut(id=n.id, name=n.name, group_id=n.group_id, port=n.port) for n in nodes],
+    )
+
+
+@router.get("/{instance_id}/dependencies", response_model=InstanceDependenciesOut)
+async def get_instance_dependencies(
+    instance_id: int, db: AsyncSession = Depends(get_db)
+) -> InstanceDependenciesOut:
+    """Faz 16-B İŞ 2: silmeden ÖNCE "bu instance'a bağlı ne var?" — kullanıcı neyi kaybedeceğini
+    görmeden onaylamasın diye."""
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
+    return await _collect_dependencies(db, instance_id)
+
+
+@router.delete("/{instance_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_instance(
+    instance_id: int,
+    cascade: bool = Query(
+        default=False,
+        description="true ise bağlı metrik/sorgu/alarm/tahmin kayıtları ve düğüm bağlantıları da silinir",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Faz 16-B İŞ 2: silme artık gerçekten çalışıyor.
+
+    Eskiden düz `db.delete(instance)` çağrılıyordu; instance'a işaret eden 7 tabloya (metrik,
+    yavaş sorgu, alarm kuralı/olayı, tahmin, rollup, şema örneği) ve `nodes.instance_id`'ye
+    foreign key kısıtı olduğu için silme veritabanı hatasıyla düşüyordu — kullanıcıya
+    "kullanılmayan instance silinemiyor" olarak yansıyordu.
+
+    Artık: bağlı kayıt yoksa doğrudan siliniyor; varsa `cascade=false` (varsayılan) ile 409
+    dönüp neyin bağlı olduğunu sayılarıyla bildiriyor, `cascade=true` ile hepsi birlikte
+    siliniyor. Düğümler (Node) SİLİNMEZ — sadece bağlantıları kopar (`instance_id = NULL`);
+    düğüm cluster topolojisinin parçası, veritabanı kaydının değil.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    deps = await _collect_dependencies(db, instance_id)
+    if (deps.total_records or deps.linked_nodes) and not cascade:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Bu instance'a bağlı kayıtlar var: {deps.total_records} kayıt, "
+                f"{len(deps.linked_nodes)} düğüm bağlantısı. Birlikte silmek için cascade=true gönderin."
+            ),
+        )
+
+    if cascade:
+        for model, column in (
+            (MetricSample, MetricSample.instance_id),
+            (SlowQuerySample, SlowQuerySample.instance_id),
+            (AlertEvent, AlertEvent.instance_id),
+            (AlertRule, AlertRule.instance_id),
+            (PredictionInsight, PredictionInsight.instance_id),
+            (MetricRollupDaily, MetricRollupDaily.instance_id),
+            (SchemaObjectDailySample, SchemaObjectDailySample.instance_id),
+        ):
+            await db.execute(sa_delete(model).where(column == instance_id))
+        # Düğümü silmek yerine bağlantısını koparıyoruz: düğüm cluster topolojisini temsil
+        # ediyor ve instance'ı sonradan yeniden bağlanabilir.
+        await db.execute(sa_update(Node).where(Node.instance_id == instance_id).values(instance_id=None))
+
     await db.delete(instance)
     await db.commit()
+
+
+@router.post("/{instance_id}/test-config", response_model=ConnectionTestResult)
+async def test_instance_config(
+    instance_id: int, payload: InstanceUpdate, db: AsyncSession = Depends(get_db)
+) -> ConnectionTestResult:
+    """Kaydetmeden bağlantı testi (Faz 16-B İŞ 2).
+
+    Düzenleme formundaki "Bağlantı testi" butonu daha önce /instances/test'e gidiyordu ve şifre
+    alanı boş olduğu için (form var olan şifreyi göstermez) var olan bir instance'ta hep
+    başarısız oluyordu. Burada gönderilmeyen alanlar KAYITLI değerlerden tamamlanıyor: şifre boş
+    bırakılırsa saklanan şifre kullanılır, doldurulursa yeni şifre denenir — hiçbir şey
+    kaydedilmez.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    updates = payload.model_dump(exclude_unset=True)
+    password = updates.get("password")
+    engine = DatabaseEngine(updates.get("engine") or instance.engine)
+    options = updates.get("options") if "options" in updates else instance.options
+    target = ConnectionTarget(
+        host=updates.get("host") or instance.host,
+        port=int(updates.get("port") or instance.port),
+        database=updates.get("database") or instance.database,
+        username=updates.get("username") or instance.username,
+        password=password if password else decrypt_secret(instance.password),
+        options=options,
+    )
+    collector = get_collector(engine, target)
+    ok, message, details = await collector.test_connection()
+    return ConnectionTestResult(ok=ok, message=message, details=details)
 
 
 @router.post("/test", response_model=ConnectionTestResult)
