@@ -3,6 +3,29 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 6: Yoksayma kontrolü gizlemiyor, sadece sayımdan çıkarıyor
+
+"Yoksayılan kontrol ön koşul yüzdesine dahil edilmesin" isteğini iki
+türlü uygulayabilirdim: kontrolü listeden tamamen kaldırmak ya da
+listede bırakıp sayımdan düşmek. İkincisini seçtim. Sebep: yoksayılan
+kontrol çoğu zaman gerçekten eksik olmaya devam ediyor ve etkilediği
+özellik çalışmıyor; onu ekrandan silmek altı ay sonra "yavaş sorgu
+listesi neden boş?" sorusunu yeniden doğururdu — İŞ 1'de düzelttiğimiz
+tam da bu tür bir sessizlikti. Bu yüzden yoksayılanlar ayrı bir bölümde,
+gerçek durumlarıyla ve "bu kontrol yoksayıldığı için etkilediği
+özellikler çalışmıyor" notuyla duruyor.
+
+## Faz 16-B — İŞ 6: Yoksayma instance bazında, grup/uygulama bazında değil
+
+Yoksama listesi `Instance` üzerinde saklanıyor. Aynı kümenin (grup) üç
+düğümü için ayrı ayrı yoksamak gerekiyor — bir grup seviyesi
+yoksaymadım. Sebep: ön koşullar gerçekten düğüm bazında farklılaşabilir
+(bir replikada `pg_stat_statements` preload edilmiş, diğerinde
+edilmemiş olabilir) ve grup seviyesinde yoksaymak, tek bir düğümdeki
+gerçek bir eksikliği sessizce örtebilirdi. Kullanım zahmeti karşılığında
+doğruluk tercih edildi; ihtiyaç görülürse grup seviyesi bir "hepsine
+uygula" kısayolu sonradan eklenebilir.
+
 ## Faz 16-B — İŞ 5: VACUUM FULL komut olarak sunulmuyor
 
 Kullanıcı "tüm üretilen SQL komutları tam ve çalıştırılabilir olsun"

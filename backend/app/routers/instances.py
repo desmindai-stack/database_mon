@@ -27,6 +27,7 @@ from app.schemas import (
     ClusterHealthOut,
     ClusterLogsOut,
     ConnectionTestResult,
+    IgnoredPrerequisitesUpdate,
     InstanceCreate,
     InstanceDependenciesOut,
     InstanceOut,
@@ -441,6 +442,36 @@ async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)
     return SchemaHealthOut.model_validate(data)
 
 
+def build_prerequisite_report(
+    engine: str, checks: list, ignored_keys: set[str]
+) -> PrerequisiteReportOut:
+    """Ham kontrol listesinden rapor — yoksayılanlar yüzdeden düşülerek (Faz 16-B İŞ 6).
+
+    Yoksayma kontrolü yeşile boyamaz: `status` gerçek sonucu göstermeye devam eder, sadece
+    `ignored` işaretlenir ve ilerleme sayımının dışında kalır. Böylece ortamda kullanılmayacak
+    bir uzantı yüzünden liste sonsuza kadar kırmızı kalmaz, ama gerçek durum da gizlenmez.
+    """
+    out: list[PrerequisiteCheckOut] = []
+    for check in checks:
+        item = PrerequisiteCheckOut(**vars(check))
+        item.ignored = item.key in ignored_keys
+        out.append(item)
+
+    counted = [c for c in out if not c.ignored]
+    ok_count = sum(1 for c in counted if c.status == "ok")
+    return PrerequisiteReportOut(
+        engine=engine,
+        checked_at=datetime.now(UTC),
+        checks=out,
+        ok_count=ok_count,
+        issue_count=len(counted) - ok_count,
+        ignored_count=len(out) - len(counted),
+        # Sayılacak kontrol kalmadıysa (hepsi yoksayıldıysa) %100 — kullanıcı bilinçli olarak
+        # "burada denetlenecek bir şey yok" demiş oluyor.
+        completion_pct=100 if not counted else round(ok_count * 100 / len(counted)),
+    )
+
+
 @router.get("/{instance_id}/prerequisites", response_model=PrerequisiteReportOut)
 async def get_instance_prerequisites(instance_id: int, db: AsyncSession = Depends(get_db)) -> PrerequisiteReportOut:
     instance = await db.get(Instance, instance_id)
@@ -464,14 +495,27 @@ async def get_instance_prerequisites(instance_id: int, db: AsyncSession = Depend
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
 
-    ok_count = sum(1 for c in checks if c.status == "ok")
-    return PrerequisiteReportOut(
-        engine=instance.engine,
-        checked_at=datetime.now(UTC),
-        checks=[PrerequisiteCheckOut(**vars(c)) for c in checks],
-        ok_count=ok_count,
-        issue_count=len(checks) - ok_count,
-    )
+    return build_prerequisite_report(instance.engine, checks, set(instance.ignored_prerequisites or []))
+
+
+@router.put("/{instance_id}/prerequisites/ignored", response_model=list[str])
+async def set_ignored_prerequisites(
+    instance_id: int, payload: IgnoredPrerequisitesUpdate, db: AsyncSession = Depends(get_db)
+) -> list[str]:
+    """Yoksayılan ön koşul anahtarlarını instance bazında kalıcı olarak saklar (Faz 16-B İŞ 6).
+
+    Tam liste gönderilir (idempotent): bir kontrolü yoksaymak da geri almak da aynı uçtan
+    yapılır, böylece arayüzde iki ayrı çağrı ve iki ayrı hata yolu olmaz.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    # Sıralı ve tekilleştirilmiş sakla — kaydın karşılaştırılabilir olması testleri ve
+    # "değişti mi?" kontrollerini basitleştiriyor.
+    keys = sorted(set(payload.keys))
+    instance.ignored_prerequisites = keys or None
+    await db.commit()
+    return keys
 
 
 @router.get("/{instance_id}/prediction-readiness", response_model=list[PredictionReadinessOut])

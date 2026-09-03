@@ -173,6 +173,12 @@ class Instance(Base):
 
     group_id: Mapped[int | None] = mapped_column(ForeignKey("database_groups.id"), nullable=True)
 
+    # Faz 16-B İŞ 6: kullanıcının "bu kontrolü yoksay" dediği ön koşul anahtarları
+    # (services/prerequisites.py'deki PrerequisiteCheck.key değerleri). Yoksayılan kontroller
+    # ön koşul yüzdesine ve dashboard önerilerine dahil edilmez; ortamda kullanılmayacak bir
+    # uzantı yüzünden liste sonsuza kadar kırmızı kalmasın diye. Null/boş = hiçbiri yoksayılmadı.
+    ignored_prerequisites: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+
     # Null = use the app-wide settings.collect_interval_seconds default. Lets a lower-priority
     # instance be sampled less often — see services/collection.py / collectors/scheduler.py.
     collect_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)

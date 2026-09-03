@@ -22,7 +22,15 @@ def _node(instance=None, role_hint: str = "primary") -> SimpleNamespace:
 
 def _instance() -> SimpleNamespace:
     return SimpleNamespace(
-        id=42, host="h", port=5432, database="d", username="u", password="plain:p", options=None
+        id=42,
+        host="h",
+        port=5432,
+        database="d",
+        username="u",
+        password="plain:p",
+        options=None,
+        # Faz 16-B İŞ 6: yoksayılan ön koşullar dashboard uyarısı üretmez.
+        ignored_prerequisites=None,
     )
 
 

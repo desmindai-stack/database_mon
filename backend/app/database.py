@@ -185,6 +185,9 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "lower_bound", "lower_bound FLOAT")
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "upper_bound", "upper_bound FLOAT")
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "seasonality", "seasonality VARCHAR(16)")
+        await _sqlite_add_column_if_missing(
+            conn, "instances", "ignored_prerequisites", "ignored_prerequisites JSON"
+        )
 
 
 async def init_db() -> None:

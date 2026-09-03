@@ -788,6 +788,10 @@ class PrerequisiteCheckOut(BaseModel):
     impact: str
     fix: str | None = None
     detail: str | None = None
+    # Faz 16-B İŞ 6: kullanıcı bu kontrolü "ortamımda geçerli değil" diye işaretlediyse true.
+    # Durum (status) yine gerçek sonucu gösterir — yoksaymak kontrolü yeşile boyamaz, sadece
+    # ilerleme yüzdesinden ve dashboard uyarılarından çıkarır.
+    ignored: bool = False
 
 
 class PrerequisiteReportOut(BaseModel):
@@ -796,6 +800,15 @@ class PrerequisiteReportOut(BaseModel):
     checks: list[PrerequisiteCheckOut]
     ok_count: int
     issue_count: int
+    # Yoksayılanlar hariç tamamlanma yüzdesi — kalan zorunlu kontroller bittiğinde %100 olur.
+    ignored_count: int = 0
+    completion_pct: int = 0
+
+
+class IgnoredPrerequisitesUpdate(BaseModel):
+    """Yoksayılan ön koşul anahtarlarının TAM listesi (idempotent)."""
+
+    keys: list[str] = []
 
 
 class SlowQueryAvailabilityOut(BaseModel):
@@ -813,6 +826,7 @@ class SlowQueryAvailabilityOut(BaseModel):
     last_collected_at: datetime | None = None
     server_rows: int | None = None
     redacted_rows: int | None = None
+    ignored_prerequisite: str | None = None
 
 
 class MetricDefinitionOut(BaseModel):

@@ -274,6 +274,9 @@ export interface PrerequisiteCheck {
   impact: string;
   fix: string | null;
   detail: string | null;
+  /** Faz 16-B İŞ 6: kullanıcı "ortamımda geçerli değil" dediyse true. Durum yine gerçek sonucu
+   *  gösterir — yoksaymak kontrolü yeşile boyamaz, yüzdenin dışında bırakır. */
+  ignored: boolean;
 }
 
 export interface PrerequisiteReport {
@@ -282,6 +285,8 @@ export interface PrerequisiteReport {
   checks: PrerequisiteCheck[];
   ok_count: number;
   issue_count: number;
+  ignored_count: number;
+  completion_pct: number;
 }
 
 /** Faz 16-B İŞ 1: "yavaş sorgu verisi neden yok?" — tek kaynak. Sabit "CREATE EXTENSION"
@@ -306,6 +311,8 @@ export interface SlowQueryAvailability {
   last_collected_at: string | null;
   server_rows: number | null;
   redacted_rows: number | null;
+  /** Bu durumun kaynağı olan ön koşul kullanıcı tarafından yoksayıldıysa anahtarı. */
+  ignored_prerequisite: string | null;
 }
 
 /** Faz 16-B İŞ 2: instance silinirken birlikte silinecek kayıtlar. */
@@ -1060,6 +1067,12 @@ export const api = {
     request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
   getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
+  /** Yoksayılan ön koşulların TAM listesini kaydeder (Faz 16-B İŞ 6). */
+  setIgnoredPrerequisites: (id: number, keys: string[]) =>
+    request<string[]>(`/api/instances/${id}/prerequisites/ignored`, {
+      method: "PUT",
+      body: JSON.stringify({ keys }),
+    }),
   getPredictionReadiness: (id: number) => request<PredictionReadiness[]>(`/api/instances/${id}/prediction-readiness`),
   getQueryHistory: (id: number, hours = 24, limit = 10) =>
     request<QueryHistoryList>(`/api/queries/${id}/history?hours=${hours}&limit=${limit}`),

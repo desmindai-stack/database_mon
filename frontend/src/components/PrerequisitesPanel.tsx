@@ -24,9 +24,63 @@ type Props = {
   error: string | null;
   loading: boolean;
   onRefresh: () => void;
+  /** Faz 16-B İŞ 6: yoksayılan kontrollerin tam listesini kaydeder. */
+  onSetIgnored?: (keys: string[]) => void;
+  canWrite?: boolean;
 };
 
-export default function PrerequisitesPanel({ data, error, loading, onRefresh }: Props) {
+export default function PrerequisitesPanel({
+  data,
+  error,
+  loading,
+  onRefresh,
+  onSetIgnored,
+  canWrite = false,
+}: Props) {
+  const active = data?.checks.filter((c) => !c.ignored) ?? [];
+  const ignored = data?.checks.filter((c) => c.ignored) ?? [];
+
+  const setIgnoredKeys = (key: string, next: boolean) => {
+    if (!data || !onSetIgnored) return;
+    const current = data.checks.filter((c) => c.ignored).map((c) => c.key);
+    onSetIgnored(next ? [...current, key] : current.filter((k) => k !== key));
+  };
+
+  const renderRow = (check: PrerequisiteCheck) => (
+    <div key={check.key} className={`checklist-row ${check.ignored ? "ignored" : rowClass(check)}`}>
+      <span className="checklist-status">{STATUS_TR[check.status]}</span>
+      <div style={{ flex: 1 }}>
+        <strong>{check.name}</strong>
+        <p>{check.impact}</p>
+        {check.detail && <p style={{ color: "var(--muted)" }}>Mevcut değer: {check.detail}</p>}
+        {check.ignored && check.status !== "ok" && (
+          <p className="warn-text">
+            Bu kontrol yoksayıldı — etkilediği özellikler çalışmamaya devam eder, sadece ilerleme
+            yüzdesine ve dashboard uyarılarına dahil edilmez.
+          </p>
+        )}
+        {check.fix && !check.ignored && (
+          <div style={{ marginTop: "0.4rem" }}>
+            <CopyableAction command={check.fix} />
+          </div>
+        )}
+      </div>
+      {canWrite && onSetIgnored && (
+        <button
+          className="btn btn-xs"
+          onClick={() => setIgnoredKeys(check.key, !check.ignored)}
+          title={
+            check.ignored
+              ? "Bu kontrolü tekrar denetime dahil et"
+              : "Bu kontrol bu ortamda geçerli değilse yoksay — yüzdeden düşer"
+          }
+        >
+          {check.ignored ? "Geri al" : "Yoksay"}
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <div className="card tuning-checklist-card">
       <div className="insights-header">
@@ -49,27 +103,22 @@ export default function PrerequisitesPanel({ data, error, loading, onRefresh }: 
       {data && (
         <>
           <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 0.6rem" }}>
-            {data.ok_count}/{data.checks.length} kontrol tamam · Son kontrol: {formatTime(data.checked_at)}
+            {data.ok_count}/{active.length} kontrol tamam (%{data.completion_pct})
+            {data.ignored_count > 0 && ` · ${data.ignored_count} yoksayıldı`} · Son kontrol:{" "}
+            {formatTime(data.checked_at)}
           </p>
-          <div className="tuning-checklist">
-            {data.checks.map((check) => (
-              <div key={check.key} className={`checklist-row ${rowClass(check)}`}>
-                <span className="checklist-status">{STATUS_TR[check.status]}</span>
-                <div style={{ flex: 1 }}>
-                  <strong>{check.name}</strong>
-                  <p>{check.impact}</p>
-                  {check.detail && (
-                    <p style={{ color: "var(--muted)" }}>Mevcut değer: {check.detail}</p>
-                  )}
-                  {check.fix && (
-                    <div style={{ marginTop: "0.4rem" }}>
-                      <CopyableAction command={check.fix} />
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          <div className="tuning-checklist">{active.map(renderRow)}</div>
+
+          {ignored.length > 0 && (
+            <div className="ignored-section">
+              <h4>Yoksayılan kontroller ({ignored.length})</h4>
+              <p className="muted-note">
+                Bunlar ilerleme yüzdesine dahil edilmez ve dashboard'da uyarı üretmez. Gerçek
+                durumları aşağıda olduğu gibi görünmeye devam eder.
+              </p>
+              <div className="tuning-checklist">{ignored.map(renderRow)}</div>
+            </div>
+          )}
         </>
       )}
     </div>

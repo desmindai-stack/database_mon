@@ -123,8 +123,14 @@ async def _prerequisite_recommendations(group: DatabaseGroup, nodes: list[Node])
     except Exception:
         return []
 
+    # Faz 16-B İŞ 6: kullanıcının "ortamımda geçerli değil" dediği kontroller dashboard'da
+    # uyarı üretmez — yoksa liste sonsuza kadar aynı uyarıyı tekrarlar.
+    ignored = set(instance.ignored_prerequisites or [])
+
     out: list[dict[str, Any]] = []
     for check in checks:
+        if check.key in ignored:
+            continue
         # "partial" da eyleme dönük bir eksiklik (Faz 16-B İŞ 1): pg_stat_statements kurulu
         # ama rol sadece kendi sorgularını görüyor — liste sessizce eksik kalır.
         if check.status not in ("missing", "unauthorized", "partial"):

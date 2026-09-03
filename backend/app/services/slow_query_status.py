@@ -35,6 +35,19 @@ from app.services.credentials import decrypt_secret
 from app.services.pgss import PgStatStatementsProbe, probe_pg_stat_statements
 
 
+# Hangi durumun hangi ön koşul kontrolünden kaynaklandığı (Faz 16-B İŞ 6). Kullanıcı o kontrolü
+# "ortamımda geçerli değil" diye yoksaydıysa, etkilediği özelliğin neden çalışmadığını burada
+# açıkça söylüyoruz — sessizce boş bir liste göstermek yerine.
+_STATUS_TO_PREREQUISITE = {
+    "extension_missing": "pg_stat_statements",
+    "extension_unreachable": "pg_stat_statements",
+    "unauthorized": "pg_stat_statements",
+    "not_preloaded": "shared_preload_libraries",
+    "track_off": "pg_stat_statements_track",
+    "restricted_visibility": "pg_stat_statements_visibility",
+}
+
+
 @dataclass
 class SlowQueryAvailability:
     status: str
@@ -45,6 +58,8 @@ class SlowQueryAvailability:
     last_collected_at: datetime | None = None
     server_rows: int | None = None
     redacted_rows: int | None = None
+    # Bu durumun kaynağı olan ön koşul kontrolü kullanıcı tarafından yoksayıldıysa anahtarı.
+    ignored_prerequisite: str | None = None
 
     @property
     def has_data(self) -> bool:
@@ -213,6 +228,17 @@ async def get_slow_query_availability(session: AsyncSession, instance: Instance)
         await conn.close()
 
     status, title, message, fix = _pg_status(probe, stored)
+
+    ignored = set(instance.ignored_prerequisites or [])
+    ignored_key = _STATUS_TO_PREREQUISITE.get(status)
+    ignored_key = ignored_key if ignored_key in ignored else None
+    if ignored_key:
+        title = f"{title} (yoksayılan ön koşul)"
+        message = (
+            f"Bu özellik çalışmıyor çünkü '{ignored_key}' ön koşulu eksik ve siz bu kontrolü "
+            f"yoksaydınız. Yoksaymayı Ön koşullar panelinden geri alabilirsiniz. Özgün sebep: {message}"
+        )
+
     return SlowQueryAvailability(
         status=status,
         title=title,
@@ -222,4 +248,5 @@ async def get_slow_query_availability(session: AsyncSession, instance: Instance)
         last_collected_at=last_at,
         server_rows=probe.total_rows,
         redacted_rows=probe.redacted_rows,
+        ignored_prerequisite=ignored_key,
     )

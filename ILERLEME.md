@@ -2391,6 +2391,59 @@ alıyor, bloat komutu düz VACUUM (FULL sadece yorum), yüksek freeze_age'de
 FREEZE, düşükte düz VACUUM, ve üç listedeki her komut şema adını içeriyor
 + noktalı virgülle bitiyor. Toplam: 153 test yeşil.
 
+## Faz 16-B — İŞ 6: Ön koşul kontrollerini yoksayma
+
+**Sorun.** Ortamda hiç kullanılmayacak bir uzantı (ör. `pg_buffercache`,
+`pg_qualstats`) yüzünden ön koşul listesi sonsuza kadar kırmızı kalıyor
+ve dashboard aynı uyarıyı tekrarlayıp duruyordu. Kullanıcı "bunu
+kurmayacağım" diyemiyordu.
+
+**Kalıcı, instance bazında yoksayma.** `Instance.ignored_prerequisites`
+(JSON) kolonu eklendi + Supabase migration
+(`20260904090000_instance_ignored_prerequisites.sql`, DEPLOY.md tablosuna
+21 numaralı satır olarak işlendi). Yeni uç:
+
+```
+PUT /api/instances/{id}/prerequisites/ignored   {"keys": [...]}
+```
+
+Tam liste gönderiliyor (idempotent) — yoksaymak da geri almak da aynı
+uçtan yapılıyor; anahtarlar tekilleştirilip sıralı saklanıyor.
+
+**Yoksaymak kontrolü yeşile boyamıyor.** Kontrolün `status` alanı gerçek
+sonucu göstermeye devam ediyor; sadece `ignored: true` işaretleniyor ve
+sayımın dışında kalıyor. Rapor artık `ignored_count` ve `completion_pct`
+de döndürüyor: yüzde yalnızca yoksayılmayan kontroller üzerinden
+hesaplanıyor, yani kalan zorunlu kontroller tamamlandığında **%100**
+görünüyor. Hepsi yoksayılmışsa yüzde %100 (kullanıcı bilinçli olarak
+"burada denetlenecek bir şey yok" demiş oluyor).
+
+**Dashboard uyarıları da susuyor.** `_prerequisite_recommendations`
+yoksayılan anahtarları atlıyor.
+
+**Etkilenen özellik nedenini söylüyor.** Yavaş sorgu kullanılabilirlik
+notu (İŞ 1'de eklenen tek kaynak) artık durum → ön koşul eşlemesi
+tutuyor: `extension_missing`/`unauthorized` → `pg_stat_statements`,
+`not_preloaded` → `shared_preload_libraries`, `track_off` →
+`pg_stat_statements_track`, `restricted_visibility` →
+`pg_stat_statements_visibility`. İlgili kontrol yoksayılmışsa mesaj
+"Bu özellik çalışmıyor çünkü '<kontrol>' ön koşulu eksik ve siz bu
+kontrolü yoksaydınız" diye başlıyor ve özgün sebebi de taşıyor.
+
+**Arayüz.** Her kontrol satırında "Yoksay" (yoksayılmışsa "Geri al")
+butonu — sadece admin için. Yoksayılanlar listenin altında ayrı bir
+**Yoksayılan kontroller (N)** bölümünde, soluk gösteriliyor; gerçek
+durumları ve "bu kontrol yoksayıldı, etkilediği özellikler çalışmamaya
+devam eder" notu görünüyor. Başlıkta `X/Y kontrol tamam (%Z) · N
+yoksayıldı` yazıyor.
+
+**Testler:** `tests/test_prerequisite_ignore.py` (7 test) — yoksayılan
+kontrol yüzdeden düşüyor ama durumunu koruyor, yüzde hesabı, hepsi
+yoksayılınca %100, `partial` durumu yoksayılmadıkça sorun sayılıyor,
+durum→kontrol eşlemesi gerçek anahtarlara denk geliyor, liste kalıcı ve
+geri alınabilir, yoksayılan kontrol dashboard önerisi üretmiyor.
+Toplam: 160 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

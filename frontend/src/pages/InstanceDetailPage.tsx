@@ -54,6 +54,7 @@ import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import SlowQueryAvailabilityNote from "../components/SlowQueryAvailabilityNote";
 import { ChartRange, useChartRangeSelection } from "../components/useChartRangeSelection";
 import TuningPanel from "../components/TuningPanel";
+import { useAuth } from "../auth";
 
 type Tab = "overview" | "metrics" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
@@ -152,6 +153,7 @@ function possibleCauses(q: SlowQuery): string[] {
 }
 
 export default function InstanceDetailPage() {
+  const canWrite = useAuth().user?.role === "admin";
   const { id } = useParams();
   const instanceId = Number(id);
   const [searchParams, setSearchParams] = useSearchParams();
@@ -281,6 +283,17 @@ export default function InstanceDetailPage() {
       setSchemaError(String((e as Error).message || e));
     } finally {
       setSchemaLoading(false);
+    }
+  };
+
+  /** Faz 16-B İŞ 6: yoksayma kalıcı — kaydedip raporu tazeliyoruz (yüzde anında düzelsin). */
+  const saveIgnoredPrerequisites = async (keys: string[]) => {
+    if (!instanceId) return;
+    try {
+      await api.setIgnoredPrerequisites(instanceId, keys);
+      await loadPrerequisites();
+    } catch (e) {
+      setPrerequisitesError(String((e as Error).message || e));
     }
   };
 
@@ -1502,6 +1515,8 @@ export default function InstanceDetailPage() {
           error={prerequisitesError}
           loading={prerequisitesLoading}
           onRefresh={loadPrerequisites}
+          onSetIgnored={saveIgnoredPrerequisites}
+          canWrite={canWrite}
         />
       )}
 
