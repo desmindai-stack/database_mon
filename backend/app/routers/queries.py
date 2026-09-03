@@ -6,12 +6,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
-from app.models import Instance, SlowQuerySample
+from app.models import Instance, Node, Server, SlowQuerySample
 from app.schemas import (
     ExplainOut,
     ExplainRequest,
     IndexAdviceOut,
     IndexAdviceRequest,
+    QueryDiagnosisOut,
+    QueryDiagnosticsReportOut,
     QueryHistoryListOut,
     QueryHistorySeriesOut,
     SlowQueryOut,
@@ -20,6 +22,7 @@ from app.services import query_cache
 from app.services.credentials import decrypt_secret
 from app.services.explain_service import PostgreSQLExplainService
 from app.services.index_advisor import PostgreSQLIndexAdvisor
+from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
 
 router = APIRouter(prefix="/queries", tags=["queries"])
@@ -127,6 +130,81 @@ async def get_slow_queries(
         .limit(limit)
     )
     return list(result.scalars().all())
+
+
+@router.get("/{instance_id}/diagnostics", response_model=QueryDiagnosticsReportOut)
+async def get_query_diagnostics(
+    instance_id: int,
+    limit: int = Query(default=10, ge=1, le=50),
+    db: AsyncSession = Depends(get_db),
+) -> QueryDiagnosticsReportOut:
+    """Faz 16 İŞ 3: Top-N yavaş sorguyu kaynak türüne göre sınıflandırır (I/O, CPU, bellek,
+    kilit/bekleme) — en son toplanan snapshot'tan, ek bir canlı sorgu çalıştırmadan."""
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    subq = (
+        select(SlowQuerySample.collected_at)
+        .where(SlowQuerySample.instance_id == instance_id)
+        .order_by(SlowQuerySample.collected_at.desc())
+        .limit(1)
+    )
+    latest_at = (await db.execute(subq)).scalar_one_or_none()
+    rows: list[SlowQuerySample] = []
+    if latest_at:
+        result = await db.execute(
+            select(SlowQuerySample)
+            .where(
+                SlowQuerySample.instance_id == instance_id,
+                SlowQuerySample.collected_at == latest_at,
+            )
+            .order_by(SlowQuerySample.total_time_ms.desc())
+            .limit(limit)
+        )
+        rows = list(result.scalars().all())
+
+    diagnoses = diagnose_queries(rows)
+    by_resource: dict[str, int] = {}
+    for d in diagnoses:
+        by_resource[d.resource] = by_resource.get(d.resource, 0) + 1
+
+    # Host-agent bugün sadece servis durumu + log tail'i sağlıyor (v1/services, v1/logs) — CPU/
+    # RAM/disk kullanımı toplayan bir uç yok, bu yüzden "sorun sorgu mu kaynak mı" ayrımını burada
+    # dürüstçe yapamıyoruz. Uydurmak yerine bunu açıkça söylüyoruz (bkz. SORULAR.md).
+    agent_configured = bool(
+        (
+            await db.execute(
+                select(Node.id)
+                .join(Server, Node.server_id == Server.id)
+                .where(Node.instance_id == instance_id, Server.agent_url.is_not(None))
+            )
+        ).first()
+    )
+    if agent_configured:
+        server_resource_note = (
+            "Bu instance için host-agent yapılandırılmış ama agent protokolü şu an CPU/RAM/disk "
+            "kullanımı toplamıyor (sadece servis durumu ve log erişimi var) — bu yüzden bir "
+            "sorunun sorgu optimizasyonuyla mı yoksa sunucu kaynağı artırımıyla mı çözüleceği "
+            "burada ayırt edilemiyor. Aşağıdaki sınıflandırma sadece sorgunun kendi metriklerine "
+            "(I/O, CPU zamanı, geçici dosya) dayanıyor."
+        )
+    else:
+        server_resource_note = (
+            "Bu instance için host-agent yapılandırılmamış — sunucu seviyesi CPU/RAM/disk "
+            "kullanımı hiç görülemiyor. Ağır sorgu yükünün sunucu kaynağı yetersizliğinden mi "
+            "yoksa optimize edilebilir bir sorgudan mı kaynaklandığını ayırt etmek için Server "
+            "ayarlarından bir host-agent tanımlayın."
+        )
+
+    return QueryDiagnosticsReportOut(
+        generated_at=datetime.now(UTC),
+        limit=limit,
+        diagnoses=[QueryDiagnosisOut(**vars(d)) for d in diagnoses],
+        by_resource=by_resource,
+        agent_configured=agent_configured,
+        server_resource_note=server_resource_note,
+    )
 
 
 @router.post("/{instance_id}/explain", response_model=ExplainOut)

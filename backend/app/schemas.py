@@ -518,6 +518,26 @@ class SlowQueryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class QueryDiagnosisOut(BaseModel):
+    queryid: str | None
+    query: str
+    calls: int
+    mean_time_ms: float
+    total_time_ms: float
+    resource: str  # io | cpu | memory | lock | unknown
+    reason: str
+    confidence: str  # observed | inferred
+
+
+class QueryDiagnosticsReportOut(BaseModel):
+    generated_at: datetime
+    limit: int
+    diagnoses: list[QueryDiagnosisOut]
+    by_resource: dict[str, int]
+    agent_configured: bool
+    server_resource_note: str
+
+
 class AlertRuleCreate(BaseModel):
     instance_id: int | None = None
     group_id: int | None = None

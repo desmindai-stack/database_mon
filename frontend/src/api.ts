@@ -93,6 +93,28 @@ export interface SlowQuery {
   exec_sys_time?: number;
 }
 
+export type QueryResourceType = "io" | "cpu" | "memory" | "lock" | "unknown";
+
+export interface QueryDiagnosis {
+  queryid: string | null;
+  query: string;
+  calls: number;
+  mean_time_ms: number;
+  total_time_ms: number;
+  resource: QueryResourceType;
+  reason: string;
+  confidence: "observed" | "inferred";
+}
+
+export interface QueryDiagnosticsReport {
+  generated_at: string;
+  limit: number;
+  diagnoses: QueryDiagnosis[];
+  by_resource: Partial<Record<QueryResourceType, number>>;
+  agent_configured: boolean;
+  server_resource_note: string;
+}
+
 export interface IndexAdvice {
   table_name: string;
   schema_name: string;
@@ -929,6 +951,8 @@ export const api = {
   getLatestMetrics: (id: number) =>
     request<MetricSample>(`/api/metrics/${id}/latest`),
   getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),
+  getQueryDiagnostics: (id: number, limit = 10) =>
+    request<QueryDiagnosticsReport>(`/api/queries/${id}/diagnostics?limit=${limit}`),
   getIndexAdvice: (id: number, query: string) =>
     request<IndexAdvice[]>(`/api/queries/${id}/advice`, {
       method: "POST",

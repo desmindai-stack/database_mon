@@ -32,6 +32,7 @@ import {
   MetricSample,
   PrerequisiteReport,
   Prediction,
+  QueryDiagnosticsReport,
   QueryHistorySeries,
   SchemaHealth,
   SlowQuery,
@@ -42,6 +43,7 @@ import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
+import QueryDiagnosticsPanel from "../components/QueryDiagnosticsPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
 import RecommendationHeader from "../components/RecommendationHeader";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
@@ -110,6 +112,10 @@ export default function InstanceDetailPage() {
   const [prerequisites, setPrerequisites] = useState<PrerequisiteReport | null>(null);
   const [prerequisitesError, setPrerequisitesError] = useState<string | null>(null);
   const [prerequisitesLoading, setPrerequisitesLoading] = useState(false);
+  const [diagnostics, setDiagnostics] = useState<QueryDiagnosticsReport | null>(null);
+  const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
+  const [diagnosticsLoading, setDiagnosticsLoading] = useState(false);
+  const [diagnosticsTopN, setDiagnosticsTopN] = useState(10);
   const [clusterHealth, setClusterHealth] = useState<ClusterHealth | null>(null);
   const [clusterError, setClusterError] = useState<string | null>(null);
   const [clusterLoading, setClusterLoading] = useState(false);
@@ -212,6 +218,20 @@ export default function InstanceDetailPage() {
       setPrerequisitesError(String((e as Error).message || e));
     } finally {
       setPrerequisitesLoading(false);
+    }
+  };
+
+  const loadDiagnostics = async (limit: number) => {
+    if (!instanceId) return;
+    setDiagnosticsLoading(true);
+    setDiagnosticsError(null);
+    try {
+      const data = await api.getQueryDiagnostics(instanceId, limit);
+      setDiagnostics(data);
+    } catch (e) {
+      setDiagnosticsError(String((e as Error).message || e));
+    } finally {
+      setDiagnosticsLoading(false);
     }
   };
 
@@ -332,6 +352,12 @@ export default function InstanceDetailPage() {
     if (!instanceId || tab !== "tuning") return;
     loadPrerequisites();
   }, [instanceId, tab]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "tuning") return;
+    loadDiagnostics(diagnosticsTopN);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, tab, diagnosticsTopN]);
 
   useEffect(() => {
     if (!instanceId || tab !== "cluster") return;
@@ -1262,6 +1288,17 @@ export default function InstanceDetailPage() {
           error={prerequisitesError}
           loading={prerequisitesLoading}
           onRefresh={loadPrerequisites}
+        />
+      )}
+
+      {tab === "tuning" && (
+        <QueryDiagnosticsPanel
+          data={diagnostics}
+          error={diagnosticsError}
+          loading={diagnosticsLoading}
+          topN={diagnosticsTopN}
+          onTopNChange={setDiagnosticsTopN}
+          onOpenQuery={() => setActiveTab("queries")}
         />
       )}
 

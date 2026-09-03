@@ -1884,6 +1884,54 @@ accent renk) ile. 4 yerde de aynı bileşen kullanılıyor:
 doldurduğunu kanıtlıyor (canlı bağlantı gerekmeden, `collect_parameter_audit`/
 `run_prerequisite_checks` monkeypatch'lenerek). Toplam 86 test yeşil.
 
+## Faz 16 — İŞ 3: Performans tuning sayfası, kaynak bazlı analiz
+
+**Yeni `services/query_diagnostics.py`:** Her yavaş sorgu için darboğazın
+I/O, CPU, bellek veya kilit/bekleme olduğunu, EK bir canlı sorgu
+çalıştırmadan — sadece `SlowQuerySample`'ın zaten topladığı sütunlardan
+(shared/temp blk sayaçları, exec_user_time/exec_sys_time) türetir:
+- **Bellek** — `temp_blks_read/written > 0` (work_mem yetersiz, disk'e
+  taştı). Her zaman `observed` (doğrudan ölçülen bir sayaç).
+- **I/O** — okunan blokların >%10'u diskten geldi (cache'te değildi) —
+  eşik `performance_insights.py`'nin "Disk okuma oranı yüksek" eşiğiyle
+  AYNI (iki modülün aynı sinyali farklı yorumlaması tutarsızlık
+  yaratmasın diye).
+- **CPU** — yürütme süresinin ≥%70'i `exec_user_time+exec_sys_time`'da.
+- **Kilit/Bekleme** — CPU ve I/O ile açıklanamayan büyük bir süre farkı
+  varsa. **Her zaman `confidence="inferred"`** — dbace sorgu başına kilit
+  bekleme SÜRESİ toplamıyor (sadece anlık Activity görüntüsü var,
+  geçmişe dönük değil), bu yüzden bu sınıf asla kesin bir teşhis olarak
+  sunulmuyor, "Activity sekmesinden kontrol edin" notuyla geliyor.
+- **Bilinmiyor** — `exec_user_time`/`exec_sys_time` hiç yoksa (PostgreSQL
+  sürümü/pg_stat_statements ayarı desteklemiyor olabilir) — uydurma
+  yapmak yerine açıkça "veri yok" deniyor, Ön koşullar paneline (İŞ 1)
+  yönlendiriyor.
+
+**Yeni uç: `GET /api/queries/{id}/diagnostics?limit=5|10|20|50`** — en son
+toplanan snapshot'tan Top-N sorguyu (toplam süreye göre) sınıflandırıp
+döndürür, `by_resource` sayaçları ve bir `server_resource_note` ile.
+
+**Sunucu kaynağı ayrımı — dürüstlük notu:** Görev "CPU/RAM/disk
+metrikleri varsa (agent'tan) kaynak mı sorgu mu ayrımı yapılsın, agent
+yoksa bunu söyleyip kurulumu önerin" diyordu. dbace'in host-agent
+protokolü (`v1/services`, `v1/logs`) bugün CPU/RAM/disk KULLANIMI hiç
+toplamıyor — agent yapılandırılmış olsa bile bu ayrım yapılamıyor. Var
+olmayan bir özelliği varmış gibi göstermek yerine `server_resource_note`
+alanı iki durumu da açıkça söylüyor: agent yoksa "host-agent tanımlayın"
+önerisi, agent VARSA "agent yapılandırılmış ama protokol CPU/RAM/disk
+toplamıyor, bu yüzden ayrım yapılamıyor" notu (bkz. SORULAR.md).
+
+**Instance detay sayfası:** Tuning sekmesinde, `PrerequisitesPanel`'in
+altında yeni `QueryDiagnosticsPanel` — Top N seçici (5/10/20/50),
+kaynak türüne göre sekmeler (I/O/CPU/Bellek/Kilit-Bekleme/Bilinmiyor +
+sayaçlarla "Toplam etki"), her sorgu satırında gerekçe ve
+"inferred" olanlarda "çıkarım (kesin ölçüm değil)" notu.
+
+**Test:** Yeni `tests/test_query_diagnostics.py` (6 test) — her dal için
+(temp file → memory, yüksek disk okuma oranı → io, CPU baskın → cpu,
+açıklanamayan süre farkı → lock+inferred, exec_time yok → unknown+inferred)
+doğru sınıflandırıldığı kanıtlanıyor. Toplam 92 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

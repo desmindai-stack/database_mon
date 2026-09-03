@@ -3,6 +3,24 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16 — İŞ 3: Sunucu kaynağı (CPU/RAM/disk) ayrımı yapılamıyor — agent protokolü bunu toplamıyor
+
+Görev host-agent'tan CPU/RAM/disk metrikleri varsa "bu sorun kaynak
+artırımıyla çözülür" ayrımı yapılmasını istiyordu. `cluster_health.py`'yi
+inceledim — dbace'in host-agent'ı (`v1/services`, `v1/logs`, `v1/keepalived`)
+SADECE servis durumu ve log tail'i sağlıyor, hiçbir CPU/RAM/disk kullanım
+ucu YOK. Bunu genişletmek (agent'a yeni bir `/v1/metrics` ucu eklemek,
+agent-side implementasyon, host makinede çalışan ajan kodunun kendisi
+muhtemelen bu repo'da bile değil) kendi başına ayrı bir faz büyüklüğünde
+bir iş olurdu. Bunun yerine, GÖREVİN KENDİSİNİN de öngördüğü ikinci yolu
+seçtim: "agent yoksa bunu söyle ve kurulumunu öner" — agent
+yapılandırılmışsa DA aynı dürüstlüğü uyguladım (protokol desteklemiyor,
+bu yüzden ayrım yapılamıyor) yerine sanki bir kontrol yapılmış gibi
+göstermek yerine `server_resource_note` alanında açıkça söylüyorum.
+Gerçek CPU/RAM/disk toplama isteniyorsa bu ayrı bir faz olmalı (agent
+protokolü + agent implementasyonu + yeni bir MetricSample-benzeri host
+tablosu gerektirir).
+
 ## Faz 16 — İŞ 2: "Aynı görsel kalıp" tek bir rijit bileşen değil, paylaşılan başlık + her yerin kendi içeriği
 
 Dashboard/DPA/parametre denetimi/tahminler'in öneri VERİSİ (steps dizisi,
