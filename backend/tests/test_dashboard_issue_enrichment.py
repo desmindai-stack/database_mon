@@ -87,3 +87,63 @@ async def test_issue_and_recommendation_enrichment():
         if stray is not None:
             await cleanup_session.delete(stray)
             await cleanup_session.commit()
+
+
+async def test_recommendation_own_link_hint_overrides_group_default():
+    """Faz 16 İŞ 5: a recommendation that already knows its precise target (e.g. a specific
+    instance's Tuning tab) must keep that link — the group page is only the fallback for
+    sources that have nothing more specific to point at."""
+    await init_db()
+    async with await authed_client() as c:
+        suffix = uuid.uuid4().hex[:8]
+        cust = (await c.post("/api/customers", json={"name": f"linkhint-test-{suffix}", "type": "public"})).json()
+        app = (await c.post("/api/applications", json={"customer_id": cust["id"], "name": f"app-{suffix}"})).json()
+        group_name = f"linkhint-standalone-{suffix}"
+        group = (
+            await c.post(
+                "/api/wizard/database-groups",
+                json={
+                    "application_id": app["id"],
+                    "group_name": group_name,
+                    "engine": "postgresql",
+                    "topology": "standalone",
+                    "nodes": [
+                        {"server_name": "linkhint-pg1", "host": "linkhint-pg1.internal", "port": 5432,
+                         "database": "postgres", "db_username": "postgres", "db_password": "x"}
+                    ],
+                },
+            )
+        ).json()
+
+    checked_at = datetime.now(UTC)
+    async with SessionLocal() as session:
+        snapshot = GroupHealthSnapshot(
+            group_id=group["id"],
+            overall="warning",
+            report_json={"overall": "warning"},
+            recommendations_json=[
+                {
+                    "severity": "medium",
+                    "source": "prerequisites",
+                    "group": group_name,
+                    "message": "Ön koşul eksik",
+                    "steps": ["..."],
+                    "action": "GRANT pg_monitor TO x;",
+                    "link_hint": "/instances/999?tab=tuning",
+                }
+            ],
+            checked_at=checked_at,
+        )
+        session.add(snapshot)
+        await session.commit()
+
+        summary = await collect_dashboard_summary(session)
+
+    rec = next(r for r in summary["recommendations"] if r["group"] == group_name)
+    assert rec["link_hint"] == "/instances/999?tab=tuning"
+
+    async with SessionLocal() as cleanup_session:
+        stray = await cleanup_session.get(GroupHealthSnapshot, snapshot.id)
+        if stray is not None:
+            await cleanup_session.delete(stray)
+            await cleanup_session.commit()

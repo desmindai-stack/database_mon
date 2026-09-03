@@ -3,6 +3,20 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16 — İŞ 5: Kapsam — tüm frontend'in baştan sona akış denetimi değil, en yüksek etkili noktalar
+
+"Akış ve kullanılabilirlik" görevi teorik olarak sınırsız genişleyebilir
+(her sayfanın her linkini, her terimi denetlemek). Somut, doğrulanabilir
+ve gerçekten "sorun tespitinden çözüme tek tıkla" akışını etkileyen 4
+noktaya odaklandım: dashboard önerilerinin hedef isabeti (en sık
+kullanılan akış — kullanıcının dashboard'dan başlayıp bir öneriyi takip
+etmesi), instance→grup geri dönüşü, tek bir gerçekten "kayıp" ham JSON
+çıktısı, ve bu oturumda eklenen terimlerin (Öneri/Ön koşullar/Kaynak)
+tutarlılığı. Diğer sayfalardaki (Alerts, Admin, Wizard gibi Faz 15'te
+zaten üzerinde çalışılmış ekranlar) akış/terminoloji denetimini kapsam
+dışı bıraktım — onlar bu görevin "sorun tespitinden çözüme" akışının
+parçası değil.
+
 ## Faz 16 — İŞ 4: hypopg/pg_qualstats eksikliği bir NoAdviceReason değil — gerçekten bloke etmiyorlar
 
 Görev "index önerisi neden gelmedi" sebepleri arasında "hypopg kurulu

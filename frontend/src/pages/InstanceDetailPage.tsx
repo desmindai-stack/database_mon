@@ -568,7 +568,11 @@ export default function InstanceDetailPage() {
             <span className={`status ${status}`}>{status}</span>
           </div>
           <p className="detail-subtitle">
-            <Link to="/">← Dashboard</Link>
+            {instance.group_id ? (
+              <Link to={`/groups/${instance.group_id}`}>← Grup</Link>
+            ) : (
+              <Link to="/">← Dashboard</Link>
+            )}
             <span className="detail-meta">
               {instance.host}:{instance.port}/{instance.database} · {instance.engine}
               {instance.application ? ` · ${instance.application}` : ""}

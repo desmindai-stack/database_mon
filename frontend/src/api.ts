@@ -39,6 +39,7 @@ export interface Instance {
   cluster_name: string | null;
   role: string | null;
   services: string[] | null;
+  group_id: number | null;
   options?: ClusterServiceOptions | null;
   // Null = app-wide default (see RefreshInterval-adjacent settings) — set to sample a
   // lower-priority instance less often.

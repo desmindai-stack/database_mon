@@ -157,7 +157,10 @@ async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:
                 "customer": ctx["customer"].name,
                 "application": ctx["application"].name,
                 "environment": ctx["group"].environment,
-                "link_hint": f"/groups/{group_id}",
+                # A recommendation may already carry its own, more precise link_hint (e.g. a
+                # specific instance's Tuning tab) — only fall back to the group page when it
+                # doesn't (Faz 16 İŞ 5: "tek tıkla" should land as close to the fix as possible).
+                "link_hint": rec.get("link_hint") or f"/groups/{group_id}",
                 "checked_at": snapshot.checked_at,
                 "steps": rec.get("steps") or [],
             }

@@ -92,6 +92,8 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
                 # A safe, real next step (check the live value) — the exact target value depends
                 # on server sizing dbace doesn't collect, so we don't fabricate an ALTER SYSTEM.
                 "action": f"SHOW {finding['name']};",
+                # Doğrudan grubun Parametreler sekmesine (Faz 16 İŞ 5).
+                "link_hint": f"/groups/{group.id}?tab=parameters",
             }
         )
     return out
@@ -134,6 +136,8 @@ async def _prerequisite_recommendations(group: DatabaseGroup, nodes: list[Node])
                 "title": f"{check.name} sorununu giderin" if check.fix else f"{check.name} kontrolünü tamamlayın",
                 "steps": [check.impact, "Aşağıdaki komutla düzeltin, sonra bu sayfayı yenileyin."],
                 "action": check.fix,
+                # Doğrudan hedef instance'ın Ön koşullar paneline (Faz 16 İŞ 5).
+                "link_hint": f"/instances/{instance.id}?tab=tuning",
             }
         )
     return out
@@ -157,6 +161,7 @@ async def _load_instance_snapshots(session: AsyncSession, group_id: int) -> list
         ).scalar_one_or_none()
         snapshots.append(
             {
+                "instance_id": instance.id,
                 "name": instance.name,
                 "engine": instance.engine,
                 "metrics_json": dict(latest.metrics_json or {}) if latest else None,
@@ -194,6 +199,17 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                         "message": f"{snap['name']}: {insight.title} — {insight.recommendation}",
                         "title": insight.recommendation,
                         "steps": [f"{snap['name']} instance'ında: {insight.recommendation}"],
+                        # Doğrudan ilgili instance'ın en alakalı sekmesine — grup sayfasından
+                        # tekrar instance aramak yerine (Faz 16 İŞ 5, "tek tıkla ilerlesin").
+                        # insight.action zaten TuningPanel'in "İlgili sekmeye git" butonunun
+                        # kullandığı geçerli bir Tab adı (queries/metrics/alerts); yoksa Tuning'e
+                        # düşer — dashboard'daki "sorun" ile instance detayındaki en yakın sekme
+                        # arasında AYNI eşleme kullanılıyor.
+                        "link_hint": (
+                            f"/instances/{snap['instance_id']}?tab={insight.action}"
+                            if insight.action in ("queries", "metrics", "alerts")
+                            else f"/instances/{snap['instance_id']}?tab=tuning"
+                        ),
                     }
                 )
 

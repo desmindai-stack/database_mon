@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   AlwaysOnHealth,
   api,
@@ -18,6 +18,7 @@ import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
 
 type Tab = "nodes" | "parameters" | "alwayson";
+const TABS: Tab[] = ["nodes", "parameters", "alwayson"];
 
 const STATUS_TR: Record<string, string> = { up: "UP", down: "DOWN", unknown: "UNKNOWN", skipped: "SKIP" };
 
@@ -32,7 +33,16 @@ export default function GroupDetailPage() {
   const [existingInstances, setExistingInstances] = useState<Instance[]>([]);
   const [servers, setServers] = useState<DbServer[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("nodes");
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const [tab, setTab] = useState<Tab>(TABS.includes(tabParam as Tab) ? (tabParam as Tab) : "nodes");
+
+  useEffect(() => {
+    if (TABS.includes(tabParam as Tab) && tabParam !== tab) {
+      setTab(tabParam as Tab);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tabParam]);
 
   const [health, setHealth] = useState<GroupHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -692,8 +702,12 @@ export default function GroupDetailPage() {
               </div>
               {params.patroni_config && (
                 <div className="card">
-                  <h3 className="chart-title">Patroni /config</h3>
-                  <pre className="cluster-log-view">{JSON.stringify(params.patroni_config, null, 2)}</pre>
+                  <details>
+                    <summary className="chart-title" style={{ cursor: "pointer" }}>
+                      Patroni /config (ham çıktı — genişletmek için tıklayın)
+                    </summary>
+                    <pre className="cluster-log-view">{JSON.stringify(params.patroni_config, null, 2)}</pre>
+                  </details>
                 </div>
               )}
             </>

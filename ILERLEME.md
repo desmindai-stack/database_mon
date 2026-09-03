@@ -1982,6 +1982,45 @@ sebep dalı + başarılı öneri durumunda `reasons=[]` olduğu kanıtlanıyor.
 `test_pgbouncer_compat.py`'ye yeni bir test (permission-denied çevirisi).
 Toplam 100 test yeşil.
 
+## Faz 16 — İŞ 5: Akış ve kullanılabilirlik
+
+**Tek tıkla ilerleme — dashboard önerileri artık isabetli hedefe iniyor:**
+`dashboard_snapshot.py`'nin 3 öneri üreticisi (`_parameter_recommendations`,
+`_prerequisite_recommendations`, `_instance_recommendations`) artık kendi
+`link_hint`'ini taşıyor; `dashboard.py`'nin enrichment'ı bunu koruyor
+(`rec.get("link_hint") or f"/groups/{group_id}"` — sadece daha isabetli
+bir hedefi olmayan kaynaklar grup sayfasına düşüyor):
+- Parametre denetimi → `/groups/{id}?tab=parameters` (grubun kendi
+  Parametreler sekmesi — bu yüzden GroupDetailPage'e de InstanceDetailPage'de
+  zaten var olan `?tab=` URL desteği eklendi, önceden GroupDetailPage
+  bunu okumuyordu).
+- Ön koşul eksikliği (İŞ 1) → doğrudan `/instances/{id}?tab=tuning`.
+- Performans içgörüsü (İŞ 2'nin `_instance_recommendations`'ı) → içgörünün
+  kendi `insight.action`'ı geçerli bir sekme adıysa (`queries`/`metrics`/
+  `alerts` — zaten TuningPanel'in "İlgili sekmeye git" butonunun kullandığı
+  AYNI değer) doğrudan o sekmeye, yoksa Tuning'e düşer.
+
+**Geri dönüş yolu:** Instance detay sayfasının üstündeki "← Dashboard"
+linki artık instance bir gruba bağlıysa "← Grup" oluyor (`instance.group_id`
+— backend'de zaten vardı ama frontend `Instance` tipinde eksikti, eklendi)
+— dashboard → grup → instance → geri grup → geri dashboard zinciri artık
+her adımda tutarlı.
+
+**Karmaşık teknik çıktı katlandı:** Parametre denetimi sekmesindeki
+Patroni `/config` ham JSON çıktısı artık `<details>` içinde — sayfa
+ilk açıldığında sade kalıyor, isteyen genişletebiliyor.
+
+**Terminoloji taraması:** "Çözüm önerisi"/"tavsiye"/"gereksinim" gibi
+eşanlamlı terimlerin karışık kullanılmadığı doğrulandı — İŞ 2'nin
+`RecommendationHeader`'ı ("Öneri: X") tüm sayfalarda tek terim; eski
+"Çözüm önerisi" etiketi hiçbir yerde kalmadı.
+
+**Test:** `test_dashboard_recommendation_titles.py`'ye her 3 üreticinin
+doğru `link_hint`'i ürettiğini kanıtlayan assertion'lar eklendi;
+`test_dashboard_issue_enrichment.py`'ye yeni bir test — bir önerinin
+kendi `link_hint`'i varsa grup varsayılanının onu EZMEDİĞİNİ kanıtlıyor.
+Toplam 101 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
