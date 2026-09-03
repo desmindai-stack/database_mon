@@ -2109,6 +2109,91 @@ kendi DEPLOY.md denetiminden çıkarılan derse sadık kalınarak: yeni
 kolon/tablo eklenen HER değişiklik için migration dosyası + DEPLOY.md
 güncellemesi birlikte yapıldı).
 
+## Faz 16-B — İŞ 1: Çelişkili pg_stat_statements raporu düzeltildi
+
+**Bildirilen sorun:** Ön koşullar paneli `pg_stat_statements`'ı "var"
+gösterirken DPA'daki "Yavaş sorgu detayları" bölümü "Yavaş sorgu verisi
+yok. Eklentiyi aktif edin: `CREATE EXTENSION pg_stat_statements`"
+diyordu. İki taraf birbirini yalanlıyordu.
+
+**Kök neden (üç ayrı hata birden):**
+
+1. **Panel yanlış kontrol yapıyordu.** Ön koşul kontrolü sadece
+   `pg_extension` kataloğuna bakıyordu (`extname = 'pg_stat_statements'`
+   var mı). Katalogda kayıtlı olmak view'ın OKUNABİLİR olduğu anlamına
+   gelmiyor: Supabase/RDS gibi yönetilen servisler eklentiyi `extensions`
+   şemasına kurar; bağlanan rolün `search_path`'inde o şema yoksa
+   `SELECT ... FROM pg_stat_statements` "relation does not exist" verir.
+   Panel yeşil, veri yok.
+2. **Collector de aynı tuzağa düşüyordu.** `collect_slow_queries()`
+   view'ı çıplak adıyla (`FROM pg_stat_statements`) sorguluyordu — yani
+   eklenti search_path dışındaysa toplama gerçekten çalışmıyordu. Artık
+   şema `pg_extension`/`pg_namespace` join'iyle çözülüp view
+   `"<şema>".pg_stat_statements` olarak niteleniyor. **Bu, semptomun
+   asıl düzeltmesi:** eklenti nerede kurulu olursa olsun veri toplanıyor.
+3. **Mesajlar iki ayrı yerden geliyordu.** DPA'nın boş-liste metni
+   frontend'de sabit yazılmıştı ve ön koşul sonucundan haberi yoktu.
+
+**Yeni `services/pgss.py` — tek probe.** `probe_pg_stat_statements(conn)`
+tek bağlantı üzerinden şu alanları çıkarır: `installed`, `schema`,
+`reachable`, `read_error`/`read_error_code`, `preloaded`, `track`,
+`privileged`, `total_rows`, `redacted_rows`. Hem ön koşul paneli hem
+"veri neden yok" mesajı artık AYNI probe nesnesinden türüyor — ikisinin
+çelişmesi yapısal olarak imkânsız.
+
+**Yeni ön koşul durumu `partial`.** Yönetilen servislerde en sık görülen
+durum artık ayrı raporlanıyor: eklenti kurulu, okunabiliyor, AMA rol
+superuser/`pg_read_all_stats` üyesi olmadığı için başka kullanıcıların
+sorgu metni `<insufficient privilege>` olarak maskeli geliyor. Yeni
+kontrol `pg_stat_statements_visibility` bunu "Kurulu ama sadece kendi
+sorgularınızı görebiliyorsunuz" diye söylüyor, düzeltme komutuyla
+(`GRANT pg_read_all_stats`). Panelde sarı (uyarı) olarak görünüyor —
+yeşil göstermek yanıltıcı, kırmızı göstermek yanlış olurdu.
+
+**Yeni `services/slow_query_status.py` + `GET /api/queries/{id}/availability`.**
+"Yavaş sorgu verisi neden yok" sorusunun tek cevabı; 11 ayrı durum ayırt
+ediyor: `ok`, `extension_missing`, `extension_unreachable`,
+`unauthorized`, `not_preloaded`, `track_off`, `restricted_visibility`,
+`no_data_yet`, `not_collected_yet`, `probe_failed`, `engine_unsupported`.
+`CREATE EXTENSION` önerisi artık YALNIZCA eklenti gerçekten kurulu
+değilken çıkıyor; eklenti varken mesaj "veri henüz birikmedi" ya da
+"worker henüz kaydetmedi" diyor.
+
+**Frontend:** yeni `SlowQueryAvailabilityNote` bileşeni her iki boş-liste
+yerinde de (yavaş sorgu dağılımı grafiği + yavaş sorgu detayları) aynı
+notu gösteriyor; komut kutusu kopyalanabilir. Probe canlı bağlantı
+gerektirdiği için 15 sn'lik yenileme döngüsüne DEĞİL, sadece sekme
+açıldığında ve liste boşken yükleniyor.
+
+**Worker gerçekten topluyor mu — doğrulama.** Toplama akışı okundu:
+`services/collection.py` metrikleri ve yavaş sorguları aynı döngüde, tek
+bağlantı üzerinden alıyor; `collect_slow_queries()` bir istisna atarsa
+tüm döngü hata veriyor (instance "error" durumuna düşer), yani "sessizce
+kaydetmiyor" senaryosu yalnızca iki yolla oluşabiliyordu ve ikisi de
+düzeltildi:
+
+- View search_path dışındaysa sorgu hiç çalışmıyordu → şema nitelemesiyle
+  çözüldü.
+- Maskelenmiş satırlar (`query = '<insufficient privilege>'`, `queryid`
+  NULL) saklanmaya çalışılıyordu; `SlowQuerySample.query` NOT NULL
+  olduğundan metni NULL gelen satırlar kaydı bozabilirdi. Artık bu
+  satırlar toplamadan çıkarılıyor ve eksikliğin sebebi görünürlük
+  kontrolünde açıklanıyor.
+
+**Diğer çelişkili metinler ayıklandı:** `performance_insights.py`'nin
+"pg_stat_statements verisi henüz gelmemiş olabilir / Extension'ın yüklü
+olduğunu doğrulayın" tahmini kaldırıldı — o fonksiyonun canlı bağlantısı
+yok, sebebi tahmin etmesi yanlıştı; artık kullanıcıyı tek kaynağa
+yönlendiriyor. Dashboard önerileri de `partial` durumunu artık eyleme
+dönük bir eksiklik olarak gösteriyor.
+
+**Testler:** `tests/test_slow_query_status.py` (13 test) — "eklenti
+varken CREATE EXTENSION denmiyor", "kısıtlı görünürlük ayrı raporlanıyor",
+"panel ve DPA mesajı asla çelişmiyor" (parametrik), "probe/collector
+view'ı şemayla niteliyor", "maskeli satırlar saklanmıyor".
+`tests/test_prerequisites.py`'ye 2 yeni test (+search_path dışı eklenti,
++partial görünürlük). Toplam: 134 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

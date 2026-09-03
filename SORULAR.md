@@ -3,6 +3,35 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 1: Kısıtlı görünürlük "hata" değil "kısıtlı" sayıldı
+
+pg_stat_statements kurulu, önyüklü ve okunabilir olduğunda ama bağlanan
+rol `pg_read_all_stats` üyesi olmadığında iki seçenek vardı: kontrolü
+"eksik" (kırmızı) saymak ya da "tamam" (yeşil) saymak. İkisi de yanlış
+olurdu — dbace veri topluyor (yeşil değil "hiç çalışmıyor"), ama topladığı
+liste eksik (kırmızı değil "her şey yolunda"). Yeni bir durum ekledim:
+`partial`. Ön koşul yüzdesinde "tamam" sayılmıyor, panelde sarı
+görünüyor, dashboard'da eyleme dönük bir öneri üretiyor.
+
+İkinci karar: maskelenmiş satırlar (`<insufficient privilege>`)
+saklanmıyor. Alternatif, metni maskeli olarak listede göstermekti — ama
+metni okunamayan bir satırın DPA'da hiçbir faydası yok (EXPLAIN
+çalıştırılamaz, index önerilemez, parmak izi çıkarılamaz) ve listeyi
+gereksiz doldururdu. Bunun yerine kaç satırın maskelendiği
+görünürlük kontrolünde ve "veri neden yok" notunda sayı olarak
+belirtiliyor.
+
+## Faz 16-B — İŞ 1: Availability endpoint'i canlı probe yapıyor, önbelleğe alınmadı
+
+`GET /api/queries/{id}/availability` her çağrıldığında hedef sunucuya
+yeni bir bağlantı açıp 5 küçük katalog sorgusu çalıştırıyor. Bunu
+önbelleğe almadım çünkü kullanıcı bu mesajı tam da bir şeyi düzelttikten
+sonra ("GRANT verdim, şimdi ne diyor?") okuyor — bayat cevap vermek
+sorunun kendisi olurdu. Bunun yerine frontend tarafında sıklığı
+sınırladım: endpoint 15 sn'lik yenileme döngüsünde DEĞİL, yalnızca
+Sorgular/Tuning sekmesi açıldığında ve liste gerçekten boşken çağrılıyor.
+Liste doluysa hiç çağrılmıyor.
+
 ## Faz 16 — İŞ 6: Index şişmesi tahmini sadece KULLANILMAYAN indexler için
 
 dbace'de "tüm indexlerin boyutunu her gün topla" diyen bir sorgu yok —

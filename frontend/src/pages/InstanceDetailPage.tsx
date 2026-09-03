@@ -37,6 +37,7 @@ import {
   QueryHistorySeries,
   SchemaHealth,
   SlowQuery,
+  SlowQueryAvailability,
   TuningReport,
 } from "../api";
 import ActivityPanel from "../components/ActivityPanel";
@@ -49,6 +50,7 @@ import QueryDiagnosticsPanel from "../components/QueryDiagnosticsPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
 import RecommendationHeader from "../components/RecommendationHeader";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
+import SlowQueryAvailabilityNote from "../components/SlowQueryAvailabilityNote";
 import TuningPanel from "../components/TuningPanel";
 
 type Tab = "overview" | "metrics" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
@@ -133,6 +135,9 @@ export default function InstanceDetailPage() {
   const [schemaHealth, setSchemaHealth] = useState<SchemaHealth | null>(null);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
+  // Faz 16-B İŞ 1: yavaş sorgu listesi boşsa NEDEN boş — canlı probe gerektirdiği için 15 sn'lik
+  // yenileme döngüsüne değil, sadece sekme açıldığında yükleniyor.
+  const [slowQueryAvailability, setSlowQueryAvailability] = useState<SlowQueryAvailability | null>(null);
   const [prerequisites, setPrerequisites] = useState<PrerequisiteReport | null>(null);
   const [prerequisitesError, setPrerequisitesError] = useState<string | null>(null);
   const [prerequisitesLoading, setPrerequisitesLoading] = useState(false);
@@ -371,6 +376,18 @@ export default function InstanceDetailPage() {
     if (!instanceId || tab !== "schema") return;
     loadSchemaHealth();
   }, [instanceId, tab]);
+
+  // Sorgular/Tuning sekmesinde liste boşsa sebebini sor. Boş değilse probe'a gerek yok
+  // (gereksiz canlı bağlantı açmayalım).
+  useEffect(() => {
+    if (!instanceId) return;
+    if (tab !== "queries" && tab !== "tuning") return;
+    if (queries.length > 0) {
+      setSlowQueryAvailability(null);
+      return;
+    }
+    api.getSlowQueryAvailability(instanceId).then(setSlowQueryAvailability).catch(() => undefined);
+  }, [instanceId, tab, queries.length]);
 
   useEffect(() => {
     if (!instanceId || tab !== "tuning") return;
@@ -1111,7 +1128,7 @@ export default function InstanceDetailPage() {
               </div>
             </div>
             {topQueriesChart.length === 0 ? (
-              <div className="empty">Yavaş sorgu verisi yok</div>
+              <SlowQueryAvailabilityNote availability={slowQueryAvailability} fallback="Yavaş sorgu verisi yok." />
             ) : (
               <div style={{ height: 280 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -1130,9 +1147,7 @@ export default function InstanceDetailPage() {
           <div className="card">
             <h3 className="chart-title">Yavaş sorgu detayları ({queries.length})</h3>
             {queries.length === 0 ? (
-              <div className="empty">
-                Yavaş sorgu verisi yok. Eklentiyi aktif edin: <code>CREATE EXTENSION pg_stat_statements;</code>
-              </div>
+              <SlowQueryAvailabilityNote availability={slowQueryAvailability} fallback="Yavaş sorgu verisi yok." />
             ) : (
               <div className="table-wrap">
                 <table className="query-table">

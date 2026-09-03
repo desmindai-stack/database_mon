@@ -269,7 +269,7 @@ export interface QueryHistoryList {
 export interface PrerequisiteCheck {
   key: string;
   name: string;
-  status: "ok" | "missing" | "unauthorized" | "unknown";
+  status: "ok" | "partial" | "missing" | "unauthorized" | "unknown";
   severity: "high" | "medium";
   impact: string;
   fix: string | null;
@@ -282,6 +282,30 @@ export interface PrerequisiteReport {
   checks: PrerequisiteCheck[];
   ok_count: number;
   issue_count: number;
+}
+
+/** Faz 16-B İŞ 1: "yavaş sorgu verisi neden yok?" — tek kaynak. Sabit "CREATE EXTENSION"
+ * metni yerine backend'in ön koşul probe'undan türettiği gerçek sebep. */
+export interface SlowQueryAvailability {
+  status:
+    | "ok"
+    | "extension_missing"
+    | "extension_unreachable"
+    | "unauthorized"
+    | "not_preloaded"
+    | "track_off"
+    | "restricted_visibility"
+    | "no_data_yet"
+    | "not_collected_yet"
+    | "probe_failed"
+    | "engine_unsupported";
+  title: string;
+  message: string;
+  fix: string | null;
+  stored_samples: number;
+  last_collected_at: string | null;
+  server_rows: number | null;
+  redacted_rows: number | null;
 }
 
 export interface SchemaHealth {
@@ -978,6 +1002,8 @@ export const api = {
   getLatestMetrics: (id: number) =>
     request<MetricSample>(`/api/metrics/${id}/latest`),
   getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),
+  getSlowQueryAvailability: (id: number) =>
+    request<SlowQueryAvailability>(`/api/queries/${id}/availability`),
   getQueryDiagnostics: (id: number, limit = 10) =>
     request<QueryDiagnosticsReport>(`/api/queries/${id}/diagnostics?limit=${limit}`),
   getIndexAdvice: (id: number, query: string, calls?: number) =>

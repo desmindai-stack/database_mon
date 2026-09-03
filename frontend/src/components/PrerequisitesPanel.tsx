@@ -4,16 +4,18 @@ import CopyableAction from "./CopyableAction";
 
 const STATUS_TR: Record<PrerequisiteCheck["status"], string> = {
   ok: "Tamam",
+  partial: "Kısıtlı",
   missing: "Eksik",
   unauthorized: "Yetkisiz",
   unknown: "Bilinmiyor",
 };
 
-// checklist-row only styles ok/warn/critical (see index.css, Tuning tab) — map our four
+// checklist-row only styles ok/warn/critical (see index.css, Tuning tab) — map our five
 // statuses onto those three visual buckets rather than inventing a parallel palette.
+// "partial" (kurulu ama kapsamı kısıtlı) uyarı; yeşil göstermek yanıltıcı olurdu.
 function rowClass(check: PrerequisiteCheck): string {
   if (check.status === "ok") return "ok";
-  if (check.status === "unknown") return "warn";
+  if (check.status === "unknown" || check.status === "partial") return "warn";
   return "critical"; // missing | unauthorized
 }
 

@@ -399,15 +399,20 @@ def analyze_metrics(
         else:
             checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "ok", f"{len(slow_queries)} örnek, kritik yok"))
     else:
-        checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "unknown", "Örnek yok / pg_stat_statements?"))
+        # Sebebi burada TAHMİN ETMİYORUZ: bu fonksiyonun canlı bağlantısı yok, sadece saklanan
+        # örnekleri görüyor. "pg_stat_statements kurulu değil" demek yanlış olabilir (eklenti
+        # kurulu ama görünürlük kısıtlı ya da veri henüz birikmemiş olabilir). Gerçek sebebi
+        # services/slow_query_status.py canlı probe ile belirliyor — kullanıcıyı oraya
+        # yönlendiriyoruz (Faz 16-B İŞ 1).
+        checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "unknown", "Saklanan örnek yok"))
         if metrics:
             insights.append(
                 PerformanceInsight(
                     severity="info",
                     category="queries",
                     title="Yavaş sorgu örneği yok",
-                    description="pg_stat_statements verisi henüz gelmemiş olabilir.",
-                    recommendation="Extension’ın yüklü olduğunu ve worker’ın sorgu topladığını doğrulayın.",
+                    description="Bu instance için henüz yavaş sorgu örneği saklanmadı.",
+                    recommendation="Sebebini Sorgular sekmesindeki durum notunda ve Ön koşullar panelinde görün.",
                     action="queries",
                 )
             )

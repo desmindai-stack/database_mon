@@ -794,6 +794,31 @@ td code,
   text-align: center;
 }
 
+/* Faz 16-B İŞ 1: "veri neden yok" notu — boş liste yerine gerçek sebep + düzeltme komutu. */
+.availability-note {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.1rem 1.3rem;
+  text-align: left;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.availability-note strong {
+  color: var(--text);
+  display: block;
+  margin-bottom: 0.3rem;
+}
+
+.availability-note p {
+  margin: 0;
+}
+
+.availability-note-issue {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.06);
+}
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);

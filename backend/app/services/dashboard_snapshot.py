@@ -125,7 +125,9 @@ async def _prerequisite_recommendations(group: DatabaseGroup, nodes: list[Node])
 
     out: list[dict[str, Any]] = []
     for check in checks:
-        if check.status not in ("missing", "unauthorized"):
+        # "partial" da eyleme dönük bir eksiklik (Faz 16-B İŞ 1): pg_stat_statements kurulu
+        # ama rol sadece kendi sorgularını görüyor — liste sessizce eksik kalır.
+        if check.status not in ("missing", "unauthorized", "partial"):
             continue
         out.append(
             {

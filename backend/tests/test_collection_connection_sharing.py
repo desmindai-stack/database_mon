@@ -46,7 +46,8 @@ async def test_collect_instance_opens_only_one_connection_for_postgresql():
                 "buffers_backend": 0, "buffers_backend_fsync": 0, "buffers_alloc": 0,
             },
             "FROM pg_stat_io": {"reads": 0, "writes": 0, "extends": 0, "op_bytes": 0},
-            "pg_extension WHERE extname = 'pg_stat_statements'": False,
+            # Eklenti şeması çözülemiyor => pg_stat_statements kurulu değil (collect_slow_queries [] döner)
+            "WHERE e.extname = $1": None,
         })
 
         real_collector = PostgreSQLCollector(collection_module._target_for(instance))

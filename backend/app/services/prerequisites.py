@@ -11,8 +11,12 @@ from dataclasses import dataclass
 
 from app.collectors.base import ConnectionTarget
 from app.domain.engines import DatabaseEngine
+from app.services.pgss import PgStatStatementsProbe, probe_pg_stat_statements
 
-# status: "ok" | "missing" | "unauthorized" | "unknown"
+# status: "ok" | "partial" | "missing" | "unauthorized" | "unknown"
+# "partial": kontrol teknik olarak geçti ama kapsamı kısıtlı — tek örneği pg_stat_statements'ın
+# kısıtlı görünürlüğü (rol sadece kendi sorgularını görebiliyor). Yeşil göstermek yanıltıcı,
+# kırmızı göstermek de yanlış olurdu.
 # severity: bu kontrol "missing"/"unauthorized" olduğunda ne kadar ciddi — dashboard
 # entegrasyonunda (dashboard_snapshot.py) hangi eksikliğin "high", hangisinin "medium" olarak
 # gösterileceğini belirler.
@@ -47,6 +51,14 @@ def _unauthorized(
     )
 
 
+def _partial(
+    key: str, name: str, severity: str, impact: str, fix: str | None = None, detail: str | None = None
+) -> PrerequisiteCheck:
+    return PrerequisiteCheck(
+        key=key, name=name, status="partial", severity=severity, impact=impact, fix=fix, detail=detail
+    )
+
+
 def _unknown(key: str, name: str, severity: str, impact: str, detail: str | None = None) -> PrerequisiteCheck:
     return PrerequisiteCheck(key=key, name=name, status="unknown", severity=severity, impact=impact, detail=detail)
 
@@ -60,6 +72,212 @@ async def _pg_extension_installed(conn, extname: str) -> bool:
             f"-- ext:{extname}\nSELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = $1)", extname
         )
     )
+
+
+def pg_stat_statements_checks(probe: PgStatStatementsProbe) -> list[PrerequisiteCheck]:
+    """Tek probe'dan pg_stat_statements ile ilgili 5 kontrolü üretir.
+
+    Ayrı bir fonksiyon: hem canlı denetim (check_postgresql_prerequisites) hem de yavaş sorgu
+    kullanılabilirlik mesajı (services/slow_query_status.py) aynı probe nesnesinden aynı
+    sonuçları türetsin diye — iki tarafın çelişmesi artık yapısal olarak imkânsız.
+    """
+    checks: list[PrerequisiteCheck] = []
+
+    # 1. Uzantı gerçekten kullanılabilir mi? Katalogda kayıtlı olması YETMEZ: yönetilen
+    # servislerde eklenti search_path dışı bir şemada olabilir ya da rol view'ı okuyamayabilir.
+    if probe.installed and probe.reachable:
+        checks.append(
+            _ok(
+                "pg_stat_statements",
+                "pg_stat_statements uzantısı",
+                "Yavaş sorgu listesi, sorgu geçmişi, EXPLAIN ve index önerisi bu uzantıya dayanır.",
+                detail=f"şema: {probe.schema}",
+            )
+        )
+    elif probe.installed and probe.read_error_code == "unauthorized":
+        checks.append(
+            _unauthorized(
+                "pg_stat_statements",
+                "pg_stat_statements uzantısı",
+                "high",
+                "Uzantı kurulu ama bağlanan kullanıcı view'ı okuyamıyor — yavaş sorgu listesi boş kalır.",
+                "GRANT pg_read_all_stats TO <kullanıcı>;\n"
+                "-- veya: GRANT SELECT ON pg_stat_statements TO <kullanıcı>;",
+                detail=probe.read_error,
+            )
+        )
+    elif probe.installed:
+        # Kurulu ama erişilemiyor: neredeyse her zaman search_path sorunu (Supabase eklentiyi
+        # `extensions` şemasına kurar). dbace collector'ı artık view'ı şema-nitelikli çağırdığı
+        # için veri yine de toplanır; bu kontrol elle sorgu çalıştıracak DBA'yı uyarır.
+        schema = probe.schema or "extensions"
+        checks.append(
+            _missing(
+                "pg_stat_statements",
+                "pg_stat_statements uzantısı",
+                "medium",
+                f"Uzantı '{schema}' şemasında kurulu ama bağlanan rolün search_path'inde bu şema yok — "
+                "dbace şema-nitelikli sorguladığı için veri toplamaya devam eder, ancak elle "
+                "çalıştıracağınız sorgularda şema adını yazmanız gerekir.",
+                f'ALTER ROLE <kullanıcı> SET search_path = public, "{schema}";\n'
+                f'-- Elle sorgularken: SELECT * FROM "{schema}".pg_stat_statements;',
+                detail=probe.read_error,
+            )
+        )
+    else:
+        checks.append(
+            _missing(
+                "pg_stat_statements",
+                "pg_stat_statements uzantısı",
+                "high",
+                "Kurulu değil: yavaş sorgu listesi, sorgu geçmişi ve index önerisi tamamen boş döner.",
+                "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\n"
+                "-- Ayrıca shared_preload_libraries'e eklenip PostgreSQL yeniden başlatılmalı (aşağıya bakın).",
+            )
+        )
+
+    # 2. shared_preload_libraries — extension CREATE edilmiş olsa bile preload yoksa hiç
+    # istatistik toplanmaz; ikisi ayrı ayrı yanlış gidebilir.
+    if probe.preloaded:
+        checks.append(
+            _ok(
+                "shared_preload_libraries",
+                "shared_preload_libraries",
+                "pg_stat_statements önyüklü; istatistik toplanabiliyor.",
+                detail=probe.preload_raw or "(boş)",
+            )
+        )
+    else:
+        checks.append(
+            _missing(
+                "shared_preload_libraries",
+                "shared_preload_libraries",
+                "high",
+                "pg_stat_statements shared_preload_libraries'de değil — extension CREATE edilse bile "
+                "sessizce hiç istatistik toplamaz.",
+                "-- postgresql.conf içinde (veya):\n"
+                "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n"
+                "-- Ardından PostgreSQL'i YENİDEN BAŞLATIN (reload yetmez).",
+                detail=probe.preload_raw or "(boş)",
+            )
+        )
+
+    # 3. pg_stat_statements.track
+    if not probe.installed:
+        checks.append(
+            _unknown(
+                "pg_stat_statements_track",
+                "pg_stat_statements.track",
+                "high",
+                "pg_stat_statements kurulu olmadığından bu ayar kontrol edilemedi.",
+            )
+        )
+    elif probe.track in ("top", "all"):
+        checks.append(
+            _ok(
+                "pg_stat_statements_track",
+                "pg_stat_statements.track",
+                f"Değer '{probe.track}' — sorgular izleniyor.",
+                detail=probe.track,
+            )
+        )
+    else:
+        checks.append(
+            _missing(
+                "pg_stat_statements_track",
+                "pg_stat_statements.track",
+                "high",
+                f"Değer '{probe.track or 'okunamadı'}' — hiçbir sorgu izlenmiyor.",
+                "ALTER SYSTEM SET pg_stat_statements.track = 'top';\nSELECT pg_reload_conf();",
+                detail=probe.track,
+            )
+        )
+
+    # 4. Okuma yetkisi — probe'un gerçek SELECT denemesinden türetiliyor (ayrı bir sorgu değil).
+    if not probe.installed:
+        checks.append(
+            _unknown(
+                "pg_stat_statements_read",
+                "pg_stat_statements okuma yetkisi",
+                "high",
+                "pg_stat_statements kurulu olmadığından bu yetki kontrol edilemedi.",
+            )
+        )
+    elif probe.reachable:
+        checks.append(
+            _ok(
+                "pg_stat_statements_read",
+                "pg_stat_statements okuma yetkisi",
+                "Bağlanan kullanıcı pg_stat_statements'ı sorgulayabiliyor.",
+                detail=f"{probe.total_rows} satır görünüyor" if probe.total_rows is not None else None,
+            )
+        )
+    elif probe.read_error_code == "unauthorized":
+        checks.append(
+            _unauthorized(
+                "pg_stat_statements_read",
+                "pg_stat_statements okuma yetkisi",
+                "high",
+                "Bağlanan kullanıcı pg_stat_statements'ı okuyamıyor — yavaş sorgu/sorgu geçmişi hep boş döner.",
+                "GRANT pg_monitor TO <kullanıcı>;\n-- veya: GRANT SELECT ON pg_stat_statements TO <kullanıcı>;",
+                detail=probe.read_error,
+            )
+        )
+    else:
+        checks.append(
+            _unknown(
+                "pg_stat_statements_read",
+                "pg_stat_statements okuma yetkisi",
+                "high",
+                probe.read_error or "Sorgu başarısız oldu, sebep belirsiz.",
+            )
+        )
+
+    # 5. Görünürlük kapsamı — yönetilen servislerde (Supabase/RDS) en sık yanılgı kaynağı:
+    # eklenti kurulu, okunabiliyor, ama rol superuser/pg_read_all_stats olmadığı için BAŞKA
+    # kullanıcıların sorgu metnini göremiyor; o satırlar '<insufficient privilege>' olarak gelir.
+    if not probe.installed or not probe.reachable:
+        checks.append(
+            _unknown(
+                "pg_stat_statements_visibility",
+                "pg_stat_statements görünürlük kapsamı",
+                "medium",
+                "pg_stat_statements okunamadığından görünürlük kapsamı belirlenemedi.",
+            )
+        )
+    elif probe.privileged:
+        checks.append(
+            _ok(
+                "pg_stat_statements_visibility",
+                "pg_stat_statements görünürlük kapsamı",
+                "Tüm kullanıcıların sorguları görülebiliyor (superuser veya pg_read_all_stats üyesi).",
+            )
+        )
+    elif probe.restricted_visibility:
+        checks.append(
+            _partial(
+                "pg_stat_statements_visibility",
+                "pg_stat_statements görünürlük kapsamı",
+                "medium",
+                "Kurulu ve okunabiliyor, AMA sadece kendi sorgularınızı görebiliyorsunuz: "
+                f"{probe.redacted_rows} satırın metni '<insufficient privilege>' olarak maskeli. "
+                "Uygulamanız farklı bir rolle bağlanıyorsa asıl yavaş sorgular listede hiç görünmez.",
+                "GRANT pg_read_all_stats TO <kullanıcı>;\n-- (pg_monitor bu rolü de kapsar)",
+                detail=f"{probe.visible_rows}/{probe.total_rows} satır okunabilir",
+            )
+        )
+    else:
+        checks.append(
+            _ok(
+                "pg_stat_statements_visibility",
+                "pg_stat_statements görünürlük kapsamı",
+                "Şu an maskelenmiş satır yok. Rol pg_read_all_stats üyesi değil; başka bir rol sorgu "
+                "çalıştırmaya başlarsa o sorgular maskeli görünecektir.",
+                detail=f"{probe.total_rows} satır",
+            )
+        )
+
+    return checks
 
 
 async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[PrerequisiteCheck]:
@@ -80,128 +298,13 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
     try:
         await conn.execute("SET statement_timeout = '5000ms'")
 
-        # 1. pg_stat_statements extension
-        has_pgss = await _pg_extension_installed(conn, "pg_stat_statements")
-        if has_pgss:
-            checks.append(
-                _ok(
-                    "pg_stat_statements",
-                    "pg_stat_statements uzantısı",
-                    "Yavaş sorgu listesi, sorgu geçmişi, EXPLAIN ve index önerisi bu uzantıya dayanır.",
-                )
-            )
-        else:
-            checks.append(
-                _missing(
-                    "pg_stat_statements",
-                    "pg_stat_statements uzantısı",
-                    "high",
-                    "Kurulu değil: yavaş sorgu listesi, sorgu geçmişi ve index önerisi tamamen boş döner.",
-                    "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;\n"
-                    "-- Ayrıca shared_preload_libraries'e eklenip PostgreSQL yeniden başlatılmalı (aşağıya bakın).",
-                )
-            )
+        # 1-5. pg_stat_statements ailesi — hepsi TEK probe'dan (services/pgss.py) türetiliyor.
+        # Daha önce bu blok kendi katalog sorgusunu yapıyordu ve DPA'nın "yavaş sorgu yok"
+        # mesajı bambaşka bir kontrole dayanıyordu; ikisi çelişebiliyordu. Artık aynı kaynak.
+        probe = await probe_pg_stat_statements(conn)
+        checks.extend(pg_stat_statements_checks(probe))
 
-        # 2. shared_preload_libraries — pg_stat_statements sadece extension CREATE edilmişse
-        # değil, preload edilmişse veri toplar; ikisi ayrı ayrı yanlış gidebilir.
-        preload = await conn.fetchval("SHOW shared_preload_libraries")
-        preload_libs = {p.strip() for p in (preload or "").split(",") if p.strip()}
-        if "pg_stat_statements" in preload_libs:
-            checks.append(
-                _ok(
-                    "shared_preload_libraries",
-                    "shared_preload_libraries",
-                    "pg_stat_statements önyüklü; istatistik toplanabiliyor.",
-                    detail=preload or "(boş)",
-                )
-            )
-        else:
-            checks.append(
-                _missing(
-                    "shared_preload_libraries",
-                    "shared_preload_libraries",
-                    "high",
-                    "pg_stat_statements shared_preload_libraries'de değil — extension CREATE edilse bile "
-                    "sessizce hiç istatistik toplamaz.",
-                    "-- postgresql.conf içinde (veya):\n"
-                    "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements';\n"
-                    "-- Ardından PostgreSQL'i YENİDEN BAŞLATIN (reload yetmez).",
-                    detail=preload or "(boş)",
-                )
-            )
-
-        # 3. pg_stat_statements.track — sadece extension yüklüyse anlamlı bir GUC.
-        if has_pgss:
-            track = await conn.fetchval("SHOW pg_stat_statements.track")
-            if track in ("top", "all"):
-                checks.append(
-                    _ok("pg_stat_statements_track", "pg_stat_statements.track", f"Değer '{track}' — sorgular izleniyor.", detail=track)
-                )
-            else:
-                checks.append(
-                    _missing(
-                        "pg_stat_statements_track",
-                        "pg_stat_statements.track",
-                        "high",
-                        f"Değer '{track}' — hiçbir sorgu izlenmiyor.",
-                        "ALTER SYSTEM SET pg_stat_statements.track = 'top';\nSELECT pg_reload_conf();",
-                        detail=track,
-                    )
-                )
-        else:
-            checks.append(
-                _unknown(
-                    "pg_stat_statements_track",
-                    "pg_stat_statements.track",
-                    "high",
-                    "pg_stat_statements kurulu olmadığından bu ayar kontrol edilemedi.",
-                )
-            )
-
-        # 4. pg_stat_statements okuma yetkisi — canlı bir SELECT ile test edilir (rol
-        # denetiminden bağımsız gerçek bir fonksiyonel kontrol).
-        if has_pgss:
-            try:
-                await conn.fetchval("SELECT count(*) FROM pg_stat_statements")
-                checks.append(
-                    _ok(
-                        "pg_stat_statements_read",
-                        "pg_stat_statements okuma yetkisi",
-                        "Bağlanan kullanıcı pg_stat_statements'ı sorgulayabiliyor.",
-                    )
-                )
-            except Exception as exc:
-                lower = str(exc).lower()
-                if "permission denied" in lower or "must be" in lower:
-                    checks.append(
-                        _unauthorized(
-                            "pg_stat_statements_read",
-                            "pg_stat_statements okuma yetkisi",
-                            "high",
-                            "Bağlanan kullanıcı pg_stat_statements'ı okuyamıyor — yavaş sorgu/sorgu geçmişi hep boş döner.",
-                            "GRANT pg_monitor TO <kullanıcı>;\n-- veya: GRANT SELECT ON pg_stat_statements TO <kullanıcı>;",
-                        )
-                    )
-                else:
-                    checks.append(
-                        _unknown(
-                            "pg_stat_statements_read",
-                            "pg_stat_statements okuma yetkisi",
-                            "high",
-                            f"Sorgu başarısız oldu, sebep belirsiz: {exc}",
-                        )
-                    )
-        else:
-            checks.append(
-                _unknown(
-                    "pg_stat_statements_read",
-                    "pg_stat_statements okuma yetkisi",
-                    "high",
-                    "pg_stat_statements kurulu olmadığından bu yetki kontrol edilemedi.",
-                )
-            )
-
-        # 5. pg_monitor rolü
+        # 6. pg_monitor rolü
         has_pg_monitor = await conn.fetchval(
             "SELECT pg_has_role(current_user, 'pg_monitor', 'member')"
         )
@@ -219,7 +322,7 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                 )
             )
 
-        # 6. hypopg — index advisor'ın hipotetik index maliyet tahmini için.
+        # 7. hypopg — index advisor'ın hipotetik index maliyet tahmini için.
         if await _pg_extension_installed(conn, "hypopg"):
             checks.append(
                 _ok(
@@ -240,7 +343,7 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                 )
             )
 
-        # 7. pg_qualstats — hangi kolonların filtrelendiğinin daha kesin tespiti için.
+        # 8. pg_qualstats — hangi kolonların filtrelendiğinin daha kesin tespiti için.
         if await _pg_extension_installed(conn, "pg_qualstats"):
             checks.append(
                 _ok(
@@ -263,7 +366,7 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                 )
             )
 
-        # 8. pg_buffercache — dbace şu an bunu tüketmiyor, ileri seviye manuel DBA analizi için.
+        # 9. pg_buffercache — dbace şu an bunu tüketmiyor, ileri seviye manuel DBA analizi için.
         if await _pg_extension_installed(conn, "pg_buffercache"):
             checks.append(
                 _ok(
@@ -284,7 +387,7 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                 )
             )
 
-        # 9. track_io_timing — I/O darboğazı tespiti (Performans Tuning, İŞ 3) bu olmadan güvenilmez.
+        # 10. track_io_timing — I/O darboğazı tespiti (Performans Tuning, İŞ 3) bu olmadan güvenilmez.
         track_io = await conn.fetchval("SHOW track_io_timing")
         if track_io == "on":
             checks.append(

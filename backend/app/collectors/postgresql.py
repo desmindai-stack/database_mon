@@ -6,6 +6,7 @@ from typing import Any
 import asyncpg
 
 from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error, resolve_uses_pooler
+from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
 
 logger = logging.getLogger(__name__)
 
@@ -374,15 +375,17 @@ class PostgreSQLCollector(BaseCollector):
         try:
             version_num, _ = await self._detect_version(conn)
 
-            has_ext = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_statements')"
-            )
-            if not has_ext:
+            # Şema-nitelikli çağrı: yönetilen servisler (Supabase, RDS) eklentiyi `extensions`
+            # şemasına kurar. Bağlanan rolün search_path'inde o şema yoksa çıplak
+            # "FROM pg_stat_statements" relation-does-not-exist verir ve yavaş sorgu toplama
+            # sessizce çalışmaz hale gelirdi — ön koşul paneli ise eklentiyi "var" gösterirdi
+            # (Faz 16-B İŞ 1'de raporlanan çelişki).
+            pgss_schema = await resolve_extension_schema(conn, "pg_stat_statements")
+            if not pgss_schema:
                 return []
+            pgss = qualified_view(pgss_schema, "pg_stat_statements")
 
-            has_kcache = await conn.fetchval(
-                "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_stat_kcache')"
-            )
+            kcache_schema = await resolve_extension_schema(conn, "pg_stat_kcache")
 
             # pg_stat_statements renamed total_time/mean_time -> total_exec_time/mean_exec_time
             # in PostgreSQL 13 (splitting out planning time separately) — pre-13 only has the
@@ -406,10 +409,11 @@ class PostgreSQLCollector(BaseCollector):
                     s.local_blks_read,
                     s.temp_blks_read,
                     s.temp_blks_written
-                FROM pg_stat_statements s
+                FROM {pgss} s
                 WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
             """
-            if has_kcache:
+            if kcache_schema:
+                kcache = qualified_view(kcache_schema, "pg_stat_kcache")
                 sql = f"""
                     SELECT
                         s.queryid::text,
@@ -428,14 +432,23 @@ class PostgreSQLCollector(BaseCollector):
                         k.plan_sys_time,
                         k.exec_user_time,
                         k.exec_sys_time
-                    FROM pg_stat_statements s
-                    LEFT JOIN pg_stat_kcache k ON k.queryid = s.queryid AND k.dbid = s.dbid
+                    FROM {pgss} s
+                    LEFT JOIN {kcache} k ON k.queryid = s.queryid AND k.dbid = s.dbid
                     WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
                 """
 
             sql += f" ORDER BY s.{mean_col} DESC LIMIT $1"
             rows = await conn.fetch(sql, limit)
-            return [dict(row) for row in rows]
+            # Ayrıcalıklı olmayan bir rol için pg_stat_statements, BAŞKA kullanıcıların
+            # satırlarında sorgu metnini '<insufficient privilege>' ile maskeler (queryid de
+            # NULL gelir). Bu satırları saklamak faydasız — hem SlowQuerySample.query NOT NULL,
+            # hem de listede okunamayan bir metin göstermek kafa karıştırır. Neden eksik
+            # göründüğünü services/slow_query_status.py açıklıyor.
+            return [
+                dict(row)
+                for row in rows
+                if row["query"] and row["query"] != REDACTED_QUERY_TEXT
+            ]
         finally:
             if owns_conn:
                 await conn.close()

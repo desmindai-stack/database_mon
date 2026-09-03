@@ -166,9 +166,9 @@ async def test_checkpoint_query_error_marks_unsupported_without_crashing_collect
 async def test_slow_queries_uses_version_correct_pg_stat_statements_columns(version_num, expected_total_col):
     responses = {
         "current_setting('server_version_num')": {"num": version_num, "txt": "PostgreSQL test"},
-        "pg_extension WHERE extname = 'pg_stat_statements'": True,
-        "pg_extension WHERE extname = 'pg_stat_kcache'": False,
-        "FROM pg_stat_statements": [],
+        # Collector artık eklenti şemasını çözüp view'ı nitelendiriyor (Faz 16-B İŞ 1).
+        "WHERE e.extname = $1": lambda sql: "public",
+        'FROM "public".pg_stat_statements': [],
     }
     conn = FakeAsyncConnection(responses)
     collector = _collector()

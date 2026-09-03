@@ -32,10 +32,13 @@ def _sqlserver_target() -> ConnectionTarget:
 
 def _pg_responses(**overrides) -> dict:
     base = {
-        "-- ext:pg_stat_statements": True,
+        # pg_stat_statements ailesi artık services/pgss.py probe'undan geliyor (Faz 16-B İŞ 1):
+        # şema çözümü + tek sayım sorgusu.
+        "WHERE e.extname = $1": "public",
         "SHOW shared_preload_libraries": "pg_stat_statements,pg_cron",
         "SHOW pg_stat_statements.track": "top",
-        "SELECT count(*) FROM pg_stat_statements": 42,
+        "pg_has_role(current_user, 'pg_read_all_stats'": True,
+        'FROM "public".pg_stat_statements': {"total": 42, "redacted": 0},
         "pg_has_role(current_user, 'pg_monitor'": True,
         "-- ext:hypopg": True,
         "-- ext:pg_qualstats": True,
@@ -72,7 +75,7 @@ async def test_postgresql_all_checks_ok(monkeypatch):
 
 
 async def test_postgresql_missing_extension_has_high_severity_and_create_extension_fix(monkeypatch):
-    conn = FakeAsyncConnection(_pg_responses(**{"-- ext:pg_stat_statements": False}))
+    conn = FakeAsyncConnection(_pg_responses(**{"WHERE e.extname = $1": None}))
     await _patch_asyncpg_connect(monkeypatch, conn)
 
     checks = await check_postgresql_prerequisites(_pg_target())
@@ -82,16 +85,17 @@ async def test_postgresql_missing_extension_has_high_severity_and_create_extensi
     assert pgss.severity == "high"
     assert "CREATE EXTENSION" in pgss.fix
 
-    # Dependent checks (track, read permission) can't be evaluated without the extension.
+    # Dependent checks (track, read permission, visibility) can't be evaluated without the extension.
     assert _by_key(checks, "pg_stat_statements_track").status == "unknown"
     assert _by_key(checks, "pg_stat_statements_read").status == "unknown"
+    assert _by_key(checks, "pg_stat_statements_visibility").status == "unknown"
 
 
 async def test_postgresql_read_permission_denied_is_reported_as_unauthorized(monkeypatch):
     def _denied(_sql: str):
         raise RuntimeError('permission denied for view pg_stat_statements')
 
-    conn = FakeAsyncConnection(_pg_responses(**{"SELECT count(*) FROM pg_stat_statements": _denied}))
+    conn = FakeAsyncConnection(_pg_responses(**{'FROM "public".pg_stat_statements': _denied}))
     await _patch_asyncpg_connect(monkeypatch, conn)
 
     checks = await check_postgresql_prerequisites(_pg_target())
@@ -99,6 +103,9 @@ async def test_postgresql_read_permission_denied_is_reported_as_unauthorized(mon
     read_check = _by_key(checks, "pg_stat_statements_read")
     assert read_check.status == "unauthorized"
     assert "GRANT" in read_check.fix
+    # Ve uzantı kontrolünün kendisi de artık "ok" DEĞİL — asıl bildirilen çelişki buydu:
+    # panel "var" derken DPA "veri yok" diyordu.
+    assert _by_key(checks, "pg_stat_statements").status == "unauthorized"
 
 
 async def test_postgresql_optional_extensions_are_medium_severity_when_missing(monkeypatch):
@@ -124,6 +131,55 @@ async def test_postgresql_track_io_timing_off_flagged_for_io_diagnosis(monkeypat
     check = _by_key(checks, "track_io_timing")
     assert check.status == "missing"
     assert "pg_reload_conf" in check.fix
+
+
+async def test_postgresql_extension_installed_but_out_of_search_path_is_not_reported_ok(monkeypatch):
+    """Bildirilen çelişkinin kök nedeni: Supabase eklentiyi `extensions` şemasına kurar, rolün
+    search_path'inde o şema yoksa çıplak SELECT "relation does not exist" verir. Katalog "kurulu"
+    dediği için panel yeşil görünüyordu; artık görünmüyor."""
+
+    def _undefined(_sql: str):
+        raise RuntimeError('relation "pg_stat_statements" does not exist')
+
+    conn = FakeAsyncConnection(
+        _pg_responses(
+            **{
+                "WHERE e.extname = $1": "extensions",
+                'FROM "extensions".pg_stat_statements': _undefined,
+            }
+        )
+    )
+    await _patch_asyncpg_connect(monkeypatch, conn)
+
+    checks = await check_postgresql_prerequisites(_pg_target())
+
+    pgss = _by_key(checks, "pg_stat_statements")
+    assert pgss.status == "missing"
+    assert "search_path" in pgss.fix
+    assert "extensions" in pgss.fix
+
+
+async def test_postgresql_restricted_visibility_is_partial_not_ok(monkeypatch):
+    """Yönetilen servislerde en sık durum: eklenti var, okunabiliyor, ama rol başkalarının
+    sorgu metnini göremiyor. Ne yeşil ne kırmızı — "partial"."""
+    conn = FakeAsyncConnection(
+        _pg_responses(
+            **{
+                "pg_has_role(current_user, 'pg_read_all_stats'": False,
+                'FROM "public".pg_stat_statements': {"total": 40, "redacted": 37},
+            }
+        )
+    )
+    await _patch_asyncpg_connect(monkeypatch, conn)
+
+    checks = await check_postgresql_prerequisites(_pg_target())
+
+    check = _by_key(checks, "pg_stat_statements_visibility")
+    assert check.status == "partial"
+    assert "sadece kendi sorgularınızı" in check.impact
+    assert "pg_read_all_stats" in check.fix
+    # Uzantının kendisi hâlâ ok — kurulu ve okunabiliyor; yanıltıcı olan sadece kapsam.
+    assert _by_key(checks, "pg_stat_statements").status == "ok"
 
 
 def _sqlserver_responses(**overrides) -> dict:

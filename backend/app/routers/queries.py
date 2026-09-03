@@ -18,6 +18,7 @@ from app.schemas import (
     QueryDiagnosticsReportOut,
     QueryHistoryListOut,
     QueryHistorySeriesOut,
+    SlowQueryAvailabilityOut,
     SlowQueryOut,
 )
 from app.services import query_cache
@@ -26,6 +27,7 @@ from app.services.explain_service import PostgreSQLExplainService
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
+from app.services.slow_query_status import get_slow_query_availability
 
 router = APIRouter(prefix="/queries", tags=["queries"])
 
@@ -100,6 +102,21 @@ async def get_query_history_detail(
         raise HTTPException(status_code=404, detail="No history for this queryid")
     series = build_query_series(rows)
     return QueryHistorySeriesOut.model_validate(summarize_history(queryid, rows[-1].query, series))
+
+
+@router.get("/{instance_id}/availability", response_model=SlowQueryAvailabilityOut)
+async def get_slow_query_availability_endpoint(
+    instance_id: int, db: AsyncSession = Depends(get_db)
+) -> SlowQueryAvailabilityOut:
+    """Yavaş sorgu listesi boşsa NEDEN boş — ön koşul paneliyle aynı probe'dan türetilir.
+
+    Yol "/{instance_id}" catch-all'ından ÖNCE tanımlı olmalı (FastAPI ilk eşleşen yolu seçer).
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    report = await get_slow_query_availability(db, instance)
+    return SlowQueryAvailabilityOut(**vars(report))
 
 
 @router.get("/{instance_id}", response_model=list[SlowQueryOut])

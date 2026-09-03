@@ -754,7 +754,7 @@ class ConnectionTestResult(BaseModel):
 class PrerequisiteCheckOut(BaseModel):
     key: str
     name: str
-    status: str  # ok | missing | unauthorized | unknown
+    status: str  # ok | partial | missing | unauthorized | unknown
     severity: str  # high | medium
     impact: str
     fix: str | None = None
@@ -767,6 +767,23 @@ class PrerequisiteReportOut(BaseModel):
     checks: list[PrerequisiteCheckOut]
     ok_count: int
     issue_count: int
+
+
+class SlowQueryAvailabilityOut(BaseModel):
+    """Faz 16-B İŞ 1: "yavaş sorgu verisi neden yok?" — tek kaynak.
+
+    Frontend'deki bütün boş-liste mesajları bunu gösteriyor; sabit "eklentiyi kurun" metni
+    kaldırıldı (ön koşul paneliyle çelişebiliyordu).
+    """
+
+    status: str
+    title: str
+    message: str
+    fix: str | None = None
+    stored_samples: int = 0
+    last_collected_at: datetime | None = None
+    server_rows: int | None = None
+    redacted_rows: int | None = None
 
 
 class MetricDefinitionOut(BaseModel):
