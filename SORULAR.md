@@ -3,6 +3,28 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 5: VACUUM FULL komut olarak sunulmuyor
+
+Kullanıcı "tüm üretilen SQL komutları tam ve çalıştırılabilir olsun"
+dedi. Bloat riski taşıyan tablolar için en akla gelen komut
+`VACUUM FULL` — ama onu kopyala-yapıştır edilebilir bir komut olarak
+sunmak sorumsuzluk olurdu: tabloyu ACCESS EXCLUSIVE kilitler (tablo o
+süre boyunca tamamen erişilemez) ve tablo boyutu kadar ek disk ister.
+Üretim veritabanında farkında olmadan çalıştırılırsa kesinti demek.
+
+Bu yüzden çalıştırılabilir komut düz `VACUUM (ANALYZE)`; `VACUUM FULL`
+uyarısıyla birlikte yorum satırı olarak duruyor. Kullanıcı gerçekten
+istiyorsa yorumu kaldırıp çalıştırıyor — bilinçli bir hareket gerekiyor.
+
+## Faz 16-B — İŞ 5: Üç önem kovası backend'deki isimlerle eşleştirildi
+
+Kullanıcı "kritik / uyarı / bilgi" dedi; backend `critical` / `high` /
+`medium` üretiyor. Backend değerlerini yeniden adlandırmadım (alarm
+motoru, dashboard önerileri ve tuning içgörüleri aynı üç değeri
+kullanıyor; birini değiştirmek hepsini etkilerdi). Bunun yerine arayüzde
+birebir eşleştirdim: critical→Kritik, high→Uyarı, medium→Bilgi. Dördüncü
+bir seviye (`low`/`info`) üretilmediği için kova sayısı da tam üç.
+
 ## Faz 16-B — İŞ 4: "Sorunlu olmayan sorgu" tanımı: pencerede iş yapmamış olmak
 
 "Artık sorunlu olmayan sorgular listede görünmesin" isteğini mutlak bir

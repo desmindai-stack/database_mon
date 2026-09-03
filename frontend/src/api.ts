@@ -333,6 +333,7 @@ export interface SchemaHealth {
     idx_tup_fetch: number;
     index_def: string;
     drop_ddl: string;
+    severity: string;
   }[];
   bloated_tables: {
     schema_name: string;
@@ -347,6 +348,7 @@ export interface SchemaHealth {
     last_autoanalyze: string | null;
     freeze_age: number;
     severity: string;
+    vacuum_ddl: string;
   }[];
   vacuum_lag: {
     schema_name: string;
@@ -358,6 +360,7 @@ export interface SchemaHealth {
     lag_sec: number;
     freeze_age: number;
     severity: string;
+    vacuum_ddl: string;
   }[];
   totals: {
     unused_indexes: number;

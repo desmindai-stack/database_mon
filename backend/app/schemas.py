@@ -1014,6 +1014,8 @@ class UnusedIndexOut(BaseModel):
     idx_tup_fetch: int
     index_def: str
     drop_ddl: str
+    # Faz 16-B İŞ 5: severity filtresi üç listede de çalışsın diye.
+    severity: str = "medium"
 
 
 class BloatedTableOut(BaseModel):
@@ -1029,6 +1031,8 @@ class BloatedTableOut(BaseModel):
     last_autoanalyze: str | None
     freeze_age: int
     severity: str
+    # Faz 16-B İŞ 5: kopyalanabilir, tam ve çalıştırılabilir komut.
+    vacuum_ddl: str = ""
 
 
 class VacuumLagOut(BaseModel):
@@ -1041,6 +1045,7 @@ class VacuumLagOut(BaseModel):
     lag_sec: float
     freeze_age: int
     severity: str
+    vacuum_ddl: str = ""
 
 
 class SchemaHealthTotalsOut(BaseModel):

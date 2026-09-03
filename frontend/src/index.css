@@ -2179,6 +2179,9 @@ td code,
   color: var(--text);
 }
 
+/* Faz 16-B İŞ 5: DROP INDEX komutu burada CSS ile kırpıldığı için "yarım üretiliyor"
+   görünüyordu. Schema health tabloları artık CopyableAction kullanıyor; bu sınıf, komutu tek
+   satırda göstermesi gereken (kırpılması sorun olmayan) kalan yerler için duruyor. */
 .ddl-code {
   display: inline-block;
   max-width: 360px;
@@ -2188,6 +2191,47 @@ td code,
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.72rem;
   color: #fbbf24;
+}
+
+.ddl-cell {
+  min-width: 320px;
+}
+
+.severity-filter {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.9rem;
+}
+
+.severity-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.7rem;
+  cursor: pointer;
+  user-select: none;
+}
+
+.severity-chip.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.severity-chip.critical.active {
+  border-color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.severity-chip.high.active {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
 }
 
 .history-grid {

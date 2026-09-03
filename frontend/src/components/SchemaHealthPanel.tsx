@@ -1,5 +1,7 @@
+import { useState } from "react";
 import { formatBytes } from "../api";
 import type { SchemaHealth } from "../api";
+import CopyableAction from "./CopyableAction";
 
 type Props = {
   data: SchemaHealth | null;
@@ -7,6 +9,11 @@ type Props = {
   loading: boolean;
   onRefresh: () => void;
 };
+
+/** Backend'in ürettiği üç seviye ↔ kullanıcıya gösterilen üç kova (Faz 16-B İŞ 5). */
+type Severity = "critical" | "high" | "medium";
+const SEVERITY_LABELS: Record<Severity, string> = { critical: "Kritik", high: "Uyarı", medium: "Bilgi" };
+const ALL_SEVERITIES: Severity[] = ["critical", "high", "medium"];
 
 function fmtLag(sec: number): string {
   if (!sec) return "—";
@@ -16,6 +23,17 @@ function fmtLag(sec: number): string {
 }
 
 export default function SchemaHealthPanel({ data, error, loading, onRefresh }: Props) {
+  // Varsayılan: hepsi açık — filtre bir daraltma aracı, veriyi gizleyerek başlamamalı.
+  const [selected, setSelected] = useState<Set<Severity>>(new Set(ALL_SEVERITIES));
+
+  const toggle = (s: Severity) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s);
+      else next.add(s);
+      return next;
+    });
+
   if (error) {
     return (
       <div className="card">
@@ -29,7 +47,21 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
     return <div className="card empty">{loading ? "Schema health yükleniyor…" : "Veri yok"}</div>;
   }
 
-  const { totals, unused_indexes, bloated_tables, vacuum_lag } = data;
+  const { totals } = data;
+  const keep = <T extends { severity: string }>(rows: T[]) =>
+    rows.filter((r) => selected.has((r.severity as Severity) ?? "medium"));
+
+  const unused_indexes = keep(data.unused_indexes);
+  const bloated_tables = keep(data.bloated_tables);
+  const vacuum_lag = keep(data.vacuum_lag);
+  const hiddenCount =
+    data.unused_indexes.length -
+    unused_indexes.length +
+    (data.bloated_tables.length - bloated_tables.length) +
+    (data.vacuum_lag.length - vacuum_lag.length);
+
+  const emptyText = (allRows: unknown[], base: string) =>
+    allRows.length > 0 ? "Seçili önem derecelerinde kayıt yok (filtreyi genişletin)" : base;
 
   return (
     <div className="schema-layout">
@@ -41,6 +73,18 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
         <button className="btn" onClick={onRefresh} disabled={loading}>
           {loading ? "Yenileniyor…" : "Yenile"}
         </button>
+      </div>
+
+      {/* Faz 16-B İŞ 5: önem derecesine göre çoklu seçim filtresi — üç listeye birden uygulanır. */}
+      <div className="severity-filter">
+        <span>Önem derecesi:</span>
+        {ALL_SEVERITIES.map((s) => (
+          <label key={s} className={`severity-chip ${s}${selected.has(s) ? " active" : ""}`}>
+            <input type="checkbox" checked={selected.has(s)} onChange={() => toggle(s)} />
+            {SEVERITY_LABELS[s]}
+          </label>
+        ))}
+        {hiddenCount > 0 && <span className="muted-note">{hiddenCount} kayıt filtrelendi</span>}
       </div>
 
       <div className="stats-grid compact">
@@ -62,7 +106,7 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
       <div className="card">
         <h3 className="chart-title">Kullanılmayan indexler</h3>
         {unused_indexes.length === 0 ? (
-          <div className="empty">Unused index bulunamadı (veya hepsi unique/PK)</div>
+          <div className="empty">{emptyText(data.unused_indexes, "Unused index bulunamadı (veya hepsi unique/PK)")}</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -72,7 +116,8 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                   <th>Index</th>
                   <th>Boyut</th>
                   <th>Scan</th>
-                  <th>DROP önerisi</th>
+                  <th>Önem</th>
+                  <th>DROP komutu</th>
                 </tr>
               </thead>
               <tbody>
@@ -82,9 +127,10 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                     <td>{idx.index_name}</td>
                     <td>{formatBytes(idx.index_bytes)}</td>
                     <td>{idx.idx_scan}</td>
-                    <td>
-                      <code className="ddl-code">{idx.drop_ddl}</code>
-                    </td>
+                    <td><span className={`insight-severity ${idx.severity}`}>{SEVERITY_LABELS[idx.severity as Severity]}</span></td>
+                    {/* Komut daha önce tek satırlık <code> içinde CSS ile kırpılıyordu ve
+                        yarım görünüyordu; artık tam metin + kopyala butonu (Faz 16-B İŞ 5). */}
+                    <td className="ddl-cell"><CopyableAction command={idx.drop_ddl} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -96,7 +142,7 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
       <div className="card">
         <h3 className="chart-title">Dead tuple / bloat riski</h3>
         {bloated_tables.length === 0 ? (
-          <div className="empty">Belirgin bloat riski yok</div>
+          <div className="empty">{emptyText(data.bloated_tables, "Belirgin bloat riski yok")}</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -108,7 +154,8 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                   <th>Dead %</th>
                   <th>Boyut</th>
                   <th>Last autovacuum</th>
-                  <th>Severity</th>
+                  <th>Önem</th>
+                  <th>Komut</th>
                 </tr>
               </thead>
               <tbody>
@@ -120,7 +167,8 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                     <td>{t.dead_ratio_pct.toFixed(1)}%</td>
                     <td>{formatBytes(t.table_bytes)}</td>
                     <td>{t.last_autovacuum ? new Date(t.last_autovacuum).toLocaleString() : "hiç"}</td>
-                    <td><span className={`insight-severity ${t.severity}`}>{t.severity}</span></td>
+                    <td><span className={`insight-severity ${t.severity}`}>{SEVERITY_LABELS[t.severity as Severity]}</span></td>
+                    <td className="ddl-cell">{t.vacuum_ddl && <CopyableAction command={t.vacuum_ddl} />}</td>
                   </tr>
                 ))}
               </tbody>
@@ -132,7 +180,7 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
       <div className="card">
         <h3 className="chart-title">Vacuum / analyze lag</h3>
         {vacuum_lag.length === 0 ? (
-          <div className="empty">Vacuum lag sorunu yok</div>
+          <div className="empty">{emptyText(data.vacuum_lag, "Vacuum lag sorunu yok")}</div>
         ) : (
           <div className="table-wrap">
             <table>
@@ -142,7 +190,8 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                   <th>Lag</th>
                   <th>Freeze age</th>
                   <th>Dead</th>
-                  <th>Severity</th>
+                  <th>Önem</th>
+                  <th>Komut</th>
                 </tr>
               </thead>
               <tbody>
@@ -152,7 +201,8 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                     <td>{t.last_autovacuum ? fmtLag(t.lag_sec) : "hiç vacuum yok"}</td>
                     <td>{t.freeze_age.toLocaleString()}</td>
                     <td>{t.dead_tup.toLocaleString()}</td>
-                    <td><span className={`insight-severity ${t.severity}`}>{t.severity}</span></td>
+                    <td><span className={`insight-severity ${t.severity}`}>{SEVERITY_LABELS[t.severity as Severity]}</span></td>
+                    <td className="ddl-cell">{t.vacuum_ddl && <CopyableAction command={t.vacuum_ddl} />}</td>
                   </tr>
                 ))}
               </tbody>

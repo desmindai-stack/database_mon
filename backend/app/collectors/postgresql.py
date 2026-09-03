@@ -653,6 +653,15 @@ class PostgreSQLCollector(BaseCollector):
                     "idx_tup_fetch": int(r["idx_tup_fetch"] or 0),
                     "index_def": r["index_def"] or "",
                     "drop_ddl": f'DROP INDEX CONCURRENTLY IF EXISTS "{r["schema_name"]}"."{r["index_name"]}";',
+                    # Faz 16-B İŞ 5: severity filtresi üç listede de çalışsın diye kullanılmayan
+                    # indexlere de bir önem derecesi veriliyor — ölçüt boşa harcanan disk.
+                    "severity": (
+                        "critical"
+                        if int(r["index_bytes"] or 0) >= 1_073_741_824
+                        else "high"
+                        if int(r["index_bytes"] or 0) >= 104_857_600
+                        else "medium"
+                    ),
                 }
                 for r in unused_rows
             ]
@@ -705,6 +714,13 @@ class PostgreSQLCollector(BaseCollector):
                         if float(r["dead_ratio_pct"] or 0) >= 20 or int(r["dead_tup"] or 0) >= 100_000
                         else "medium"
                     ),
+                    # Faz 16-B İŞ 5: her satır çalıştırılabilir tam bir komutla gelsin.
+                    # VACUUM FULL bilerek önerilmiyor: tabloyu ACCESS EXCLUSIVE kilitler ve
+                    # tablo boyutu kadar geçici disk ister — ölü satırları temizlemek için
+                    # normal VACUUM yeterli. Disk gerçekten geri isteniyorsa yorum satırında.
+                    "vacuum_ddl": f'''VACUUM (ANALYZE) "{r["schema_name"]}"."{r["table_name"]}";
+-- Diski işletim sistemine geri vermek gerekiyorsa (tabloyu kilitler, bakım penceresinde çalıştırın):
+-- VACUUM FULL "{r["schema_name"]}"."{r["table_name"]}";''',
                 }
                 for r in bloat_rows
             ]
@@ -748,6 +764,13 @@ class PostgreSQLCollector(BaseCollector):
                     "lag_sec": float(r["lag_sec"] or 0),
                     "freeze_age": int(r["freeze_age"] or 0),
                     "severity": "critical" if int(r["freeze_age"] or 0) > 500_000_000 else "high" if r["last_autovacuum"] is None else "medium",
+                    # freeze_age yüksekse asıl mesele wraparound: FREEZE gerekiyor. Değilse
+                    # gecikmiş autovacuum/analyze'ı elle tetiklemek yeterli (Faz 16-B İŞ 5).
+                    "vacuum_ddl": (
+                        f'VACUUM (FREEZE, ANALYZE) "{r["schema_name"]}"."{r["table_name"]}";'
+                        if int(r["freeze_age"] or 0) > 100_000_000
+                        else f'VACUUM (ANALYZE) "{r["schema_name"]}"."{r["table_name"]}";'
+                    ),
                 }
                 for r in vacuum_rows
             ]

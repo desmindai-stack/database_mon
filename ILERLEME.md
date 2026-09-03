@@ -2349,6 +2349,48 @@ sıralıyor (kümülatif dev sorgu listeye girmiyor), sayaç sıfırlaması
 negatif fark üretmiyor, önemsiz sorgular eleniyor, geçersiz `sort` 422.
 Toplam: 147 test yeşil.
 
+## Faz 16-B — İŞ 5: Schema Health
+
+**"DROP INDEX komutu yarım üretiliyor" — aslında kırpılıyordu.** Komut
+backend'de baştan beri tamdı (`DROP INDEX CONCURRENTLY IF EXISTS
+"şema"."index";`). Sorun arayüzdeydi: komut `.ddl-code` sınıfıyla tek
+satırlık bir `<code>` içinde gösteriliyordu ve o sınıf
+`max-width: 360px; white-space: nowrap; text-overflow: ellipsis`
+taşıdığı için uzun komutlar "…" ile kesiliyordu — kullanıcı kestiği
+yerden kopyalayınca çalışmayan bir komut elde ediyordu. Artık üç tablo da
+DPA'daki `CopyableAction` bileşenini kullanıyor: komut tam metin
+görünüyor ve kopyala butonu var.
+
+**Bloat ve vacuum satırlarına da komut eklendi.** Daha önce sadece
+kullanılmayan indexlerde komut vardı; "şu tablo şişmiş" deyip ne
+yapılacağını söylememek eksikti.
+
+- Bloat riski: `VACUUM (ANALYZE) "şema"."tablo";`. `VACUUM FULL` bilerek
+  çalıştırılabilir komut olarak sunulmuyor — tabloyu ACCESS EXCLUSIVE
+  kilitler ve tablo boyutu kadar geçici disk ister; ölü satırları
+  temizlemek için normal VACUUM yeterli. Diski gerçekten geri vermek
+  gerekiyorsa yorum satırı olarak, uyarısıyla birlikte duruyor.
+- Vacuum lag: `freeze_age > 100M` ise `VACUUM (FREEZE, ANALYZE)`
+  (asıl mesele wraparound), değilse `VACUUM (ANALYZE)`.
+
+**Önem derecesi filtresi.** Üç listeye birden uygulanan çoklu seçim
+(checkbox) filtresi eklendi: **Kritik / Uyarı / Bilgi** (backend'deki
+`critical` / `high` / `medium` karşılıkları). Varsayılan olarak üçü de
+açık — filtre bir daraltma aracı, veriyi gizleyerek başlamamalı. Kaç
+kaydın filtrelendiği başlıkta yazıyor, filtre yüzünden boşalan bir liste
+"kayıt yok" yerine "seçili önem derecelerinde kayıt yok (filtreyi
+genişletin)" diyor.
+
+Filtrenin üç listede de çalışabilmesi için kullanılmayan indexlere de bir
+önem derecesi verildi; ölçüt boşa harcanan disk (≥1 GB kritik, ≥100 MB
+uyarı, altı bilgi).
+
+**Testler:** `tests/test_schema_health_commands.py` (6 test) — DROP
+komutu tam ve şema nitelikli, kullanılmayan index önem derecesi
+alıyor, bloat komutu düz VACUUM (FULL sadece yorum), yüksek freeze_age'de
+FREEZE, düşükte düz VACUUM, ve üç listedeki her komut şema adını içeriyor
++ noktalı virgülle bitiyor. Toplam: 153 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
