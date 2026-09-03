@@ -45,6 +45,7 @@ import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
+import PredictionPlaybook from "../components/PredictionPlaybook";
 import PredictionReadinessPanel from "../components/PredictionReadinessPanel";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
 import QueryDiagnosticsPanel from "../components/QueryDiagnosticsPanel";
@@ -1597,7 +1598,10 @@ export default function InstanceDetailPage() {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>Metrik</th><th>Güncel</th><th>Tahmin (%90 aralık)</th><th>Eşik</th><th>Ciddiyet</th><th>Mesaj</th></tr>
+                    <tr>
+                      <th>Metrik</th><th>Güncel</th><th>Tahmin (%90 aralık)</th><th>Eşik</th>
+                      <th>Ciddiyet</th><th>Mesaj ve çözüm</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {predictions.map((p) => (
@@ -1615,7 +1619,13 @@ export default function InstanceDetailPage() {
                         </td>
                         <td>{p.threshold.toFixed(2)}</td>
                         <td><span className={`status ${p.severity}`}>{p.severity}</span></td>
-                        <td>{p.message}</td>
+                        <td style={{ minWidth: "340px" }}>
+                          <p style={{ margin: "0 0 0.4rem" }}>{p.message}</p>
+                          {p.recommendation && <RecommendationHeader title={p.recommendation} />}
+                          {p.action && <CopyableAction command={p.action} />}
+                          {/* Faz 16-B İŞ 7: adım adım çözüm, katlanabilir. */}
+                          <PredictionPlaybook steps={p.playbook} />
+                        </td>
                       </tr>
                     ))}
                   </tbody>

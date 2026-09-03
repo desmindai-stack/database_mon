@@ -3,6 +3,40 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 7: Plan kaydediliyor, her görüntülemede yeniden üretilmiyor
+
+`playbook` tahmin oluşturulurken hesaplanıp veritabanına yazılıyor.
+Alternatif, okuma anında üretmekti (kolon eklemeye gerek kalmazdı). Şunun
+için kaydetmeyi seçtim: plan, tahminin o anki ölçümlerini taşıyor
+("şu an 10 GB, günde ~250 MB, ~2026-11-01'de iki katına çıkar"). Okuma
+anında üretilseydi bu sayılar ya kaybolur ya da güncel değerlerle
+karışırdı — kullanıcı üç hafta önceki bir tahmini açtığında o günün
+gerekçesini değil bugünün sayılarını görürdü. Bedeli: plan metni
+değiştiğinde eski kayıtlar eski metni taşımaya devam eder; bu, tahmin
+kayıtlarının doğası gereği zaten geçmiş bir anın fotoğrafı olduğu için
+kabul edilebilir.
+
+## Faz 16-B — İŞ 7: Kısa vadeli metrik tahminlerinin çoğuna plan yazılmadı
+
+Adım adım plan beş tahmin türü için var: disk/veritabanı dolma, bağlantı
+artışı, tablo büyümesi, transaction ID wraparound, index şişmesi —
+kullanıcının saydığı beş tür. Diğer kısa vadeli metrik tahminlerine
+(cache hit ratio düşüşü, replication lag, TPS artışı) bilerek plan
+yazmadım: çözümleri tamamen sunucu donanımına, iş yüküne ve uygulama
+mimarisine bağlı; genel bir "şunu çalıştır" listesi ya yanlış yönlendirir
+ya da zaten `parameter_audit`'in canlı değerlere bakarak verdiği daha
+isabetli öneriyle çelişirdi. O tahminler tek cümlelik öneriyle kalıyor.
+
+## Faz 16-B — İŞ 7: Komutlarda yer tutucu (`<sema>.<tablo>`) bırakıldı
+
+Veritabanı boyutu ve wraparound planlarında bazı komutlar
+`<sema>.<tablo>` yer tutucusuyla geliyor; tablo/index planlarında ise
+gerçek adlar yazılı. Sebep: ilk iki tahmin veritabanı seviyesinde,
+hangi tabloya VACUUM çalıştırılacağı planın ilk adımının ÇIKTISINA bağlı.
+Rastgele bir tablo adı yazmak, kullanıcıyı yanlış tabloda işlem yapmaya
+yönlendirirdi. Bu yüzden o adımlar "önce şu sorguyu çalıştır, çıkan
+tabloyu buraya yaz" akışını koruyor.
+
 ## Faz 16-B — İŞ 6: Yoksayma kontrolü gizlemiyor, sadece sayımdan çıkarıyor
 
 "Yoksayılan kontrol ön koşul yüzdesine dahil edilmesin" isteğini iki

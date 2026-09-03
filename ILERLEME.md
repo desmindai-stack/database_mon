@@ -2444,6 +2444,69 @@ durum→kontrol eşlemesi gerçek anahtarlara denk geliyor, liste kalıcı ve
 geri alınabilir, yoksayılan kontrol dashboard önerisi üretmiyor.
 Toplam: 160 test yeşil.
 
+## Faz 16-B — İŞ 7: Tahminler için adım adım aksiyon planı
+
+**Sorun.** Tahminlerin önerisi tek cümlelik ve genel geçerdi
+("arşivleme/partitioning değerlendirin", "bağlantı havuzunu gözden
+geçirin"). Kullanıcı ne çalıştıracağını bilmiyordu.
+
+**Yeni `services/prediction_playbooks.py`.** Beş tahmin türü için
+numaralı adımlar; her adım `{title, detail, command}`. Plan tahmin
+kaydedildiği anda üretilip `PredictionInsight.playbook` (JSON) kolonunda
+saklanıyor — böylece geçmiş tahminler kendi planlarını taşıyor.
+Supabase migration: `20260904100000_prediction_playbook.sql`
+(DEPLOY.md tablosunda 22 numara).
+
+**Disk/veritabanı dolma (6 adım):** en çok yer kaplayan tabloları çıkaran
+sorgu → ölü satır oranını ölçen sorgu → rutin `VACUUM (ANALYZE, VERBOSE)`
+→ `VACUUM FULL` (ACCESS EXCLUSIVE kilit ve ek disk uyarısıyla, pg_repack
+alternatifiyle) → partition'a geçiş ve `DETACH PARTITION` ile arşivleme →
+disk büyütme kararı için eşik. Eşik uydurulmuyor: dbace gerçek disk
+kapasitesini ölçmediği için "iki katına çıkma tarihindeki doluluk %85'i
+geçecekse şimdi planla" diye kullanıcının kendi kapasitesine bağlanıyor.
+
+**Bağlantı artışı (PostgreSQL 5 adım):** mevcut/azami + idle /
+idle-in-transaction dağılımı → bağlantıyı kim tutuyor → **önce PgBouncer**
+(örnek `pgbouncer.ini` ile) → `idle_in_transaction_session_timeout` →
+en sonda `max_connections` artırımı, "reload ile GİRMEZ, yeniden
+başlatma gerekir" ve bellek uyarısıyla. Sıra bilinçli: max_connections'ı
+büyütmek bağlantı sorununu bellek sorununa çevirir. SQL Server ve MongoDB
+için ayrı, kendi komutlarıyla planlar var (Postgres komutu sızmıyor).
+
+**Tablo büyümesi (5 adım):** büyüme gerçek veri mi şişme mi ayrımı →
+tablo/index boyut dağılımı → `VACUUM (ANALYZE, VERBOSE)` → partiler
+halinde arşivleme (tek seferde milyonlarca satır silmenin WAL'i şişirdiği
+ve VACUUM'u engellediği uyarısıyla) → kalıcı çözüm olarak partitioning.
+Komutlar ilgili şema/tablo adıyla üretiliyor.
+
+**Transaction ID wraparound (5 adım):** veritabanı bazında yaş → yaşı
+hangi tablo taşıyor → **önce engelleyicileri bul** (uzun transaction,
+`pg_replication_slots`, `pg_prepared_xacts`) → `VACUUM (FREEZE, VERBOSE,
+ANALYZE)` → autovacuum ayarları (`autovacuum_max_workers` yeniden
+başlatma ister, diğer ikisi reload ile geçer notuyla). Engelleyici adımı
+freeze adımından ÖNCE: autovacuum engellenmişse elle FREEZE de yetmez.
+
+**Index şişmesi (5 adım):** boyut ve `idx_scan` kontrolü → `pgstattuple`
+ile gerçek şişme oranı → hiç kullanılmıyorsa `DROP INDEX CONCURRENTLY` →
+kullanılıyorsa `REINDEX INDEX CONCURRENTLY` (iki kopyanın birden diskte
+duracağı ve yarıda kalırsa INVALID index kalacağı uyarısıyla) →
+tekrarlamaması için `fillfactor`.
+
+**Arayüz.** Yeni `PredictionPlaybook` bileşeni: "Adım adım çözüm (N adım)"
+katlanabilir başlığı, açılınca numaralı liste; her adımın komutu ayrı
+satırda `CopyableAction` kutusunda (çok satırlı komutlar `white-space:
+pre` ile olduğu gibi kopyalanıyor). Hem Tahminler sayfasında hem instance
+detayının Tahminler sekmesinde. Varsayılan katlı — üstte sade özet
+kalıyor.
+
+**Testler:** `tests/test_prediction_playbooks.py` (20 test) — her planda
+en az 3 adım ve en az bir komut, komutlar kırpılmamış, ölçülen değerler
+adım metnine geçiyor, tablo/index planları gerçek nesne adını yazıyor,
+yıkıcı komutlar uyarı taşıyor, wraparound planında engelleyici adımı
+freeze'den önce, bağlantı planında pooler max_connections'tan önce,
+SQL Server/MongoDB planlarına Postgres komutu sızmıyor.
+Toplam: 180 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

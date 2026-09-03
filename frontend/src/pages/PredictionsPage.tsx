@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, formatTime, Prediction } from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
+import PredictionPlaybook from "../components/PredictionPlaybook";
 import RecommendationHeader from "../components/RecommendationHeader";
 
 export default function PredictionsPage() {
@@ -68,15 +69,17 @@ export default function PredictionsPage() {
                   </td>
                   <td><span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>{p.severity}</span></td>
                   <td>{p.message}</td>
-                  <td style={{ minWidth: "220px" }}>
+                  <td style={{ minWidth: "320px" }}>
                     {p.recommendation ? (
                       <>
                         <RecommendationHeader title={p.recommendation} />
                         {p.action && <CopyableAction command={p.action} />}
                       </>
                     ) : (
-                      <span className="muted-note">—</span>
+                      p.playbook.length === 0 && <span className="muted-note">—</span>
                     )}
+                    {/* Faz 16-B İŞ 7: genel öneri yerine numaralı adımlar + kopyalanabilir komutlar. */}
+                    <PredictionPlaybook steps={p.playbook} />
                   </td>
                   <td>
                     {canWrite && (

@@ -343,6 +343,10 @@ class PredictionInsight(Base):
     lower_bound: Mapped[float | None] = mapped_column(Float, nullable=True)
     upper_bound: Mapped[float | None] = mapped_column(Float, nullable=True)
     seasonality: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # Faz 16-B İŞ 7: adım adım çözüm planı — [{title, detail, command}]. `recommendation` tek
+    # cümlelik özet olarak kalıyor; bu, o özetin "önce şunu çalıştır, çıktısına göre şunu yap"
+    # açılımı. Kaydedildiği anda üretiliyor ki tahmin geçmişi kendi planını taşısın.
+    playbook: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="predictions")
 

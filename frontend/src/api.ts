@@ -435,6 +435,13 @@ export interface AlertEvent {
   resolved_at: string | null;
 }
 
+/** Faz 16-B İŞ 7: tahmin için tek bir çözüm adımı. */
+export interface PredictionStep {
+  title: string;
+  detail: string;
+  command: string | null;
+}
+
 export interface Prediction {
   id: number;
   instance_id: number;
@@ -453,6 +460,8 @@ export interface Prediction {
   lower_bound: number | null;
   upper_bound: number | null;
   seasonality: string | null;
+  /** Adım adım çözüm planı; plan üretilmeyen tahmin türlerinde boş dizi. */
+  playbook: PredictionStep[];
 }
 
 export interface PredictionReadiness {

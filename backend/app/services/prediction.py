@@ -6,6 +6,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.metrics import METRIC_KEYS
+from app.services.prediction_playbooks import (
+    connections_playbook,
+    database_size_playbook,
+    index_bloat_playbook,
+    table_growth_playbook,
+    wraparound_playbook,
+)
 from app.models import MetricRollupDaily, MetricSample, PredictionInsight, SchemaObjectDailySample
 from app.services.forecasting import DataSufficiency, SeasonalPoint, check_sufficiency, forecast_with_seasonality
 
@@ -136,6 +143,14 @@ async def _short_horizon_predictions(
         if not _will_breach(metric_key, current, forecast.point, threshold):
             continue
         recommendation, action = _recommendation_for(metric_key, engine, current, forecast.point)
+        # Bağlantı sayısı tahminleri için adım adım plan (Faz 16-B İŞ 7). Diğer kısa vadeli
+        # metrikler (cache hit, replication lag, TPS) için plan üretmiyoruz: çözümleri
+        # sunucuya/uygulamaya özgü, uyduramayacağımız kadar bağlama bağlı.
+        playbook = (
+            connections_playbook(engine)
+            if metric_key in ("connection_utilization_pct", "active_connections")
+            else None
+        )
 
         insight = PredictionInsight(
             instance_id=instance_id,
@@ -152,6 +167,7 @@ async def _short_horizon_predictions(
             message=message,
             recommendation=recommendation,
             action=action,
+            playbook=playbook,
         )
         session.add(insight)
         created.append(insight)
@@ -266,6 +282,11 @@ async def _database_size_prediction(session: AsyncSession, instance_id: int) -> 
         message=message,
         recommendation=recommendation,
         action=None,
+        playbook=database_size_playbook(
+            current_human=_format_bytes(current),
+            per_day_human=_format_bytes(bytes_per_day),
+            doubling_date=doubling_date,
+        ),
     )
     session.add(insight)
     return [insight]
@@ -324,6 +345,9 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
         message=message,
         recommendation=recommendation,
         action="SELECT datname, age(datfrozenxid) FROM pg_database ORDER BY 2 DESC;",
+        playbook=wraparound_playbook(
+            current_age=current, freeze_max_age=AUTOVACUUM_FREEZE_MAX_AGE, eta_date=eta_date
+        ),
     )
     session.add(insight)
     return [insight]
@@ -395,6 +419,11 @@ async def _object_growth_predictions(
             message=message,
             recommendation=recommendation,
             action=None,
+            playbook=(
+                index_bloat_playbook(schema_name, object_name, _format_bytes(forecast.slope_per_day))
+                if object_kind == "index"
+                else table_growth_playbook(schema_name, object_name, _format_bytes(forecast.slope_per_day))
+            ),
         )
         session.add(insight)
         created.append(insight)

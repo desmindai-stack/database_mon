@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.domain.engines import DEFAULT_PORTS, DatabaseEngine
 from app.domain.topology import CustomerType, GroupEnvironment, GroupTopology, NodeRoleHint, NodeSite, ServerOS, UserRole
@@ -636,6 +636,15 @@ class CustomRuleTestRequest(BaseModel):
     group_id: int | None = None
 
 
+class PredictionStepOut(BaseModel):
+    """Tahmin için tek bir çözüm adımı (Faz 16-B İŞ 7). Arayüzde numaralanır; `command` varsa
+    ayrı satırda, kopyalanabilir bir kutuda gösterilir."""
+
+    title: str
+    detail: str
+    command: str | None = None
+
+
 class PredictionOut(BaseModel):
     id: int
     instance_id: int
@@ -654,6 +663,15 @@ class PredictionOut(BaseModel):
     lower_bound: float | None = None
     upper_bound: float | None = None
     seasonality: str | None = None
+    # Adım adım çözüm planı — `recommendation` özetinin açılımı. Veritabanında NULL olabilir
+    # (planı olmayan tahmin türleri ve bu alan eklenmeden önce kaydedilmiş satırlar), bu yüzden
+    # None boş listeye çevriliyor — istemci her zaman bir dizi görüyor.
+    playbook: list[PredictionStepOut] = []
+
+    @field_validator("playbook", mode="before")
+    @classmethod
+    def _playbook_never_null(cls, v):
+        return v or []
 
     model_config = {"from_attributes": True}
 

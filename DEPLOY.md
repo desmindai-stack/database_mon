@@ -75,6 +75,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 19 | `20260901100000_prediction_insight_recommendation.sql` | **YENİ** — prediction_insights.recommendation, .action |
 | 20 | `20260903090000_prediction_forecasting.sql` | **YENİ** — prediction_insights.lower_bound/.upper_bound/.seasonality, metric_rollup_daily ve schema_object_daily_samples tabloları |
 | 21 | `20260904090000_instance_ignored_prerequisites.sql` | **YENİ** — instances.ignored_prerequisites (yoksayılan ön koşul kontrolleri) |
+| 22 | `20260904100000_prediction_playbook.sql` | **YENİ** — prediction_insights.playbook (adım adım çözüm planı) |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun
