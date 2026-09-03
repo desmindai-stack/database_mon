@@ -46,6 +46,7 @@ def _connectivity_recommendations(group: DatabaseGroup, report: dict[str, Any] |
             "source": "connectivity",
             "group": group.name,
             "message": f"{len(down_nodes)} düğüme erişilemiyor ({names}): servis durumunu ve ağ erişimini kontrol edin.",
+            "title": f"{group.engine} servisinin ayakta olduğunu doğrulayın",
             "steps": [
                 "Sunucunun ayakta ve ağdan erişilebilir olduğunu doğrulayın (ping / ssh).",
                 f"{group.engine} servisinin durumunu kontrol edin (systemctl status / sc query).",
@@ -83,6 +84,7 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
                 "source": "parameter_audit",
                 "group": group.name,
                 "message": f"{finding['name']}: {finding['recommendation']}",
+                "title": f"{finding['name']} parametresini {finding['recommendation']} olacak şekilde ayarlayın",
                 "steps": [
                     finding["recommendation"],
                     "Mevcut değeri canlı olarak doğrulayın (aşağıdaki komut).",
@@ -129,6 +131,7 @@ async def _prerequisite_recommendations(group: DatabaseGroup, nodes: list[Node])
                 "source": "prerequisites",
                 "group": group.name,
                 "message": f"Ön koşul eksik — {check.name}: {check.impact}",
+                "title": f"{check.name} sorununu giderin" if check.fix else f"{check.name} kontrolünü tamamlayın",
                 "steps": [check.impact, "Aşağıdaki komutla düzeltin, sonra bu sayfayı yenileyin."],
                 "action": check.fix,
             }
@@ -189,6 +192,7 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                         # here) — insight.action is a UI tab hint ("queries"/"metrics"), not a
                         # command, so it's deliberately not reused as the action field.
                         "message": f"{snap['name']}: {insight.title} — {insight.recommendation}",
+                        "title": insight.recommendation,
                         "steps": [f"{snap['name']} instance'ında: {insight.recommendation}"],
                     }
                 )

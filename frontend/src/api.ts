@@ -748,6 +748,7 @@ export interface DashboardRecommendation {
   source: string;
   group: string;
   message: string;
+  title: string | null;
   steps: string[];
   action: string | null;
   customer: string;

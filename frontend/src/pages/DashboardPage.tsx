@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, AppConfig, DashboardSummary, formatRelativeTime, GroupOverallStatus, HealthResponse } from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
+import RecommendationHeader from "../components/RecommendationHeader";
 
 const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
   critical: "Kritik",
@@ -15,6 +16,7 @@ interface ProblemCard {
   key: string;
   severity: string;
   title: string;
+  recTitle: string | null;
   customer: string;
   application: string;
   group: string;
@@ -48,6 +50,7 @@ function buildProblemCards(summary: DashboardSummary): ProblemCard[] {
       environment: issue.environment,
       linkHint: issue.link_hint,
       checkedAt: issue.checked_at,
+      recTitle: rec?.title ?? null,
       steps: rec?.steps ?? [],
       action: rec?.action ?? null,
     });
@@ -61,6 +64,7 @@ function buildProblemCards(summary: DashboardSummary): ProblemCard[] {
       key: `rec-${idx}`,
       severity: rec.severity,
       title: rec.message,
+      recTitle: rec.title,
       customer: rec.customer,
       application: rec.application,
       group: rec.group,
@@ -337,7 +341,7 @@ export default function DashboardPage() {
                       </div>
                       {isOpen && hasBody && (
                         <div className="problem-card-body">
-                          <h4>Çözüm önerisi</h4>
+                          {card.recTitle && <RecommendationHeader title={card.recTitle} />}
                           {card.steps.length > 0 && (
                             <ol>
                               {card.steps.map((step, i) => (

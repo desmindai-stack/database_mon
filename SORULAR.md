@@ -3,6 +3,20 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16 — İŞ 2: "Aynı görsel kalıp" tek bir rijit bileşen değil, paylaşılan başlık + her yerin kendi içeriği
+
+Dashboard/DPA/parametre denetimi/tahminler'in öneri VERİSİ (steps dizisi,
+tek cümlelik reason, DDL komutu, SQL check komutu...) dört ayrı, birbirine
+benzemeyen şekilde geliyor — bunları TEK bir rijit `{title, reason, command}`
+bileşenine zorlamak (örn. Dashboard'ın numaralı adım listesini tek bir
+"reason" string'ine sıkıştırmak) bilgi kaybettirirdi. Bunun yerine sadece
+GERÇEKTEN ortak olan parçayı (kalın "Öneri: X" başlığı) `RecommendationHeader`
+olarak paylaşılan bileşene çıkardım, her sayfa kendi içeriğini (adım listesi,
+tek paragraf, tablo hücresi) kendi doğal şekliyle o başlığın altında/yanında
+render etmeye devam ediyor. "Aynı görsel kalıp" isteğini böyle yorumladım:
+görsel dil (başlık rengi/ağırlığı, komut kutusunun konumu) her yerde aynı,
+ama veri şekli zorla tek kalıba sokulmadı.
+
 ## Faz 16 — İŞ 1: Ön koşul denetimi dashboard'da sadece gruplu instance'lar için çalışıyor
 
 `_prerequisite_recommendations` `dashboard_snapshot.py`'deki diğer canlı-prob

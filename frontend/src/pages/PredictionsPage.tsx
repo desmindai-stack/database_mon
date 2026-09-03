@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, formatTime, Prediction } from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
+import RecommendationHeader from "../components/RecommendationHeader";
 
 export default function PredictionsPage() {
   const canWrite = useAuth().user?.role === "admin";
@@ -67,7 +68,7 @@ export default function PredictionsPage() {
                   <td style={{ minWidth: "220px" }}>
                     {p.recommendation ? (
                       <>
-                        <div className="muted-note">{p.recommendation}</div>
+                        <RecommendationHeader title={p.recommendation} />
                         {p.action && <CopyableAction command={p.action} />}
                       </>
                     ) : (

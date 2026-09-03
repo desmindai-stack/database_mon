@@ -14,6 +14,8 @@ import {
   ParameterAudit,
 } from "../api";
 import { useAuth } from "../auth";
+import CopyableAction from "../components/CopyableAction";
+import RecommendationHeader from "../components/RecommendationHeader";
 
 type Tab = "nodes" | "parameters" | "alwayson";
 
@@ -672,7 +674,16 @@ export default function GroupDetailPage() {
                         <td>{f.category}</td>
                         <td>{f.current_value ?? "—"}</td>
                         <td><span className={`status ${f.severity}`}>{f.severity}</span></td>
-                        <td>{f.recommendation}</td>
+                        <td style={{ minWidth: "220px" }}>
+                          {f.severity === "ok" ? (
+                            f.recommendation
+                          ) : (
+                            <>
+                              <RecommendationHeader title={f.recommendation} />
+                              <CopyableAction command={`SHOW ${f.name};`} />
+                            </>
+                          )}
+                        </td>
                         <td className="muted-note">{f.detail}</td>
                       </tr>
                     ))}

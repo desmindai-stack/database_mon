@@ -1712,6 +1712,21 @@ td code,
   color: var(--accent-2);
 }
 
+/* Faz 16 İŞ 2 — the one shared "Öneri: X" visual pattern reused across Dashboard, DPA index
+   advice, parametre denetimi and tahminler so a recommendation is never just plain prose. */
+.recommendation-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--accent-2);
+  margin: 0 0 0.3rem;
+}
+
+.recommendation-reason {
+  font-size: 0.85rem;
+  color: var(--text);
+  margin: 0 0 0.5rem;
+}
+
 .insight-recommendation span {
   color: var(--muted);
 }

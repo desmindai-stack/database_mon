@@ -39,9 +39,11 @@ import {
 } from "../api";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
+import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
+import RecommendationHeader from "../components/RecommendationHeader";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import TuningPanel from "../components/TuningPanel";
 
@@ -1018,8 +1020,9 @@ export default function InstanceDetailPage() {
                                             {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
                                           </span>
                                         </div>
-                                        <p className="advice-reason">{a.reason}</p>
-                                        <code className="advice-ddl">{a.index_ddl}</code>
+                                        <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
+                                        <p className="recommendation-reason">{a.reason}</p>
+                                        <CopyableAction command={a.index_ddl} />
                                       </div>
                                     ))
                                   )}
@@ -1193,8 +1196,9 @@ export default function InstanceDetailPage() {
                                               {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
                                             </span>
                                           </div>
-                                          <p className="advice-reason">{a.reason}</p>
-                                          <code className="advice-ddl">{a.index_ddl}</code>
+                                          <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
+                                          <p className="recommendation-reason">{a.reason}</p>
+                                          <CopyableAction command={a.index_ddl} />
                                           {a.before_cost !== null && a.after_cost !== null && (
                                             <div className="advice-costs">
                                               <span>Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}</span>

@@ -1844,6 +1844,46 @@ eksik uzantı → bağımlı kontroller unknown, izin reddi → unauthorized,
 opsiyonel uzantılar → medium severity, Query Store kapalı, VIEW SERVER
 STATE eksik) doğru raporlandığı kanıtlanıyor. Toplam 82 test yeşil.
 
+## Faz 16 — İŞ 2: Öneri başlıkları belirgin olsun
+
+**Sorun:** Öneriler metin içinde kayboluyordu — Dashboard'da genel
+"Çözüm önerisi" etiketi vardı ama kısa bir eylem başlığı yoktu; DPA'daki
+index önerisi kartında hiç başlık/kopyalama yoktu (DDL düz `<code>`
+içindeydi, kopyalanamıyordu); parametre denetimi tablosunda öneri düz
+metin bir hücreydi; tahminler sayfasında öneri `.muted-note` (soluk,
+ikincil metin) sınıfıyla render ediliyordu — yani GERÇEKTEN görsel
+olarak bastırılıyordu.
+
+**Yeni paylaşılan bileşen `components/RecommendationHeader.tsx`:**
+Tek satır — `Öneri: {title}` başlığı, `.recommendation-title` (kalın,
+accent renk) ile. 4 yerde de aynı bileşen kullanılıyor:
+
+- **Dashboard** (`DashboardPage.tsx`): `dashboard_snapshot.py`'nin 4
+  öneri üreticisi (`_connectivity_recommendations`,
+  `_parameter_recommendations`, `_prerequisite_recommendations`,
+  `_instance_recommendations`) artık her biri kısa bir `title` alanı da
+  dolduruyor (yeni `DashboardRecommendationOut.title`, opsiyonel — eski
+  kayıtlarda yoksa kart eskisi gibi başlıksız düşer). Kart açıldığında
+  artık sabit "Çözüm önerisi" yerine `Öneri: {title}` görünüyor, adımlar
+  ve komut aynı şekilde altında kalıyor.
+- **DPA** (`InstanceDetailPage.tsx`, 2 yer — tekli sorgu + toplu index
+  önerisi): index advice kartı artık `Öneri: {schema}.{table} için index
+  ekleyin` başlığı + gerekçe (`a.reason`, artık `.recommendation-reason`
+  ile okunabilir, soluk değil) + **DDL artık `CopyableAction` ile
+  kopyalanabilir** (önceden düz `<code>`, kopyalanamıyordu — gerçek bir
+  eksiklik giderildi).
+- **Parametre denetimi** (`GroupDetailPage.tsx`): "Öneri" tablo hücresi
+  artık `ok` olmayan bulgular için başlık + `SHOW {parametre};` komutunu
+  (dashboard'daki aynı güvenli, uydurulmamış kontrol komutu) kopyalanabilir
+  gösteriyor.
+- **Tahminler** (`PredictionsPage.tsx`): `.muted-note` (soluk metin)
+  kaldırıldı, `RecommendationHeader` ile değiştirildi.
+
+**Test:** Yeni `tests/test_dashboard_recommendation_titles.py` (4 test)
+— dashboard_snapshot.py'nin 4 öneri üreticisinin hepsinin `title`
+doldurduğunu kanıtlıyor (canlı bağlantı gerekmeden, `collect_parameter_audit`/
+`run_prerequisite_checks` monkeypatch'lenerek). Toplam 86 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

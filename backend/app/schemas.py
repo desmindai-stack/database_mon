@@ -647,6 +647,11 @@ class DashboardRecommendationOut(BaseModel):
     source: str
     group: str
     message: str
+    # Short imperative "Öneri: <title>" headline (Faz 16 İŞ 2) — distinct from `message` (the
+    # diagnostic/problem statement shown on the card's collapsed head) and from `steps` (the
+    # fuller walk-through). Optional so a recommendation generated before this field existed
+    # still renders (frontend falls back to a generic label).
+    title: str | None = None
     # Numbered walk-through shown when the card's "çözüm önerisi" section is expanded (Faz 15
     # İŞ 4) — falls back to an empty list for any recommendation generated before this existed.
     steps: list[str] = []
