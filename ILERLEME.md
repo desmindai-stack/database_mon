@@ -2294,6 +2294,61 @@ ortalaması olarak hesaplanıyor. Başlık da buna göre değişiyor
 sadece penceredeki örnekleri döndürüyor, `hours` davranışı bozulmamış,
 `start` tek başına açık uçlu çalışıyor. Toplam: 142 test yeşil.
 
+## Faz 16-B — İŞ 4: Yavaş sorgu listesi mantığı
+
+**Sorun.** Sorgular sekmesinde iki ayrı liste vardı ve varsayılan olan
+tek bir zaman noktasına bağlıydı ("14:29 civarında öne çıkan sorgular").
+O liste sorgu geçmişinden geliyordu, güncel yavaş sorgu listesiyle
+kesişmediğinde de "bu sorgu artık güncel yavaş sorgu listesinde değil"
+diyordu — yani kullanıcıya önce sorunlu olmayan bir sorgu gösterilip
+sonra üzerinde işlem yapılamayacağı söyleniyordu.
+
+**Tek liste, "en sorunlu N" mantığı.** Artık tek bir liste var: *En
+sorunlu sorgular*. Ayrı "an'a bağlı" liste kaldırıldı; sorgu yükü
+çizelgesi duruyor ama artık kendi listesini değil bu listeyi besliyor.
+
+`GET /api/queries/{id}` genişletildi:
+
+- `limit` (UI'da 5/10/20 seçici) ve `sort` (`total`/`mean`/`calls`).
+- `start`/`end` — aralık modu.
+
+**Aralık modunda sıralama kümülatif toplama değil DEĞİŞİME göre.**
+pg_stat_statements sayaçları sıfırlanana kadar birikir; "14:00–14:30
+arasında en çok süre harcayan sorgu" sorusunun cevabı son değerin
+kendisi değil, pencerenin başı ile sonu arasındaki farktır. Aksi halde
+haftalardır biriken dev bir sayaç, pencerede hiç çalışmasa bile listenin
+başında kalırdı — kullanıcının şikâyet ettiği "sorunlu olmayan sorgular"
+tam olarak buydu. Sayaç pencerede sıfırlanmışsa (son < ilk) son değer
+olduğu gibi alınıyor. Pencerede toplam 1 ms'den az iş yapmış sorgular
+listeye hiç girmiyor.
+
+**Aralık seçimi tek yerden yönetiliyor.** Liste şu önceliğe göre bir
+aralığa bağlanıyor: sorgu yükü çizelgesinde seçilen aralık → metrik
+grafiklerinde yakınlaştırılan aralık → üstteki "Özel" aralık. Hiçbiri
+yoksa liste en son toplama döngüsünün anlık görüntüsü. Liste başlığının
+altında hangi modda olduğu ve neye göre sıralandığı açıkça yazıyor.
+Sabit bir aralığa bakılırken 15 saniyelik otomatik yenileme durdurulmuş
+(sonuç değişmeyeceği için).
+
+**"Olası nedenler" ayıklandı.** Eski hali `+1 çağrı arttı` gibi önemsiz
+gözlemleri ve hiçbir sinyal yokken bile bir dolgu cümlesini öneri gibi
+sunuyordu. Yeni kurallar sadece eşiği geçen gerçek sinyalleri yazıyor:
+ortalama süre > 100 ms, `temp_blks_written > 0` (work_mem taşması),
+diskten okunan blok sayısı cache isabetinden fazla (I/O ağırlıklı).
+Hiçbiri yoksa "Olası nedenler" başlığı hiç görünmüyor.
+
+**Kaldırılan kafa karıştırıcı metinler:** "bu sorgu artık güncel yavaş
+sorgu listesinde değil", "Sorgu seçin", "Bu zaman noktasında
+ilişkilendirilecek sorgu verisi yok". Listedeki her sorgu artık gerçek
+bir `SlowQuerySample` satırına karşılık geliyor, dolayısıyla
+EXPLAIN/index önerisi her zaman çalışıyor.
+
+**Testler:** `tests/test_slow_query_ranking.py` (5 test) — varsayılan
+görünüm istenen ölçüte göre Top N, aralık modu pencere içi değişime göre
+sıralıyor (kümülatif dev sorgu listeye girmiyor), sayaç sıfırlaması
+negatif fark üretmiyor, önemsiz sorgular eleniyor, geçersiz `sort` 422.
+Toplam: 147 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

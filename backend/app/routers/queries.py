@@ -119,36 +119,133 @@ async def get_slow_query_availability_endpoint(
     return SlowQueryAvailabilityOut(**vars(report))
 
 
+_SLOW_QUERY_SORT_KEYS = {
+    "total": lambda r: r.total_time_ms,
+    "mean": lambda r: r.mean_time_ms,
+    "calls": lambda r: r.calls,
+}
+
+# Aralık modunda bu eşiğin altındaki sorgular listeye alınmaz: pencerede toplam 1 ms'den az
+# harcamış bir sorgu "en sorunlu N" listesinde yer kaplamamalı (Faz 16-B İŞ 4 — kullanıcı
+# listede sorunlu olmayan sorgular görüyordu).
+_NEGLIGIBLE_TOTAL_MS = 1.0
+
+
+def _window_delta(rows: list[SlowQuerySample]) -> SlowQuerySample:
+    """Bir queryid'nin pencere içindeki DEĞİŞİMİ — kümülatif sayaçlardan fark alınarak.
+
+    pg_stat_statements sayaçları sıfırlanana kadar birikir; "14:00–14:30 arasında en çok süre
+    harcayan sorgu" sorusunun cevabı son değerin kendisi değil, pencerenin başı ile sonu
+    arasındaki farktır. Sayaç pencerede sıfırlanmışsa (son < ilk) son değer olduğu gibi alınır.
+    """
+    first, last = rows[0], rows[-1]
+    reset = last.total_time_ms < first.total_time_ms or last.calls < first.calls
+    total = last.total_time_ms if reset else last.total_time_ms - first.total_time_ms
+    calls = last.calls if reset else last.calls - first.calls
+    delta = SlowQuerySample(
+        instance_id=last.instance_id,
+        queryid=last.queryid,
+        query=last.query,
+        calls=calls,
+        total_time_ms=total,
+        mean_time_ms=(total / calls) if calls > 0 else last.mean_time_ms,
+        rows=last.rows,
+        shared_blks_hit=last.shared_blks_hit,
+        shared_blks_read=last.shared_blks_read,
+        local_blks_hit=last.local_blks_hit,
+        local_blks_read=last.local_blks_read,
+        temp_blks_read=last.temp_blks_read,
+        temp_blks_written=last.temp_blks_written,
+        plan_user_time=last.plan_user_time,
+        plan_sys_time=last.plan_sys_time,
+        exec_user_time=last.exec_user_time,
+        exec_sys_time=last.exec_sys_time,
+    )
+    # Bu nesne veritabanına EKLENMİYOR; sadece yanıt şemasını doldurmak için var. id/collected_at
+    # son gerçek örnekten geliyor ki frontend EXPLAIN/index önerisi için onu kullanabilsin.
+    delta.id = last.id
+    delta.collected_at = last.collected_at
+    return delta
+
+
 @router.get("/{instance_id}", response_model=list[SlowQueryOut])
 async def get_slow_queries(
     instance_id: int,
     limit: int = Query(default=20, ge=1, le=100),
+    sort: str = Query(default="mean", pattern="^(total|mean|calls)$"),
+    start: datetime | None = Query(default=None, description="Aralık başlangıcı (ISO-8601)"),
+    end: datetime | None = Query(default=None, description="Aralık bitişi (ISO-8601)"),
     db: AsyncSession = Depends(get_db),
 ) -> list[SlowQuerySample]:
+    """En sorunlu N sorgu (Faz 16-B İŞ 4).
+
+    İki mod:
+
+    * **Aralık verilmezse** — en son toplama döngüsünün anlık görüntüsü, seçilen ölçüte göre
+      sıralanıp ilk N. (Eski davranış; sadece sıralama ve N artık parametre.)
+    * **`start`/`end` verilirse** — pencere içindeki DEĞİŞİM. Kümülatif sayaçlardan fark
+      alınır, böylece "bu aralıkta en çok süre harcayan sorgu" gerçekten o aralığın sorusu
+      olur; pencerede kayda değer iş yapmamış sorgular listeden düşer.
+    """
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
 
-    subq = (
-        select(SlowQuerySample.collected_at)
-        .where(SlowQuerySample.instance_id == instance_id)
-        .order_by(SlowQuerySample.collected_at.desc())
-        .limit(1)
-    )
-    latest_at = (await db.execute(subq)).scalar_one_or_none()
+    key = _SLOW_QUERY_SORT_KEYS[sort]
+
+    if start or end:
+        conditions = [SlowQuerySample.instance_id == instance_id]
+        if start:
+            conditions.append(SlowQuerySample.collected_at >= _as_utc(start))
+        if end:
+            conditions.append(SlowQuerySample.collected_at <= _as_utc(end))
+        rows = list(
+            (
+                await db.execute(
+                    select(SlowQuerySample).where(*conditions).order_by(SlowQuerySample.collected_at.asc())
+                )
+            )
+            .scalars()
+            .all()
+        )
+        by_queryid: dict[str, list[SlowQuerySample]] = {}
+        for row in rows:
+            # queryid yoksa (çok eski örnekler) sorgu metni parmak izi olarak kullanılır.
+            by_queryid.setdefault(row.queryid or row.query, []).append(row)
+        deltas = [_window_delta(group) for group in by_queryid.values()]
+        deltas = [d for d in deltas if d.total_time_ms >= _NEGLIGIBLE_TOTAL_MS]
+        deltas.sort(key=key, reverse=True)
+        return deltas[:limit]
+
+    latest_at = (
+        await db.execute(
+            select(SlowQuerySample.collected_at)
+            .where(SlowQuerySample.instance_id == instance_id)
+            .order_by(SlowQuerySample.collected_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
     if not latest_at:
         return []
 
-    result = await db.execute(
-        select(SlowQuerySample)
-        .where(
-            SlowQuerySample.instance_id == instance_id,
-            SlowQuerySample.collected_at == latest_at,
+    rows = list(
+        (
+            await db.execute(
+                select(SlowQuerySample).where(
+                    SlowQuerySample.instance_id == instance_id,
+                    SlowQuerySample.collected_at == latest_at,
+                )
+            )
         )
-        .order_by(SlowQuerySample.mean_time_ms.desc())
-        .limit(limit)
+        .scalars()
+        .all()
     )
-    return list(result.scalars().all())
+    rows.sort(key=key, reverse=True)
+    return rows[:limit]
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
 @router.get("/{instance_id}/diagnostics", response_model=QueryDiagnosticsReportOut)

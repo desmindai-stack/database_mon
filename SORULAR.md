@@ -3,6 +3,32 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 4: "Sorunlu olmayan sorgu" tanımı: pencerede iş yapmamış olmak
+
+"Artık sorunlu olmayan sorgular listede görünmesin" isteğini mutlak bir
+eşikle (ör. "ortalama süresi 50 ms'nin altındakiler sorunlu değildir")
+uygulamadım — böyle bir eşik veritabanından veritabanına anlamsız hale
+gelir (OLTP'de 20 ms yavaştır, raporlama veritabanında 2 saniye
+normaldir). Bunun yerine iki mekanizma:
+
+1. Liste zaten "seçilen ölçüte göre ilk N" — yani tanım gereği en
+   sorunlu olanlar.
+2. Aralık modunda sıralama kümülatif toplama değil pencere içindeki
+   değişime bakıyor; pencerede çalışmamış bir sorgu doğal olarak listeden
+   düşüyor. Ek olarak pencerede 1 ms'den az iş yapmış sorgular tamamen
+   eleniyor (bu, "gürültü" için mutlak ama çok düşük bir taban).
+
+## Faz 16-B — İŞ 4: An'a bağlı sorgu listesi tamamen kaldırıldı
+
+Faz 15 İŞ 8'de eklenen "şu ana denk gelen sorgular" listesi ile yeni
+"en sorunlu N" listesi aynı ekranda iki farklı cevap veriyordu. İkisini
+yan yana tutmak yerine an'a bağlı olanı kaldırdım: sorgu yükü çizelgesi
+duruyor (sıçrama işaretleri, tıklama, sürükleme dahil) ama artık kendi
+listesini beslemek yerine tek listeyi filtreliyor. Kayıp: tek bir ana
+tıklayıp "tam o saniyede ne çalışıyordu" görme. Kazanç: ekranda tek bir
+"sorunlu sorgular" tanımı — ve o listedeki her satır üzerinde
+EXPLAIN/index önerisi gerçekten çalışıyor.
+
 ## Faz 16-B — İŞ 3: Yakınlaştırma istemci tarafında, yeni veri çekmiyor
 
 Grafikte bir aralık seçildiğinde sunucudan o aralık için daha yüksek

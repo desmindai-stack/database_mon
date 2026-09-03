@@ -112,6 +112,8 @@ interface LoadContributor {
 
 interface LoadTimelinePoint {
   time: string;
+  /** Etiketin karşılık geldiği gerçek zaman damgası — aralık seçimi sunucuya ISO olarak gider. */
+  collectedAt: string;
   totalMs: number;
   contributors: LoadContributor[];
 }
@@ -120,16 +122,31 @@ interface LoadTimelinePoint {
 // a historical query_history point, so this deliberately stops at "here's the signal that made
 // this query stand out" rather than guessing a root cause it can't actually see (Faz 15 İŞ 8,
 // see SORULAR.md).
-function possibleCauses(c: { calls_delta: number | null; mean_time_ms: number }): string[] {
+/** Sadece GERÇEKTEN anlamlı sinyaller (Faz 16-B İŞ 4).
+ *
+ * Önceki hali "+1 çağrı arttı" gibi önemsiz gözlemleri ve hiçbir sinyal yokken de bir dolgu
+ * cümlesini öneri gibi sunuyordu. Artık eşiği geçmeyen hiçbir şey yazılmıyor; liste boşsa
+ * "Olası nedenler" başlığı hiç görünmüyor. */
+function possibleCauses(q: SlowQuery): string[] {
   const causes: string[] = [];
-  if (c.calls_delta !== null && c.calls_delta > 0) {
-    causes.push(`Bu aralıkta çağrı sayısı arttı (+${c.calls_delta}) — artan trafik/yük olabilir.`);
+  if (q.mean_time_ms > 100) {
+    causes.push(
+      `Ortalama çalışma süresi yüksek (${q.mean_time_ms.toFixed(0)} ms) — eksik index, sıralı tarama ` +
+        "(seq scan) veya kilit beklemesi olabilir. EXPLAIN planına bakın.",
+    );
   }
-  if (c.mean_time_ms > 100) {
-    causes.push("Ortalama çalışma süresi yüksek — eksik index, sıralı tarama (seq scan) veya kilit beklemesi olabilir. EXPLAIN plana bakın.");
+  if ((q.temp_blks_written ?? 0) > 0) {
+    causes.push(
+      "Geçici dosyaya taşma var (temp_blks_written > 0) — sıralama/hash işlemi work_mem'e sığmıyor.",
+    );
   }
-  if (causes.length === 0) {
-    causes.push("Bu sorgu bu aralıkta toplam yüke önemli katkı yaptı — detay için EXPLAIN/index önerisine bakın.");
+  const read = q.shared_blks_read ?? 0;
+  const hit = q.shared_blks_hit ?? 0;
+  if (read > 0 && read > hit) {
+    causes.push(
+      `Blokların çoğu diskten okundu (${read.toLocaleString()} okuma / ${hit.toLocaleString()} cache) — ` +
+        "I/O ağırlıklı; index veya daha büyük shared_buffers değerlendirilebilir.",
+    );
   }
   return causes;
 }
@@ -176,6 +193,8 @@ export default function InstanceDetailPage() {
   const [tab, setTab] = useState<Tab>(initialTab);
   const [range, setRange] = useState<RangeHours>(6);
   const [querySort, setQuerySort] = useState<"total" | "mean" | "calls">("total");
+  // Faz 16-B İŞ 4: liste artık "en sorunlu N" — N kullanıcı seçimi.
+  const [queryTopN, setQueryTopN] = useState<5 | 10 | 20>(10);
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
   const [advice, setAdvice] = useState<Record<number, IndexAdviceReport>>({});
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
@@ -184,7 +203,6 @@ export default function InstanceDetailPage() {
   const [explainError, setExplainError] = useState<Record<number, string>>({});
   const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
-  const [expandedCorrelated, setExpandedCorrelated] = useState<Set<string>>(new Set());
   // Faz 16-B İŞ 3: grafikte sürüklenerek seçilen aralık. Metrik grafikleri bu aralığa
   // yakınlaştırılır, alttaki sorgu listesi de aynı aralığa göre filtrelenir.
   const [zoom, setZoom] = useState<ChartRange | null>(null);
@@ -350,16 +368,14 @@ export default function InstanceDetailPage() {
     let mounted = true;
     const load = async () => {
       try {
-        const [inst, m, q, summaries] = await Promise.all([
+        const [inst, m, summaries] = await Promise.all([
           api.getInstance(instanceId),
           fetchMetrics(),
-          api.getSlowQueries(instanceId),
           api.getSummaries(),
         ]);
         if (!mounted) return;
         setInstance(inst);
         setMetrics(m);
-        setQueries(q);
         setSummary(summaries.find((s) => s.instance.id === instanceId) || null);
         setError(null);
 
@@ -391,7 +407,6 @@ export default function InstanceDetailPage() {
       // Özel aralık seçiliyse otomatik yenileme metrikleri değiştirmez (sabit bir pencereye
       // bakılıyor); sadece diğer kutucuklar tazelenir.
       if (!customRange) fetchMetrics().then(setMetrics).catch(() => undefined);
-      api.getSlowQueries(instanceId).then(setQueries).catch(() => undefined);
       api.getSummaries().then((s) => setSummary(s.find((x) => x.instance.id === instanceId) || null)).catch(() => undefined);
       api.getInsights(instanceId).then(setTuning).catch(() => undefined);
     }, 15000);
@@ -519,23 +534,15 @@ export default function InstanceDetailPage() {
     onRange: (r) => setZoom(r),
   });
 
-  const sortedQueries = useMemo(() => {
-    const list = [...queries];
-    if (querySort === "total") list.sort((a, b) => b.total_time_ms - a.total_time_ms);
-    if (querySort === "mean") list.sort((a, b) => b.mean_time_ms - a.mean_time_ms);
-    if (querySort === "calls") list.sort((a, b) => b.calls - a.calls);
-    return list;
-  }, [queries, querySort]);
-
   const topQueriesChart = useMemo(
     () =>
-      sortedQueries.slice(0, 10).map((q, i) => ({
+      queries.slice(0, 10).map((q, i) => ({
         name: `#${i + 1}`,
         total: q.total_time_ms,
         mean: q.mean_time_ms,
         calls: q.calls,
       })),
-    [sortedQueries],
+    [queries],
   );
 
   // Graph–query correlation (İŞ 8): one aggregate "query load" point per timestamp, built from
@@ -550,7 +557,7 @@ export default function InstanceDetailPage() {
         const time = timeLabel(p.collected_at, labelWithDate);
         let bucket = byTime.get(time);
         if (!bucket) {
-          bucket = { time, totalMs: 0, contributors: [] };
+          bucket = { time, collectedAt: p.collected_at, totalMs: 0, contributors: [] };
           byTime.set(time, bucket);
         }
         const meanMs = p.interval_mean_ms ?? p.mean_time_ms;
@@ -589,7 +596,6 @@ export default function InstanceDetailPage() {
   }, [loadTimeline, spikeTimes]);
 
   const effectiveSelectedTime = selectedTime ?? defaultSelectedTime;
-  const selectedLoadPoint = loadTimeline.find((p) => p.time === effectiveSelectedTime) ?? null;
 
   const timelineLabels = useMemo(() => loadTimeline.map((p) => p.time), [loadTimeline]);
   const timelineSelection = useChartRangeSelection({
@@ -601,50 +607,48 @@ export default function InstanceDetailPage() {
     onRange: (r) => setTimelineRange(r),
   });
 
-  /** Seçili aralıktaki (yoksa seçili tek andaki) sorgular, queryid bazında toplanmış.
-   *  Faz 16-B İŞ 3: aralık seçimi artık listeyi gerçekten filtreliyor — önceden sürükleme
-   *  bir işe yaramıyor, liste hep tek bir ana bağlı kalıyordu. */
-  const correlatedQueries = useMemo(() => {
+  /** Sorgu listesinin kapsadığı zaman aralığı (ISO). Öncelik: sorgu yükü çizelgesinde seçilen
+   *  aralık → metrik grafiklerinde yakınlaştırılan aralık → üstteki özel aralık. Hiçbiri yoksa
+   *  liste en son toplama döngüsünün anlık görüntüsüdür. (Faz 16-B İŞ 4) */
+  const activeQueryRange = useMemo<{ start: string; end: string } | null>(() => {
     if (timelineRange) {
-      const from = timelineLabels.indexOf(timelineRange.start);
-      const to = timelineLabels.indexOf(timelineRange.end);
-      if (from < 0 || to < 0) return [];
-      const merged = new Map<string, LoadContributor & { _points: number }>();
-      for (const point of loadTimeline.slice(from, to + 1)) {
-        for (const c of point.contributors) {
-          const existing = merged.get(c.queryid);
-          if (!existing) {
-            merged.set(c.queryid, { ...c, _points: 1 });
-          } else {
-            // total_time_ms kümülatif sayaç; aralıkta gördüğümüz en yüksek değer geçerli.
-            existing.total_time_ms = Math.max(existing.total_time_ms, c.total_time_ms);
-            existing.calls = Math.max(existing.calls, c.calls);
-            existing.calls_delta = (existing.calls_delta ?? 0) + (c.calls_delta ?? 0);
-            existing.mean_time_ms += c.mean_time_ms;
-            existing._points += 1;
-          }
-        }
-      }
-      return Array.from(merged.values())
-        .map(({ _points, ...c }) => ({ ...c, mean_time_ms: c.mean_time_ms / _points }))
-        .sort((a, b) => b.mean_time_ms - a.mean_time_ms);
+      const s = loadTimeline.find((p) => p.time === timelineRange.start);
+      const e = loadTimeline.find((p) => p.time === timelineRange.end);
+      if (s && e) return { start: s.collectedAt, end: e.collectedAt };
     }
-    return selectedLoadPoint ? [...selectedLoadPoint.contributors].sort((a, b) => b.mean_time_ms - a.mean_time_ms) : [];
-  }, [selectedLoadPoint, timelineRange, timelineLabels, loadTimeline]);
-  const slowQueryByQueryid = useMemo(() => {
-    const map = new Map<string, SlowQuery>();
-    for (const q of queries) if (q.queryid) map.set(q.queryid, q);
-    return map;
-  }, [queries]);
+    if (zoom) {
+      const s = chartData.find((p) => p.time === zoom.start);
+      const e = chartData.find((p) => p.time === zoom.end);
+      if (s && e) return { start: s.collectedAt, end: e.collectedAt };
+    }
+    if (customRange) return customRange;
+    return null;
+  }, [timelineRange, zoom, customRange, loadTimeline, chartData]);
 
-  const toggleCorrelated = (key: string) => {
-    setExpandedCorrelated((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
+  useEffect(() => {
+    if (!instanceId) return;
+    let mounted = true;
+    const fetchQueries = () =>
+      api
+        .getSlowQueries(instanceId, {
+          limit: queryTopN,
+          sort: querySort,
+          start: activeQueryRange?.start,
+          end: activeQueryRange?.end,
+        })
+        .then((rows) => {
+          if (mounted) setQueries(rows);
+        })
+        .catch(() => undefined);
+    fetchQueries();
+    // Sabit bir aralığa bakılıyorsa yenilemeye gerek yok — sonuç değişmez.
+    const timer = activeQueryRange ? null : setInterval(fetchQueries, 15000);
+    return () => {
+      mounted = false;
+      if (timer) clearInterval(timer);
+    };
+  }, [instanceId, queryTopN, querySort, activeQueryRange]);
+
 
   useEffect(() => {
     setSelectedTime(null);
@@ -1235,118 +1239,27 @@ export default function InstanceDetailPage() {
                 </ResponsiveContainer>
               </div>
 
-              <div style={{ marginTop: "1rem" }}>
-                <div className="activity-toolbar">
-                  <h4 style={{ margin: 0, color: "var(--text)" }}>
-                    {timelineRange
-                      ? `${timelineRange.start} – ${timelineRange.end} aralığında öne çıkan sorgular`
-                      : effectiveSelectedTime
-                        ? `${effectiveSelectedTime} civarında öne çıkan sorgular`
-                        : "Sorgu seçin"}
-                    {!timelineRange && effectiveSelectedTime && spikeTimes.has(effectiveSelectedTime) && (
-                      <span className="tag" style={{ marginLeft: "0.5rem", background: "var(--danger)" }}>sıçrama</span>
-                    )}
-                  </h4>
-                </div>
-                {correlatedQueries.length === 0 ? (
-                  <p className="muted-note">
-                    {timelineRange
-                      ? "Bu aralıkta ilişkilendirilecek sorgu verisi yok."
-                      : "Bu zaman noktasında ilişkilendirilecek sorgu verisi yok."}
-                  </p>
-                ) : (
-                  <div className="problem-card-list">
-                    {correlatedQueries.map((c) => {
-                      const sq = slowQueryByQueryid.get(c.queryid);
-                      const key = `corr-${timelineRange ? `${timelineRange.start}_${timelineRange.end}` : effectiveSelectedTime}-${c.queryid}`;
-                      const isOpen = expandedCorrelated.has(key);
-                      return (
-                        <div className="problem-card" key={key}>
-                          <div className="problem-card-head">
-                            <button type="button" className="problem-card-toggle" onClick={() => toggleCorrelated(key)}>
-                              <span className="problem-card-chevron">{isOpen ? "▾" : "▸"}</span>
-                              <span className="problem-card-title">{queryFingerprint(c.query)}</span>
-                            </button>
-                            <div className="problem-card-source muted-note">
-                              {c.calls.toLocaleString()} çağrı · toplam {c.total_time_ms.toFixed(1)} ms · bu aralıkta ort. {c.mean_time_ms.toFixed(1)} ms
-                            </div>
-                          </div>
-                          {isOpen && (
-                            <div className="problem-card-body">
-                              <pre style={{ whiteSpace: "pre-wrap", margin: "0 0 0.6rem" }}>{c.query}</pre>
-                              <h4>Olası nedenler</h4>
-                              <ul>
-                                {possibleCauses(c).map((cause, i) => <li key={i}>{cause}</li>)}
-                              </ul>
-                              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", marginTop: "0.5rem" }}>
-                                {sq ? (
-                                  <>
-                                    <button
-                                      className="btn btn-xs"
-                                      onClick={() => loadExplain(sq, false)}
-                                      disabled={explainLoading[sq.id]}
-                                      title="Sadece planı gösterir, sorguyu çalıştırmaz"
-                                    >
-                                      {explainLoading[sq.id] ? "EXPLAIN…" : "EXPLAIN plan"}
-                                    </button>
-                                    <button
-                                      className="btn btn-primary btn-xs"
-                                      onClick={() => loadAdvice(sq)}
-                                      disabled={adviceLoading[sq.id]}
-                                    >
-                                      {adviceLoading[sq.id] ? "İnceleniyor…" : "Index önerisi"}
-                                    </button>
-                                  </>
-                                ) : (
-                                  <span className="muted-note">
-                                    Bu sorgu artık güncel yavaş sorgu listesinde değil — EXPLAIN/index önerisi
-                                    için tekrar tetiklenmesi gerekir.
-                                  </span>
-                                )}
-                              </div>
-                              {sq && explainError[sq.id] && <p className="advice-empty">{explainError[sq.id]}</p>}
-                              {sq && explain[sq.id] && <ExplainPlanTree result={explain[sq.id]!} />}
-                              {sq && advice[sq.id] && (
-                                <div className="advice-results">
-                                  {advice[sq.id].advice.length === 0 ? (
-                                    <NoAdviceReasons reasons={advice[sq.id].no_advice_reasons} />
-                                  ) : (
-                                    advice[sq.id].advice.map((a) => (
-                                      <div className="advice-card" key={a.index_ddl}>
-                                        <div className="advice-header">
-                                          <span className="advice-table">{a.schema_name}.{a.table_name}</span>
-                                          <span className="advice-pill">
-                                            Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong>
-                                            {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
-                                          </span>
-                                        </div>
-                                        <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
-                                        <p className="recommendation-reason">{a.reason}</p>
-                                        <CopyableAction command={a.index_ddl} />
-                                      </div>
-                                    ))
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+              <p className="muted-note" style={{ marginTop: "0.8rem" }}>
+                Seçim aşağıdaki <strong>En sorunlu sorgular</strong> listesine uygulanır — liste o
+                aralıktaki değişime göre yeniden sıralanır.
+              </p>
             </div>
           )}
 
           <div className="card">
             <div className="queries-header">
-              <h3 className="chart-title">Yavaş sorgu dağılımı (ilk 10)</h3>
+              <h3 className="chart-title">En sorunlu sorgular — dağılım</h3>
               <div className="sort-bar">
                 <span>Sırala:</span>
                 {(["total", "mean", "calls"] as const).map((k) => (
                   <button key={k} className={`sort-btn${querySort === k ? " active" : ""}`} onClick={() => setQuerySort(k)}>
                     {k === "total" ? "Toplam süre" : k === "mean" ? "Ortalama süre" : "Çağrı sayısı"}
+                  </button>
+                ))}
+                <span style={{ marginLeft: "0.75rem" }}>Kaç sorgu:</span>
+                {([5, 10, 20] as const).map((n) => (
+                  <button key={n} className={`sort-btn${queryTopN === n ? " active" : ""}`} onClick={() => setQueryTopN(n)}>
+                    {n}
                   </button>
                 ))}
               </div>
@@ -1369,7 +1282,24 @@ export default function InstanceDetailPage() {
           </div>
 
           <div className="card">
-            <h3 className="chart-title">Yavaş sorgu detayları ({queries.length})</h3>
+            <h3 className="chart-title">En sorunlu sorgular ({queries.length})</h3>
+            <p className="muted-note">
+              {activeQueryRange ? (
+                <>
+                  {new Date(activeQueryRange.start).toLocaleString("tr-TR")} –{" "}
+                  {new Date(activeQueryRange.end).toLocaleString("tr-TR")} aralığındaki{" "}
+                  <strong>değişime</strong> göre sıralandı (kümülatif sayaç farkı); bu aralıkta kayda
+                  değer iş yapmayan sorgular listeye alınmadı.
+                </>
+              ) : (
+                <>
+                  En son toplama döngüsünün anlık görüntüsü,{" "}
+                  {querySort === "total" ? "toplam süreye" : querySort === "mean" ? "ortalama süreye" : "çağrı sayısına"}{" "}
+                  göre ilk {queryTopN}. Bir aralık seçmek için üstteki sorgu yükü çizelgesinde
+                  sürükleyin.
+                </>
+              )}
+            </p>
             {queries.length === 0 ? (
               <SlowQueryAvailabilityNote availability={slowQueryAvailability} fallback="Yavaş sorgu verisi yok." />
             ) : (
@@ -1385,7 +1315,7 @@ export default function InstanceDetailPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedQueries.map((q) => (
+                    {queries.map((q) => (
                       <Fragment key={q.id}>
                         <tr
                           className="query-row"
@@ -1416,6 +1346,18 @@ export default function InstanceDetailPage() {
                                   {!historyLoading[q.queryid] && !queryHistory[q.queryid] && (
                                     <p className="muted-note">Bu queryid için henüz geçmiş örnek yok.</p>
                                   )}
+                                </div>
+                              )}
+                              {/* Faz 16-B İŞ 4: sadece gerçekten anlamlı sinyaller — hiçbiri
+                                  yoksa başlık da görünmüyor. */}
+                              {possibleCauses(q).length > 0 && (
+                                <div className="query-causes">
+                                  <h4>Olası nedenler</h4>
+                                  <ul>
+                                    {possibleCauses(q).map((cause, i) => (
+                                      <li key={i}>{cause}</li>
+                                    ))}
+                                  </ul>
                                 </div>
                               )}
                               <div className="query-stats">

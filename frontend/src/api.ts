@@ -1029,7 +1029,18 @@ export const api = {
     ),
   getLatestMetrics: (id: number) =>
     request<MetricSample>(`/api/metrics/${id}/latest`),
-  getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),
+  /** En sorunlu N sorgu (Faz 16-B İŞ 4). Aralık verilirse sıralama o aralıktaki DEĞİŞİME göre. */
+  getSlowQueries: (
+    id: number,
+    opts: { limit?: number; sort?: "total" | "mean" | "calls"; start?: string; end?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(opts.limit ?? 20));
+    params.set("sort", opts.sort ?? "mean");
+    if (opts.start) params.set("start", opts.start);
+    if (opts.end) params.set("end", opts.end);
+    return request<SlowQuery[]>(`/api/queries/${id}?${params.toString()}`);
+  },
   getSlowQueryAvailability: (id: number) =>
     request<SlowQueryAvailability>(`/api/queries/${id}/availability`),
   getQueryDiagnostics: (id: number, limit = 10) =>
