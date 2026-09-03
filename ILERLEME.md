@@ -1791,6 +1791,59 @@ kanıtlıyor. Toplam 72 test yeşil.
 bölümü: hatanın sebebi, dbace'in koşulsuz çözümü, ve "Pooler kullanılıyor"
 seçeneğinin nasıl çalıştığı.
 
+## Faz 16 — İŞ 1: Ön koşul denetimi
+
+**Sorun:** Yavaş sorgu listesi/EXPLAIN/index önerisi bazen sessizce boş
+dönüyordu ve kullanıcı sebebini (uzantı eksik mi, yetki mi yok, ayar mı
+kapalı) göremiyordu.
+
+**Yeni `services/prerequisites.py`:** PostgreSQL için 9 kontrol
+(pg_stat_statements kurulu mu + `shared_preload_libraries`'de mi +
+`.track` ayarı + okuma yetkisi, pg_monitor rolü, hypopg, pg_qualstats,
+pg_buffercache, track_io_timing) ve SQL Server için 3 kontrol (VIEW
+SERVER STATE yetkisi, gerçek bir DMV sorgusuyla fonksiyonel doğrulama,
+Query Store durumu) — her biri tek bir bağlantı üzerinden art arda
+çalışıyor, biri başarısız olursa (extension yok → ona bağımlı kontroller)
+`unknown` dönüyor, çökmüyor. Her kontrol `{ad, durum (ok|eksik|yetkisiz|
+bilinmiyor), önem (high|medium), etki, düzeltme komutu}` taşıyor;
+"opsiyonel" olanlar (pg_qualstats, pg_buffercache, hypopg) `medium`,
+temel özellikleri tamamen bloke edenler (`pg_stat_statements`,
+`shared_preload_libraries`, okuma yetkisi, pg_monitor, VIEW SERVER
+STATE, Query Store) `high`.
+
+**Yeni uç: `GET /api/instances/{id}/prerequisites`** — PostgreSQL/SQL
+Server dışında 400 döner (MongoDB henüz kapsam dışı). Hata yine de
+oluşursa `classify_connection_error` ile Türkçe mesaja çevriliyor.
+
+**Instance detay sayfası:** "Tuning" sekmesinde, mevcut `TuningPanel`'in
+hemen üstünde yeni `PrerequisitesPanel` — her satır mevcut
+`.checklist-row` görsel dilini kullanıyor (ok/eksik/yetkisiz/bilinmiyor),
+eksik olan her kontrolün düzeltme komutu `CopyableAction` ile kopyalanabilir
+kutu içinde. Sekme açıldığında bir kez yükleniyor (activity gibi her 10sn
+yenilenmiyor — canlı bağlantı açan bir kontrol olduğu için).
+
+**Grup sayfası:** Tam panel yerine her düğüm kartına instance detayının
+tuning sekmesine (`?tab=tuning`) giden bir "Ön koşullar" linki eklendi —
+tekrar aynı UI'ı inşa etmek yerine tek tıkla var olan panele yönlendiriyor.
+
+**Dashboard uyarısı:** `dashboard_snapshot.py`'ye yeni
+`_prerequisite_recommendations` — `parameter_audit` ile AYNI cadence'te
+(dashboard-refresh tick, worker/all run_mode + `POST /api/dashboard/refresh`)
+grubun hedef düğümü üzerinden bir kez kontrol çalıştırıp `missing`/
+`unauthorized` bulunanları mevcut `GroupHealthSnapshot.recommendations_json`
+akışına ekliyor — dashboard'un "top_issues"/"recommendations" render
+mantığı zaten kaynak-agnostik olduğundan (`source` alanı özel işlenmiyor)
+frontend'de EK bir değişiklik gerekmedi, öneri kartı otomatik göründü.
+Standalone (grupsuz) instance'lar için bu dashboard entegrasyonu
+çalışmıyor — `parameter_audit`/`performance_insights`'ın dashboard
+entegrasyonuyla AYNI, önceden var olan sınır (bkz. SORULAR.md).
+
+**Test:** Yeni `tests/test_prerequisites.py` (10 test) —
+`FakeAsyncConnection`/`FakeSqlServerConnection` ile her durumun (ok,
+eksik uzantı → bağımlı kontroller unknown, izin reddi → unauthorized,
+opsiyonel uzantılar → medium severity, Query Store kapalı, VIEW SERVER
+STATE eksik) doğru raporlandığı kanıtlanıyor. Toplam 82 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -30,6 +30,7 @@ import {
   Instance,
   InstanceSummary,
   MetricSample,
+  PrerequisiteReport,
   Prediction,
   QueryHistorySeries,
   SchemaHealth,
@@ -39,6 +40,7 @@ import {
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import ExplainPlanTree from "../components/ExplainPlanTree";
+import PrerequisitesPanel from "../components/PrerequisitesPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import TuningPanel from "../components/TuningPanel";
@@ -103,6 +105,9 @@ export default function InstanceDetailPage() {
   const [schemaHealth, setSchemaHealth] = useState<SchemaHealth | null>(null);
   const [schemaError, setSchemaError] = useState<string | null>(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
+  const [prerequisites, setPrerequisites] = useState<PrerequisiteReport | null>(null);
+  const [prerequisitesError, setPrerequisitesError] = useState<string | null>(null);
+  const [prerequisitesLoading, setPrerequisitesLoading] = useState(false);
   const [clusterHealth, setClusterHealth] = useState<ClusterHealth | null>(null);
   const [clusterError, setClusterError] = useState<string | null>(null);
   const [clusterLoading, setClusterLoading] = useState(false);
@@ -191,6 +196,20 @@ export default function InstanceDetailPage() {
       setSchemaError(String((e as Error).message || e));
     } finally {
       setSchemaLoading(false);
+    }
+  };
+
+  const loadPrerequisites = async () => {
+    if (!instanceId) return;
+    setPrerequisitesLoading(true);
+    setPrerequisitesError(null);
+    try {
+      const data = await api.getPrerequisites(instanceId);
+      setPrerequisites(data);
+    } catch (e) {
+      setPrerequisitesError(String((e as Error).message || e));
+    } finally {
+      setPrerequisitesLoading(false);
     }
   };
 
@@ -305,6 +324,11 @@ export default function InstanceDetailPage() {
   useEffect(() => {
     if (!instanceId || tab !== "schema") return;
     loadSchemaHealth();
+  }, [instanceId, tab]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "tuning") return;
+    loadPrerequisites();
   }, [instanceId, tab]);
 
   useEffect(() => {
@@ -1225,6 +1249,15 @@ export default function InstanceDetailPage() {
           error={schemaError}
           loading={schemaLoading}
           onRefresh={loadSchemaHealth}
+        />
+      )}
+
+      {tab === "tuning" && (
+        <PrerequisitesPanel
+          data={prerequisites}
+          error={prerequisitesError}
+          loading={prerequisitesLoading}
+          onRefresh={loadPrerequisites}
         />
       )}
 

@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +22,8 @@ from app.schemas import (
     MetricDefinitionOut,
     MetricSampleOut,
     PerformanceInsightOut,
+    PrerequisiteCheckOut,
+    PrerequisiteReportOut,
     SchemaHealthOut,
     TuningChecklistOut,
     TuningReportOut,
@@ -28,6 +32,7 @@ from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
 from app.services.performance_insights import analyze_metrics
+from app.services.prerequisites import run_prerequisite_checks
 
 router = APIRouter(prefix="/instances", tags=["instances"])
 
@@ -302,6 +307,39 @@ async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     return SchemaHealthOut.model_validate(data)
+
+
+@router.get("/{instance_id}/prerequisites", response_model=PrerequisiteReportOut)
+async def get_instance_prerequisites(instance_id: int, db: AsyncSession = Depends(get_db)) -> PrerequisiteReportOut:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    if instance.engine not in ("postgresql", "sqlserver"):
+        raise HTTPException(
+            status_code=400, detail="Ön koşul denetimi şu an sadece PostgreSQL ve SQL Server için mevcut"
+        )
+
+    target = ConnectionTarget(
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        username=instance.username,
+        password=decrypt_secret(instance.password),
+        options=instance.options,
+    )
+    try:
+        checks = await run_prerequisite_checks(DatabaseEngine(instance.engine), target)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
+
+    ok_count = sum(1 for c in checks if c.status == "ok")
+    return PrerequisiteReportOut(
+        engine=instance.engine,
+        checked_at=datetime.now(UTC),
+        checks=[PrerequisiteCheckOut(**vars(c)) for c in checks],
+        ok_count=ok_count,
+        issue_count=len(checks) - ok_count,
+    )
 
 
 @router.get("/{instance_id}/insights", response_model=TuningReportOut)

@@ -711,6 +711,24 @@ class ConnectionTestResult(BaseModel):
     details: dict[str, Any] = {}
 
 
+class PrerequisiteCheckOut(BaseModel):
+    key: str
+    name: str
+    status: str  # ok | missing | unauthorized | unknown
+    severity: str  # high | medium
+    impact: str
+    fix: str | None = None
+    detail: str | None = None
+
+
+class PrerequisiteReportOut(BaseModel):
+    engine: str
+    checked_at: datetime
+    checks: list[PrerequisiteCheckOut]
+    ok_count: int
+    issue_count: int
+
+
 class MetricDefinitionOut(BaseModel):
     key: str
     display_name: str

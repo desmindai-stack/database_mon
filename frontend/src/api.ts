@@ -232,6 +232,24 @@ export interface QueryHistoryList {
   series: QueryHistorySeries[];
 }
 
+export interface PrerequisiteCheck {
+  key: string;
+  name: string;
+  status: "ok" | "missing" | "unauthorized" | "unknown";
+  severity: "high" | "medium";
+  impact: string;
+  fix: string | null;
+  detail: string | null;
+}
+
+export interface PrerequisiteReport {
+  engine: string;
+  checked_at: string;
+  checks: PrerequisiteCheck[];
+  ok_count: number;
+  issue_count: number;
+}
+
 export interface SchemaHealth {
   unused_indexes: {
     schema_name: string;
@@ -921,6 +939,7 @@ export const api = {
   getClusterLogs: (id: number, service: string, lines = 100) =>
     request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
+  getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
   getQueryHistory: (id: number, hours = 24, limit = 10) =>
     request<QueryHistoryList>(`/api/queries/${id}/history?hours=${hours}&limit=${limit}`),
   getQueryHistoryDetail: (id: number, queryid: string, hours = 24) =>

@@ -9,10 +9,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.collectors.base import ConnectionTarget
+from app.domain.engines import DatabaseEngine
 from app.models import DatabaseGroup, GroupHealthSnapshot, Instance, MetricSample, Node
 from app.services.cluster_health import collect_group_health
+from app.services.credentials import decrypt_secret
 from app.services.parameter_audit import collect_parameter_audit
 from app.services.performance_insights import analyze_metrics
+from app.services.prerequisites import run_prerequisite_checks
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +90,47 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
                 # A safe, real next step (check the live value) — the exact target value depends
                 # on server sizing dbace doesn't collect, so we don't fabricate an ALTER SYSTEM.
                 "action": f"SHOW {finding['name']};",
+            }
+        )
+    return out
+
+
+async def _prerequisite_recommendations(group: DatabaseGroup, nodes: list[Node]) -> list[dict[str, Any]]:
+    """Faz 16 İŞ 1: eksik/yetkisiz bir ön koşul (pg_stat_statements, VIEW SERVER STATE, ...) her
+    dashboard-refresh tick'inde (parameter_audit ile aynı ucuz, katalog-taraması cadence'i)
+    grubun hedef düğümü üzerinden tespit edilip burada bir öneriye dönüştürülür — kullanıcı
+    "neden hiç öneri gelmiyor?" sorusunun cevabını instance detayına gitmeden dashboard'da görür."""
+    if group.engine not in ("postgresql", "sqlserver") or not nodes:
+        return []
+    target_node = next((n for n in nodes if n.role_hint == "primary"), nodes[0])
+    if target_node.instance is None:
+        return []
+    instance = target_node.instance
+    target = ConnectionTarget(
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        username=instance.username,
+        password=decrypt_secret(instance.password),
+        options=instance.options,
+    )
+    try:
+        checks = await run_prerequisite_checks(DatabaseEngine(group.engine), target)
+    except Exception:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for check in checks:
+        if check.status not in ("missing", "unauthorized"):
+            continue
+        out.append(
+            {
+                "severity": check.severity,
+                "source": "prerequisites",
+                "group": group.name,
+                "message": f"Ön koşul eksik — {check.name}: {check.impact}",
+                "steps": [check.impact, "Aşağıdaki komutla düzeltin, sonra bu sayfayı yenileyin."],
+                "action": check.fix,
             }
         )
     return out
@@ -175,13 +220,14 @@ async def refresh_all_group_snapshots(session: AsyncSession) -> int:
 
     async def handle_group(group: DatabaseGroup) -> tuple[int, dict[str, Any] | None, list[dict[str, Any]]]:
         nodes = nodes_by_group.get(group.id, [])
-        report, param_recs, instance_recs = await asyncio.gather(
+        report, param_recs, instance_recs, prereq_recs = await asyncio.gather(
             _probe_group_health(group, nodes),
             _parameter_recommendations(group, nodes),
             _instance_recommendations(group, snapshots_by_group[group.id]),
+            _prerequisite_recommendations(group, nodes),
         )
         connectivity_recs = _connectivity_recommendations(group, report)
-        return group.id, report, [*param_recs, *instance_recs, *connectivity_recs]
+        return group.id, report, [*param_recs, *instance_recs, *prereq_recs, *connectivity_recs]
 
     results = await asyncio.gather(*(handle_group(group) for group in groups))
 

@@ -521,6 +521,10 @@ export default function GroupDetailPage() {
                         <Link to={`/instances/${node.instance_id}`} className="detail-link tuning">
                           Instance detayı (metrikler, yavaş sorgular, index önerileri, explain)
                         </Link>
+                        {" · "}
+                        <Link to={`/instances/${node.instance_id}?tab=tuning`} className="detail-link tuning">
+                          Ön koşullar
+                        </Link>
                       </p>
                     ) : connectingNodeId === node.id ? (
                       <div className="conn-form">

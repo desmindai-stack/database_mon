@@ -3,6 +3,33 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16 — İŞ 1: Ön koşul denetimi dashboard'da sadece gruplu instance'lar için çalışıyor
+
+`_prerequisite_recommendations` `dashboard_snapshot.py`'deki diğer canlı-prob
+kaynaklarıyla (parameter_audit, performance_insights) AYNI mimariyi
+kullanıyor: sadece bir `DatabaseGroup`'a bağlı düğümler üzerinden çalışıyor,
+`group_id`'si NULL olan standalone instance'lar dashboard'da hiç ön koşul
+uyarısı almıyor. Bunu yeni bir sınır olarak İCAT etmedim — mevcut
+mimarinin zaten sahip olduğu bir sınırı olduğu gibi koruyup üstüne inşa
+ettim (tutarlılık, ayrı bir "standalone instance'lar için farklı bir yol"
+inşa etmek bu işin kapsamını gereksiz büyütürdü). `GET /api/instances/{id}/
+prerequisites` uç noktası (asıl arayüz) her instance için, gruplu olsun
+olmasın, çalışıyor — sadece dashboard'daki OTOMATİK uyarı gruplu
+instance'larla sınırlı.
+
+## Faz 16 — İŞ 1: "Opsiyonel" uzantılar (pg_qualstats, pg_buffercache) neden medium, high değil
+
+`pg_stat_statements`, `shared_preload_libraries`, okuma yetkisi, pg_monitor
+(PostgreSQL) ve VIEW SERVER STATE, Query Store (SQL Server) eksikse dbace'in
+TEMEL özellikleri (yavaş sorgu listesi, EXPLAIN, index önerisi) tamamen boş
+döner — bunlar `high`. `hypopg`/`pg_qualstats`/`pg_buffercache` eksikse
+index advisor YİNE ÇALIŞIYOR (regex ile sorgu metni ayrıştırma, kaba
+istatistiksel tahmin) — sadece daha az kesin — bu yüzden `medium`. Severity
+her `PrerequisiteCheck`'in kendi alanında taşınıyor (dashboard entegrasyonu
+key'e göre ikinci bir eşleme tablosu tutmuyor) — tek doğruluk kaynağı
+`prerequisites.py`, ileride yeni bir kontrol eklendiğinde severity'yi iki
+yerde senkron tutma riski yok.
+
 ## Faz 15 sonrası düzeltme — PgBouncer pooler tespiti sadece host/port sezgisi, hepsi override edilebilir
 
 `detect_pooler()` sadece host adında `pooler`/`pgbouncer` geçmesine veya
