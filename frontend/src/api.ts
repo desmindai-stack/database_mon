@@ -128,6 +128,17 @@ export interface IndexAdvice {
   existing_indexes: string[];
 }
 
+export interface NoAdviceReason {
+  code: string;
+  message: string;
+  what_to_do: string;
+}
+
+export interface IndexAdviceReport {
+  advice: IndexAdvice[];
+  no_advice_reasons: NoAdviceReason[];
+}
+
 export interface PerformanceInsight {
   severity: "critical" | "high" | "medium" | "low" | "info";
   category: string;
@@ -953,10 +964,10 @@ export const api = {
   getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),
   getQueryDiagnostics: (id: number, limit = 10) =>
     request<QueryDiagnosticsReport>(`/api/queries/${id}/diagnostics?limit=${limit}`),
-  getIndexAdvice: (id: number, query: string) =>
-    request<IndexAdvice[]>(`/api/queries/${id}/advice`, {
+  getIndexAdvice: (id: number, query: string, calls?: number) =>
+    request<IndexAdviceReport>(`/api/queries/${id}/advice`, {
       method: "POST",
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, calls: calls ?? null }),
     }),
   getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
   getActivity: (id: number) => request<ActivitySnapshot>(`/api/instances/${id}/activity`),

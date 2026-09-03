@@ -167,3 +167,10 @@ def test_classify_connection_error_still_handles_plain_auth_failure():
     exc = Exception("password authentication failed for user \"u\"")
     message = classify_connection_error(exc)
     assert "Kimlik doğrulama" in message
+
+
+def test_classify_connection_error_translates_permission_denied():
+    exc = Exception('permission denied for view pg_stat_statements')
+    message = classify_connection_error(exc)
+    assert "yetkisi yok" in message
+    assert "GRANT" in message

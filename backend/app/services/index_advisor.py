@@ -35,6 +35,24 @@ class IndexAdvice:
     existing_indexes: list[str] = field(default_factory=list)
 
 
+@dataclass
+class NoAdviceReason:
+    """Faz 16 İŞ 4: "index önerisi bulunamadı" tek başına bir sebep değil — bu, HANGİ
+    aşamada neden hiçbir öneri üretilemediğini taşır, böylece kullanıcı "şu yüzden
+    öneremiyorum, şunu yaparsan önerebilirim" cevabını görür."""
+
+    code: str
+    message: str
+    what_to_do: str
+
+
+# Bir sorgunun pg_stat_statements'ta çok az çağrısı varsa ("calls"), o sorgu için üretilecek
+# bir öneri tek/birkaç örneğe dayanır — istatistiksel olarak zayıf bir temel. Kesin bir eşik
+# yok, ama tek haneli bir sayı "henüz veri birikmedi" ile "gerçekten nadir çalışan bir sorgu"
+# arasındaki en makul ayrım noktası.
+MIN_SAMPLE_CALLS = 5
+
+
 class PostgreSQLIndexAdvisor:
     def __init__(self, target: ConnectionTarget) -> None:
         self.target = target
@@ -57,10 +75,12 @@ class PostgreSQLIndexAdvisor:
         await conn.execute("SET statement_timeout = '8000ms'")
         return conn
 
-    async def advise(self, query_text: str) -> list[IndexAdvice]:
+    async def advise(
+        self, query_text: str, calls: int | None = None
+    ) -> tuple[list[IndexAdvice], list[NoAdviceReason]]:
         query_text = _strip_comments(query_text).strip()
         if not query_text or query_text.lower().startswith("set "):
-            return []
+            return [], []
 
         conn = await self._connect()
         try:
@@ -76,13 +96,29 @@ class PostgreSQLIndexAdvisor:
                 alias = tables[0][0]
                 candidates[alias] = {**candidates.get(alias, {}), **candidates["__unknown"]}
 
+            if not tables:
+                return [], [
+                    NoAdviceReason(
+                        code="no_query_data",
+                        message="Sorgudan tablo/kolon çıkarılamadı.",
+                        what_to_do=(
+                            "Sorgu bir FROM/JOIN içermiyor olabilir, ya da dbace'in regex tabanlı "
+                            "ayrıştırıcısı bu sorgu biçimini (CTE, alt sorgu, özel sözdizimi) "
+                            "tanımadı. EXPLAIN ile planı manuel inceleyin."
+                        ),
+                    )
+                ]
+
             recommendations: list[IndexAdvice] = []
+            reasons: dict[str, NoAdviceReason] = {}
+            any_columns_found = False
             for table_alias, table_name, schema_name in tables:
                 table_cols = candidates.get(table_alias) or candidates.get(table_name)
                 if not table_cols:
                     continue
+                any_columns_found = True
 
-                advice = await self._build_advice(
+                advice, reason = await self._build_advice(
                     conn,
                     schema_name,
                     table_name,
@@ -92,8 +128,37 @@ class PostgreSQLIndexAdvisor:
                 )
                 if advice:
                     recommendations.append(advice)
+                elif reason and reason.code not in reasons:
+                    reasons[reason.code] = reason
 
-            return recommendations
+            if not any_columns_found:
+                reasons.setdefault(
+                    "no_filter_columns",
+                    NoAdviceReason(
+                        code="no_filter_columns",
+                        message="Sorguda geçen tablolarda WHERE/JOIN/ORDER BY/GROUP BY ile "
+                        "filtrelenen bir kolon tespit edilemedi.",
+                        what_to_do=(
+                            "Sorgu zaten filtresizse (ör. tüm tabloyu okuyorsa) index gerekmeyebilir. "
+                            "Filtre varsa dbace'in ayrıştırıcısı onu tanımamış olabilir — EXPLAIN ile "
+                            "planı manuel inceleyin."
+                        ),
+                    ),
+                )
+
+            if not recommendations and calls is not None and calls < MIN_SAMPLE_CALLS:
+                reasons.setdefault(
+                    "insufficient_samples",
+                    NoAdviceReason(
+                        code="insufficient_samples",
+                        message=f"Bu sorgu pg_stat_statements'ta sadece {calls} kez çalışmış "
+                        f"(önerilen minimum: {MIN_SAMPLE_CALLS}).",
+                        what_to_do="Sorgu birkaç kez daha çalıştıktan sonra tekrar deneyin — "
+                        "az sayıda çağrıya dayanan bir öneri istatistiksel olarak zayıf olur.",
+                    ),
+                )
+
+            return recommendations, list(reasons.values())
         finally:
             await conn.close()
 
@@ -197,7 +262,7 @@ class PostgreSQLIndexAdvisor:
         table_cols: dict[str, dict[str, Any]],
         has_hypopg: bool,
         query_text: str,
-    ) -> IndexAdvice | None:
+    ) -> tuple[IndexAdvice | None, NoAdviceReason | None]:
         # Verify table exists
         exists = await conn.fetchval(
             "SELECT EXISTS(SELECT 1 FROM pg_tables WHERE schemaname = $1 AND tablename = $2)",
@@ -205,7 +270,12 @@ class PostgreSQLIndexAdvisor:
             table_name,
         )
         if not exists:
-            return None
+            return None, NoAdviceReason(
+                code="table_not_found",
+                message=f"'{schema_name}.{table_name}' tablosu bu veritabanında bulunamadı.",
+                what_to_do="Şema/arama yolunu (search_path) kontrol edin — tablo başka bir "
+                "şemada veya farklı bir veritabanında olabilir.",
+            )
 
         # Order columns: equality first, then range, then join/group, then sort
         ordered_cols: list[str] = []
@@ -215,7 +285,12 @@ class PostgreSQLIndexAdvisor:
                     ordered_cols.append(col)
 
         if not ordered_cols:
-            return None
+            return None, NoAdviceReason(
+                code="no_filter_columns",
+                message=f"'{table_name}' tablosunda filtrelenebilir bir kolon tespit edilemedi.",
+                what_to_do="Sorgu bu tabloyu filtresiz kullanıyor olabilir (index gerekmeyebilir) "
+                "ya da dbace'in ayrıştırıcısı filtreyi tanımadı.",
+            )
 
         # Get table stats
         stats = await conn.fetchrow(
@@ -250,7 +325,13 @@ class PostgreSQLIndexAdvisor:
             if len(idx_cols) >= len(ordered_cols) and all(
                 c.lower() == idx_cols[i].lower() for i, c in enumerate(ordered_cols)
             ):
-                return None
+                return None, NoAdviceReason(
+                    code="already_indexed",
+                    message=f"'{table_name}' tablosunda bu kolonları zaten kapsayan bir index "
+                    f"var ({idx['indexname']}).",
+                    what_to_do="Sorun index eksikliği değil — sıralama stratejisi, join sırası "
+                    "veya veri hacmi olabilir. EXPLAIN ANALYZE ile gerçek planı inceleyin.",
+                )
 
         index_name = f"idx_dbace_{table_name}_{'_'.join(ordered_cols)[:40]}"
         index_ddl = f"CREATE INDEX {index_name} ON {schema_name}.{table_name} ({', '.join(ordered_cols)});"
@@ -294,7 +375,7 @@ class PostgreSQLIndexAdvisor:
             before_cost=before_cost,
             after_cost=after_cost,
             existing_indexes=existing_indexes,
-        )
+        ), None
 
     def _index_columns(self, indexdef: str) -> list[str]:
         # Extract columns from a CREATE INDEX ... (... ) statement

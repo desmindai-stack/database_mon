@@ -26,7 +26,7 @@ import {
   ExplainResult,
   formatBytes,
   formatTime,
-  IndexAdvice,
+  IndexAdviceReport,
   Instance,
   InstanceSummary,
   MetricSample,
@@ -62,6 +62,27 @@ function timeLabel(iso: string): string {
 
 function queryFingerprint(q: string): string {
   return q.length > 120 ? q.slice(0, 120) + "…" : q;
+}
+
+// Faz 16 İŞ 4 — "index önerisi bulunamadı" tek başına anlamsız; her zaman index_advisor'ın
+// belirlediği somut sebep(ler) + "şunu yaparsan önerebilirim" ile birlikte gösterilir.
+function NoAdviceReasons({ reasons }: { reasons: IndexAdviceReport["no_advice_reasons"] }) {
+  if (reasons.length === 0) {
+    return <p className="advice-empty">Index önerisi bulunamadı (sebep belirlenemedi).</p>;
+  }
+  return (
+    <div className="tuning-checklist">
+      {reasons.map((r) => (
+        <div key={r.code} className="checklist-row warn">
+          <span className="checklist-status">Öneri yok</span>
+          <div>
+            <strong>{r.message}</strong>
+            <p>{r.what_to_do}</p>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 interface LoadTimelinePoint {
@@ -127,7 +148,7 @@ export default function InstanceDetailPage() {
   const [range, setRange] = useState<RangeHours>(6);
   const [querySort, setQuerySort] = useState<"total" | "mean" | "calls">("total");
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
-  const [advice, setAdvice] = useState<Record<number, IndexAdvice[]>>({});
+  const [advice, setAdvice] = useState<Record<number, IndexAdviceReport>>({});
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
   const [explain, setExplain] = useState<Record<number, ExplainResult | null>>({});
   const [explainLoading, setExplainLoading] = useState<Record<number, boolean>>({});
@@ -156,10 +177,10 @@ export default function InstanceDetailPage() {
   const loadAdvice = async (q: SlowQuery) => {
     setAdviceLoading((prev) => ({ ...prev, [q.id]: true }));
     try {
-      const result = await api.getIndexAdvice(instanceId, q.query);
+      const result = await api.getIndexAdvice(instanceId, q.query, q.calls);
       setAdvice((prev) => ({ ...prev, [q.id]: result }));
     } catch {
-      setAdvice((prev) => ({ ...prev, [q.id]: [] }));
+      setAdvice((prev) => ({ ...prev, [q.id]: { advice: [], no_advice_reasons: [] } }));
     } finally {
       setAdviceLoading((prev) => ({ ...prev, [q.id]: false }));
     }
@@ -1034,10 +1055,10 @@ export default function InstanceDetailPage() {
                               {sq && explain[sq.id] && <ExplainPlanTree result={explain[sq.id]!} />}
                               {sq && advice[sq.id] && (
                                 <div className="advice-results">
-                                  {advice[sq.id].length === 0 ? (
-                                    <p className="advice-empty">Index önerisi bulunamadı.</p>
+                                  {advice[sq.id].advice.length === 0 ? (
+                                    <NoAdviceReasons reasons={advice[sq.id].no_advice_reasons} />
                                   ) : (
-                                    advice[sq.id].map((a) => (
+                                    advice[sq.id].advice.map((a) => (
                                       <div className="advice-card" key={a.index_ddl}>
                                         <div className="advice-header">
                                           <span className="advice-table">{a.schema_name}.{a.table_name}</span>
@@ -1210,10 +1231,10 @@ export default function InstanceDetailPage() {
                                 {explain[q.id] && <ExplainPlanTree result={explain[q.id]!} />}
                                 {advice[q.id] && (
                                   <div className="advice-results">
-                                    {advice[q.id].length === 0 ? (
-                                      <p className="advice-empty">Index önerisi bulunamadı.</p>
+                                    {advice[q.id].advice.length === 0 ? (
+                                      <NoAdviceReasons reasons={advice[q.id].no_advice_reasons} />
                                     ) : (
-                                      advice[q.id].map((a) => (
+                                      advice[q.id].advice.map((a) => (
                                         <div className="advice-card" key={a.index_ddl}>
                                           <div className="advice-header">
                                             <span className="advice-table">{a.schema_name}.{a.table_name}</span>

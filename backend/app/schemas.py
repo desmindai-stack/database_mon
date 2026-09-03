@@ -765,6 +765,9 @@ class MetricDefinitionOut(BaseModel):
 
 class IndexAdviceRequest(BaseModel):
     query: str = Field(min_length=1)
+    # pg_stat_statements.calls for this query, if the caller has it (Faz 16 İŞ 4) — used to warn
+    # when a recommendation would be based on very few executions.
+    calls: int | None = None
 
 
 class IndexAdviceOut(BaseModel):
@@ -778,6 +781,17 @@ class IndexAdviceOut(BaseModel):
     before_cost: float | None
     after_cost: float | None
     existing_indexes: list[str]
+
+
+class NoAdviceReasonOut(BaseModel):
+    code: str
+    message: str
+    what_to_do: str
+
+
+class IndexAdviceReportOut(BaseModel):
+    advice: list[IndexAdviceOut]
+    no_advice_reasons: list[NoAdviceReasonOut]
 
 
 class PerformanceInsightOut(BaseModel):

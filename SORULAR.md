@@ -3,6 +3,32 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16 — İŞ 4: hypopg/pg_qualstats eksikliği bir NoAdviceReason değil — gerçekten bloke etmiyorlar
+
+Görev "index önerisi neden gelmedi" sebepleri arasında "hypopg kurulu
+değil" ve "pg_qualstats yok"u da sayıyordu. Kodu inceledim:
+- `hypopg` eksikliği `advise()`'da `has_hypopg=False` olarak akıyor ve
+  SADECE hipotetik index maliyet TAHMİNİNİ atlıyor
+  (`has_hypopg_estimate=False`, zaten UI'da "(gerçek plan maliyeti)"
+  notuyla ayrı gösteriliyor) — öneri YİNE ÜRETİLİYOR, sadece kaba bir
+  istatistiksel tahmine dayanıyor. Bunu bir "öneri yok" sebebi olarak
+  listelemek YANLIŞ olurdu (öneri VAR, sadece kesinliği farklı).
+- `pg_qualstats` index_advisor.py'de hiç KULLANILMIYOR (grep ile
+  doğrulandı) — sadece Ön koşullar denetiminde (İŞ 1) genel bir DBA
+  hijyeni kontrolü olarak var. Bunu bir "öneri yok" sebebi olarak
+  göstermek dbace'in aslında ihtiyaç duymadığı bir şeyi ihtiyaçmış gibi
+  göstermek olurdu.
+
+İkisini de NoAdviceReason listesine EKLEMEDİM — fabrikasyon yapmaktansa
+gerçek engelleri (no_query_data, no_filter_columns, table_not_found,
+already_indexed, insufficient_samples) ve gerçek hataları (yetki →
+classify_connection_error ile 502) doğru yansıtmayı seçtim. "pg_stat_statements
+yok/veri yok" de benzer şekilde index_advisor seviyesinde bir sebep
+DEĞİL — bu durumda kullanıcı zaten "index önerisi" butonuna hiç
+basamaz, çünkü yavaş sorgu listesinin kendisi (pg_stat_statements'a
+dayanan) boş kalır; bu durumun açıklaması İŞ 1'in Ön koşullar
+panelinde zaten var.
+
 ## Faz 16 — İŞ 3: Sunucu kaynağı (CPU/RAM/disk) ayrımı yapılamıyor — agent protokolü bunu toplamıyor
 
 Görev host-agent'tan CPU/RAM/disk metrikleri varsa "bu sorun kaynak

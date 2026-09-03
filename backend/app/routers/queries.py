@@ -11,7 +11,9 @@ from app.schemas import (
     ExplainOut,
     ExplainRequest,
     IndexAdviceOut,
+    IndexAdviceReportOut,
     IndexAdviceRequest,
+    NoAdviceReasonOut,
     QueryDiagnosisOut,
     QueryDiagnosticsReportOut,
     QueryHistoryListOut,
@@ -244,19 +246,19 @@ async def explain_query(
     return out
 
 
-@router.post("/{instance_id}/advice", response_model=list[IndexAdviceOut])
+@router.post("/{instance_id}/advice", response_model=IndexAdviceReportOut)
 async def advise_indexes(
     instance_id: int,
     body: IndexAdviceRequest,
     db: AsyncSession = Depends(get_db),
-) -> list[IndexAdviceOut]:
+) -> IndexAdviceReportOut:
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
     if instance.engine != "postgresql":
         raise HTTPException(status_code=400, detail="Index advice is only available for PostgreSQL")
 
-    cache_key = ("advice", instance_id, body.query.strip())
+    cache_key = ("advice", instance_id, body.query.strip(), body.calls)
     cached = query_cache.get(cache_key)
     if cached is not None:
         return cached
@@ -271,23 +273,28 @@ async def advise_indexes(
     )
     advisor = PostgreSQLIndexAdvisor(target)
     try:
-        recommendations = await advisor.advise(body.query)
+        recommendations, reasons = await advisor.advise(body.query, calls=body.calls)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
-    out = [
-        IndexAdviceOut(
-            table_name=r.table_name,
-            schema_name=r.schema_name,
-            columns=r.columns,
-            index_ddl=r.index_ddl,
-            reason=r.reason,
-            estimated_improvement_pct=r.estimated_improvement_pct,
-            has_hypopg_estimate=r.has_hypopg_estimate,
-            before_cost=r.before_cost,
-            after_cost=r.after_cost,
-            existing_indexes=r.existing_indexes,
-        )
-        for r in recommendations
-    ]
-    query_cache.set(cache_key, out, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
-    return out
+    report = IndexAdviceReportOut(
+        advice=[
+            IndexAdviceOut(
+                table_name=r.table_name,
+                schema_name=r.schema_name,
+                columns=r.columns,
+                index_ddl=r.index_ddl,
+                reason=r.reason,
+                estimated_improvement_pct=r.estimated_improvement_pct,
+                has_hypopg_estimate=r.has_hypopg_estimate,
+                before_cost=r.before_cost,
+                after_cost=r.after_cost,
+                existing_indexes=r.existing_indexes,
+            )
+            for r in recommendations
+        ],
+        no_advice_reasons=[
+            NoAdviceReasonOut(code=r.code, message=r.message, what_to_do=r.what_to_do) for r in reasons
+        ],
+    )
+    query_cache.set(cache_key, report, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
+    return report

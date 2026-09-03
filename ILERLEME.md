@@ -1932,6 +1932,56 @@ sayaçlarla "Toplam etki"), her sorgu satırında gerekçe ve
 açıklanamayan süre farkı → lock+inferred, exec_time yok → unknown+inferred)
 doğru sınıflandırıldığı kanıtlanıyor. Toplam 92 test yeşil.
 
+## Faz 16 — İŞ 4: Index önerisi neden gelmediğini açıkla
+
+**Sorun:** `advise()` önerecek bir şey bulamadığında sessizce `[]`
+döndürüyordu, frontend de bunu düz "Index önerisi bulunamadı." metniyle
+gösteriyordu — sebep yoktu.
+
+**`index_advisor.py`'nin `advise()` imzası değişti:** artık
+`(list[IndexAdvice], list[NoAdviceReason])` döndürüyor. Her
+`NoAdviceReason` `{code, message, what_to_do}` taşıyor — "öneri yok"
+yerine "şu yüzden öneremiyorum, şunu yaparsan önerebilirim". Tespit
+edilen sebepler:
+
+- **`no_query_data`** — sorgudan hiç tablo/FROM çıkarılamadı.
+- **`no_filter_columns`** — tablo bulundu ama WHERE/JOIN/ORDER BY/GROUP
+  BY'da filtrelenen bir kolon yok (sorgu zaten filtresiz olabilir, ya da
+  ayrıştırıcı tanımadı).
+- **`table_not_found`** — tablo bağlı veritabanında/şemada yok.
+- **`already_indexed`** — **"sorgu zaten index kullanıyor, sorun başka"**
+  durumu: bu kolonları zaten kapsayan bir index var, `what_to_do` EXPLAIN
+  ANALYZE'a yönlendiriyor (sıralama/join/veri hacmi olabilir).
+- **`insufficient_samples`** — **"yeterli örnek birikmemiş"**: çağıran
+  `calls` sayısını verirse (artık `IndexAdviceRequest.calls`, frontend
+  `SlowQuery.calls`'ı gönderiyor) ve bu < `MIN_SAMPLE_CALLS` (5) ise, kaç
+  çağrı olduğu ve minimum kaçının önerildiği mesajda açık açık yazıyor.
+
+**"yetki yetersiz" ayrı bir NoAdviceReason DEĞİL — gerçek bir hata:**
+Katalog sorgularında (`pg_stats`/`pg_indexes`/`pg_class`) bir izin hatası
+olursa bu zaten bir exception olarak fırlıyor ve router 502 döndürüyor —
+sessizce boş sonuç DEĞİL. `classify_connection_error`'a yeni bir "permission
+denied" dalı eklendi (GRANT pg_monitor / VIEW SERVER STATE önerisiyle) —
+bu, index advisor dışında activity/schema-health/parametre denetimi gibi
+diğer tüm uçlarda da aynı anlamlı mesajı veriyor.
+
+**"pg_stat_statements yok/veri yok" ve "pg_qualstats yok" NEDEN
+NoAdviceReason DEĞİL:** bkz. SORULAR.md — ikisi de index_advisor'ı
+gerçekte BLOKE etmiyor (birincisi zaten yavaş sorgu listesinin kendisini
+boşaltır, oraya hiç gelinmez — Ön koşullar paneli İŞ 1'de zaten var;
+ikincisi dbace tarafından hiç kullanılmıyor), bu yüzden fabrikasyon
+yapılmadı.
+
+**Frontend:** `advice` state artık `IndexAdviceReport` (`{advice,
+no_advice_reasons}`) tutuyor; yeni `NoAdviceReasons` bileşeni "Öneri yok"
+etiketiyle her sebebi + "ne yapmalı"yı `.checklist-row` görsel diliyle
+(İŞ 1/3 ile aynı) gösteriyor.
+
+**Test:** Yeni `tests/test_index_advisor_reasons.py` (7 test) — her
+sebep dalı + başarılı öneri durumunda `reasons=[]` olduğu kanıtlanıyor.
+`test_pgbouncer_compat.py`'ye yeni bir test (permission-denied çevirisi).
+Toplam 100 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

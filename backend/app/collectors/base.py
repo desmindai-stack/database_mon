@@ -75,6 +75,12 @@ def classify_connection_error(exc: Exception) -> str:
         )
     ):
         return wrap("Kimlik doğrulama başarısız: kullanıcı adı veya parola yanlış.")
+    if "permission denied" in lower:
+        return wrap(
+            "Bağlanan kullanıcının bu işlem için yetkisi yok — sistem kataloğu/view'larını "
+            "okuma yetkisi eksik olabilir. GRANT pg_monitor TO <kullanıcı>; (PostgreSQL) veya "
+            "GRANT VIEW SERVER STATE TO <login>; (SQL Server) deneyin."
+        )
     if any(k in lower for k in ("does not exist", "unknown database", "cannot open database")):
         return wrap("Veritabanı bulunamadı: veritabanı adını kontrol edin.")
     if any(
