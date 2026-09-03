@@ -10,6 +10,7 @@ import {
   Legend,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceDot,
   ReferenceLine,
   ResponsiveContainer,
@@ -51,6 +52,7 @@ import QueryHistoryChart from "../components/QueryHistoryChart";
 import RecommendationHeader from "../components/RecommendationHeader";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import SlowQueryAvailabilityNote from "../components/SlowQueryAvailabilityNote";
+import { ChartRange, useChartRangeSelection } from "../components/useChartRangeSelection";
 import TuningPanel from "../components/TuningPanel";
 
 type Tab = "overview" | "metrics" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
@@ -59,9 +61,19 @@ type RangeHours = 1 | 6 | 24 | 168;
 const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "cluster", "schema", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
-function timeLabel(iso: string): string {
+/** Grafik ekseni etiketi. 24 saatten uzun aralıklarda gün de yazılır — aksi halde etiketler
+ *  tekrar eder ve kategorik eksende iki farklı an aynı noktaya düşer (Faz 16-B İŞ 3). */
+function timeLabel(iso: string, withDate = false): string {
   const d = new Date(iso);
-  return `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  const hm = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
+  if (!withDate) return hm;
+  return `${d.getDate().toString().padStart(2, "0")}.${(d.getMonth() + 1).toString().padStart(2, "0")} ${hm}`;
+}
+
+/** datetime-local input değeri (yerel saat) ↔ Date. */
+function toLocalInputValue(d: Date): string {
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function queryFingerprint(q: string): string {
@@ -89,10 +101,19 @@ function NoAdviceReasons({ reasons }: { reasons: IndexAdviceReport["no_advice_re
   );
 }
 
+interface LoadContributor {
+  queryid: string;
+  query: string;
+  total_time_ms: number;
+  mean_time_ms: number;
+  calls: number;
+  calls_delta: number | null;
+}
+
 interface LoadTimelinePoint {
   time: string;
   totalMs: number;
-  contributors: { queryid: string; query: string; total_time_ms: number; mean_time_ms: number; calls: number; calls_delta: number | null }[];
+  contributors: LoadContributor[];
 }
 
 // Honest, non-fabricated heuristics only — dbace doesn't have wait-event/lock data attached to
@@ -164,6 +185,15 @@ export default function InstanceDetailPage() {
   const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   const [expandedCorrelated, setExpandedCorrelated] = useState<Set<string>>(new Set());
+  // Faz 16-B İŞ 3: grafikte sürüklenerek seçilen aralık. Metrik grafikleri bu aralığa
+  // yakınlaştırılır, alttaki sorgu listesi de aynı aralığa göre filtrelenir.
+  const [zoom, setZoom] = useState<ChartRange | null>(null);
+  // Özel zaman aralığı (hazır 1/6/24/168 saat seçeneklerine ek).
+  const [customRange, setCustomRange] = useState<{ start: string; end: string } | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
+  const [customDraft, setCustomDraft] = useState<{ start: string; end: string }>({ start: "", end: "" });
+  // Sorgu yükü çizelgesinde sürüklenerek seçilen aralık — alttaki sorgu listesini besler.
+  const [timelineRange, setTimelineRange] = useState<ChartRange | null>(null);
 
   const status = summary?.status || "pending";
   const insights = tuning?.insights || [];
@@ -309,6 +339,12 @@ export default function InstanceDetailPage() {
     }
   };
 
+  // Hazır aralık mı özel aralık mı — tek yerden karar verilsin (Faz 16-B İŞ 3).
+  const fetchMetrics = () =>
+    customRange
+      ? api.getMetricsRange(instanceId, customRange.start, customRange.end)
+      : api.getMetrics(instanceId, range);
+
   useEffect(() => {
     if (!instanceId) return;
     let mounted = true;
@@ -316,7 +352,7 @@ export default function InstanceDetailPage() {
       try {
         const [inst, m, q, summaries] = await Promise.all([
           api.getInstance(instanceId),
-          api.getMetrics(instanceId, range),
+          fetchMetrics(),
           api.getSlowQueries(instanceId),
           api.getSummaries(),
         ]);
@@ -352,7 +388,9 @@ export default function InstanceDetailPage() {
     };
     load();
     const timer = setInterval(() => {
-      api.getMetrics(instanceId, range).then(setMetrics).catch(() => undefined);
+      // Özel aralık seçiliyse otomatik yenileme metrikleri değiştirmez (sabit bir pencereye
+      // bakılıyor); sadece diğer kutucuklar tazelenir.
+      if (!customRange) fetchMetrics().then(setMetrics).catch(() => undefined);
       api.getSlowQueries(instanceId).then(setQueries).catch(() => undefined);
       api.getSummaries().then((s) => setSummary(s.find((x) => x.instance.id === instanceId) || null)).catch(() => undefined);
       api.getInsights(instanceId).then(setTuning).catch(() => undefined);
@@ -361,7 +399,8 @@ export default function InstanceDetailPage() {
       mounted = false;
       clearInterval(timer);
     };
-  }, [instanceId, range]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, range, customRange]);
 
   useEffect(() => {
     if (!instanceId || tab !== "activity") return;
@@ -423,12 +462,16 @@ export default function InstanceDetailPage() {
 
   const latest = metrics.at(-1);
 
+  // 24 saatten uzun aralıklarda etikete gün de girer, yoksa "14:29" günlerce tekrar eder.
+  const labelWithDate = customRange ? true : range > 24;
+
   const chartData = useMemo(
     () =>
       metrics.map((m) => {
         const metricsJson = m.metrics ?? {};
         return {
-          time: timeLabel(m.collected_at),
+          time: timeLabel(m.collected_at, labelWithDate),
+          collectedAt: m.collected_at,
           connections: m.active_connections,
           maxConnections: m.max_connections,
           cacheHit: m.cache_hit_ratio,
@@ -456,8 +499,25 @@ export default function InstanceDetailPage() {
           buffersClean: Number(metricsJson.buffers_clean_per_sec ?? 0),
         };
       }),
-    [metrics],
+    [metrics, labelWithDate],
   );
+
+  // Yakınlaştırma: seçilen aralık dışındaki noktalar TÜM metrik grafiklerinden çıkarılır —
+  // grafikler aynı chartData'yı paylaştığı için seçim hepsinde aynı anda geçerli olur.
+  const chartLabels = useMemo(() => chartData.map((p) => p.time), [chartData]);
+  const visibleChartData = useMemo(() => {
+    if (!zoom) return chartData;
+    const from = chartLabels.indexOf(zoom.start);
+    const to = chartLabels.indexOf(zoom.end);
+    if (from < 0 || to < 0) return chartData;
+    return chartData.slice(from, to + 1);
+  }, [chartData, chartLabels, zoom]);
+
+  const zoomSelection = useChartRangeSelection({
+    labels: chartLabels,
+    onPick: (label) => setSelectedTime(label),
+    onRange: (r) => setZoom(r),
+  });
 
   const sortedQueries = useMemo(() => {
     const list = [...queries];
@@ -487,7 +547,7 @@ export default function InstanceDetailPage() {
     const byTime = new Map<string, LoadTimelinePoint>();
     for (const series of queryHistoryTop) {
       for (const p of series.points) {
-        const time = timeLabel(p.collected_at);
+        const time = timeLabel(p.collected_at, labelWithDate);
         let bucket = byTime.get(time);
         if (!bucket) {
           bucket = { time, totalMs: 0, contributors: [] };
@@ -506,7 +566,7 @@ export default function InstanceDetailPage() {
       }
     }
     return Array.from(byTime.values()).sort((a, b) => a.time.localeCompare(b.time));
-  }, [queryHistoryTop]);
+  }, [queryHistoryTop, labelWithDate]);
 
   // Spikes: points whose aggregate load is well above the timeline's own mean — needs a few
   // points to mean anything, so it's simply empty (no false positives) on a thin timeline.
@@ -530,10 +590,47 @@ export default function InstanceDetailPage() {
 
   const effectiveSelectedTime = selectedTime ?? defaultSelectedTime;
   const selectedLoadPoint = loadTimeline.find((p) => p.time === effectiveSelectedTime) ?? null;
-  const correlatedQueries = useMemo(
-    () => (selectedLoadPoint ? [...selectedLoadPoint.contributors].sort((a, b) => b.mean_time_ms - a.mean_time_ms) : []),
-    [selectedLoadPoint],
-  );
+
+  const timelineLabels = useMemo(() => loadTimeline.map((p) => p.time), [loadTimeline]);
+  const timelineSelection = useChartRangeSelection({
+    labels: timelineLabels,
+    onPick: (label) => {
+      setTimelineRange(null);
+      setSelectedTime(label);
+    },
+    onRange: (r) => setTimelineRange(r),
+  });
+
+  /** Seçili aralıktaki (yoksa seçili tek andaki) sorgular, queryid bazında toplanmış.
+   *  Faz 16-B İŞ 3: aralık seçimi artık listeyi gerçekten filtreliyor — önceden sürükleme
+   *  bir işe yaramıyor, liste hep tek bir ana bağlı kalıyordu. */
+  const correlatedQueries = useMemo(() => {
+    if (timelineRange) {
+      const from = timelineLabels.indexOf(timelineRange.start);
+      const to = timelineLabels.indexOf(timelineRange.end);
+      if (from < 0 || to < 0) return [];
+      const merged = new Map<string, LoadContributor & { _points: number }>();
+      for (const point of loadTimeline.slice(from, to + 1)) {
+        for (const c of point.contributors) {
+          const existing = merged.get(c.queryid);
+          if (!existing) {
+            merged.set(c.queryid, { ...c, _points: 1 });
+          } else {
+            // total_time_ms kümülatif sayaç; aralıkta gördüğümüz en yüksek değer geçerli.
+            existing.total_time_ms = Math.max(existing.total_time_ms, c.total_time_ms);
+            existing.calls = Math.max(existing.calls, c.calls);
+            existing.calls_delta = (existing.calls_delta ?? 0) + (c.calls_delta ?? 0);
+            existing.mean_time_ms += c.mean_time_ms;
+            existing._points += 1;
+          }
+        }
+      }
+      return Array.from(merged.values())
+        .map(({ _points, ...c }) => ({ ...c, mean_time_ms: c.mean_time_ms / _points }))
+        .sort((a, b) => b.mean_time_ms - a.mean_time_ms);
+    }
+    return selectedLoadPoint ? [...selectedLoadPoint.contributors].sort((a, b) => b.mean_time_ms - a.mean_time_ms) : [];
+  }, [selectedLoadPoint, timelineRange, timelineLabels, loadTimeline]);
   const slowQueryByQueryid = useMemo(() => {
     const map = new Map<string, SlowQuery>();
     for (const q of queries) if (q.queryid) map.set(q.queryid, q);
@@ -551,7 +648,9 @@ export default function InstanceDetailPage() {
 
   useEffect(() => {
     setSelectedTime(null);
-  }, [instanceId, range]);
+    setTimelineRange(null);
+    setZoom(null);
+  }, [instanceId, range, customRange]);
 
   const connectionUtil = latest && latest.max_connections ? (latest.active_connections / latest.max_connections) * 100 : 0;
 
@@ -612,12 +711,94 @@ export default function InstanceDetailPage() {
         </div>
         <div className="range-selector">
           {(Object.keys(rangeLabel) as unknown as RangeHours[]).map((h) => (
-            <button key={h} className={`range-btn${range === h ? " active" : ""}`} onClick={() => setRange(h)}>
+            <button
+              key={h}
+              className={`range-btn${range === h && !customRange ? " active" : ""}`}
+              onClick={() => {
+                setRange(h);
+                setCustomRange(null);
+                setCustomOpen(false);
+              }}
+            >
               {rangeLabel[h]}
             </button>
           ))}
+          {/* Faz 16-B İŞ 3: hazır aralıklara ek olarak özel aralık. */}
+          <button
+            className={`range-btn${customRange ? " active" : ""}`}
+            onClick={() => setCustomOpen((v) => !v)}
+          >
+            Özel
+          </button>
         </div>
       </header>
+
+      {customOpen && (
+        <div className="card custom-range-bar">
+          <label>
+            Başlangıç
+            <input
+              type="datetime-local"
+              defaultValue={toLocalInputValue(new Date(Date.now() - 6 * 3600 * 1000))}
+              onChange={(e) => setCustomDraft((d) => ({ ...d, start: e.target.value }))}
+            />
+          </label>
+          <label>
+            Bitiş
+            <input
+              type="datetime-local"
+              defaultValue={toLocalInputValue(new Date())}
+              onChange={(e) => setCustomDraft((d) => ({ ...d, end: e.target.value }))}
+            />
+          </label>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              const start = customDraft.start || toLocalInputValue(new Date(Date.now() - 6 * 3600 * 1000));
+              const end = customDraft.end || toLocalInputValue(new Date());
+              if (new Date(start) >= new Date(end)) {
+                setError("Özel aralıkta başlangıç bitişten önce olmalı");
+                return;
+              }
+              setError(null);
+              setZoom(null);
+              setCustomRange({ start: new Date(start).toISOString(), end: new Date(end).toISOString() });
+              setCustomOpen(false);
+            }}
+          >
+            Uygula
+          </button>
+          {customRange && (
+            <button className="btn" onClick={() => { setCustomRange(null); setCustomOpen(false); }}>
+              Özel aralığı kaldır
+            </button>
+          )}
+        </div>
+      )}
+
+      {(zoom || customRange) && (
+        <div className="zoom-bar">
+          <span>
+            Seçili aralık:{" "}
+            <strong>
+              {zoom
+                ? `${zoom.start} – ${zoom.end}`
+                : `${new Date(customRange!.start).toLocaleString("tr-TR")} – ${new Date(customRange!.end).toLocaleString("tr-TR")}`}
+            </strong>
+            {zoom && ` · ${visibleChartData.length} örnek`}
+          </span>
+          <button
+            className="btn btn-xs"
+            onClick={() => {
+              setZoom(null);
+              setCustomRange(null);
+              setSelectedTime(null);
+            }}
+          >
+            Yakınlaştırmayı sıfırla
+          </button>
+        </div>
+      )}
 
       {error && <div className="error">{error}</div>}
 
@@ -807,10 +988,15 @@ export default function InstanceDetailPage() {
       )}
 
       {tab === "metrics" && (
+        <>
+        <p className="muted-note" style={{ marginBottom: "0.6rem" }}>
+          Grafiklerde <strong>sürükleyerek bir aralık seçin</strong> — tüm grafikler o aralığa
+          yakınlaştırılır. Üstteki "Özel" butonuyla kesin başlangıç/bitiş girebilirsiniz.
+        </p>
         <div className="grid grid-2">
           <ChartCard title="Connections over time">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
+              <AreaChart data={visibleChartData} {...zoomSelection.handlers}>
                 <defs>
                   <linearGradient id="connGrad2" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.4} />
@@ -823,13 +1009,14 @@ export default function InstanceDetailPage() {
                 <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} />
                 <ReferenceLine y={latest?.max_connections} stroke="var(--danger)" strokeDasharray="4 4" />
                 <Area type="monotone" dataKey="connections" stroke="#3b82f6" fill="url(#connGrad2)" strokeWidth={2} />
+                {zoomSelection.overlay}
               </AreaChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Cache hit ratio & TPS">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData}>
+              <ComposedChart data={visibleChartData} {...zoomSelection.handlers}>
                 <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                 <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                 <YAxis yAxisId="left" stroke="#22d3ee" fontSize={11} domain={[0, 100]} />
@@ -838,13 +1025,14 @@ export default function InstanceDetailPage() {
                 <Legend />
                 <Line yAxisId="left" type="monotone" dataKey="cacheHit" name="Cache hit %" stroke="#22d3ee" dot={false} strokeWidth={2} />
                 <Line yAxisId="right" type="monotone" dataKey="tps" name="TPS" stroke="#22c55e" dot={false} strokeWidth={2} />
+                {zoomSelection.overlay}
               </ComposedChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Database size">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
+              <AreaChart data={visibleChartData} {...zoomSelection.handlers}>
                 <defs>
                   <linearGradient id="sizeGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
@@ -856,25 +1044,27 @@ export default function InstanceDetailPage() {
                 <YAxis stroke="#8b9bb8" fontSize={11} tickFormatter={(v) => formatBytes(v)} />
                 <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} formatter={(v) => formatBytes(Number(v))} />
                 <Area type="monotone" dataKey="size" stroke="#f59e0b" fill="url(#sizeGrad)" strokeWidth={2} />
+                {zoomSelection.overlay}
               </AreaChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Replication lag">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
+              <LineChart data={visibleChartData} {...zoomSelection.handlers}>
                 <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                 <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                 <YAxis stroke="#8b9bb8" fontSize={11} tickFormatter={(v) => formatBytes(Number(v))} />
                 <Tooltip contentStyle={{ background: "#121a2b", border: "1px solid #243049" }} formatter={(v) => formatBytes(Number(v))} />
                 <Line type="monotone" dataKey="lag" stroke="#f472b6" dot={false} strokeWidth={2} />
+                {zoomSelection.overlay}
               </LineChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Deadlocks & temp bytes">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData}>
+              <ComposedChart data={visibleChartData} {...zoomSelection.handlers}>
                 <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                 <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                 <YAxis yAxisId="left" stroke="#ef4444" fontSize={11} />
@@ -883,13 +1073,14 @@ export default function InstanceDetailPage() {
                 <Legend />
                 <Line yAxisId="left" type="monotone" dataKey="deadlocks" name="Deadlocks" stroke="#ef4444" dot={false} strokeWidth={2} />
                 <Line yAxisId="right" type="monotone" dataKey="temp" name="Temp bytes" stroke="#a78bfa" dot={false} strokeWidth={2} />
+                {zoomSelection.overlay}
               </ComposedChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="I/O blocks per second">
             <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
+              <AreaChart data={visibleChartData} {...zoomSelection.handlers}>
                 <defs>
                   <linearGradient id="ioReadGrad" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#ef4444" stopOpacity={0.4} />
@@ -907,13 +1098,14 @@ export default function InstanceDetailPage() {
                 <Legend />
                 <Area type="monotone" dataKey="blksRead" name="Disk read" stroke="#ef4444" fill="url(#ioReadGrad)" strokeWidth={2} />
                 <Area type="monotone" dataKey="blksHit" name="Buffer hit" stroke="#22c55e" fill="url(#ioHitGrad)" strokeWidth={2} />
+                {zoomSelection.overlay}
               </AreaChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Tuple throughput">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
+              <LineChart data={visibleChartData} {...zoomSelection.handlers}>
                 <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                 <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                 <YAxis stroke="#8b9bb8" fontSize={11} />
@@ -924,13 +1116,14 @@ export default function InstanceDetailPage() {
                 <Line type="monotone" dataKey="tupInserted" name="Inserted" stroke="#22c55e" dot={false} strokeWidth={2} />
                 <Line type="monotone" dataKey="tupUpdated" name="Updated" stroke="#f59e0b" dot={false} strokeWidth={2} />
                 <Line type="monotone" dataKey="tupDeleted" name="Deleted" stroke="#ef4444" dot={false} strokeWidth={2} />
+                {zoomSelection.overlay}
               </LineChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Temp files & bytes">
             <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={chartData}>
+              <ComposedChart data={visibleChartData} {...zoomSelection.handlers}>
                 <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                 <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                 <YAxis yAxisId="left" stroke="#f59e0b" fontSize={11} />
@@ -939,13 +1132,14 @@ export default function InstanceDetailPage() {
                 <Legend />
                 <Line yAxisId="left" type="monotone" dataKey="tempFiles" name="Temp files / s" stroke="#f59e0b" dot={false} strokeWidth={2} />
                 <Line yAxisId="right" type="monotone" dataKey="tempBytes" name="Temp bytes / s" stroke="#a78bfa" dot={false} strokeWidth={2} />
+                {zoomSelection.overlay}
               </ComposedChart>
             </ResponsiveContainer>
           </ChartCard>
 
           <ChartCard title="Checkpoints & buffers">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData}>
+              <LineChart data={visibleChartData} {...zoomSelection.handlers}>
                 <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                 <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                 <YAxis stroke="#8b9bb8" fontSize={11} />
@@ -956,10 +1150,12 @@ export default function InstanceDetailPage() {
                 <Line type="monotone" dataKey="buffersCheckpoint" name="Buffers checkpoint / s" stroke="#22c55e" dot={false} strokeWidth={2} />
                 <Line type="monotone" dataKey="buffersBackend" name="Buffers backend / s" stroke="#f59e0b" dot={false} strokeWidth={2} />
                 <Line type="monotone" dataKey="buffersClean" name="Buffers clean / s" stroke="#a78bfa" dot={false} strokeWidth={2} />
+                {zoomSelection.overlay}
               </LineChart>
             </ResponsiveContainer>
           </ChartCard>
         </div>
+        </>
       )}
 
       {tab === "queries" && (
@@ -985,17 +1181,23 @@ export default function InstanceDetailPage() {
             <div className="card">
               <h3 className="chart-title">Sorgu yükü zaman çizelgesi</h3>
               <p className="muted-note">
-                Grafikte bir noktaya tıklayın — altta o ana denk gelen sorgular listelenir. Kırmızı
-                noktalar otomatik işaretlenen sıçramalar (ortalamanın belirgin üzerinde).
+                Bir noktaya tıklayın ya da <strong>sürükleyerek bir aralık seçin</strong> — altta o
+                ana/aralığa denk gelen sorgular listelenir. Kırmızı noktalar otomatik işaretlenen
+                sıçramalar (ortalamanın belirgin üzerinde).
               </p>
+              {timelineRange && (
+                <div className="zoom-bar">
+                  <span>
+                    Seçili aralık: <strong>{timelineRange.start} – {timelineRange.end}</strong>
+                  </span>
+                  <button className="btn btn-xs" onClick={() => setTimelineRange(null)}>
+                    Aralık seçimini kaldır
+                  </button>
+                </div>
+              )}
               <div style={{ height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart
-                    data={loadTimeline}
-                    onClick={(e) => {
-                      if (e && typeof e.activeLabel === "string") setSelectedTime(e.activeLabel);
-                    }}
-                  >
+                  <ComposedChart data={loadTimeline} {...timelineSelection.handlers}>
                     <CartesianGrid stroke="#243049" strokeDasharray="3 3" />
                     <XAxis dataKey="time" stroke="#8b9bb8" fontSize={11} />
                     <YAxis stroke="#8b9bb8" fontSize={11} />
@@ -1017,9 +1219,18 @@ export default function InstanceDetailPage() {
                       .map((p) => (
                         <ReferenceDot key={p.time} x={p.time} y={p.totalMs} r={6} fill="var(--danger)" stroke="none" />
                       ))}
-                    {effectiveSelectedTime && (
+                    {!timelineRange && effectiveSelectedTime && (
                       <ReferenceLine x={effectiveSelectedTime} stroke="var(--accent-2)" strokeDasharray="4 4" />
                     )}
+                    {timelineRange && (
+                      <ReferenceArea
+                        x1={timelineRange.start}
+                        x2={timelineRange.end}
+                        fill="var(--accent-2)"
+                        fillOpacity={0.12}
+                      />
+                    )}
+                    {timelineSelection.overlay}
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -1027,19 +1238,27 @@ export default function InstanceDetailPage() {
               <div style={{ marginTop: "1rem" }}>
                 <div className="activity-toolbar">
                   <h4 style={{ margin: 0, color: "var(--text)" }}>
-                    {effectiveSelectedTime ? `${effectiveSelectedTime} civarında öne çıkan sorgular` : "Sorgu seçin"}
-                    {effectiveSelectedTime && spikeTimes.has(effectiveSelectedTime) && (
+                    {timelineRange
+                      ? `${timelineRange.start} – ${timelineRange.end} aralığında öne çıkan sorgular`
+                      : effectiveSelectedTime
+                        ? `${effectiveSelectedTime} civarında öne çıkan sorgular`
+                        : "Sorgu seçin"}
+                    {!timelineRange && effectiveSelectedTime && spikeTimes.has(effectiveSelectedTime) && (
                       <span className="tag" style={{ marginLeft: "0.5rem", background: "var(--danger)" }}>sıçrama</span>
                     )}
                   </h4>
                 </div>
                 {correlatedQueries.length === 0 ? (
-                  <p className="muted-note">Bu zaman noktasında ilişkilendirilecek sorgu verisi yok.</p>
+                  <p className="muted-note">
+                    {timelineRange
+                      ? "Bu aralıkta ilişkilendirilecek sorgu verisi yok."
+                      : "Bu zaman noktasında ilişkilendirilecek sorgu verisi yok."}
+                  </p>
                 ) : (
                   <div className="problem-card-list">
                     {correlatedQueries.map((c) => {
                       const sq = slowQueryByQueryid.get(c.queryid);
-                      const key = `corr-${effectiveSelectedTime}-${c.queryid}`;
+                      const key = `corr-${timelineRange ? `${timelineRange.start}_${timelineRange.end}` : effectiveSelectedTime}-${c.queryid}`;
                       const isOpen = expandedCorrelated.has(key);
                       return (
                         <div className="problem-card" key={key}>

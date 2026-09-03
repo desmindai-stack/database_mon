@@ -1022,6 +1022,11 @@ export const api = {
     request<ConnectionTestResult>(`/api/instances/${id}/test`, { method: "POST" }),
   getMetrics: (id: number, hours = 1) =>
     request<MetricSample[]>(`/api/metrics/${id}?hours=${hours}`),
+  /** Özel zaman aralığı (Faz 16-B İŞ 3) — start/end ISO-8601. */
+  getMetricsRange: (id: number, start: string, end: string) =>
+    request<MetricSample[]>(
+      `/api/metrics/${id}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ),
   getLatestMetrics: (id: number) =>
     request<MetricSample>(`/api/metrics/${id}/latest`),
   getSlowQueries: (id: number) => request<SlowQuery[]>(`/api/queries/${id}`),

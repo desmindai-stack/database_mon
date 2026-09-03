@@ -3,6 +3,28 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16-B — İŞ 3: Yakınlaştırma istemci tarafında, yeni veri çekmiyor
+
+Grafikte bir aralık seçildiğinde sunucudan o aralık için daha yüksek
+çözünürlüklü veri İSTENMİYOR — eldeki noktalar aralığa göre kırpılıyor.
+Sebep: dbace metrikleri sabit bir aralıkla (varsayılan 15 sn) topluyor,
+yani "daha yakına bakınca daha çok nokta" diye bir şey yok; sunucuya
+gitmek aynı noktaları tekrar getirirdi. Gerçekten daha geniş/başka bir
+pencere isteniyorsa "Özel" aralık kullanılıyor ve o zaman sunucuya
+`start`/`end` ile gidiliyor.
+
+## Faz 16-B — İŞ 3: Seçim etiket bazlı, zaman damgası bazlı değil
+
+Recharts'ta X ekseni kategorik (`dataKey="time"`) olduğu için sürükleme
+olayları zaman damgası değil etiket veriyor. Seçimi gerçek zaman
+damgalarına çevirmek yerine etiketlerle çalışmayı sürdürdüm (grafik
+verisinde `collectedAt` de tutuluyor, ileride gerekirse hazır). Bunun tek
+gerçek riski etiket tekrarıydı — 7 günlük pencerede `HH:MM` tekrar
+ediyordu; etiketlere gün ekleyerek çözdüm. Ekseni sürekli (zaman) eksene
+çevirmek daha "doğru" olurdu ama 9 grafiği, sorgu yükü çizelgesini ve
+QueryHistoryChart'ı birden değiştirmeyi gerektirirdi — bu işin kapsamını
+aşıyordu.
+
 ## Faz 16-B — İŞ 2: Cascade silme düğümü silmiyor, sadece bağlantısını koparıyor
 
 Instance cascade ile silinirken `nodes.instance_id`'yi ne yapacağımız

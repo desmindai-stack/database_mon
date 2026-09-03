@@ -2252,6 +2252,48 @@ yarım iş bırakmıyor, cascade siliyor, cascade düğümü silmeyip
 bağlantısını koparıyor, test-config şifreyi kayıtlıdan tamamlıyor /
 verilen şifreyi tercih ediyor. Toplam: 139 test yeşil.
 
+## Faz 16-B — İŞ 3: DPA metrik grafikleri etkileşimli
+
+**Sürükleyerek aralık seçme + yakınlaştırma.** Yeni
+`components/useChartRangeSelection.tsx` hook'u Recharts grafiklerine
+mouse-down/move/up ile aralık seçimi kazandırıyor: sürükleme sırasında
+seçilen bölge `ReferenceArea` ile gölgeleniyor, bırakıldığında aralık
+kesinleşiyor. Sürükleme değil de tek tıklama yapılırsa (başlangıç ==
+bitiş) eski "o anı seç" davranışı korunuyor — grafik–sorgu
+ilişkilendirmesi (Faz 15 İŞ 8) bu davranışa dayanıyordu.
+
+Metrikler sekmesindeki 9 grafiğin hepsi aynı `chartData`'yı paylaştığı
+için seçim hepsinde birden geçerli: bir grafikte 14:10–14:25 arası
+seçildiğinde bağlantılar, cache hit, I/O, tuple, checkpoint — hepsi aynı
+pencereye yakınlaştırılıyor. Üstte "Seçili aralık: … · N örnek" çubuğu ve
+"Yakınlaştırmayı sıfırla" butonu çıkıyor.
+
+**Zaman aralığı seçici genişletildi.** Hazır 1 saat / 6 saat / 24 saat /
+7 gün butonlarının yanına **Özel** eklendi: başlangıç/bitiş
+`datetime-local` girdileriyle kesin bir pencere seçiliyor. Backend
+tarafında `GET /api/metrics/{id}` artık `start`/`end` (ISO-8601)
+parametrelerini kabul ediyor; verilmezse eski `hours` davranışı aynen
+korunuyor. Özel aralık aktifken 15 saniyelik otomatik yenileme
+metrikleri değiştirmiyor (sabit bir pencereye bakılıyor).
+
+**Etiket belirsizliği düzeltildi.** Grafik X ekseni kategorik ve etiket
+`HH:MM` idi — 7 günlük aralıkta "14:29" yedi kez tekrar ediyor ve iki
+farklı an aynı noktaya düşüyordu. 24 saatten uzun pencerelerde etiket
+artık `DD.MM HH:MM`.
+
+**Aralık seçimi sorgu listesini gerçekten filtreliyor.** "Sorgu yükü
+zaman çizelgesi" grafiğinde de sürükleyerek aralık seçilebiliyor; altta
+listelenen sorgular artık tek bir zaman noktası yerine seçilen aralığın
+TAMAMINDAN toplanıyor. Aynı queryid aralıkta birden çok noktada
+görünüyorsa: `total_time_ms`/`calls` kümülatif sayaç olduğu için en
+yüksek değer alınıyor, `calls_delta` toplanıyor, ortalama süre aralık
+ortalaması olarak hesaplanıyor. Başlık da buna göre değişiyor
+("14:10 – 14:25 aralığında öne çıkan sorgular").
+
+**Testler:** `tests/test_metrics_custom_range.py` (3 test) — özel aralık
+sadece penceredeki örnekleri döndürüyor, `hours` davranışı bozulmamış,
+`start` tek başına açık uçlu çalışıyor. Toplam: 142 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -840,6 +840,41 @@ td code,
   margin-left: 0.6rem;
 }
 
+/* Faz 16-B İŞ 3: grafik aralık seçimi / yakınlaştırma çubuğu ve özel aralık formu. */
+.zoom-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 8px;
+  padding: 0.5rem 0.8rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.zoom-bar strong {
+  color: var(--text);
+}
+
+.custom-range-bar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+
+.custom-range-bar label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);
