@@ -39,6 +39,7 @@ async def test_collect_instance_opens_only_one_connection_for_postgresql():
             "SHOW max_connections": "100",
             "pg_database_size": 0,
             "pg_wal_lsn_diff": None,
+            "age(datfrozenxid)": 1_000_000,
             "FROM pg_stat_bgwriter": {
                 "checkpoints_timed": 0, "checkpoints_req": 0, "checkpoint_write_time": 0,
                 "checkpoint_sync_time": 0, "buffers_checkpoint": 0, "buffers_clean": 0,

@@ -30,6 +30,7 @@ import {
   Instance,
   InstanceSummary,
   MetricSample,
+  PredictionReadiness,
   PrerequisiteReport,
   Prediction,
   QueryDiagnosticsReport,
@@ -42,6 +43,7 @@ import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
+import PredictionReadinessPanel from "../components/PredictionReadinessPanel";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
 import QueryDiagnosticsPanel from "../components/QueryDiagnosticsPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
@@ -123,6 +125,7 @@ export default function InstanceDetailPage() {
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [events, setEvents] = useState<AlertEvent[]>([]);
   const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [predictionReadiness, setPredictionReadiness] = useState<PredictionReadiness[]>([]);
   const [tuning, setTuning] = useState<TuningReport | null>(null);
   const [activity, setActivity] = useState<ActivitySnapshot | null>(null);
   const [activityError, setActivityError] = useState<string | null>(null);
@@ -379,6 +382,11 @@ export default function InstanceDetailPage() {
     loadDiagnostics(diagnosticsTopN);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instanceId, tab, diagnosticsTopN]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "predictions") return;
+    api.getPredictionReadiness(instanceId).then(setPredictionReadiness).catch(() => undefined);
+  }, [instanceId, tab]);
 
   useEffect(() => {
     if (!instanceId || tab !== "cluster") return;
@@ -1383,32 +1391,43 @@ export default function InstanceDetailPage() {
       )}
 
       {tab === "predictions" && (
-        <div className="card">
-          <h3 className="chart-title">Tahminler</h3>
-          {predictions.length === 0 ? (
-            <div className="empty">Açık tahmin yok</div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr><th>Metrik</th><th>Güncel</th><th>Tahmin</th><th>Eşik</th><th>Ciddiyet</th><th>Mesaj</th></tr>
-                </thead>
-                <tbody>
-                  {predictions.map((p) => (
-                    <tr key={p.id}>
-                      <td>{p.metric_key}</td>
-                      <td>{p.current_value.toFixed(2)}</td>
-                      <td>{p.predicted_value.toFixed(2)}</td>
-                      <td>{p.threshold.toFixed(2)}</td>
-                      <td><span className={`status ${p.severity}`}>{p.severity}</span></td>
-                      <td>{p.message}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        <>
+          <PredictionReadinessPanel items={predictionReadiness} />
+          <div className="card">
+            <h3 className="chart-title">Tahminler</h3>
+            {predictions.length === 0 ? (
+              <div className="empty">Açık tahmin yok</div>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Metrik</th><th>Güncel</th><th>Tahmin (%90 aralık)</th><th>Eşik</th><th>Ciddiyet</th><th>Mesaj</th></tr>
+                  </thead>
+                  <tbody>
+                    {predictions.map((p) => (
+                      <tr key={p.id}>
+                        <td>{p.metric_key}</td>
+                        <td>{p.current_value.toFixed(2)}</td>
+                        <td>
+                          {p.predicted_value.toFixed(2)}
+                          {p.lower_bound !== null && p.upper_bound !== null && (
+                            <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                              [{p.lower_bound.toFixed(2)} – {p.upper_bound.toFixed(2)}]
+                              {p.seasonality && p.seasonality !== "none" && ` · ${p.seasonality} mevsimsellik`}
+                            </div>
+                          )}
+                        </td>
+                        <td>{p.threshold.toFixed(2)}</td>
+                        <td><span className={`status ${p.severity}`}>{p.severity}</span></td>
+                        <td>{p.message}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </>
       )}
     </>
   );

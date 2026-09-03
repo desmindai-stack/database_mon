@@ -1,8 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -331,5 +332,56 @@ class PredictionInsight(Base):
     recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
     action: Mapped[str | None] = mapped_column(String(255), nullable=True)
     acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # %90 tahmin aralığı + kullanılan mevsimsellik modeli (Faz 16 İŞ 6) — regresyonun kalıntı
+    # varyansından türetilen gerçek bir istatistiksel aralık, göstermelik bir sayı değil.
+    lower_bound: Mapped[float | None] = mapped_column(Float, nullable=True)
+    upper_bound: Mapped[float | None] = mapped_column(Float, nullable=True)
+    seasonality: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="predictions")
+
+
+class MetricRollupDaily(Base):
+    """Faz 16 İŞ 6: günlük özet — ham `MetricSample` satırları 1 aylık saklama süresinden sonra
+    silinir (services/retention.py), ama uzun vadeli tahminler (disk dolma tarihi, wraparound)
+    haftalar/aylar süren bir trend ister. Bu tablo her instance/metrik/gün için TEK bir satır
+    tutar ve retention temizliğinden MUAFTIR (ham örneklerden çok daha küçük hacimli — bkz.
+    SORULAR.md)."""
+
+    __tablename__ = "metric_rollup_daily"
+    __table_args__ = (UniqueConstraint("instance_id", "metric_key", "day", name="uq_metric_rollup_instance_key_day"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    avg_value: Mapped[float] = mapped_column(Float, nullable=False)
+    min_value: Mapped[float] = mapped_column(Float, nullable=False)
+    max_value: Mapped[float] = mapped_column(Float, nullable=False)
+    last_value: Mapped[float] = mapped_column(Float, nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SchemaObjectDailySample(Base):
+    """Faz 16 İŞ 6: tablo/index boyutunun günlük anlık görüntüsü — `collect_schema_health()`'in
+    (zaten var olan, on-demand kullanılan) tek bir katalog taramasından günde bir kez türetilir.
+    "Tablo büyüme hızı" ve "index şişmesi" tahminleri bu tabloya dayanır."""
+
+    __tablename__ = "schema_object_daily_samples"
+    __table_args__ = (
+        UniqueConstraint(
+            "instance_id", "object_kind", "schema_name", "object_name", "day",
+            name="uq_schema_object_daily",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    object_kind: Mapped[str] = mapped_column(String(16), nullable=False)  # "table" | "index"
+    schema_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    object_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    size_bytes: Mapped[float] = mapped_column(Float, nullable=False)
+    extra: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -73,6 +73,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 17 | `20260831090000_wizard_model_fields.sql` | database_groups.listener_port, servers.ip_address |
 | 18 | `20260901090000_users_table.sql` | **YENİ** — users tablosu (kimlik doğrulama) |
 | 19 | `20260901100000_prediction_insight_recommendation.sql` | **YENİ** — prediction_insights.recommendation, .action |
+| 20 | `20260903090000_prediction_forecasting.sql` | **YENİ** — prediction_insights.lower_bound/.upper_bound/.seasonality, metric_rollup_daily ve schema_object_daily_samples tabloları |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun

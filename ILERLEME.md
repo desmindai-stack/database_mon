@@ -2021,6 +2021,94 @@ doğru `link_hint`'i ürettiğini kanıtlayan assertion'lar eklendi;
 kendi `link_hint`'i varsa grup varsayılanının onu EZMEDİĞİNİ kanıtlıyor.
 Toplam 101 test yeşil.
 
+## Faz 16 — İŞ 6: Tahmin (predictions) için veri gereksinimleri
+
+**Yeni tahmin motoru `services/forecasting.py`:** Sadece Python stdlib
+(`statistics`, `math`) — makine öğrenmesi kütüphanesi veya LLM
+KULLANILMADI:
+- `linear_regression_with_ci` — en küçük kareler doğrusal regresyonu +
+  kalıntı (residual) varyansından türetilen klasik bir %90 tahmin
+  aralığı formülü (istatistik ders kitabı formülü, uydurma bir sayı
+  değil).
+- `deseasonalize`/`forecast_with_seasonality` — additive mevsimsel
+  ayrıştırma: "haftaiçi/haftasonu" (günlük rollup'lara uygulanıyor) veya
+  "saat bazlı" (ham örneklere uygulanıyor) — en az 8 nokta VE en az 2
+  farklı mevsim bucket'ı yoksa mevsimsellik uygulanmıyor (yetersiz
+  veriyle "mevsimsel desen" uydurulmuyor, düz regresyona düşüyor).
+- `PREDICTION_REQUIREMENTS`/`check_sufficiency` — 5 tahmin türünün her
+  biri için minimum gün/örnek sayısı + "kaç gün daha gerekli" hesabı.
+
+**Yeni günlük rollup — `services/rollup.py` + `MetricRollupDaily`/
+`SchemaObjectDailySample` tabloları:** Saklama süresi 1 ay olduğundan
+(retention.py ham `MetricSample` satırlarını siler) uzun vadeli
+tahminler için DÜNÜN verisi her gün (scheduler'a yeni `daily_rollup_tick`,
+retention ile aynı `days=1` cadence) tek satıra özetleniyor:
+`database_size_bytes`/`active_connections`/`connection_utilization_pct`/
+`transaction_id_age` metrikleri (avg/min/max/last/sample_count) VE
+(sadece PostgreSQL) günde bir kez `collect_table_sizes`/
+`collect_schema_health` ile tablo/index boyutlarının anlık görüntüsü.
+**Bu rollup'lar retention temizliğinden MUAF** — ham örneklerden çok
+daha küçük hacimli, aylar/yıllar boyunca birikmesi sorun değil (bkz.
+SORULAR.md).
+
+**Yeni metrik: `transaction_id_age`** — PostgreSQL collector'a tek bir
+ucuz katalog sorgusu eklendi (`age(datfrozenxid)`), her 15s'lik toplama
+döngüsünde. Wraparound riski tahmininin temeli.
+
+**Yeni collector metodu: `collect_table_sizes`** — `collect_schema_health`'in
+`bloated_tables`'ından KASITLI olarak ayrı: o liste sadece ZATEN bloat
+eşiğini geçmiş tabloları içeriyor, sağlıklı ama hızlı büyüyen bir tabloyu
+kaçırırdı. Bu yeni metod TÜM tabloları boyuta göre sıralıyor.
+
+**5 tahmin türü** (`services/prediction.py`), hepsi
+`check_sufficiency` ile yetersiz veride SESSİZCE HİÇBİR ŞEY ÜRETMİYOR
+(uydurma yok):
+1. **Disk/veritabanı boyutu dolma tarihi** — günlük rollup, haftaiçi/
+   haftasonu mevsimselliği, ≥7 gün gerektiriyor. Artık ham örneklerin
+   son birkaç saatine değil, günlük trende dayanıyor (önceki halinden
+   daha sağlam).
+2. **Bağlantı sayısı trendi** — ham örnekler + saat-bazlı mevsimsellik,
+   ≥12 saat (mevcut kısa-vadeli eşik-ihlali tahmininin YERİNE geçmedi,
+   onu güven aralığı + mevsimsellikle güçlendirdi).
+3. **Tablo büyüme hızı** — `SchemaObjectDailySample` (object_kind=table),
+   en hızlı büyüyen ilk 5 tablo, ≥7 gün.
+4. **Transaction ID wraparound riski** — günlük rollup, PostgreSQL'in
+   kendi sabit eşiği `autovacuum_freeze_max_age` (200M) baz alınıyor.
+   VACUUM FREEZE'den kaynaklı ani bir düşüş (yaşın yarıya inmesi)
+   tespit edilirse trend "henüz yeniden kurulmadı" sayılıp tahmin
+   ATLANIYOR — reset sonrası eski trendle uydurma yapılmıyor.
+5. **Index şişmesi** — `SchemaObjectDailySample` (object_kind=index),
+   sadece KULLANILMAYAN indexler (dbace'de genel index bloat tahmini
+   için "tüm indexlerin boyutu" toplayan bir sorgu yok — bkz. SORULAR.md
+   kapsam kararı), en hızlı büyüyen ilk 5, ≥7 gün.
+
+**Yeni uç: `GET /api/instances/{id}/prediction-readiness`** — 5 türün
+(PostgreSQL değilse sadece disk + bağlantı) hepsi için `{kaç gün/örnek
+gerekli, şu an ne kadar var, hazır mı, kaç gün kaldı}` — tahmin
+üretilmiş olsun olmasın HER ZAMAN dönüyor, "neden tahmin yok" sorusu
+asla cevapsız kalmıyor.
+
+**Güven aralığı:** `PredictionInsight`'a `lower_bound`/`upper_bound`/
+`seasonality` kolonları eklendi — her tahmin artık %90 tahmin aralığıyla
+birlikte geliyor. Instance detay sayfasının Tahminler sekmesinde yeni
+`PredictionReadinessPanel` (veri yeterliliği listesi) + tablo artık
+aralığı ve mevsimsellik türünü gösteriyor; global Tahminler sayfasına da
+aynı aralık bilgisi eklendi.
+
+**Test:** Yeni `tests/test_forecasting.py` (7 test — regresyon doğruluğu,
+CI genişlemesi, mevsimsellik tespiti/reddi, yeterlilik hesabı),
+`tests/test_rollup.py` (2 test — özetleme + idempotency),
+`tests/test_prediction_capacity.py` (8 test — wraparound/tablo/index
+tahminleri + reset tespiti + readiness endpoint). `test_prediction.py`
+rollup-tabanlı yeni mimariye güncellendi (+1 yeni "yetersiz veri" testi).
+Toplam 119 test yeşil.
+
+**Yeni Supabase migration:** `20260903090000_prediction_forecasting.sql`
+— DEPLOY.md'nin migration tablosuna 20. sıra olarak eklendi (bu oturumun
+kendi DEPLOY.md denetiminden çıkarılan derse sadık kalınarak: yeni
+kolon/tablo eklenen HER değişiklik için migration dosyası + DEPLOY.md
+güncellemesi birlikte yapıldı).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

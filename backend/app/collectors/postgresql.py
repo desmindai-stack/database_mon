@@ -137,6 +137,15 @@ class PostgreSQLCollector(BaseCollector):
 
             db_size = await conn.fetchval("SELECT pg_database_size(current_database())")
 
+            # Transaction ID wraparound risk (Faz 16 İŞ 6 tahmini) — age(datfrozenxid) sadece
+            # bir integer karşılaştırma, in-memory katalog satırı okuma; autovacuum bunu
+            # düzenli olarak geri kazanmazsa PostgreSQL'in sabit sınırlarına
+            # (autovacuum_freeze_max_age varsayılan 200M, 2^31'e yakın "wraparound" acil durumu)
+            # yaklaşır.
+            txid_age = await conn.fetchval(
+                "SELECT age(datfrozenxid) FROM pg_database WHERE datname = current_database()"
+            )
+
             replication_lag = await conn.fetchrow(
                 """
                 SELECT COALESCE(
@@ -182,6 +191,7 @@ class PostgreSQLCollector(BaseCollector):
                 "cache_hit_ratio": round(cache_hit_ratio, 2),
                 "replication_lag_bytes": float(replication_lag["lag_bytes"]) if replication_lag else None,
                 "database_size_bytes": float(db_size or 0),
+                "transaction_id_age": int(txid_age or 0),
                 "deadlocks": int(db_stats["deadlocks"] or 0),
                 "temp_bytes": float(db_stats["temp_bytes"] or 0),
                 "temp_files": int(db_stats["temp_files"] or 0),
@@ -564,6 +574,28 @@ class PostgreSQLCollector(BaseCollector):
                 "blocking": blocking,
                 "totals": totals,
             }
+        finally:
+            await conn.close()
+
+    async def collect_table_sizes(self, limit: int = 20) -> list[dict[str, Any]]:
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT n.nspname AS schema_name, c.relname AS table_name,
+                       pg_table_size(c.oid)::bigint AS table_bytes
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+                ORDER BY pg_table_size(c.oid) DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+            return [
+                {"schema_name": r["schema_name"], "table_name": r["table_name"], "table_bytes": int(r["table_bytes"] or 0)}
+                for r in rows
+            ]
         finally:
             await conn.close()
 

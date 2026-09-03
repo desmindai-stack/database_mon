@@ -182,6 +182,9 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "servers", "ip_address", "ip_address VARCHAR(64)")
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "recommendation", "recommendation TEXT")
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "action", "action VARCHAR(255)")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "lower_bound", "lower_bound FLOAT")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "upper_bound", "upper_bound FLOAT")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "seasonality", "seasonality VARCHAR(16)")
 
 
 async def init_db() -> None:

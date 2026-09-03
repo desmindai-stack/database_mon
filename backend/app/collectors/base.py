@@ -147,6 +147,13 @@ class BaseCollector(ABC):
             },
         }
 
+    async def collect_table_sizes(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Top-N tables by size, regardless of bloat status — used for the daily table-growth
+        rollup (Faz 16 İŞ 6). Deliberately separate from collect_schema_health's bloated_tables,
+        which only lists tables that already qualify as bloated (would silently miss a healthy
+        but fast-growing table)."""
+        return []
+
     async def collect_schema_health(self, limit: int = 50) -> dict[str, Any]:
         """Unused indexes + vacuum/bloat signals."""
         return {

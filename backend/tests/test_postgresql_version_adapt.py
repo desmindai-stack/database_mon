@@ -41,6 +41,7 @@ def _base_responses(version_num: int, version_txt: str) -> dict:
         "SHOW max_connections": "100",
         "pg_database_size": 123_456,
         "pg_wal_lsn_diff": None,
+        "age(datfrozenxid)": 1_000_000,
     }
 
 

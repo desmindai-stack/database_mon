@@ -67,6 +67,15 @@ CANONICAL_METRICS: tuple[MetricDefinition, ...] = (
         frozenset({DatabaseEngine.POSTGRESQL, DatabaseEngine.SQLSERVER, DatabaseEngine.MONGODB}),
     ),
     MetricDefinition(
+        "transaction_id_age",
+        "Transaction ID age",
+        "count",
+        "reliability",
+        frozenset({DatabaseEngine.POSTGRESQL}),
+        "age(datfrozenxid) — autovacuum_freeze_max_age'e (varsayılan 200M) ne kadar yakın; "
+        "sürekli artması wraparound riskine işaret eder.",
+    ),
+    MetricDefinition(
         "deadlocks",
         "Deadlocks",
         "count",

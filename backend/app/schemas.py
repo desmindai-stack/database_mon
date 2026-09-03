@@ -622,8 +622,23 @@ class PredictionOut(BaseModel):
     recommendation: str | None = None
     action: str | None = None
     acknowledged_at: datetime | None
+    lower_bound: float | None = None
+    upper_bound: float | None = None
+    seasonality: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class PredictionReadinessOut(BaseModel):
+    kind: str
+    label: str
+    have_days: float
+    need_days: float
+    have_samples: int
+    need_samples: int
+    ready: bool
+    days_remaining: float
+    note: str = ""
 
 
 class InstanceSummary(BaseModel):

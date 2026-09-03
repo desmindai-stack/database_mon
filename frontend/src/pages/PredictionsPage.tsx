@@ -61,6 +61,9 @@ export default function PredictionsPage() {
                     {p.current_value.toFixed(1)} → {p.predicted_value.toFixed(1)}
                     <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
                       eşik: {p.threshold} · güven: {(p.confidence * 100).toFixed(0)}%
+                      {p.lower_bound !== null && p.upper_bound !== null && (
+                        <> · %90 aralık: [{p.lower_bound.toFixed(1)} – {p.upper_bound.toFixed(1)}]</>
+                      )}
                     </div>
                   </td>
                   <td><span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>{p.severity}</span></td>

@@ -22,6 +22,7 @@ from app.schemas import (
     MetricDefinitionOut,
     MetricSampleOut,
     PerformanceInsightOut,
+    PredictionReadinessOut,
     PrerequisiteCheckOut,
     PrerequisiteReportOut,
     SchemaHealthOut,
@@ -32,6 +33,7 @@ from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
 from app.services.performance_insights import analyze_metrics
+from app.services.prediction import compute_prediction_readiness
 from app.services.prerequisites import run_prerequisite_checks
 
 router = APIRouter(prefix="/instances", tags=["instances"])
@@ -340,6 +342,18 @@ async def get_instance_prerequisites(instance_id: int, db: AsyncSession = Depend
         ok_count=ok_count,
         issue_count=len(checks) - ok_count,
     )
+
+
+@router.get("/{instance_id}/prediction-readiness", response_model=list[PredictionReadinessOut])
+async def get_prediction_readiness(instance_id: int, db: AsyncSession = Depends(get_db)) -> list[PredictionReadinessOut]:
+    """Faz 16 İŞ 6: her tahmin türü için "kaç gün/örnek gerekli, şu an ne kadar var" —
+    tahminin kendisi olmasa bile bu her zaman döner, böylece UI "neden tahmin yok" sorusunu
+    her zaman cevaplayabilir."""
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+    results = await compute_prediction_readiness(db, instance_id, instance.engine)
+    return [PredictionReadinessOut(**vars(r)) for r in results]
 
 
 @router.get("/{instance_id}/insights", response_model=TuningReportOut)

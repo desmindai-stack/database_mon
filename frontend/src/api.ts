@@ -402,6 +402,21 @@ export interface Prediction {
   recommendation: string | null;
   action: string | null;
   acknowledged_at: string | null;
+  lower_bound: number | null;
+  upper_bound: number | null;
+  seasonality: string | null;
+}
+
+export interface PredictionReadiness {
+  kind: string;
+  label: string;
+  have_days: number;
+  need_days: number;
+  have_samples: number;
+  need_samples: number;
+  ready: boolean;
+  days_remaining: number;
+  note: string;
 }
 
 export interface HealthResponse {
@@ -977,6 +992,7 @@ export const api = {
     request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
   getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
+  getPredictionReadiness: (id: number) => request<PredictionReadiness[]>(`/api/instances/${id}/prediction-readiness`),
   getQueryHistory: (id: number, hours = 24, limit = 10) =>
     request<QueryHistoryList>(`/api/queries/${id}/history?hours=${hours}&limit=${limit}`),
   getQueryHistoryDetail: (id: number, queryid: string, hours = 24) =>

@@ -3,6 +3,46 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 16 — İŞ 6: Index şişmesi tahmini sadece KULLANILMAYAN indexler için
+
+dbace'de "tüm indexlerin boyutunu her gün topla" diyen bir sorgu yok —
+var olan `collect_schema_health()` sadece `idx_scan = 0` (hiç
+kullanılmamış) indexleri listeliyor (`unused_indexes`), çünkü bu liste
+zaten "silinebilir" kararına yardımcı olmak için var. Genel bir "index
+bloat" tahmini (kullanılan AMA şişmiş bir index) için TÜM indexlerin
+boyutunu her gün toplayan ayrı bir katalog sorgusu ve muhtemelen
+PostgreSQL'in bilinen zor `pg_stats`-tabanlı bloat tahmini formülü
+gerekirdi — bu, bu görevin kapsamını kendi başına bir alt-göreve
+büyütürdü. Bunun yerine dürüst bir daraltma yaptım: "index şişmesi"
+tahmini şu an sadece BÜYÜYEN VE kullanılmayan indexleri kapsıyor —
+bunlar zaten en açık "aksiyon alınmalı" adayları (büyüyor + hiç
+kullanılmıyor = çifte israf), ama gerçek/genel index bloat tahmini
+DEĞİL. Bunu hem koddaki yorumda hem burada açıkça belirttim.
+
+## Faz 16 — İŞ 6: Rollup/tahmin tabloları retention'dan muaf — ama PredictionInsight hâlâ 30 günde siliniyor
+
+`MetricRollupDaily`/`SchemaObjectDailySample` bilinçli olarak
+`services/retention.py`'nin sildiği tablolar listesine EKLENMEDİ — asıl
+amaçları 1 aylık ham veri saklama sınırının ÖTESİNDE yaşamak (görev
+metninin kendi isteği: "daha uzun tahmin isteniyorsa günlük özet
+tablosu tut"). Küçük hacimleri (instance × metrik/nesne başına günde
+tek satır) bunu güvenli kılıyor.
+
+Ancak fark ettiğim bir gerilim: `PredictionInsight` satırları HÂLÂ
+`created_at` bazlı 30 günlük retention'a tabi (bu ÖNCEDEN de böyleydi,
+bu turda değiştirmedim). Wraparound/tablo-büyümesi gibi haftalar süren
+bir riski anlatan, henüz onaylanmamış (acknowledged_at IS NULL) bir
+tahmin de 30 gün sonra sessizce silinir — bir sonraki toplama
+döngüsünde yeniden hesaplanıp taze bir satır olarak geri gelir (kendi
+kendini onaran davranış, veri kaybı değil) ama kullanıcı "bunu daha önce
+görmüştüm" bağlamını kaybedebilir. Bu, İŞ 6'nın kapsamı dışında,
+retention politikasının GENEL bir tasarım kararı (tüm PredictionInsight
+türlerini etkiler, sadece yeni uzun-vadeli olanları değil) — burada
+düzeltmedim, ama fark edilsin diye not ediyorum: retention.py'nin
+`PredictionInsight`'ı `acknowledged_at IS NOT NULL` satırlarla
+sınırlaması (sadece çözülmüş/onaylanmış olanları süpürmesi) ayrı bir
+küçük iyileştirme olarak değerlendirilebilir.
+
 ## Faz 16 — İŞ 5: Kapsam — tüm frontend'in baştan sona akış denetimi değil, en yüksek etkili noktalar
 
 "Akış ve kullanılabilirlik" görevi teorik olarak sınırsız genişleyebilir
