@@ -5,8 +5,12 @@ import {
   Application,
   Customer,
   DatabaseGroup,
+  DecisionScope,
   ExecutiveReport,
   ExportSection,
+  FINDING_STATUS_LABELS,
+  FindingStatus,
+  FindingStatusUpdate,
   HealthReport,
   HealthReportSummary,
   Instance,
@@ -69,6 +73,15 @@ export default function ReportsPage() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Ek İŞ A: durum filtresi — varsayılan olarak yalnızca "açık". Diğerleri katlanmış
+  // bölümlerde duruyor ve kaç tanesinin gizlendiği görünür kalıyor.
+  const [statusFilter, setStatusFilter] = useState<Set<FindingStatus>>(new Set(["open"]));
+  const [showDecided, setShowDecided] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState<FindingStatus>("deferred");
+  const [bulkNote, setBulkNote] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // Kapsam seçicileri için katalog — kapsam ağacı (müşteri → uygulama → grup → instance).
   useEffect(() => {
@@ -213,16 +226,78 @@ export default function ReportsPage() {
     }
   };
 
-  const onAcknowledge = async (finding: ReportFinding, note: string, days: number | null) => {
-    await api.acknowledgeFinding({
-      fingerprint: finding.fingerprint,
-      scope_type: scopeType,
-      scope_id: scopeId,
-      expires_in_days: days,
-      note: note || null,
-    });
+  const applyStatus = async (update: FindingStatusUpdate) => {
+    await api.setFindingStatus([update]);
     if (selectedId) setReport(await api.getReport(selectedId));
     await loadHistory();
+  };
+
+  /** Bulgunun bağlı olduğu birimler — durum kararının kapsam seçenekleri. */
+  const scopeTargetsFor = (finding: ReportFinding): { scope: DecisionScope; id: number | null; label: string }[] => {
+    const targets: { scope: DecisionScope; id: number | null; label: string }[] = [];
+    const instance =
+      finding.related_object_type === "instance"
+        ? instances.find((i) => i.id === finding.related_object_id)
+        : undefined;
+    if (instance) {
+      targets.push({ scope: "instance", id: instance.id, label: instance.name });
+      const group = groups.find((g) => g.id === instance.group_id);
+      if (group) {
+        targets.push({ scope: "group", id: group.id, label: group.name });
+        const application = applications.find((a) => a.id === group.application_id);
+        if (application) {
+          targets.push({ scope: "application", id: application.id, label: application.name });
+          const customer = customers.find((c) => c.id === application.customer_id);
+          if (customer) targets.push({ scope: "customer", id: customer.id, label: customer.name });
+        }
+      }
+    } else if (finding.related_object_type === "group" && finding.related_object_id) {
+      const group = groups.find((g) => g.id === finding.related_object_id);
+      targets.push({ scope: "group", id: finding.related_object_id, label: group?.name ?? "" });
+    }
+    targets.push({ scope: "global", id: null, label: "" });
+    return targets;
+  };
+
+  const toggleSelect = (fingerprint: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(fingerprint)) next.delete(fingerprint);
+      else next.add(fingerprint);
+      return next;
+    });
+
+  const applyBulk = async () => {
+    if (!report || selected.size === 0 || !bulkNote.trim()) return;
+    setBulkBusy(true);
+    setError(null);
+    try {
+      const updates: FindingStatusUpdate[] = report.findings
+        .filter((f) => selected.has(f.fingerprint))
+        .map((f) => {
+          const targets = scopeTargetsFor(f);
+          const narrowest = targets[0];
+          return {
+            fingerprint: f.fingerprint,
+            finding_type: f.finding_type,
+            status: bulkStatus,
+            // Toplu işlemde de varsayılan en dar kapsam — geniş kapsamlı bir karar tek tek
+            // ve bilinçli verilmeli.
+            scope_type: narrowest.scope,
+            scope_id: narrowest.id,
+            note: bulkNote.trim(),
+          };
+        });
+      await api.setFindingStatus(updates);
+      setSelected(new Set());
+      setBulkNote("");
+      if (selectedId) setReport(await api.getReport(selectedId));
+      await loadHistory();
+    } catch (e) {
+      setError(String((e as Error).message));
+    } finally {
+      setBulkBusy(false);
+    }
   };
 
   const scopeOptions = useMemo(() => {
@@ -235,15 +310,33 @@ export default function ReportsPage() {
 
   const sectionOrder = report?.sections?.order || [];
   const sectionItems = report?.sections?.items || {};
+  /** Ek İŞ A: ana bölümlerde yalnızca filtreye uyan bulgular. Varsayılan filtre "açık";
+   *  karar verilmiş olanlar gizlenir ama SAYISI görünür kalır — tamamen kaybolmazlar. */
+  const visibleFindings = useMemo(
+    () => (report?.findings || []).filter((f) => statusFilter.has(f.status) && f.change_state !== "resolved"),
+    [report, statusFilter],
+  );
+  const decidedFindings = useMemo(
+    () =>
+      (report?.findings || []).filter(
+        (f) => !statusFilter.has(f.status) && f.status !== "open" && f.change_state !== "resolved",
+      ),
+    [report, statusFilter],
+  );
+  const resolvedFindings = useMemo(
+    () => (report?.findings || []).filter((f) => f.change_state === "resolved"),
+    [report],
+  );
+
   const findingsBySection = useMemo(() => {
     const map = new Map<string, ReportFinding[]>();
-    for (const finding of report?.findings || []) {
+    for (const finding of visibleFindings) {
       const list = map.get(finding.section) || [];
       list.push(finding);
       map.set(finding.section, list);
     }
     return map;
-  }, [report]);
+  }, [visibleFindings]);
 
   return (
     <>
@@ -446,6 +539,103 @@ export default function ReportsPage() {
                 </div>
               </div>
 
+              {/* Ek İŞ A: durum filtresi + toplu işlem + gizlenen bulgu sayısı. */}
+              <div className="card status-toolbar">
+                <div className="severity-filter">
+                  <span>Durum:</span>
+                  {(Object.keys(FINDING_STATUS_LABELS) as FindingStatus[])
+                    .filter((key) => key !== "resolved")
+                    .map((key) => (
+                      <label key={key} className={`severity-chip${statusFilter.has(key) ? " active" : ""}`}>
+                        <input
+                          type="checkbox"
+                          checked={statusFilter.has(key)}
+                          onChange={() =>
+                            setStatusFilter((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(key)) next.delete(key);
+                              else next.add(key);
+                              return next;
+                            })
+                          }
+                        />
+                        {FINDING_STATUS_LABELS[key]}
+                      </label>
+                    ))}
+                </div>
+                {decidedFindings.length > 0 && (
+                  <button className="btn btn-xs" onClick={() => setShowDecided((v) => !v)}>
+                    {decidedFindings.length} bulgu gizlendi — {showDecided ? "gizle" : "göster"}
+                  </button>
+                )}
+              </div>
+
+              {showDecided && decidedFindings.length > 0 && (
+                <div className="card">
+                  <h3 className="chart-title">Gizlenen bulgular ({decidedFindings.length})</h3>
+                  <p className="muted-note">
+                    Durum filtresine uymadıkları için ana bölümlerde gösterilmiyorlar. Kararlarıyla
+                    birlikte burada duruyorlar.
+                  </p>
+                  {decidedFindings.map((finding) => (
+                    <ReportFindingCard
+                      key={finding.id}
+                      finding={finding}
+                      canWrite={canWrite}
+                      scopeTargets={scopeTargetsFor(finding)}
+                      onApplyStatus={applyStatus}
+                      selected={selected.has(finding.fingerprint)}
+                      onToggleSelect={toggleSelect}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {canWrite && selected.size > 0 && (
+                <div className="card bulk-bar">
+                  <strong>{selected.size} bulgu seçildi</strong>
+                  <label>
+                    Durum
+                    <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value as FindingStatus)}>
+                      {(Object.keys(FINDING_STATUS_LABELS) as FindingStatus[]).map((key) => (
+                        <option key={key} value={key}>
+                          {FINDING_STATUS_LABELS[key]}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ flex: 1, minWidth: 220 }}>
+                    Not <span className="required-mark">*</span>
+                    <input
+                      value={bulkNote}
+                      onChange={(e) => setBulkNote(e.target.value)}
+                      placeholder="Bu kararı neden verdiniz?"
+                    />
+                  </label>
+                  <button className="btn btn-primary btn-xs" disabled={bulkBusy || !bulkNote.trim()} onClick={applyBulk}>
+                    {bulkBusy ? "Uygulanıyor…" : "Uygula"}
+                  </button>
+                  <button className="btn btn-xs" onClick={() => setSelected(new Set())}>
+                    Seçimi temizle
+                  </button>
+                  <p className="muted-note" style={{ width: "100%", margin: 0 }}>
+                    Toplu işlemde karar en dar kapsama (bulgunun kendi instance'ına) uygulanır;
+                    daha geniş kapsam tek tek ve bilinçli seçilmeli.
+                  </p>
+                </div>
+              )}
+
+              {resolvedFindings.length > 0 && (
+                <div className="card">
+                  <h3 className="chart-title">Bu dönemde düzelenler ({resolvedFindings.length})</h3>
+                  <ul className="resolved-list">
+                    {resolvedFindings.map((finding) => (
+                      <li key={finding.id}>{finding.title}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {compareReport && (
                 <div className="card">
                   <h3 className="chart-title">Karşılaştırma</h3>
@@ -506,7 +696,10 @@ export default function ReportsPage() {
                         key={finding.id}
                         finding={finding}
                         canWrite={canWrite}
-                        onAcknowledge={onAcknowledge}
+                        scopeTargets={scopeTargetsFor(finding)}
+                        onApplyStatus={applyStatus}
+                        selected={selected.has(finding.fingerprint)}
+                        onToggleSelect={toggleSelect}
                       />
                     ))}
                   </div>

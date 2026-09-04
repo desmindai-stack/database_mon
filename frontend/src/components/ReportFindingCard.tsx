@@ -1,7 +1,15 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import type { ReportFinding } from "../api";
+import {
+  api,
+  DecisionScope,
+  FINDING_STATUS_LABELS,
+  FindingStatusHistoryEntry,
+  FindingStatusUpdate,
+  ReportFinding,
+} from "../api";
 import CopyableAction from "./CopyableAction";
+import FindingStatusControl from "./FindingStatusControl";
 
 const SEVERITY_TR: Record<string, string> = {
   critical: "Kritik",
@@ -54,39 +62,67 @@ function evidenceLine(evidence: Record<string, unknown>): string {
 type Props = {
   finding: ReportFinding;
   canWrite: boolean;
-  onAcknowledge: (finding: ReportFinding, note: string, days: number | null) => Promise<void>;
+  scopeTargets: { scope: DecisionScope; id: number | null; label: string }[];
+  onApplyStatus: (update: FindingStatusUpdate) => Promise<void>;
+  selected: boolean;
+  onToggleSelect: (fingerprint: string) => void;
 };
 
-export default function ReportFindingCard({ finding, canWrite, onAcknowledge }: Props) {
+export default function ReportFindingCard({
+  finding,
+  canWrite,
+  scopeTargets,
+  onApplyStatus,
+  selected,
+  onToggleSelect,
+}: Props) {
   const [open, setOpen] = useState(false);
-  const [ackOpen, setAckOpen] = useState(false);
-  const [note, setNote] = useState("");
-  const [days, setDays] = useState<string>("30");
-  const [busy, setBusy] = useState(false);
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [history, setHistory] = useState<FindingStatusHistoryEntry[] | null>(null);
 
   const link = deepLink(finding);
   const evidence = evidenceLine(finding.evidence || {});
+  const isOpenStatus = finding.status === "open";
 
-  const submitAck = async () => {
-    setBusy(true);
+  const loadHistory = async () => {
+    if (history) {
+      setHistory(null);
+      return;
+    }
     try {
-      await onAcknowledge(finding, note, days === "" ? null : Number(days));
-      setAckOpen(false);
-      setNote("");
-    } finally {
-      setBusy(false);
+      setHistory(await api.getFindingHistory(finding.fingerprint));
+    } catch {
+      setHistory([]);
     }
   };
 
   return (
-    <div className={`finding-card ${finding.severity}${finding.acknowledged ? " acknowledged" : ""}`}>
+    <div
+      className={`finding-card ${finding.severity}${isOpenStatus ? "" : " decided"}${
+        finding.verification_failed ? " verification-failed" : ""
+      }`}
+    >
       <div className="finding-head">
+        {canWrite && (
+          <input
+            type="checkbox"
+            className="finding-select"
+            checked={selected}
+            onChange={() => onToggleSelect(finding.fingerprint)}
+            title="Toplu işlem için seç"
+          />
+        )}
         <button type="button" className="problem-card-toggle" onClick={() => setOpen((v) => !v)}>
           <span className="problem-card-chevron">{open ? "▾" : "▸"}</span>
           <span className={`insight-severity ${finding.severity}`}>{SEVERITY_TR[finding.severity]}</span>
           <span className="finding-title">{finding.title}</span>
         </button>
         <div className="finding-tags">
+          {/* Yanlış kapatma işareti — en görünür etiket olmalı. */}
+          {finding.verification_failed && <span className="tag verification-tag">Çözüm doğrulanamadı</span>}
+          {!isOpenStatus && (
+            <span className={`tag status-${finding.status}`}>{FINDING_STATUS_LABELS[finding.status]}</span>
+          )}
           {finding.change_state !== "new" && (
             <span className={`tag change-${finding.change_state}`}>{CHANGE_TR[finding.change_state]}</span>
           )}
@@ -94,9 +130,17 @@ export default function ReportFindingCard({ finding, canWrite, onAcknowledge }: 
           {finding.open_since_days > 0 && finding.change_state !== "resolved" && (
             <span className="tag">{finding.open_since_days} gündür açık</span>
           )}
-          {finding.acknowledged && <span className="tag acknowledged-tag">Bilinen konu</span>}
         </div>
       </div>
+
+      {!isOpenStatus && finding.decision_note && (
+        <p className="finding-decision-note">
+          {FINDING_STATUS_LABELS[finding.status]}: {finding.decision_note}
+          {finding.decision_reference && ` · ${finding.decision_reference}`}
+          {finding.decision_until &&
+            ` · ${new Date(finding.decision_until).toLocaleDateString("tr-TR")} tarihinde geri açılır`}
+        </p>
+      )}
 
       {open && (
         <div className="finding-body">
@@ -123,46 +167,43 @@ export default function ReportFindingCard({ finding, canWrite, onAcknowledge }: 
                 İlgili sayfaya git →
               </Link>
             )}
-            {canWrite && !finding.acknowledged && finding.change_state !== "resolved" && (
-              <button className="btn btn-xs" onClick={() => setAckOpen((v) => !v)}>
-                Kabul et
+            {canWrite && finding.change_state !== "resolved" && (
+              <button className="btn btn-xs" onClick={() => setStatusOpen((v) => !v)}>
+                Durum değiştir
               </button>
             )}
+            <button className="btn btn-xs" onClick={loadHistory}>
+              {history ? "Geçmişi gizle" : "Durum geçmişi"}
+            </button>
           </div>
 
-          {ackOpen && (
-            <div className="ack-form">
-              <label>
-                Not
-                <input
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  placeholder="Neden biliniyor / ne zaman ele alınacak?"
-                />
-              </label>
-              <label>
-                Süre (gün)
-                <input
-                  type="number"
-                  min={1}
-                  max={365}
-                  value={days}
-                  onChange={(e) => setDays(e.target.value)}
-                  placeholder="Boş = süresiz"
-                />
-              </label>
-              <div className="form-actions">
-                <button className="btn btn-primary btn-xs" disabled={busy} onClick={submitAck}>
-                  {busy ? "Kaydediliyor…" : "Kabul et"}
-                </button>
-                <button className="btn btn-xs" onClick={() => setAckOpen(false)}>
-                  Vazgeç
-                </button>
-              </div>
-              <p className="muted-note">
-                Kabul edilen bulgu rapordan silinmez; "Bilinen konular" bölümüne düşer ve kritik
-                sayısını şişirmez. Süre dolunca tekrar öne çıkar.
-              </p>
+          {statusOpen && (
+            <FindingStatusControl
+              finding={finding}
+              scopeTargets={scopeTargets}
+              onApply={onApplyStatus}
+              onClose={() => setStatusOpen(false)}
+            />
+          )}
+
+          {history && (
+            <div className="status-history">
+              {history.length === 0 ? (
+                <p className="muted-note">Bu bulgu için henüz durum değişikliği yok.</p>
+              ) : (
+                <ul>
+                  {history.map((entry) => (
+                    <li key={entry.id}>
+                      <strong>
+                        {entry.from_status ? `${FINDING_STATUS_LABELS[entry.from_status as never] ?? entry.from_status} → ` : ""}
+                        {FINDING_STATUS_LABELS[entry.to_status as never] ?? entry.to_status}
+                      </strong>{" "}
+                      · {entry.changed_by} · {new Date(entry.changed_at).toLocaleString("tr-TR")}
+                      {entry.note && <div className="muted-note">{entry.note}</div>}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
         </div>

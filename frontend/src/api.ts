@@ -334,6 +334,55 @@ export interface InstanceDependencies {
 
 export type ReportScopeType = "global" | "customer" | "application" | "group" | "instance";
 
+export type FindingStatus =
+  | "open"
+  | "ignored"
+  | "deferred"
+  | "risk_accepted"
+  | "planned"
+  | "resolved_pending_verification"
+  | "resolved";
+
+/** Kararın uygulanacağı genişlik. Varsayılan en dar (instance) — bir sunucuda verilen
+ *  "yoksay" kararının sessizce tüm filoyu susturması raporun amacına aykırı olurdu. */
+export type DecisionScope = "instance" | "group" | "application" | "customer" | "global";
+
+export const FINDING_STATUS_LABELS: Record<FindingStatus, string> = {
+  open: "Açık",
+  ignored: "Yoksayıldı",
+  deferred: "Ertelendi",
+  risk_accepted: "Risk kabul",
+  planned: "Planlandı",
+  resolved_pending_verification: "Çözüldü (doğrulanacak)",
+  resolved: "Çözüldü",
+};
+
+export interface FindingStatusHistoryEntry {
+  id: number;
+  fingerprint: string;
+  finding_type: string | null;
+  scope_type: string;
+  scope_id: number | null;
+  from_status: string | null;
+  to_status: string;
+  note: string | null;
+  reference: string | null;
+  expires_at: string | null;
+  changed_by: string;
+  changed_at: string;
+}
+
+export interface FindingStatusUpdate {
+  fingerprint: string;
+  finding_type: string;
+  status: FindingStatus;
+  scope_type?: DecisionScope;
+  scope_id?: number | null;
+  note: string;
+  until?: string | null;
+  reference?: string | null;
+}
+
 export interface ReportFinding {
   id: number;
   section: string;
@@ -350,6 +399,13 @@ export interface ReportFinding {
   open_since_days: number;
   change_state: "new" | "ongoing" | "regressed" | "resolved";
   acknowledged: boolean;
+  finding_type: string;
+  status: FindingStatus;
+  /** "Çözüldü" denmişti ama bulgu hâlâ tespit ediliyor — yanlış kapatma işareti. */
+  verification_failed: boolean;
+  decision_note: string | null;
+  decision_reference: string | null;
+  decision_until: string | null;
 }
 
 export interface HealthReportSummary {
@@ -399,6 +455,8 @@ export interface ExecutiveReport {
   trend: Record<string, any>;
   work_done: Record<string, any>;
   recommendations: Record<string, any>[];
+  /** "Planlandı" / "risk kabul" konuları; yoksayılanlar bu listeye hiç girmez. */
+  decisions: Record<string, any>[];
 }
 
 export interface FindingAcknowledgement {
@@ -1260,6 +1318,14 @@ export const api = {
   getReportSchedule: () => request<HealthReportSchedule>("/api/reports/schedule"),
   updateReportSchedule: (body: { hour?: number; enabled?: boolean; scope_mode?: string }) =>
     request<HealthReportSchedule>("/api/reports/schedule", { method: "PUT", body: JSON.stringify(body) }),
+  /** Tekil ve toplu durum değişikliği aynı uçtan (Ek İŞ A). */
+  setFindingStatus: (findings: FindingStatusUpdate[]) =>
+    request<unknown[]>("/api/reports/findings/status", {
+      method: "POST",
+      body: JSON.stringify({ findings }),
+    }),
+  getFindingHistory: (fingerprint: string) =>
+    request<FindingStatusHistoryEntry[]>(`/api/reports/findings/${encodeURIComponent(fingerprint)}/history`),
   getAcknowledgements: () => request<FindingAcknowledgement[]>("/api/reports/acknowledgements"),
   acknowledgeFinding: (body: {
     fingerprint: string;

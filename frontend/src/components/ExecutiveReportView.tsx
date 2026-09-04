@@ -148,6 +148,32 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
         )}
       </div>
 
+      {/* Ek İŞ A: planlanan çalışmalar ve bilinçli kabul edilen riskler. Yoksayılanlar
+          buraya HİÇ girmez — o, ekibin kendi iç gürültü yönetimi kararı. */}
+      <div className="card">
+        <h3 className="chart-title">Planlanan çalışmalar ve kabul edilen riskler</h3>
+        {(data.decisions || []).length === 0 ? (
+          <p className="muted-note">Bu dönemde planlanmış çalışma ya da kabul edilmiş risk yok.</p>
+        ) : (
+          <div className="risk-list">
+            {data.decisions.map((item: any, i: number) => (
+              <div key={i} className={`risk-item ${item.kind === "planned" ? "info" : "warning"}`}>
+                <div className="risk-head">
+                  <span className={`insight-severity ${item.kind === "planned" ? "info" : "warning"}`}>
+                    {item.label}
+                  </span>
+                  <strong>{item.area}</strong>
+                  <span className="muted-note">{item.application}</span>
+                  {item.reference && <span className="tag">{item.reference}</span>}
+                </div>
+                <p>{item.statement}</p>
+                <p className="muted-note">{item.business_impact}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="card">
         <h3 className="chart-title">Önceki döneme göre</h3>
         {!trend.available ? (

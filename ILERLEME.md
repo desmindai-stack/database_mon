@@ -3025,6 +3025,58 @@ bir saniye-hassasiyeti hatası yakaladı: durum geçmişi sorgusu yalnızca
 sıralanıyordu (`_previous_report`'takiyle aynı düzeltme uygulandı).
 Toplam: 303 test yeşil.
 
+## Faz 17 — Ek İŞ A (arayüz): Durum seçici, toplu işlem ve filtre
+
+**Bulgu kartında durum seçici.** Ayrı bir sayfaya gitmeye gerek yok:
+"Durum değiştir" tek tıkla açılan bir panel getiriyor — durum, kapsam,
+not ve duruma göre tarih/referans alanları. Yeni
+`components/FindingStatusControl.tsx`.
+
+- Tarih alanı yalnızca "ertelendi" ve "yoksayıldı" için görünüyor;
+  referans alanı yalnızca "planlandı" için. Backend de o durumlarda
+  saklamıyor — arayüzün anlamsız alan göstermesi kullanıcıyı yanıltırdı.
+- Not zorunlu: boşken "Uygula" butonu kapalı. Sunucu da reddediyor ama
+  kullanıcıyı hata mesajıyla karşılaştırmak yerine engelliyoruz.
+- Kapsam seçenekleri bulgunun gerçek zincirinden üretiliyor: bu instance
+  → grubu → uygulaması → müşterisi → bu bulgu tipi (tüm sistem).
+  Varsayılan en dar olan. Daha geniş bir kapsam seçildiğinde kartın
+  altında "bu karar seçtiğiniz kapsamdaki TÜM aynı tip bulgulara
+  uygulanır" uyarısı çıkıyor.
+- "Ertelendi" ve "çözüldü_doğrulanacak" seçildiğinde ne olacağı panelde
+  yazıyor (tarih gelince açılır / doğrulanamazsa açılır).
+
+**Durum geçmişi.** Her kartta "Durum geçmişi" butonu: kim, ne zaman,
+hangi durumdan hangisine, hangi notla. Otomatik geçişler "sistem" olarak
+görünüyor.
+
+**Toplu işlem.** Kartların yanındaki onay kutularıyla birden çok bulgu
+seçilip tek seferde aynı duruma alınabiliyor. Seçim yapıldığında alt
+çubuk beliriyor (durum + not + uygula). Toplu işlemde karar bilinçli
+olarak **en dar kapsama** uygulanıyor; daha geniş kapsam tek tek ve
+bilinçli seçilmeli — bu da çubukta yazılı.
+
+**Durum filtresi.** Varsayılan olarak yalnızca **"açık"** bulgular ana
+bölümlerde. Filtre çipleriyle diğer durumlar da açılabiliyor. Filtre
+dışında kalan bulgular kaybolmuyor: üstte **"N bulgu gizlendi — göster"**
+butonu duruyor ve açıldığında hepsi kararlarıyla birlikte listeleniyor.
+
+**Yanlış kapatma görünürlüğü.** `verification_failed` işaretli bulgu
+kırmızı kenarlı ve en görünür etiketle ("Çözüm doğrulanamadı") çıkıyor.
+
+**Karar özeti kartta.** Açık olmayan bir bulgunun altında tek satırlık
+özet: durum, not, referans ve varsa "şu tarihte geri açılır".
+
+**Düzelenler bölümü.** Bu dönemde kapanan bulgular ayrı bir kartta
+listeleniyor.
+
+**Yönetici görünümü.** Yeni "Planlanan çalışmalar ve kabul edilen
+riskler" bölümü; her madde iş etkisi ve (varsa) referansla. Yoksayılanlar
+bu görünümde hiç yok.
+
+Yetki davranışı değişmedi: viewer raporu görüntüleyip dışa aktarabiliyor,
+durum değiştiremiyor (onay kutuları ve butonlar görünmüyor; backend de
+403 döndürüyor).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
