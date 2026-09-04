@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import SessionLocal
+from app.services.advice import Advice, advice_to_dict, simple_advice, unavailable
 from app.services.finding_status import (
     COUNTED_STATUSES,
     STATUS_OPEN,
@@ -84,6 +85,10 @@ class FindingDraft:
     related_object_id: int | None = None
     # Ortam etiketi (prod/preprod/test) — öncelik sıralamasında kullanılır.
     environment: str = "prod"
+    # Faz 17 Ek İŞ B: standart öneri yapısı. Bölüm doldurmazsa motor `recommendation` ve
+    # `commands` alanlarından asgari bir yapı üretir — böylece arayüz her bulguda AYNI
+    # şekli görür, bölümlerin hepsini aynı anda güncellemek gerekmez.
+    advice: "Advice | None" = None
 
 
 @dataclass
@@ -319,6 +324,27 @@ NO_RECOMMENDATION_EXPLANATION = (
 )
 
 
+def _advice_from_legacy_fields(draft: FindingDraft) -> Advice:
+    """Bölüm yapılandırılmış öneri vermediyse mevcut alanlardan standart yapıyı kurar.
+
+    Faz 17 Ek İŞ B'nin şekli her yerde aynı olsun diye: bölümler kademeli olarak zengin
+    öneriye geçebilir, arayüz bu arada iki farklı şekille uğraşmaz.
+    """
+    recommendation = (draft.recommendation or "").strip()
+    if recommendation == NO_RECOMMENDATION_EXPLANATION:
+        return unavailable(recommendation, title="Otomatik öneri üretilemedi")
+    if not recommendation and not draft.commands:
+        return unavailable(
+            "Bu bulgu bilgi amaçlı; ayrı bir aksiyon gerektirmiyor.",
+            title="Aksiyon gerekmiyor",
+        )
+    return simple_advice(
+        title=recommendation or draft.title,
+        why=draft.detail,
+        commands=list(draft.commands or []),
+    )
+
+
 def _validated_drafts(results: list[SectionResult]) -> list[FindingDraft]:
     """Kalite kurallarını (Faz 17 İŞ 6) rapor kaydedilmeden ÖNCE uygular.
 
@@ -340,6 +366,8 @@ def _validated_drafts(results: list[SectionResult]) -> list[FindingDraft]:
                     draft.title,
                 )
                 draft.recommendation = NO_RECOMMENDATION_EXPLANATION
+            if draft.advice is None:
+                draft.advice = _advice_from_legacy_fields(draft)
             drafts.append(draft)
     return drafts
 
@@ -456,6 +484,7 @@ async def generate_report(
                     finding_type=finding_type,
                     status=effective.status,
                     verification_failed=effective.verification_failed,
+                    advice=advice_to_dict(draft.advice),
                     decision_note=payload["note"],
                     decision_reference=payload["reference"],
                     decision_until=payload["until"],

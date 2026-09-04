@@ -479,6 +479,10 @@ class ReportFinding(Base):
     decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     decision_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
     decision_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Faz 17 Ek İŞ B: standart öneri yapısı (başlık/neden/adımlar/komutlar/dikkat/doğrulama).
+    # `recommendation` + `commands` alanları geriye dönük uyumluluk için duruyor; bu alan
+    # onların yapılandırılmış hali ve arayüzde gösterilen asıl kaynak.
+    advice: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Etki × aciliyet sıralaması için hesaplanan puan (Faz 17 İŞ 6) — büyük olan üstte.
     priority: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     # Bu fingerprint kaç gündür kesintisiz açık (önceki raporlardan devralınır).

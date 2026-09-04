@@ -3077,6 +3077,68 @@ Yetki davranışı değişmedi: viewer raporu görüntüleyip dışa aktarabiliy
 durum değiştiremiyor (onay kutuları ve butonlar görünmüyor; backend de
 403 döndürüyor).
 
+## Faz 17 — Ek İŞ B: Öneri ve çözüm adımları standardı
+
+dbace'te öneriler dört ayrı yerde üretiliyordu ve her biri kendi
+şeklindeydi: rapor bulguları düz metin + komut listesi, dashboard kartları
+başlık + adımlar + tek komut, DPA index önerisi gerekçe + DDL, tahminler
+adım adım playbook. Aynı ürünün dört farklı "öneri" kavramı olması hem
+kullanıcı için kafa karıştırıcıydı hem de her yerde ayrı ayrı eksik
+kalıyordu — kiminde doğrulama sorgusu vardı kiminde yoktu.
+
+**Tek yapı: `services/advice.py`.**
+
+    Öneri: <kısa eylem>       → title (durum tespiti değil EYLEM)
+    Neden                     → why (iş etkisi dahil, "yapılmazsa ne olur")
+    Adımlar (numaralı)        → steps[].action
+      └ komut                 → steps[].command (tam, çalıştırılabilir, kopyalanabilir)
+    Dikkat                    → cautions[] (kilitleme, süre, bakım penceresi)
+    Tahmini süre / Geri alma  → estimated_duration, rollback
+    Doğrulama                 → verification ("düzeldi mi" sorgusu)
+
+Öneri üretilemiyorsa `unavailable_reason` doldurulup yapı yine dönüyor —
+boş bırakmak yerine NEDEN üretilemediği yazılıyor.
+
+**Dört üretici de aynı yapıya bağlandı:**
+
+- **Rapor bulguları** — `FindingDraft.advice` eklendi ve
+  `ReportFinding.advice` (JSON) olarak saklanıyor (Supabase migration
+  `20260906100000_finding_advice.sql`, DEPLOY.md 26). Bölüm yapılandırılmış
+  öneri vermediyse motor mevcut `recommendation` + `commands`
+  alanlarından asgari yapıyı kuruyor — böylece bölümler kademeli olarak
+  zenginleşebiliyor, arayüz bu arada iki farklı şekille uğraşmıyor.
+  Erişilebilirlik, bağlantı doluluğu ve cache hit bulguları tam
+  (neden/adım/komut/dikkat/süre/geri alma/doğrulama) önerilerle yazıldı.
+- **Dashboard** — dört öneri üreticisinin (bağlanamayan düğüm, parametre
+  denetimi, ön koşullar, performans içgörüleri) hepsi `advice` alanı
+  taşıyor.
+- **DPA index önerisi** — `CREATE INDEX CONCURRENTLY` (kilitsiz) adımı,
+  önce "aynı index zaten var mı" kontrolü, sonra `ANALYZE`; dikkat
+  notlarında işlem bloğunda çalışmaması, yarıda kalırsa INVALID index
+  bırakması ve disk gereksinimi; geri alma `DROP INDEX CONCURRENTLY`;
+  doğrulama olarak EXPLAIN + `idx_scan` sorgusu.
+- **Tahminler** — mevcut playbook sunum anında standart yapıya
+  çevriliyor (veritabanına ikinci kopya yazılmıyor; iki kopya zamanla
+  ayrışırdı). Her tahmin türü için ayrı doğrulama sorgusu var (disk
+  boyutu, XID yaşı, bağlantı sayısı, tablo/index boyutu).
+
+**Arayüz: tek bileşen.** Yeni `components/AdviceCard.tsx` dört yerde de
+kullanılıyor. Başlık "Öneri: …" ön ekiyle, neden altında, adımlar
+numaralı ve her adımın komutu kendi kopyalanabilir kutusunda, dikkat
+notları ayrı blokta (tahmini süre ve geri alma dahil), doğrulama sorgusu
+"uyguladıktan sonra çalıştırın" başlığıyla en altta. Öneri
+üretilememişse kart nedeni gösteriyor, boş kutu değil.
+
+Eski alanlar (`recommendation`, `commands`, `steps`, `action`, `playbook`)
+API'de duruyor ve arayüz `advice` yoksa onlara düşüyor — bu değişiklikten
+önce üretilmiş rapor ve snapshot kayıtları bozulmadan görüntüleniyor.
+
+**Testler:** `tests/test_advice_standard.py` (15 test). Testler tek tek
+üreticileri değil hepsinin uyduğu ORTAK sözleşmeyi kontrol ediyor
+(`assert_valid_advice`): başlık boş olamaz, ya adım/neden ya da
+üretilememe gerekçesi bulunmalı, adımlar eylemsiz veya boş komutlu
+olamaz. Toplam: 318 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

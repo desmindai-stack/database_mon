@@ -79,6 +79,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 23 | `20260905090000_health_reports.sql` | **YENİ** — health_reports, report_findings, finding_acknowledgements tabloları (Sağlık Raporu) |
 | 24 | `20260905100000_daily_state_snapshots.sql` | **YENİ** — daily_state_snapshots (günlük parametre/ön koşul fotoğrafı) |
 | 25 | `20260906090000_finding_status_machine.sql` | **YENİ** — bulgu durum makinesi: finding_acknowledgements/report_findings yeni kolonlar + finding_status_history tablosu |
+| 26 | `20260906100000_finding_advice.sql` | **YENİ** — report_findings.advice (standart öneri yapısı) |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun

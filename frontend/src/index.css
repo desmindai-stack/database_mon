@@ -1238,6 +1238,87 @@ td code,
   font-size: 0.84rem;
 }
 
+/* ---- Faz 17 Ek İŞ B: standart öneri kartı (rapor / dashboard / DPA / tahminler) ---- */
+.advice-card {
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  background: rgba(59, 130, 246, 0.06);
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+  margin: 0.5rem 0;
+}
+
+.advice-card.unavailable {
+  border-color: var(--border);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.advice-title {
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.advice-why {
+  margin: 0.25rem 0 0.4rem;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.advice-toggle {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.8rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.advice-body { margin-top: 0.5rem; }
+
+.advice-steps {
+  margin: 0 0 0.7rem;
+  padding-left: 1.3rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.advice-step-action {
+  display: block;
+  color: var(--text);
+  font-size: 0.83rem;
+  margin-bottom: 0.25rem;
+}
+
+.advice-cautions,
+.advice-verification {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.advice-cautions h5,
+.advice-verification h5 {
+  margin: 0 0 0.3rem;
+  font-size: 0.78rem;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.advice-cautions ul {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.advice-cautions strong { color: var(--text); }
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);

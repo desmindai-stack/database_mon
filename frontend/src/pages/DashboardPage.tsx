@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  Advice,
   api,
   AppConfig,
   DashboardSummary,
@@ -10,6 +11,7 @@ import {
   HealthResponse,
 } from "../api";
 import { useAuth } from "../auth";
+import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
 
@@ -34,6 +36,8 @@ interface ProblemCard {
   checkedAt: string | null;
   steps: string[];
   action: string | null;
+  /** Faz 17 Ek İŞ B: standart öneri yapısı; steps/action geriye dönük uyumluluk için. */
+  advice: Advice | null;
 }
 
 // Merges top_issues (a concrete problem, may carry the group's best-matching recommendation)
@@ -61,6 +65,7 @@ function buildProblemCards(summary: DashboardSummary): ProblemCard[] {
       recTitle: rec?.title ?? null,
       steps: rec?.steps ?? [],
       action: rec?.action ?? null,
+      advice: rec?.advice ?? null,
     });
   });
 
@@ -82,6 +87,7 @@ function buildProblemCards(summary: DashboardSummary): ProblemCard[] {
       checkedAt: rec.checked_at,
       steps: rec.steps,
       action: rec.action,
+      advice: rec.advice ?? null,
     });
   });
 
@@ -373,15 +379,23 @@ export default function DashboardPage() {
                       </div>
                       {isOpen && hasBody && (
                         <div className="problem-card-body">
-                          {card.recTitle && <RecommendationHeader title={card.recTitle} />}
-                          {card.steps.length > 0 && (
-                            <ol>
-                              {card.steps.map((step, i) => (
-                                <li key={i}>{step}</li>
-                              ))}
-                            </ol>
+                          {/* Faz 17 Ek İŞ B: rapor/DPA/tahminlerle aynı öneri bileşeni. Eski
+                              alanlar yalnızca advice yoksa (eski snapshot) devreye girer. */}
+                          {card.advice ? (
+                            <AdviceCard advice={card.advice} />
+                          ) : (
+                            <>
+                              {card.recTitle && <RecommendationHeader title={card.recTitle} />}
+                              {card.steps.length > 0 && (
+                                <ol>
+                                  {card.steps.map((step, i) => (
+                                    <li key={i}>{step}</li>
+                                  ))}
+                                </ol>
+                              )}
+                              {card.action && <CopyableAction command={card.action} />}
+                            </>
                           )}
-                          {card.action && <CopyableAction command={card.action} />}
                         </div>
                       )}
                     </div>

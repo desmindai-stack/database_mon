@@ -43,6 +43,7 @@ import {
 } from "../api";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
+import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
 import PredictionPlaybook from "../components/PredictionPlaybook";
@@ -1450,9 +1451,17 @@ export default function InstanceDetailPage() {
                                               {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
                                             </span>
                                           </div>
-                                          <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
-                                          <p className="recommendation-reason">{a.reason}</p>
-                                          <CopyableAction command={a.index_ddl} />
+                                          {/* Faz 17 Ek İŞ B: rapor/dashboard ile aynı öneri yapısı —
+                                              neden, adımlar, dikkat notları ve doğrulama sorgusu. */}
+                                          {a.advice ? (
+                                            <AdviceCard advice={a.advice} defaultOpen={false} />
+                                          ) : (
+                                            <>
+                                              <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
+                                              <p className="recommendation-reason">{a.reason}</p>
+                                              <CopyableAction command={a.index_ddl} />
+                                            </>
+                                          )}
                                           {a.before_cost !== null && a.after_cost !== null && (
                                             <div className="advice-costs">
                                               <span>Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}</span>

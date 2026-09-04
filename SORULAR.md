@@ -3,6 +3,48 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — Ek İŞ B: Eski öneri alanları kaldırılmadı
+
+`recommendation`, `commands`, `steps`, `action` ve `playbook` alanları
+API'de duruyor; yeni `advice` yapısı onların yanına eklendi. Temiz olan,
+eskilerini silmekti — ama bu, bu değişiklikten ÖNCE üretilmiş rapor ve
+dashboard snapshot kayıtlarının önerisiz görünmesi demekti (o kayıtlarda
+`advice` NULL). Rapor geçmişi bir arşiv; geçmişe dönük bir görüntüyü
+bozmamak, şema temizliğinden önce geliyor. Arayüz `advice` varsa onu,
+yoksa eski alanları kullanıyor.
+
+## Faz 17 — Ek İŞ B: Bölüm önerileri kademeli zenginleştirildi
+
+12 rapor bölümünün hepsine elle tam öneri (neden + adımlar + dikkat +
+geri alma + doğrulama) yazmak yerine motora bir geri düşüş koydum: bölüm
+yapılandırılmış öneri vermezse `recommendation` + `commands`
+alanlarından asgari ama GEÇERLİ bir yapı üretiliyor. Böylece arayüz her
+bulguda aynı şekli görüyor ve bölümler zamanla tek tek zenginleşebiliyor.
+
+Bu işte üç bölüm tam öneriyle yazıldı (erişilebilirlik, bağlantı
+doluluğu, cache hit) — en sık görülen ve en somut aksiyonu olanlar.
+Diğerleri asgari yapıyla çalışıyor; eksiklik "öneri yok" olarak değil,
+"daha az ayrıntılı öneri" olarak görünüyor.
+
+## Faz 17 — Ek İŞ B: Tahmin önerisi sunum anında türetiliyor
+
+Tahminlerin `playbook` alanı zaten veritabanında saklı (Faz 16-B İŞ 7).
+`advice`'i ikinci bir kolon olarak yazmak yerine `PredictionOut` üzerinde
+bir Pydantic validator ile sunum anında türetiyorum. Sebep: aynı bilginin
+iki kopyası zamanla ayrışır — playbook metni güncellendiğinde eski
+kayıtların `advice`'i eski kalırdı. Rapor bulgularında ise tam tersini
+yaptım (`advice` saklanıyor), çünkü orada bulgu KENDİ anının fotoğrafı
+olmalı ve o günkü öneriyi taşımalı.
+
+## Faz 17 — Ek İŞ B: Index önerisinde CONCURRENTLY tercih edildi
+
+Index advisor'ın ürettiği ham DDL düz `CREATE INDEX`. Standart öneriye
+çevirirken `CONCURRENTLY` ekliyorum: üretim veritabanında tabloyu yazmaya
+kapatan bir komutu kopyala-yapıştır edilebilir biçimde sunmak
+sorumsuzluk olurdu. Karşılığında CONCURRENTLY'nin kendi riskleri var
+(işlem bloğunda çalışmaz, yarıda kalırsa INVALID index bırakır, iki kopya
+birden diskte durur) ve bunların üçü de "Dikkat" başlığında yazılı.
+
 ## Faz 17 — Ek İŞ A: Tablo adı korundu, model genişletildi
 
 `FindingAcknowledgement` artık "kabul" değil bir DURUM KARARI tutuyor;

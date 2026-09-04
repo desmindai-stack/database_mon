@@ -127,6 +127,7 @@ export interface IndexAdvice {
   before_cost: number | null;
   after_cost: number | null;
   existing_indexes: string[];
+  advice: Advice | null;
 }
 
 export interface NoAdviceReason {
@@ -334,6 +335,24 @@ export interface InstanceDependencies {
 
 export type ReportScopeType = "global" | "customer" | "application" | "group" | "instance";
 
+/** Faz 17 Ek İŞ B: standart öneri yapısı — rapor, dashboard, DPA ve tahminlerde AYNI şekil. */
+export interface AdviceStep {
+  action: string;
+  command: string | null;
+}
+
+export interface Advice {
+  title: string;
+  why: string;
+  steps: AdviceStep[];
+  cautions: string[];
+  estimated_duration: string | null;
+  rollback: string | null;
+  verification: string | null;
+  /** Öneri üretilemiyorsa nedeni — bu alan doluyken adımlar boştur. */
+  unavailable_reason: string | null;
+}
+
 export type FindingStatus =
   | "open"
   | "ignored"
@@ -406,6 +425,7 @@ export interface ReportFinding {
   decision_note: string | null;
   decision_reference: string | null;
   decision_until: string | null;
+  advice: Advice | null;
 }
 
 export interface HealthReportSummary {
@@ -615,6 +635,8 @@ export interface Prediction {
   seasonality: string | null;
   /** Adım adım çözüm planı; plan üretilmeyen tahmin türlerinde boş dizi. */
   playbook: PredictionStep[];
+  /** Playbook'un standart öneri yapısına çevrilmiş hali (Faz 17 Ek İŞ B). */
+  advice: Advice | null;
 }
 
 export interface PredictionReadiness {
@@ -1011,6 +1033,8 @@ export interface DashboardRecommendation {
   title: string | null;
   steps: string[];
   action: string | null;
+  /** Faz 17 Ek İŞ B: standart öneri yapısı; title/steps/action geriye dönük uyumluluk için. */
+  advice: Advice | null;
   customer: string;
   application: string;
   environment: string;

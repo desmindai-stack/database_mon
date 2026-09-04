@@ -24,6 +24,7 @@ from app.schemas import (
 from app.services import query_cache
 from app.services.credentials import decrypt_secret
 from app.services.explain_service import PostgreSQLExplainService
+from app.services.advice import Advice, AdviceStep, advice_to_dict
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
@@ -360,6 +361,66 @@ async def explain_query(
     return out
 
 
+def _index_advice(recommendation) -> dict:
+    """Index önerisini standart öneri yapısına çevirir (Faz 17 Ek İŞ B).
+
+    CREATE INDEX CONCURRENTLY bilinçli tercih: tabloyu yazmaya kapatmaz. Buna karşılık kendi
+    riskleri var (yarıda kalırsa INVALID index bırakır, iki kopya birden diskte durur) ve bu
+    riskler "Dikkat" başlığında yazılı — komutu uyarısız vermek sorumsuzluk olurdu.
+    """
+    target = f"{recommendation.schema_name}.{recommendation.table_name}"
+    columns = ", ".join(recommendation.columns)
+    concurrent_ddl = recommendation.index_ddl.replace("CREATE INDEX ", "CREATE INDEX CONCURRENTLY ", 1)
+    return advice_to_dict(
+        Advice(
+            title=f"{target} tablosuna ({columns}) index ekleyin",
+            why=(
+                f"{recommendation.reason} Index olmadan bu sorgu tabloyu baştan sona tarıyor; "
+                "veri büyüdükçe süre doğrusal olarak artar ve yoğun saatlerde uygulama yavaşlar."
+            ),
+            steps=[
+                AdviceStep(
+                    "Aynı kolonları kapsayan bir index zaten var mı, doğrulayın.",
+                    f"SELECT indexname, indexdef FROM pg_indexes\n"
+                    f"WHERE schemaname = '{recommendation.schema_name}' "
+                    f"AND tablename = '{recommendation.table_name}';",
+                ),
+                AdviceStep(
+                    "Index'i tabloyu kilitlemeden oluşturun.",
+                    concurrent_ddl,
+                ),
+                AdviceStep(
+                    "İstatistikleri tazeleyin ki planlayıcı yeni index'i hemen kullanabilsin.",
+                    f"ANALYZE {target};",
+                ),
+            ],
+            cautions=[
+                "CREATE INDEX CONCURRENTLY işlem bloğu içinde çalıştırılamaz ve normalinden uzun sürer.",
+                "Yarıda kalırsa geride INVALID bir index kalır; DROP INDEX ile temizlenmelidir.",
+                "İşlem sırasında index'in diskte yer kaplayacağını hesaba katın.",
+            ],
+            estimated_duration="Tablo boyutuna göre dakikalar; büyük tablolarda saatler sürebilir.",
+            rollback=f"DROP INDEX CONCURRENTLY IF EXISTS {recommendation.schema_name}.{_index_name(recommendation)};",
+            verification=(
+                f"EXPLAIN (ANALYZE, BUFFERS) <sorgunuz>;\n"
+                f"-- Planda Seq Scan yerine Index Scan görmelisiniz.\n"
+                f"SELECT idx_scan FROM pg_stat_user_indexes\n"
+                f"WHERE schemaname = '{recommendation.schema_name}' "
+                f"AND indexrelname = '{_index_name(recommendation)}';"
+            ),
+        )
+    )
+
+
+def _index_name(recommendation) -> str:
+    """CREATE INDEX ifadesinden index adını çıkarır (geri alma ve doğrulama komutları için)."""
+    parts = recommendation.index_ddl.split()
+    try:
+        return parts[parts.index("INDEX") + 1]
+    except (ValueError, IndexError):
+        return "<index_adi>"
+
+
 @router.post("/{instance_id}/advice", response_model=IndexAdviceReportOut)
 async def advise_indexes(
     instance_id: int,
@@ -403,6 +464,7 @@ async def advise_indexes(
                 before_cost=r.before_cost,
                 after_cost=r.after_cost,
                 existing_indexes=r.existing_indexes,
+                advice=_index_advice(r),
             )
             for r in recommendations
         ],

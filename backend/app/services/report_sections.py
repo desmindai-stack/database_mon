@@ -29,6 +29,7 @@ from app.models import (
     SlowQuerySample,
 )
 from app.services.collection import effective_collect_interval
+from app.services.advice import Advice, AdviceStep
 from app.services.finding_status import (
     STATUS_LABELS_TR,
     STATUS_OPEN,
@@ -296,6 +297,34 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
                     recommendation=(
                         "Kesinti saatlerinde sunucu/servis loglarına ve dbace worker loglarına bakın; "
                         "kesinti tekrarlıyorsa Cluster sekmesinden servis durumlarını doğrulayın."
+                    ),
+                    advice=Advice(
+                        title="Kesinti saatlerindeki kaydı inceleyip kaynağı belirleyin",
+                        why=(
+                            "Veri toplanamayan her dönem, o sürede veritabanının gerçekten erişilebilir olup "
+                            "olmadığını bilmediğimiz anlamına gelir; tekrarlıyorsa uygulama da aynı "
+                            "kesintileri yaşıyor olabilir."
+                        ),
+                        steps=[
+                            AdviceStep(
+                                f"Sunucuda PostgreSQL servisinin o saatlerdeki durumunu kontrol edin "
+                                f"(en uzun kesintinin başlangıcı: {worst['start'][11:16]}).",
+                                "systemctl status postgresql\n"
+                                "journalctl -u postgresql --since '1 day ago' | tail -100",
+                            ),
+                            AdviceStep(
+                                "dbace worker'ının aynı saatte çalışıp çalışmadığını doğrulayın — boşluk "
+                                "veritabanından değil izleme tarafından da kaynaklanabilir.",
+                            ),
+                            AdviceStep(
+                                "Kimlik bilgisi ya da ağ sorunu ihtimalini elemek için bağlantıyı test edin "
+                                "(Instances → Düzenle → Bağlantı testi).",
+                            ),
+                        ],
+                        cautions=["Bu bulgu tek başına veritabanının kapalı olduğunu kanıtlamaz."],
+                        verification=(
+                            "-- Bir sonraki rapor bu instance için kesinti göstermiyorsa sorun giderilmiştir."
+                        ),
                     ),
                     related_object_type="instance",
                     related_object_id=instance.id,
@@ -895,6 +924,49 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                     commands=[
                         "SELECT state, count(*) FROM pg_stat_activity GROUP BY state ORDER BY 2 DESC;",
                     ],
+                    advice=Advice(
+                        title="Bağlantı havuzunu devreye alın veya havuz boyutunu sınırlayın",
+                        why=(
+                            "Bağlantı doluluğu %100'e ulaştığında veritabanı yeni bağlantı kabul etmez ve "
+                            "uygulama hata vermeye başlar — bu, plansız bir kesinti demektir."
+                        ),
+                        steps=[
+                            AdviceStep(
+                                "Bağlantıların hangi durumda olduğunu görün: boşta bekleyenler mi, işlem "
+                                "içinde takılanlar mı?",
+                                "SELECT state, count(*) FROM pg_stat_activity GROUP BY state ORDER BY 2 DESC;",
+                            ),
+                            AdviceStep(
+                                "Bağlantıyı hangi uygulamanın tuttuğunu belirleyin.",
+                                "SELECT usename, application_name, client_addr, count(*)\n"
+                                "FROM pg_stat_activity GROUP BY 1, 2, 3 ORDER BY 4 DESC;",
+                            ),
+                            AdviceStep(
+                                "Uygulama tarafındaki havuz boyutunu sınırlayın ya da PgBouncer'ı transaction "
+                                "modunda devreye alın. max_connections'ı büyütmek sorunu bellek sorununa çevirir.",
+                            ),
+                            AdviceStep(
+                                "İşlem içinde takılı kalan oturumlar için zaman aşımı koyun.",
+                                "ALTER SYSTEM SET idle_in_transaction_session_timeout = '5min';\n"
+                                "SELECT pg_reload_conf();",
+                            ),
+                        ],
+                        cautions=[
+                            "max_connections değişikliği reload ile devreye GİRMEZ; PostgreSQL yeniden "
+                            "başlatılmalıdır (kesinti).",
+                            "Her bağlantı work_mem kadar bellek isteyebilir — artırmadan önce toplam belleği "
+                            "hesaplayın.",
+                        ],
+                        estimated_duration="Havuz ayarı: dakikalar. PgBouncer kurulumu: 1-2 saat.",
+                        rollback="idle_in_transaction_session_timeout = 0 ile zaman aşımı kaldırılabilir.",
+                        verification=(
+                            "SELECT (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS azami,\n"
+                            "       count(*) AS toplam,\n"
+                            "       round(100.0 * count(*) / (SELECT setting::int FROM pg_settings "
+                            "WHERE name = 'max_connections'), 1) AS doluluk_yuzde\n"
+                            "FROM pg_stat_activity;"
+                        ),
+                    ),
                     related_object_type="instance",
                     related_object_id=instance.id,
                     environment=_environment_of(instance),
@@ -923,6 +995,43 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                     recommendation=(
                         "Parametre denetiminde shared_buffers/effective_cache_size değerlerine bakın; "
                         "en pahalı sorguların index kullanıp kullanmadığını kontrol edin."
+                    ),
+                    advice=Advice(
+                        title="Bellek ayarlarını ve en çok disk okuyan sorguları gözden geçirin",
+                        why=(
+                            "Veri diskten okunduğunda sorgular bellekten okunduğuna göre kat kat yavaşlar; "
+                            "yoğun saatlerde uygulama yanıt süreleri belirgin şekilde uzar."
+                        ),
+                        steps=[
+                            AdviceStep(
+                                "Mevcut bellek ayarlarını görün.",
+                                "SELECT name, setting, unit FROM pg_settings\n"
+                                "WHERE name IN ('shared_buffers', 'effective_cache_size', 'work_mem');",
+                            ),
+                            AdviceStep(
+                                "En çok disk okuyan sorguları bulun — sorun ayar değil, eksik index olabilir.",
+                                "SELECT queryid, calls, shared_blks_read, shared_blks_hit,\n"
+                                "       round(100.0 * shared_blks_read / "
+                                "NULLIF(shared_blks_read + shared_blks_hit, 0), 1) AS disk_yuzde\n"
+                                "FROM pg_stat_statements\n"
+                                "ORDER BY shared_blks_read DESC LIMIT 10;",
+                            ),
+                            AdviceStep(
+                                "Gerekiyorsa shared_buffers'ı toplam belleğin ~%25'ine ayarlayın.",
+                                "ALTER SYSTEM SET shared_buffers = '4GB';\n"
+                                "-- Ardından PostgreSQL'i YENİDEN BAŞLATIN.",
+                            ),
+                        ],
+                        cautions=[
+                            "shared_buffers değişikliği yeniden başlatma gerektirir (kesinti).",
+                            "Çok büyük shared_buffers işletim sistemi önbelleğini küçültüp ters etki yapabilir.",
+                        ],
+                        estimated_duration="Ayar: dakikalar + yeniden başlatma penceresi.",
+                        rollback="ALTER SYSTEM RESET shared_buffers; ardından yeniden başlatma.",
+                        verification=(
+                            "SELECT round(100.0 * blks_hit / NULLIF(blks_hit + blks_read, 0), 2) AS cache_hit_yuzde\n"
+                            "FROM pg_stat_database WHERE datname = current_database();"
+                        ),
                     ),
                     related_object_type="instance",
                     related_object_id=instance.id,

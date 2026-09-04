@@ -663,6 +663,9 @@ class PredictionOut(BaseModel):
     lower_bound: float | None = None
     upper_bound: float | None = None
     seasonality: str | None = None
+    # Faz 17 Ek İŞ B: rapor/dashboard/DPA ile aynı öneri yapısı. `playbook` ham adım listesi
+    # olarak duruyor (geriye dönük uyumluluk); `advice` onun standart hali.
+    advice: AdviceOut | None = None
     # Adım adım çözüm planı — `recommendation` özetinin açılımı. Veritabanında NULL olabilir
     # (planı olmayan tahmin türleri ve bu alan eklenmeden önce kaydedilmiş satırlar), bu yüzden
     # None boş listeye çevriliyor — istemci her zaman bir dizi görüyor.
@@ -673,7 +676,74 @@ class PredictionOut(BaseModel):
     def _playbook_never_null(cls, v):
         return v or []
 
+    @model_validator(mode="after")
+    def _build_advice(self):
+        """Faz 17 Ek İŞ B: playbook'u standart öneri yapısına çevirir.
+
+        Dönüşüm sunum anında yapılıyor, veritabanına ikinci bir kopya yazılmıyor: playbook
+        zaten tahminle birlikte kaydedilmiş durumda ve iki kopya zamanla ayrışırdı.
+        """
+        if self.advice is not None:
+            return self
+        if not self.playbook:
+            self.advice = AdviceOut(
+                title=self.recommendation or "Aksiyon planı yok",
+                why=self.message,
+                unavailable_reason=(
+                    None
+                    if self.recommendation
+                    else "Bu tahmin türü için adım adım plan üretilmiyor; çözüm sunucuya ve iş yüküne "
+                    "özgü olduğundan genel bir komut listesi yanıltıcı olurdu."
+                ),
+            )
+            return self
+
+        verification = _PREDICTION_VERIFICATION.get(self.metric_key.split(":")[0])
+        self.advice = AdviceOut(
+            title=self.recommendation or "Kapasite riskini giderin",
+            why=self.message,
+            steps=[
+                AdviceStepOut(
+                    action=f"{step.title}: {step.detail}".strip(": ").strip(),
+                    command=step.command,
+                )
+                for step in self.playbook
+            ],
+            cautions=[
+                "Adımlardaki VACUUM FULL / REINDEX / max_connections değişikliği gibi komutlar "
+                "kilitleme ya da yeniden başlatma gerektirebilir; her adımın kendi açıklamasını okuyun."
+            ],
+            verification=verification,
+        )
+        return self
+
     model_config = {"from_attributes": True}
+
+
+# Tahmin türüne göre "düzeldi mi?" sorgusu — uygulandıktan sonra çalıştırılacak kontrol.
+_PREDICTION_VERIFICATION = {
+    "database_size_bytes": "SELECT pg_size_pretty(pg_database_size(current_database())) AS boyut;",
+    "transaction_id_age": (
+        "SELECT datname, age(datfrozenxid) AS yas FROM pg_database ORDER BY yas DESC;"
+    ),
+    "connection_utilization_pct": (
+        "SELECT count(*) AS toplam,\n"
+        "       (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS azami\n"
+        "FROM pg_stat_activity;"
+    ),
+    "active_connections": (
+        "SELECT count(*) AS toplam,\n"
+        "       (SELECT setting::int FROM pg_settings WHERE name = 'max_connections') AS azami\n"
+        "FROM pg_stat_activity;"
+    ),
+    "table_growth": (
+        "SELECT pg_size_pretty(pg_total_relation_size('<sema>.<tablo>')) AS toplam_boyut;"
+    ),
+    "index_bloat": (
+        "SELECT indexrelname, pg_size_pretty(pg_relation_size(indexrelid)) AS boyut, idx_scan\n"
+        "FROM pg_stat_user_indexes ORDER BY pg_relation_size(indexrelid) DESC LIMIT 10;"
+    ),
+}
 
 
 class PredictionReadinessOut(BaseModel):
@@ -740,6 +810,9 @@ class DashboardRecommendationOut(BaseModel):
     # Separate, single-line, copy-pasteable follow-up command — not every recommendation has
     # one (e.g. prose-only performance_insights findings), so this stays optional.
     action: str | None = None
+    # Faz 17 Ek İŞ B: standart öneri yapısı — rapor bulgularıyla AYNI şekil. `title`/`steps`/
+    # `action` alanları geriye dönük uyumluluk için duruyor; arayüz bu alanı tercih ediyor.
+    advice: AdviceOut | None = None
     customer: str = ""
     application: str = ""
     environment: str = ""
@@ -874,6 +947,8 @@ class IndexAdviceOut(BaseModel):
     before_cost: float | None
     after_cost: float | None
     existing_indexes: list[str]
+    # Faz 17 Ek İŞ B: rapor ve dashboard ile AYNI öneri yapısı — arayüzde tek bileşen.
+    advice: AdviceOut | None = None
 
 
 class NoAdviceReasonOut(BaseModel):
@@ -1261,6 +1336,27 @@ class AlwaysOnHealthOut(BaseModel):
 # --- Sağlık Raporu (Faz 17) ---
 
 
+class AdviceStepOut(BaseModel):
+    action: str
+    command: str | None = None
+
+
+class AdviceOut(BaseModel):
+    """Standart öneri yapısı (Faz 17 Ek İŞ B) — rapor, dashboard, DPA ve tahminlerde AYNI şekil.
+
+    Öneri üretilemiyorsa `unavailable_reason` dolu gelir; boş bir öneri hiçbir zaman dönmez.
+    """
+
+    title: str
+    why: str = ""
+    steps: list[AdviceStepOut] = []
+    cautions: list[str] = []
+    estimated_duration: str | None = None
+    rollback: str | None = None
+    verification: str | None = None
+    unavailable_reason: str | None = None
+
+
 class ReportFindingOut(BaseModel):
     id: int
     section: str
@@ -1284,6 +1380,7 @@ class ReportFindingOut(BaseModel):
     decision_note: str | None = None
     decision_reference: str | None = None
     decision_until: datetime | None = None
+    advice: AdviceOut | None = None
 
     @field_validator("evidence", mode="before")
     @classmethod

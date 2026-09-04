@@ -16,6 +16,7 @@ from app.services.cluster_health import collect_group_health
 from app.services.credentials import decrypt_secret
 from app.services.parameter_audit import collect_parameter_audit
 from app.services.performance_insights import analyze_metrics
+from app.services.advice import Advice, AdviceStep, advice_to_dict, unavailable
 from app.services.prerequisites import run_prerequisite_checks
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,23 @@ def _connectivity_recommendations(group: DatabaseGroup, report: dict[str, Any] |
                 "Servis loglarını inceleyin (aşağıdaki komut).",
             ],
             "action": hint,
+            # Faz 17 Ek İŞ B: dashboard önerileri de rapordaki standart yapıyı taşıyor.
+            "advice": advice_to_dict(
+                Advice(
+                    title=f"{group.engine} servisinin ayakta olduğunu doğrulayın",
+                    why=(
+                        "Erişilemeyen düğüm, uygulamanın o veritabanına bağlanamadığı anlamına gelebilir; "
+                        "kümede yeterli düğüm kalmazsa yazma işlemleri tamamen durur."
+                    ),
+                    steps=[
+                        AdviceStep("Sunucunun ayakta ve ağdan erişilebilir olduğunu doğrulayın.", "ping -c 3 <sunucu>"),
+                        AdviceStep(f"{group.engine} servisinin durumunu kontrol edin.", "systemctl status postgresql"),
+                        AdviceStep("Servis loglarını inceleyin.", hint),
+                    ],
+                    cautions=["Servisi yeniden başlatmadan önce neden durduğunu logdan doğrulayın."],
+                    verification="systemctl is-active postgresql",
+                )
+            ),
         }
     ]
 
@@ -92,6 +110,31 @@ async def _parameter_recommendations(group: DatabaseGroup, nodes: list[Node]) ->
                 # A safe, real next step (check the live value) — the exact target value depends
                 # on server sizing dbace doesn't collect, so we don't fabricate an ALTER SYSTEM.
                 "action": f"SHOW {finding['name']};",
+                "advice": advice_to_dict(
+                    Advice(
+                        title=f"{finding['name']} parametresini gözden geçirin",
+                        why=(
+                            f"{finding.get('detail') or 'Değer baseline dışında.'} Baseline dışı bir ayar "
+                            "performans ya da veri güvenliği açısından risk oluşturabilir."
+                        ),
+                        steps=[
+                            AdviceStep("Mevcut değeri ve nereden geldiğini canlı olarak doğrulayın.",
+                                       f"SELECT name, setting, unit, source FROM pg_settings "
+                                       f"WHERE name = '{finding['name']}';"),
+                            AdviceStep(
+                                f"Önerilen yön: {finding['recommendation']} — hedef değeri kendi sunucu "
+                                "kapasitenize göre belirleyin; dbace donanım bilgisi toplamadığı için "
+                                "kesin bir sayı önermiyor."
+                            ),
+                        ],
+                        cautions=[
+                            "Bazı parametreler yalnızca yeniden başlatmayla devreye girer (pg_settings.context "
+                            "= postmaster); değişiklikten önce kontrol edin."
+                        ],
+                        rollback=f"ALTER SYSTEM RESET {finding['name']}; SELECT pg_reload_conf();",
+                        verification=f"SHOW {finding['name']};",
+                    )
+                ),
                 # Doğrudan grubun Parametreler sekmesine (Faz 16 İŞ 5).
                 "link_hint": f"/groups/{group.id}?tab=parameters",
             }
@@ -144,6 +187,31 @@ async def _prerequisite_recommendations(group: DatabaseGroup, nodes: list[Node])
                 "title": f"{check.name} sorununu giderin" if check.fix else f"{check.name} kontrolünü tamamlayın",
                 "steps": [check.impact, "Aşağıdaki komutla düzeltin, sonra bu sayfayı yenileyin."],
                 "action": check.fix,
+                "advice": advice_to_dict(
+                    Advice(
+                        title=f"{check.name} eksiğini giderin",
+                        why=(
+                            f"{check.impact} Eksik ön koşul, ilgili analizin sessizce boş sonuç "
+                            "döndürmesine yol açar."
+                        ),
+                        steps=(
+                            [AdviceStep("Aşağıdaki komutu çalıştırın.", check.fix)]
+                            if check.fix
+                            else [
+                                AdviceStep(
+                                    "Bu kontrol için otomatik bir düzeltme komutu yok; ortamınızda "
+                                    "gerekmiyorsa Ön koşullar panelinden yoksayın."
+                                )
+                            ]
+                        ),
+                        cautions=(
+                            ["shared_preload_libraries değişikliği PostgreSQL'in yeniden başlatılmasını gerektirir."]
+                            if check.key == "shared_preload_libraries"
+                            else []
+                        ),
+                        verification="-- Ön koşullar panelini yeniden çalıştırın; kontrol yeşile dönmeli.",
+                    )
+                ),
                 # Doğrudan hedef instance'ın Ön koşullar paneline (Faz 16 İŞ 5).
                 "link_hint": f"/instances/{instance.id}?tab=tuning",
             }
@@ -207,6 +275,16 @@ async def _instance_recommendations(group: DatabaseGroup, snapshots: list[dict[s
                         "message": f"{snap['name']}: {insight.title} — {insight.recommendation}",
                         "title": insight.recommendation,
                         "steps": [f"{snap['name']} instance'ında: {insight.recommendation}"],
+                        # Buradaki içgörülerin tek bir kopyalanabilir komutu yok (öneri düz metin);
+                        # yapı yine standart, adım listesi tek maddeli.
+                        "advice": advice_to_dict(
+                            Advice(
+                                title=insight.recommendation,
+                                why=f"{insight.title}. {insight.description}",
+                                steps=[AdviceStep(f"{snap['name']} instance'ında: {insight.recommendation}")],
+                                verification="-- Değişiklikten sonra ilgili sekmedeki metrikleri tekrar kontrol edin.",
+                            )
+                        ),
                         # Doğrudan ilgili instance'ın en alakalı sekmesine — grup sayfasından
                         # tekrar instance aramak yerine (Faz 16 İŞ 5, "tek tıkla ilerlesin").
                         # insight.action zaten TuningPanel'in "İlgili sekmeye git" butonunun

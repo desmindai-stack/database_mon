@@ -8,6 +8,7 @@ import {
   FindingStatusUpdate,
   ReportFinding,
 } from "../api";
+import AdviceCard from "./AdviceCard";
 import CopyableAction from "./CopyableAction";
 import FindingStatusControl from "./FindingStatusControl";
 
@@ -146,20 +147,23 @@ export default function ReportFindingCard({
         <div className="finding-body">
           <p>{finding.detail}</p>
           {evidence && <p className="finding-evidence">Kanıt — {evidence}</p>}
-          {finding.recommendation ? (
-            <div className="finding-recommendation">
-              <strong>Öneri:</strong> {finding.recommendation}
-            </div>
+          {/* Faz 17 Ek İŞ B: standart öneri yapısı — dashboard, DPA ve tahminlerle aynı bileşen.
+              Eski recommendation/commands alanları yalnızca advice yoksa (eski kayıtlar) devreye
+              girer. */}
+          {finding.advice ? (
+            <AdviceCard advice={finding.advice} />
           ) : (
-            finding.severity !== "ok" && (
-              <p className="muted-note">
-                Bu bulgu için otomatik bir öneri üretilemedi — ayrıntı için ilgili sayfaya bakın.
-              </p>
-            )
+            <>
+              {finding.recommendation && (
+                <div className="finding-recommendation">
+                  <strong>Öneri:</strong> {finding.recommendation}
+                </div>
+              )}
+              {(finding.commands || []).map((command, i) => (
+                <CopyableAction key={i} command={command} />
+              ))}
+            </>
           )}
-          {(finding.commands || []).map((command, i) => (
-            <CopyableAction key={i} command={command} />
-          ))}
 
           <div className="finding-actions">
             {link && (
