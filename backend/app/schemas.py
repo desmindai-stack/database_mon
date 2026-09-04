@@ -1256,3 +1256,114 @@ class AlwaysOnHealthOut(BaseModel):
     overall: str
     checked_at: str
     replicas: list[ReplicaHealthOut]
+
+
+# --- Sağlık Raporu (Faz 17) ---
+
+
+class ReportFindingOut(BaseModel):
+    id: int
+    section: str
+    severity: str
+    title: str
+    detail: str
+    evidence: dict[str, Any] = {}
+    recommendation: str | None = None
+    commands: list[str] = []
+    related_object_type: str | None = None
+    related_object_id: int | None = None
+    fingerprint: str
+    priority: float
+    open_since_days: int
+    change_state: str
+    acknowledged: bool
+
+    @field_validator("evidence", mode="before")
+    @classmethod
+    def _evidence_never_null(cls, v):
+        return v or {}
+
+    @field_validator("commands", mode="before")
+    @classmethod
+    def _commands_never_null(cls, v):
+        return v or []
+
+    model_config = {"from_attributes": True}
+
+
+class HealthReportSummaryOut(BaseModel):
+    """Rapor listesi satırı — bulgular olmadan (liste ekranı için hafif)."""
+
+    id: int
+    scope_type: str
+    scope_id: int | None
+    scope_label: str
+    period_start: datetime
+    period_end: datetime
+    generated_at: datetime
+    generated_by: str
+    overall_status: str
+    status: str
+    progress_pct: int
+    progress_label: str | None = None
+    error: str | None = None
+    duration_ms: int
+    previous_report_id: int | None = None
+    critical_count: int = 0
+    warning_count: int = 0
+
+    model_config = {"from_attributes": True}
+
+
+class HealthReportOut(HealthReportSummaryOut):
+    sections: dict[str, Any] = {}
+    findings: list[ReportFindingOut] = []
+
+    @field_validator("sections", mode="before")
+    @classmethod
+    def _sections_never_null(cls, v):
+        return v or {}
+
+
+class RunReportRequest(BaseModel):
+    scope_type: Literal["global", "customer", "application", "group", "instance"] = "global"
+    scope_id: int | None = None
+    # Rapor dönemi gün cinsinden (1 = günlük, 7 = haftalık, 30 = aylık) ya da özel aralık.
+    period_days: int = Field(default=1, ge=1, le=365)
+    period_start: datetime | None = None
+    period_end: datetime | None = None
+
+
+class AcknowledgeFindingRequest(BaseModel):
+    fingerprint: str
+    scope_type: Literal["global", "customer", "application", "group", "instance"] = "global"
+    scope_id: int | None = None
+    # Varsayılan 30 gün; None = süresiz (arayüz bunu bilinçli bir seçim olarak sunar).
+    expires_in_days: int | None = Field(default=30, ge=1, le=365)
+    note: str | None = None
+
+
+class FindingAcknowledgementOut(BaseModel):
+    id: int
+    fingerprint: str
+    scope_type: str
+    scope_id: int | None
+    acknowledged_by: str
+    acknowledged_at: datetime
+    expires_at: datetime | None
+    note: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class HealthReportScheduleOut(BaseModel):
+    hour: int
+    enabled: bool
+    scope_mode: str
+    scope_mode_options: list[str]
+
+
+class HealthReportScheduleUpdate(BaseModel):
+    hour: int | None = Field(default=None, ge=0, le=23)
+    enabled: bool | None = None
+    scope_mode: Literal["global", "customers", "both"] | None = None

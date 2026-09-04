@@ -395,3 +395,109 @@ class SchemaObjectDailySample(Base):
     size_bytes: Mapped[float] = mapped_column(Float, nullable=False)
     extra: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class HealthReport(Base):
+    """Faz 17 İŞ 1: bir kapsam için üretilmiş sağlık raporu.
+
+    Rapor CANLI PROBE YAPMAZ — tamamen toplanmış veriden (MetricSample, SlowQuerySample,
+    AlertEvent, PredictionInsight, GroupHealthSnapshot, rollup tabloları) türetilir. Sebep:
+    rapor 06:00'da onlarca instance için çalışır; her biri için canlı bağlantı açmak hem
+    toplama döngüsüyle yarışır hem de raporun "dün ne oldu" sorusuna cevap vermesi gerekirken
+    "şu an ne oluyor" sorusuna cevap vermesine yol açardı.
+
+    `sections` bölüm gövdelerini (özet metinleri, tablolar, grafik verisi) tutar; tek tek
+    bulgular ayrı satırlar olarak ReportFinding'de durur — böylece fingerprint üzerinden
+    günler arası karşılaştırma ve kabul (acknowledgement) mümkün olur.
+    """
+
+    __tablename__ = "health_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # scope_type: global | customer | application | group | instance. "global" için scope_id NULL.
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Kapsamın o anki adı — kapsam sonradan silinse/yeniden adlandırılsa bile rapor kendi
+    # başlığını taşısın diye kopyalanıyor (rapor geçmişi bir arşivdir, canlı bir görünüm değil).
+    scope_label: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    generated_by: Mapped[str] = mapped_column(String(16), default="manual", nullable=False)  # schedule | manual
+    # ok | info | warning | critical — bölümlerin en kötüsü.
+    overall_status: Mapped[str] = mapped_column(String(16), default="ok", nullable=False)
+    sections: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Aynı kapsamın bir önceki raporu — "dünden beri değişenler" bölümü bunun bulgularıyla
+    # karşılaştırarak üretilir.
+    previous_report_id: Mapped[int | None] = mapped_column(ForeignKey("health_reports.id"), nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Arka planda üretim durumu: queued | running | done | failed. Rapor satırı üretim
+    # başlarken oluşturuluyor ki arayüz ilerlemeyi gösterebilsin.
+    status: Mapped[str] = mapped_column(String(16), default="done", nullable=False, index=True)
+    progress_pct: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+    progress_label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    findings: Mapped[list["ReportFinding"]] = relationship(
+        back_populates="report", cascade="all, delete-orphan"
+    )
+
+
+class ReportFinding(Base):
+    """Rapordaki tek bir bulgu.
+
+    `fingerprint` aynı bulgunun günler arasında eşleşmesini sağlayan kararlı bir hash'tir
+    (bulgu tipi + hedef nesne; ölçülen DEĞER hash'e girmez, yoksa değer her değiştiğinde bulgu
+    "yeni" görünür ve "kaç gündür açık" sayısı hiç ilerlemezdi).
+    """
+
+    __tablename__ = "report_findings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report_id: Mapped[int] = mapped_column(ForeignKey("health_reports.id"), index=True, nullable=False)
+    section: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)  # critical | warning | info | ok
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Bulgunun DAYANDIĞI veri: {metric, value, threshold, measured_at, ...}. Kanıtsız bulgu
+    # üretilmiyor (Faz 17 İŞ 6) — bu alan boş bırakılamaz.
+    evidence: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    recommendation: Mapped[str | None] = mapped_column(Text, nullable=True)
+    commands: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    related_object_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    related_object_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Etki × aciliyet sıralaması için hesaplanan puan (Faz 17 İŞ 6) — büyük olan üstte.
+    priority: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    # Bu fingerprint kaç gündür kesintisiz açık (önceki raporlardan devralınır).
+    open_since_days: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # new | ongoing | resolved | regressed — "dünden beri değişenler" bölümünün ham verisi.
+    change_state: Mapped[str] = mapped_column(String(16), default="new", nullable=False)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    report: Mapped["HealthReport"] = relationship(back_populates="findings")
+
+
+class FindingAcknowledgement(Base):
+    """DBA'nın "bunu biliyorum, susturabilirsin" dediği bulgular (Faz 17 İŞ 1).
+
+    Kabul edilen bulgu RAPORDAN SİLİNMEZ — "Bilinen konular" bölümüne düşer ve kritik sayısını
+    şişirmez. Süreli kabul destekleniyor: `expires_at` geçtiğinde bulgu tekrar normal
+    bölümüne döner (kalıcı susturma, unutulan bir sorunun sessizce büyümesi demek olurdu).
+    """
+
+    __tablename__ = "finding_acknowledgements"
+    __table_args__ = (
+        UniqueConstraint("fingerprint", "scope_type", "scope_id", name="uq_ack_fingerprint_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="global")
+    # NULL = bu fingerprint'i tüm kapsamlarda sustur.
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    acknowledged_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # NULL = süresiz. Arayüz varsayılan olarak 30 gün öneriyor.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)

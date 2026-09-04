@@ -1,0 +1,545 @@
+"""Sağlık Raporu motoru (Faz 17 İŞ 1).
+
+Tek bir toplanmış veri kümesinden iki farklı rapor üretilir: teknik (DBA) ve yönetici
+(müşteri). Bu modül her ikisinin de dayandığı ORTAK üretim hattıdır — bölümleri çalıştırır,
+bulguları fingerprint'leyip önceki raporla karşılaştırır, kabul edilmiş (acknowledged)
+bulguları ayırır, etki × aciliyet ile sıralar ve sonucu HealthReport/ReportFinding olarak
+saklar.
+
+Tasarım kararları:
+
+* **Canlı probe yok.** Rapor yalnızca saklanmış veriden (MetricSample, SlowQuerySample,
+  AlertEvent, PredictionInsight, GroupHealthSnapshot, rollup tabloları, Instance üzerindeki
+  collector alanları) üretilir. Rapor 06:00'da onlarca instance için çalışır; her biri için
+  canlı bağlantı açmak toplama döngüsüyle yarışırdı ve "dün ne oldu" sorusunu "şu an ne
+  oluyor"a çevirirdi.
+* **Arka planda üretim.** HealthReport satırı `status="running"` ile ÖNCE oluşturulur, bölümler
+  ilerledikçe `progress_pct`/`progress_label` güncellenir. Arayüz ilerlemeyi buradan okur.
+* **Kanıtsız bulgu yok.** `FindingDraft.evidence` zorunlu; boş bırakan bir bölüm üretim
+  sırasında hata alır (Faz 17 İŞ 6 kalite kuralı, kodda zorlanıyor).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import logging
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Any, Awaitable, Callable
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.database import SessionLocal
+from app.models import (
+    Application,
+    Customer,
+    DatabaseGroup,
+    FindingAcknowledgement,
+    HealthReport,
+    Instance,
+    ReportFinding,
+)
+
+logger = logging.getLogger(__name__)
+
+SCOPE_TYPES = ("global", "customer", "application", "group", "instance")
+
+SEVERITY_ORDER = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
+
+# Etki × aciliyet sıralamasının ağırlıkları (Faz 17 İŞ 6: "alfabetik veya rastgele değil").
+_SEVERITY_WEIGHT = {"critical": 100.0, "warning": 40.0, "info": 10.0, "ok": 0.0}
+# Prod ortam preprod/test'ten önce gelir — aynı ciddiyetteki iki bulgudan prod olanı üstte.
+_ENVIRONMENT_WEIGHT = {"prod": 1.6, "production": 1.6, "preprod": 1.1, "test": 0.9, "dev": 0.8}
+_CHANGE_WEIGHT = {"regressed": 1.35, "new": 1.2, "ongoing": 1.0, "resolved": 0.3}
+
+
+@dataclass
+class FindingDraft:
+    """Bölümlerin ürettiği ham bulgu. fingerprint motorda hesaplanır."""
+
+    section: str
+    severity: str
+    title: str
+    detail: str
+    # Bulgunun dayandığı ölçüm: {"metric": ..., "value": ..., "threshold": ..., "measured_at": ...}
+    evidence: dict[str, Any]
+    fingerprint_parts: tuple[str, ...]
+    recommendation: str | None = None
+    commands: list[str] = field(default_factory=list)
+    related_object_type: str | None = None
+    related_object_id: int | None = None
+    # Ortam etiketi (prod/preprod/test) — öncelik sıralamasında kullanılır.
+    environment: str = "prod"
+
+
+@dataclass
+class SectionResult:
+    """Bir rapor bölümünün çıktısı."""
+
+    key: str
+    title: str
+    status: str  # ok | info | warning | critical | unknown
+    summary: str
+    findings: list[FindingDraft] = field(default_factory=list)
+    # Bölüme özgü serbest veri (tablolar, grafik serileri) — sections JSON'una gider.
+    data: dict[str, Any] = field(default_factory=dict)
+    # Veri yetersizse burada söylenir; "sorunsuz" gibi gösterilmez (Faz 17 İŞ 6 dürüstlük kuralı).
+    unknown_reason: str | None = None
+
+
+@dataclass
+class ReportScope:
+    scope_type: str
+    scope_id: int | None
+    label: str
+
+
+@dataclass
+class ReportContext:
+    session: AsyncSession
+    scope: ReportScope
+    instances: list[Instance]
+    period_start: datetime
+    period_end: datetime
+    previous: HealthReport | None
+    previous_findings: dict[str, ReportFinding]
+
+    @property
+    def period_days(self) -> float:
+        return max((self.period_end - self.period_start).total_seconds() / 86400.0, 0.0)
+
+    def instance_ids(self) -> list[int]:
+        return [i.id for i in self.instances]
+
+    def instance_by_id(self, instance_id: int) -> Instance | None:
+        return next((i for i in self.instances if i.id == instance_id), None)
+
+
+SectionBuilder = Callable[[ReportContext], Awaitable[SectionResult]]
+
+# Bölüm sırası raporun okunma sırasıdır; kayıt (registry) İŞ 2'de doldurulur.
+_SECTION_BUILDERS: list[SectionBuilder] = []
+
+
+def register_section(builder: SectionBuilder) -> SectionBuilder:
+    """Bölüm builder'ını rapora ekler. Sıra, kayıt sırasıdır."""
+    _SECTION_BUILDERS.append(builder)
+    return builder
+
+
+def registered_sections() -> list[SectionBuilder]:
+    return list(_SECTION_BUILDERS)
+
+
+def as_utc(value: datetime) -> datetime:
+    """SQLite naive, Postgres aware datetime döndürür — karşılaştırmalar iki motorda da
+    çalışsın diye tek noktada UTC'ye sabitleniyor."""
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+def make_fingerprint(*parts: str) -> str:
+    """Bulgunun kararlı kimliği.
+
+    ÖLÇÜLEN DEĞER kasıtlı olarak dışarıda: hash'e girseydi değer her değiştiğinde (yani her
+    gün) bulgu "yeni" görünür, "kaç gündür açık" sayacı hiç ilerlemez ve gürültü kontrolü
+    (Faz 17 İŞ 6) çalışmazdı. Hash'e sadece bulgu TİPİ ve HEDEF NESNE girer.
+    """
+    raw = "|".join(str(p) for p in parts)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+async def resolve_scope_instances(session: AsyncSession, scope: ReportScope) -> list[Instance]:
+    """Kapsamın kapsadığı instance'lar.
+
+    Gruplu instance'lar grup → uygulama → müşteri zinciriyle bulunur; gruba bağlanmamış eski
+    instance'lar (geriye dönük uyumluluk, `Instance.customer_name`) müşteri kapsamında ad
+    eşleşmesiyle dahil edilir — aksi halde tek başına eklenmiş bir sunucu hiçbir müşteri
+    raporunda görünmezdi.
+    """
+    stmt = select(Instance).where(Instance.enabled.is_(True))
+
+    if scope.scope_type == "instance":
+        stmt = stmt.where(Instance.id == scope.scope_id)
+    elif scope.scope_type == "group":
+        stmt = stmt.where(Instance.group_id == scope.scope_id)
+    elif scope.scope_type == "application":
+        group_ids = (
+            await session.execute(select(DatabaseGroup.id).where(DatabaseGroup.application_id == scope.scope_id))
+        ).scalars().all()
+        stmt = stmt.where(Instance.group_id.in_(list(group_ids) or [-1]))
+    elif scope.scope_type == "customer":
+        app_ids = (
+            await session.execute(select(Application.id).where(Application.customer_id == scope.scope_id))
+        ).scalars().all()
+        group_ids = (
+            await session.execute(
+                select(DatabaseGroup.id).where(DatabaseGroup.application_id.in_(list(app_ids) or [-1]))
+            )
+        ).scalars().all()
+        customer = await session.get(Customer, scope.scope_id)
+        conditions = Instance.group_id.in_(list(group_ids) or [-1])
+        if customer is not None:
+            conditions = conditions | (Instance.customer_name == customer.name)
+        stmt = stmt.where(conditions)
+
+    rows = (await session.execute(stmt.options(selectinload(Instance.group)))).scalars().all()
+    return list(rows)
+
+
+async def resolve_scope_label(session: AsyncSession, scope_type: str, scope_id: int | None) -> str:
+    if scope_type == "global":
+        return "Tüm sistem"
+    if scope_id is None:
+        return scope_type
+    if scope_type == "customer":
+        row = await session.get(Customer, scope_id)
+    elif scope_type == "application":
+        row = await session.get(Application, scope_id)
+    elif scope_type == "group":
+        row = await session.get(DatabaseGroup, scope_id)
+    else:
+        row = await session.get(Instance, scope_id)
+    return getattr(row, "name", None) or f"{scope_type} #{scope_id}"
+
+
+async def _previous_report(session: AsyncSession, scope: ReportScope, before: datetime) -> HealthReport | None:
+    stmt = (
+        select(HealthReport)
+        .where(
+            HealthReport.scope_type == scope.scope_type,
+            HealthReport.status == "done",
+            HealthReport.generated_at < before,
+        )
+        .order_by(HealthReport.generated_at.desc())
+        .limit(1)
+    )
+    stmt = stmt.where(HealthReport.scope_id.is_(None) if scope.scope_id is None else HealthReport.scope_id == scope.scope_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
+
+
+async def _active_acknowledgements(
+    session: AsyncSession, scope: ReportScope, now: datetime
+) -> dict[str, FindingAcknowledgement]:
+    """Süresi dolmamış kabuller. Süresi dolan kayıt SİLİNMEZ (kim ne zaman neyi kabul etmişti
+    bilgisi kalsın diye), sadece etkisiz sayılır — bulgu kendiliğinden öne çıkar."""
+    rows = (await session.execute(select(FindingAcknowledgement))).scalars().all()
+    active: dict[str, FindingAcknowledgement] = {}
+    for row in rows:
+        if row.expires_at is not None and as_utc(row.expires_at) <= now:
+            continue
+        # scope_id NULL = her kapsamda geçerli; doluysa sadece o kapsamda.
+        if row.scope_id is not None and (row.scope_type != scope.scope_type or row.scope_id != scope.scope_id):
+            continue
+        active[row.fingerprint] = row
+    return active
+
+
+def _priority(draft: FindingDraft, change_state: str, open_days: int, acknowledged: bool) -> float:
+    """Etki × aciliyet. Büyük olan üstte."""
+    base = _SEVERITY_WEIGHT.get(draft.severity, 5.0)
+    env = _ENVIRONMENT_WEIGHT.get((draft.environment or "prod").lower(), 1.0)
+    change = _CHANGE_WEIGHT.get(change_state, 1.0)
+    # Uzun süredir açık bir bulgu daha acildir, ama bu tek başına ciddiyeti geçemesin:
+    # 30 günde en fazla %25 ek ağırlık.
+    age = 1.0 + min(open_days, 30) * 0.0083
+    score = base * env * change * age
+    if acknowledged:
+        # Kabul edilenler ayrı bölümde; yine de kendi içlerinde sıralanabilsinler diye
+        # tamamen sıfırlanmıyor.
+        score *= 0.05
+    return round(score, 3)
+
+
+async def _run_sections(ctx: ReportContext, report: HealthReport, session: AsyncSession) -> list[SectionResult]:
+    builders = registered_sections()
+    results: list[SectionResult] = []
+    for index, builder in enumerate(builders):
+        try:
+            result = await builder(ctx)
+        except Exception:
+            logger.exception("Rapor bölümü başarısız: %s", getattr(builder, "__name__", builder))
+            # Bölüm çökerse rapor tamamen düşmesin — o bölüm "bilinmiyor" olarak işaretlensin.
+            # Sessizce "sorunsuz" göstermek dürüstlük kuralına aykırı olurdu.
+            result = SectionResult(
+                key=getattr(builder, "section_key", f"section_{index}"),
+                title=getattr(builder, "section_title", "Bölüm"),
+                status="unknown",
+                summary="Bu bölüm üretilirken hata oluştu.",
+                unknown_reason="Bölüm üretimi hata verdi; ayrıntı sunucu loglarında.",
+            )
+        results.append(result)
+        report.progress_pct = int((index + 1) * 100 / max(len(builders), 1))
+        report.progress_label = result.title
+        await session.commit()
+    return results
+
+
+def _validated_drafts(results: list[SectionResult]) -> list[FindingDraft]:
+    drafts: list[FindingDraft] = []
+    for result in results:
+        for draft in result.findings:
+            if not draft.evidence:
+                # Kalite kuralı kodda zorlanıyor: kanıtsız bulgu rapora giremez.
+                raise ValueError(f"Kanıtsız bulgu üretildi: {result.key}/{draft.title}")
+            drafts.append(draft)
+    return drafts
+
+
+async def generate_report(
+    session: AsyncSession,
+    scope: ReportScope,
+    period_start: datetime,
+    period_end: datetime,
+    generated_by: str = "manual",
+    report: HealthReport | None = None,
+) -> HealthReport:
+    """Raporu üretir ve kaydeder. `report` verilirse (arka plan akışı) o satır güncellenir."""
+    started = datetime.now(UTC)
+
+    if report is None:
+        report = HealthReport(
+            scope_type=scope.scope_type,
+            scope_id=scope.scope_id,
+            scope_label=scope.label,
+            period_start=period_start,
+            period_end=period_end,
+            generated_by=generated_by,
+            status="running",
+            progress_pct=0,
+        )
+        session.add(report)
+        await session.commit()
+
+    try:
+        instances = await resolve_scope_instances(session, scope)
+        previous = await _previous_report(session, scope, started)
+        previous_findings: dict[str, ReportFinding] = {}
+        if previous is not None:
+            rows = (
+                await session.execute(select(ReportFinding).where(ReportFinding.report_id == previous.id))
+            ).scalars().all()
+            previous_findings = {f.fingerprint: f for f in rows}
+
+        ctx = ReportContext(
+            session=session,
+            scope=scope,
+            instances=instances,
+            period_start=period_start,
+            period_end=period_end,
+            previous=previous,
+            previous_findings=previous_findings,
+        )
+
+        results = await _run_sections(ctx, report, session)
+        drafts = _validated_drafts(results)
+        acks = await _active_acknowledgements(session, scope, started)
+
+        seen: set[str] = set()
+        findings: list[ReportFinding] = []
+        for draft in drafts:
+            fingerprint = make_fingerprint(draft.section, *draft.fingerprint_parts)
+            if fingerprint in seen:
+                continue  # aynı bulgu iki bölümden geldiyse bir kez raporla
+            seen.add(fingerprint)
+
+            prior = previous_findings.get(fingerprint)
+            if prior is None:
+                change_state = "new"
+                open_days = 0
+            else:
+                open_days = prior.open_since_days + 1
+                worsened = SEVERITY_ORDER.get(draft.severity, 0) > SEVERITY_ORDER.get(prior.severity, 0)
+                change_state = "regressed" if worsened else "ongoing"
+
+            acknowledged = fingerprint in acks
+            findings.append(
+                ReportFinding(
+                    report_id=report.id,
+                    section=draft.section,
+                    severity=draft.severity,
+                    title=draft.title,
+                    detail=draft.detail,
+                    evidence=draft.evidence,
+                    recommendation=draft.recommendation,
+                    commands=draft.commands or None,
+                    related_object_type=draft.related_object_type,
+                    related_object_id=draft.related_object_id,
+                    fingerprint=fingerprint,
+                    priority=_priority(draft, change_state, open_days, acknowledged),
+                    open_since_days=open_days,
+                    change_state=change_state,
+                    acknowledged=acknowledged,
+                )
+            )
+
+        # Önceki raporda olup bu raporda olmayanlar: çözülmüş. Kayıt olarak tutuluyor ki
+        # "yapılan işler" ve "dünden beri düzelenler" gerçek veriye dayansın.
+        for fingerprint, prior in previous_findings.items():
+            if fingerprint in seen or prior.change_state == "resolved":
+                continue
+            findings.append(
+                ReportFinding(
+                    report_id=report.id,
+                    section=prior.section,
+                    severity="ok",
+                    title=prior.title,
+                    detail="Bu bulgu bir önceki rapordan bu yana kapandı.",
+                    evidence={
+                        "previous_severity": prior.severity,
+                        "previous_report_id": prior.report_id,
+                        "open_since_days": prior.open_since_days,
+                    },
+                    fingerprint=fingerprint,
+                    priority=_priority(
+                        FindingDraft(
+                            section=prior.section,
+                            severity="ok",
+                            title=prior.title,
+                            detail="",
+                            evidence={"x": 1},
+                            fingerprint_parts=(),
+                        ),
+                        "resolved",
+                        prior.open_since_days,
+                        False,
+                    ),
+                    open_since_days=prior.open_since_days,
+                    change_state="resolved",
+                    acknowledged=False,
+                    related_object_type=prior.related_object_type,
+                    related_object_id=prior.related_object_id,
+                )
+            )
+
+        for finding in findings:
+            session.add(finding)
+
+        # Genel durum: KABUL EDİLMEMİŞ bulguların en kötüsü. Kabul edilmiş bir kritik bulgu
+        # raporun tamamını kırmızıya boyamamalı (talep edilen "kritik sayısını şişirmesin").
+        counted = [f for f in findings if not f.acknowledged and f.change_state != "resolved"]
+        worst = max((SEVERITY_ORDER.get(f.severity, 0) for f in counted), default=0)
+        report.overall_status = {3: "critical", 2: "warning", 1: "info", 0: "ok"}[worst]
+        report.sections = {
+            "order": [r.key for r in results],
+            "items": {
+                r.key: {
+                    "title": r.title,
+                    "status": r.status,
+                    "summary": r.summary,
+                    "data": r.data,
+                    "unknown_reason": r.unknown_reason,
+                }
+                for r in results
+            },
+        }
+        report.previous_report_id = previous.id if previous else None
+        report.duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+        report.status = "done"
+        report.progress_pct = 100
+        report.progress_label = None
+        await session.commit()
+        return report
+    except Exception as exc:  # noqa: BLE001 — hata raporun kendisine yazılır, sessizce kaybolmaz
+        logger.exception("Rapor üretimi başarısız (scope=%s/%s)", scope.scope_type, scope.scope_id)
+        report.status = "failed"
+        report.error = str(exc)[:2000]
+        report.duration_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
+        await session.commit()
+        raise
+
+
+async def enqueue_report(
+    scope: ReportScope, period_start: datetime, period_end: datetime, generated_by: str = "manual"
+) -> HealthReport:
+    """Raporu arka planda üretir; çağıran hemen "queued" satırını alır.
+
+    Kendi oturumunu açan ayrı bir task kullanılıyor — rapor üretimi saniyeler sürebilir ve
+    istek/döngü oturumunu o süre boyunca meşgul etmemeli (toplama döngüsünü bloke etmesin).
+    """
+    async with SessionLocal() as session:
+        label = await resolve_scope_label(session, scope.scope_type, scope.scope_id)
+        scope = ReportScope(scope.scope_type, scope.scope_id, label)
+        report = HealthReport(
+            scope_type=scope.scope_type,
+            scope_id=scope.scope_id,
+            scope_label=label,
+            period_start=period_start,
+            period_end=period_end,
+            generated_by=generated_by,
+            status="queued",
+            progress_pct=0,
+            progress_label="Sıraya alındı",
+        )
+        session.add(report)
+        await session.commit()
+        report_id = report.id
+
+    async def _run() -> None:
+        async with SessionLocal() as bg_session:
+            row = await bg_session.get(HealthReport, report_id)
+            if row is None:
+                return
+            row.status = "running"
+            await bg_session.commit()
+            try:
+                await generate_report(bg_session, scope, period_start, period_end, generated_by, report=row)
+            except Exception:
+                # generate_report zaten status="failed" yazdı ve logladı.
+                pass
+
+    asyncio.create_task(_run())
+
+    async with SessionLocal() as session:
+        return await session.get(HealthReport, report_id)
+
+
+def default_period(days: int = 1, end: datetime | None = None) -> tuple[datetime, datetime]:
+    period_end = end or datetime.now(UTC)
+    return period_end - timedelta(days=days), period_end
+
+
+async def scheduled_scopes(session: AsyncSession, scope_mode: str) -> list[ReportScope]:
+    """Zamanlanmış üretimin kapsayacağı kapsamlar.
+
+    "customers" modunda her müşteri için ayrı rapor üretilir — yönetici raporu doğası gereği
+    müşteri bazlıdır ("X Bank'ın sistemleri sağlıklı mı?"), tüm sistemi tek raporda özetlemek
+    çok müşterili kurulumda anlamsız olurdu.
+    """
+    scopes: list[ReportScope] = []
+    if scope_mode in ("global", "both"):
+        scopes.append(ReportScope("global", None, "Tüm sistem"))
+    if scope_mode in ("customers", "both"):
+        customers = (await session.execute(select(Customer).order_by(Customer.name))).scalars().all()
+        scopes.extend(ReportScope("customer", c.id, c.name) for c in customers)
+    return scopes
+
+
+async def run_scheduled_reports() -> int:
+    """Günlük zamanlanmış rapor üretimi. Kaç rapor üretildiğini döndürür.
+
+    Kapsamlar SIRAYLA üretilir (paralel değil): rapor üretimi veritabanı okuması yoğun ve
+    aynı anda onlarca kapsam çalıştırmak toplama döngüsüyle yarışırdı. Bir kapsam hata alırsa
+    diğerleri devam eder.
+    """
+    from app.services.settings import get_health_report_schedule
+
+    async with SessionLocal() as session:
+        schedule = await get_health_report_schedule(session)
+        if not schedule["enabled"]:
+            logger.info("Zamanlanmış sağlık raporu kapalı, atlanıyor")
+            return 0
+        scopes = await scheduled_scopes(session, schedule["scope_mode"])
+
+    period_start, period_end = default_period(days=1)
+    produced = 0
+    for scope in scopes:
+        async with SessionLocal() as session:
+            try:
+                await generate_report(session, scope, period_start, period_end, generated_by="schedule")
+                produced += 1
+            except Exception:
+                logger.exception("Zamanlanmış rapor başarısız: %s/%s", scope.scope_type, scope.scope_id)
+    return produced

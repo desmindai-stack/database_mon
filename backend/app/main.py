@@ -21,6 +21,7 @@ from app.routers import (
     nodes,
     predictions,
     queries,
+    reports,
     servers,
     wizard,
 )
@@ -72,6 +73,7 @@ app.include_router(database_groups.router, prefix="/api", dependencies=_protecte
 app.include_router(nodes.router, prefix="/api", dependencies=_protected)
 app.include_router(servers.router, prefix="/api", dependencies=_protected)
 app.include_router(dashboard.router, prefix="/api", dependencies=_protected)
+app.include_router(reports.router, prefix="/api", dependencies=_protected)
 app.include_router(wizard.router, prefix="/api", dependencies=_protected)
 
 # Admin screen (Faz 15 İŞ 2) — every route here needs role=admin, not just a valid session.

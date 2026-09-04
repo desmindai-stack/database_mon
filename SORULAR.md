@@ -3,6 +3,54 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — İŞ 1: Erişilebilirlik toplama boşluklarından türetiliyor (ve sınırı yazılı)
+
+dbace'de "veritabanı şu saatte kapalıydı" diyen doğrudan bir kayıt yok.
+Elimizdeki en yakın gerçek sinyal, metrik örneklerinin arasındaki
+boşluklar: collector bağlanamadığında o döngüde satır yazılmıyor. Bu
+yüzden kesintiler bu boşluklardan türetiliyor.
+
+Bunun bir sınırı var ve bu sınırı gizlemek yerine rapora yazdım: boşluk
+"dbace veri toplayamadı" demektir — dbace worker'ının durması, ağın
+kopması veya kimlik bilgisinin geçersiz olması da aynı boşluğu yaratır.
+Rapor "veritabanı 20 dakika kapalıydı" diye kesin iddiada bulunmuyor.
+Alternatif, boşlukları hiç raporlamamaktı; o da elimizdeki en değerli
+erişilebilirlik sinyalini çöpe atmak olurdu.
+
+Eşik: toplama aralığının 3 katı ve en az 60 saniye. Tek kaçırılan döngü
+ağ gecikmesi ya da yavaş bir sorgu yüzünden olabilir; 15 sn'lik toplamada
+45 sn'lik bir gecikmeyi "kesinti" diye raporlamak gürültü olurdu.
+
+## Faz 17 — İŞ 1: Kapsam adı rapora kopyalanıyor (normalize edilmiyor)
+
+`HealthReport.scope_label`, kapsamın üretim anındaki adının kopyası.
+Normalleştirilmiş tasarım, adı her okumada canlı tablodan JOIN'lemek
+olurdu. Kopyalamayı seçtim: rapor geçmişi bir ARŞİV. Müşteri altı ay
+sonra yeniden adlandırılırsa ya da silinirse, geçmiş raporun başlığının
+değişmesi (veya raporun adsız kalması) yanlış olurdu — o rapor o gün o
+kapsam için üretildi.
+
+## Faz 17 — İŞ 1: Kabul edilen bulgu susturulmuyor, sayımdan çıkarılıyor
+
+"Kabul edilen bulgular raporda ayrı bir 'bilinen konular' bölümüne
+düşsün, kritik sayısını şişirmesin" isteğini şöyle uyguladım: bulgu
+rapora normal şekilde yazılıyor ve `acknowledged=true` işaretleniyor;
+kritik/uyarı sayıları ve raporun genel durumu yalnızca kabul edilmemiş
+bulgulardan hesaplanıyor. Bulguyu hiç üretmemek daha kolay olurdu ama
+kabul edilmiş bir sorunun ciddiyeti zamanla artarsa (regressed) bunu
+görebilmek gerekiyor — üretilmeyen bulgunun geçmişi de olmaz.
+
+Süreli kabulün süresi dolduğunda kayıt SİLİNMİYOR, sadece etkisiz
+sayılıyor. Böylece "bu bulgu 3 ay önce şu notla kabul edilmişti" bilgisi
+kayıtta kalıyor.
+
+## Faz 17 — İŞ 1: Zamanlanmış kapsamlar sırayla üretiliyor
+
+`run_scheduled_reports()` kapsamları paralel değil sırayla üretiyor.
+Rapor üretimi veritabanı okuması yoğun; 06:00'da onlarca kapsamı aynı
+anda çalıştırmak toplama döngüsüyle yarışır ve asıl işi (metrik toplama)
+geciktirirdi. Bir kapsam hata alırsa diğerleri devam ediyor.
+
 ## Faz 16-B — İŞ 7: Plan kaydediliyor, her görüntülemede yeniden üretilmiyor
 
 `playbook` tahmin oluşturulurken hesaplanıp veritabanına yazılıyor.

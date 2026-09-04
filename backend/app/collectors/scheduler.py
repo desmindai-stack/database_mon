@@ -14,7 +14,8 @@ from app.services.custom_alert_rules import evaluate_custom_alert_rules
 from app.services.dashboard_snapshot import refresh_all_group_snapshots
 from app.services.retention import run_retention_cleanup
 from app.services.rollup import run_daily_rollup
-from app.services.settings import get_dashboard_refresh_interval
+from app.services.health_report import run_scheduled_reports
+from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ scheduler = AsyncIOScheduler()
 REFRESH_JOB_ID = "refresh_dashboard_snapshots"
 RETENTION_JOB_ID = "retention_cleanup"
 DAILY_ROLLUP_JOB_ID = "daily_rollup"
+HEALTH_REPORT_JOB_ID = "daily_health_report"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -84,11 +86,25 @@ async def daily_rollup_tick() -> None:
             logger.exception("Failed running daily rollup")
 
 
+async def daily_health_report_tick() -> None:
+    """Faz 17 İŞ 1: günlük sağlık raporu. Saati ayarlanabilir (varsayılan 06:00).
+
+    Toplama döngüsünü bloke etmemesi için APScheduler'ın kendi cron job'u olarak çalışıyor;
+    içeride kapsamlar sırayla üretiliyor ve her biri kendi oturumunu açıyor.
+    """
+    try:
+        produced = await run_scheduled_reports()
+        logger.info("Zamanlanmış sağlık raporu: %s rapor üretildi", produced)
+    except Exception:
+        logger.exception("Zamanlanmış sağlık raporu başarısız")
+
+
 async def start_scheduler() -> None:
     if scheduler.running:
         return
     async with SessionLocal() as session:
         refresh_interval = await get_dashboard_refresh_interval(session)
+        report_schedule = await get_health_report_schedule(session)
 
     scheduler.add_job(
         collect_all_instances,
@@ -126,6 +142,14 @@ async def start_scheduler() -> None:
         id=DAILY_ROLLUP_JOB_ID,
         replace_existing=True,
     )
+    scheduler.add_job(
+        daily_health_report_tick,
+        "cron",
+        hour=report_schedule["hour"],
+        minute=0,
+        id=HEALTH_REPORT_JOB_ID,
+        replace_existing=True,
+    )
     scheduler.start()
     logger.info(
         "Collector scheduler started (collect=%ss, dashboard_refresh=%ss)",
@@ -144,6 +168,16 @@ def reschedule_dashboard_refresh(seconds: int) -> None:
         return
     scheduler.reschedule_job(REFRESH_JOB_ID, trigger="interval", seconds=seconds)
     logger.info("Dashboard refresh interval changed to %ss", seconds)
+
+
+def reschedule_health_report(hour: int) -> None:
+    """Rapor saatini canlı scheduler'a uygular (yeniden başlatma gerekmeden).
+    Scheduler çalışmıyorsa (run_mode=api) no-op — kaydedilen ayar bir sonraki worker
+    başlangıcında zaten devreye girer; reschedule_dashboard_refresh ile aynı desen."""
+    if not scheduler.running or scheduler.get_job(HEALTH_REPORT_JOB_ID) is None:
+        return
+    scheduler.reschedule_job(HEALTH_REPORT_JOB_ID, trigger="cron", hour=hour, minute=0)
+    logger.info("Sağlık raporu saati %s:00 olarak değiştirildi", hour)
 
 
 def stop_scheduler() -> None:

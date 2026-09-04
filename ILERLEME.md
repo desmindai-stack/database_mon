@@ -2507,6 +2507,100 @@ freeze'den önce, bağlantı planında pooler max_connections'tan önce,
 SQL Server/MongoDB planlarına Postgres komutu sızmıyor.
 Toplam: 180 test yeşil.
 
+## Faz 17 — İŞ 1: Sağlık Raporu motoru ve veri modeli
+
+Yeni özellik: aynı toplanmış veriden iki farklı rapor (teknik/DBA ve
+yönetici/müşteri) üretecek ortak üretim hattı. Bu iş hattın kendisini
+kuruyor; bölümler İŞ 2-3'te dolduruluyor.
+
+**Veri modeli (3 yeni tablo + Supabase migration
+`20260905090000_health_reports.sql`, DEPLOY.md'de 23 numara):**
+
+- `HealthReport` — kapsam (global/customer/application/group/instance),
+  dönem, üretim şekli (schedule/manual), genel durum, bölüm gövdeleri
+  (`sections` JSON), önceki rapor bağı, süre. Ayrıca arka plan üretimi
+  için `status` (queued/running/done/failed), `progress_pct`,
+  `progress_label`, `error`. Kapsamın o anki adı (`scope_label`) rapora
+  KOPYALANIYOR: kapsam sonradan silinse/yeniden adlandırılsa bile rapor
+  kendi başlığını taşısın (rapor geçmişi bir arşivdir, canlı görünüm değil).
+- `ReportFinding` — bölüm, ciddiyet, başlık, detay, **kanıt** (evidence),
+  öneri, komutlar, ilgili nesne, fingerprint. Ek olarak motorun
+  hesapladığı `priority`, `open_since_days`, `change_state`,
+  `acknowledged`.
+- `FindingAcknowledgement` — fingerprint + kapsam bazında kabul, kim/ne
+  zaman/not, süreli (`expires_at`).
+
+**Fingerprint kararlılığı.** Hash'e yalnızca *bulgu tipi* ve *hedef
+nesne* girer; ÖLÇÜLEN DEĞER bilerek dışarıda. Değer hash'e girseydi
+bulgu her gün "yeni" görünür, "kaç gündür açık" sayacı hiç ilerlemez ve
+gürültü kontrolü çalışmazdı.
+
+**Gün-gün karşılaştırma.** Motor her raporda önceki raporun bulgularını
+fingerprint ile eşleştirip `change_state` üretiyor: `new`, `ongoing`
+(+ `open_since_days` bir artar), `regressed` (ciddiyet yükselmiş),
+`resolved` (önceki raporda vardı, artık yok). Kapanan bulgular rapora
+`severity="ok"` satır olarak YAZILIYOR — "yapılan işler" ve "düzelenler"
+bölümleri (İŞ 2/3) gerçek veriye dayansın diye.
+
+**Kabul (acknowledgement) davranışı.** Kabul edilen bulgu rapordan
+silinmiyor, `acknowledged=true` işaretleniyor; raporun genel durumu ve
+kritik/uyarı sayıları yalnızca KABUL EDİLMEMİŞ ve kapanmamış bulgulardan
+hesaplanıyor. Süresi dolan kabul kaydı silinmiyor (kim ne zaman neyi
+kabul etmişti bilgisi kalsın) ama etkisiz sayılıyor — bulgu kendiliğinden
+öne çıkıyor. Uç idempotent: aynı fingerprint tekrar kabul edilirse yeni
+kayıt açılmaz, süre uzatılır.
+
+**Öncelik (etki × aciliyet).** `priority = ciddiyet × ortam × değişim ×
+yaş`. Ciddiyet ana ağırlık (kritik 100, uyarı 40, bilgi 10); **prod ortam
+preprod/test'ten önce** (×1.6 / ×1.1 / ×0.9); kötüleşen bulgu yeniden,
+yeni bulgu süregelenden önce; 30 güne kadar yaş en fazla %25 ek ağırlık
+verir (yaş tek başına ciddiyeti geçemesin). Rapor detayı bulguları bu
+puana göre sıralı döndürüyor — alfabetik değil.
+
+**Canlı probe yok.** Rapor yalnızca saklanmış veriden üretiliyor. Rapor
+06:00'da onlarca instance için çalışıyor; her biri için canlı bağlantı
+açmak hem toplama döngüsüyle yarışır hem de raporu "dün ne oldu"dan
+"şu an ne oluyor"a çevirirdi.
+
+**Arka plan üretimi ve ilerleme.** `enqueue_report()` satırı `queued`
+olarak yazıp `asyncio.create_task` ile kendi oturumunda üretime
+başlatıyor; her bölüm bitince `progress_pct`/`progress_label`
+güncelleniyor. Bir bölüm çökerse rapor tamamen düşmüyor — o bölüm
+`status="unknown"` + sebebiyle işaretleniyor (sessizce "sorunsuz"
+göstermek dürüstlük kuralına aykırı olurdu). Üretim hatası raporun
+kendi `error` alanına yazılıyor.
+
+**Kanıt zorunluluğu kodda.** `evidence` boş bırakan bir bölüm üretim
+sırasında `ValueError` alıyor ve rapor `failed` işaretleniyor — kural
+yorum satırı değil, çalışan bir kısıt.
+
+**Zamanlama.** APScheduler'a cron job eklendi (varsayılan 06:00, saat
+ayarlanabilir). `scope_mode` ayarı hangi kapsamların otomatik
+üretileceğini belirliyor: `global`, `customers` (her müşteri için ayrı)
+veya `both` (varsayılan). Saat değişince `reschedule_health_report()`
+canlı scheduler'a uyguluyor (dashboard yenileme aralığındaki desenin
+aynısı). Kapsamlar SIRAYLA üretiliyor — paralel çalıştırmak toplama
+döngüsüyle yarışırdı.
+
+**Uçlar** (`/api/reports`): liste, detay (bulgular önceliğe göre sıralı),
+`latest` (dashboard kartı için), `run` (elle tetikleme, 202 + queued),
+silme, `schedule` GET/PUT, `acknowledgements` GET/POST/DELETE. Yetki
+main.py'deki `require_write_access` ile geliyor: viewer GET yapabiliyor,
+POST/DELETE yapamıyor — İŞ 5'te istenen davranış ek kod olmadan sağlanmış
+oluyor.
+
+**İlk bölüm — Erişilebilirlik.** Hattı uçtan uca kanıtlamak için bir
+gerçek bölüm eklendi: toplanan metrik örnekleri arasındaki boşluklardan
+kesinti pencereleri türetiliyor (toplama aralığının 3 katından uzun
+boşluk, en az 60 sn). Yüzde, dönemin tamamı için değil instance'ın
+İZLENEBİLDİĞİ süre için hesaplanıyor — dönemin ortasında eklenmiş bir
+instance'ın öncesini "kesinti" saymak yanlış olurdu. Bulgu metni ölçümün
+sınırını açıkça söylüyor: bu "dbace veri toplayamadı" demektir,
+veritabanının kapalı olduğunu tek başına kanıtlamaz.
+
+**Testler:** `tests/test_health_report_engine.py` (11) +
+`tests/test_health_report_api.py` (13). Toplam: 204 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
