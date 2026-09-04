@@ -3,6 +3,67 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — İŞ 2: Parametre/ön koşul geçmişi için yeni bir günlük fotoğraf tablosu eklendi
+
+"Parametre denetimi — DÜN'e göre DEĞİŞEN parametreler (biri elle
+değişiklik yaptıysa görünsün)" isteğini karşılamanın tek yolu geçmişe
+dönük veri saklamaktı: dbace parametreleri yalnızca kullanıcı Parametreler
+sekmesini açtığında CANLI okuyordu, hiçbir yerde saklamıyordu. Aynısı ön
+koşullar için de geçerliydi.
+
+Üç seçenek vardı:
+
+1. Raporun canlı probe yapması — Faz 17 İŞ 1'in temel kuralına
+   ("rapor anlık probe yapmasın") aykırı.
+2. Parametreleri 15 saniyelik toplama döngüsüne eklemek — `pg_settings`
+   okuması ve ön koşul denetimi (uzantı kontrolleri, rol sorguları) bu
+   sıklık için fazla pahalı ve parametreler saniyede bir değişmiyor.
+3. Zaten günde bir kez çalışan rollup işine eklemek — şema taramasının
+   (`collect_table_sizes`) yaptığının aynısı.
+
+3'ü seçtim. Yeni `DailyStateSnapshot` tablosu tek bir jenerik tablo:
+`kind` alanı ("parameters" / "prerequisites") ile iki farklı fotoğrafı
+taşıyor. İki ayrı tablo açmak yerine tek tablo, çünkü ikisi de aynı
+şekle sahip (instance + gün + JSON payload) ve ileride üçüncü bir günlük
+fotoğraf gerekirse migration istemeyecek.
+
+Bir sınır: fotoğraf BUGÜNÜN tarihiyle saklanıyor, dünün ayarı geriye
+dönük okunamaz. Yani "dünden beri değişenler" karşılaştırması iki ardışık
+FOTOĞRAF arasında yapılıyor; gün içinde değiştirilip geri alınan bir
+parametre görünmez. Bunu gün içi bir tarama ile yakalamak, aynı pahalı
+sorguyu sık çalıştırmak demekti — kabul edilebilir bir eksiklik olarak
+bıraktım ve bölüm metninde "önceki fotoğrafa göre" ifadesini kullandım.
+
+## Faz 17 — İŞ 2: "En pahalı 10 sorgu"nun tamamı bulguya çevrilmiyor
+
+Bölüm en pahalı sorguları tablo olarak listeliyor ama bulgu (finding)
+yalnızca YENİ ortaya çıkmış ya da belirgin (≥%25) kötüleşmiş ve ortalaması
+≥50 ms olan sorgular için üretiliyor. Sebep gürültü kontrolü (Faz 17
+İŞ 6): her veritabanının her zaman "en pahalı 10 sorgusu" vardır; bunları
+her gün 10 bulgu olarak raporlamak, gerçek değişimleri görünmez kılardı.
+Liste yine de tam haliyle raporda duruyor — sadece "bugün buna bak"
+demiyoruz.
+
+## Faz 17 — İŞ 2: Cluster lider değişimi örnek bazlı, olay bazlı değil
+
+Lider değişimi, ardışık metrik örneklerine gömülü cluster anlık
+görüntülerindeki `leader` alanının değişmesinden çıkarılıyor. Bu, iki
+örnek ARASINDA olup biten (ve bir sonraki örnekte eski haline dönen) bir
+failover'ı kaçırabilir. Doğru çözüm Patroni'nin kendi history API'sini
+okumak olurdu, ama o canlı bir probe gerektirir ve raporun temel kuralına
+aykırı. Kaçırma riskini kabul ettim; buna karşılık "lidersiz kalınan
+ölçüm sayısı" ayrı bir bulgu olarak raporlanıyor, çünkü failover
+sırasındaki lidersiz pencere genelde birden fazla örneğe yayılıyor.
+
+## Faz 17 — İŞ 2: Bölüm eşikleri tek yerde ve mevcut eşiklerle hizalı
+
+Rapor bölümlerinin kullandığı eşikler (bağlantı doluluğu %85/%95, cache
+hit %90, yavaş sorgu 50 ms, gürültülü kural 10 tetikleme) modülün
+başında tek bir blokta ve gerekçeli. Bağlantı doluluğu eşiği bilerek
+`performance_insights.py` ile aynı (%85): aynı sinyali iki modülün farklı
+eşiklerle yorumlaması, kullanıcının dashboard'da gördüğü uyarı ile raporda
+gördüğü bulgunun çelişmesi demek olurdu.
+
 ## Faz 17 — İŞ 1: Erişilebilirlik toplama boşluklarından türetiliyor (ve sınırı yazılı)
 
 dbace'de "veritabanı şu saatte kapalıydı" diyen doğrudan bir kayıt yok.

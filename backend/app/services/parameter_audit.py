@@ -303,3 +303,51 @@ async def collect_parameter_audit(group: DatabaseGroup, nodes: list[Node]) -> di
         "patroni_config": patroni_config,
         "summary": summary,
     }
+
+
+async def collect_instance_parameters(instance) -> dict[str, Any]:
+    """Faz 17 İŞ 2: tek bir Instance için parametre denetimi (Node/Server gerektirmeden).
+
+    `collect_parameter_audit` bir gruba ve onun düğümüne bağlı çalışıyor; günlük durum
+    fotoğrafı ise instance bazında alınıyor (gruba bağlanmamış standalone sunucular da
+    kapsansın diye). Aynı `CRITICAL_PARAMETERS` baseline'ını ve aynı `_evaluate_parameter`
+    değerlendirmesini kullanır — iki yerin farklı sonuç vermesi mümkün değil.
+    """
+    import asyncpg
+
+    from app.services.credentials import decrypt_secret
+
+    ssl_mode = (instance.options or {}).get("ssl_mode")
+    conn = await asyncpg.connect(
+        host=instance.host,
+        port=instance.port,
+        database=instance.database,
+        user=instance.username,
+        password=decrypt_secret(instance.password),
+        timeout=10,
+        ssl=True if ssl_mode == "require" else None,
+        statement_cache_size=0,
+    )
+    try:
+        await conn.execute("SET statement_timeout = '5000ms'")
+        rows = await conn.fetch(
+            "SELECT name, setting, unit, category, short_desc FROM pg_settings WHERE name = ANY($1)",
+            list(CRITICAL_PARAMETERS.keys()),
+        )
+    finally:
+        await conn.close()
+
+    settings_by_name = {row["name"]: dict(row) for row in rows}
+    findings = [
+        _evaluate_parameter(name, spec, settings_by_name.get(name)) for name, spec in CRITICAL_PARAMETERS.items()
+    ]
+    summary: dict[str, int] = {}
+    for finding in findings:
+        summary[finding["severity"]] = summary.get(finding["severity"], 0) + 1
+    return {
+        "checked_at": _now_iso(),
+        "findings": findings,
+        "summary": summary,
+        # Ham değerler: "düne göre değişti mi" karşılaştırması bu sözlük üzerinden yapılır.
+        "values": {name: row["setting"] for name, row in settings_by_name.items()},
+    }

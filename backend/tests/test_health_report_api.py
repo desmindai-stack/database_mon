@@ -105,8 +105,9 @@ async def test_manual_run_returns_queued_and_completes_in_background():
         assert queued["status"] in ("queued", "running", "done")
         assert queued["generated_by"] == "manual"
 
-        # Arka plan task'ının bitmesi için kısa bir tur ver.
-        for _ in range(50):
+        # Arka plan task'ının bitmesini bekle. Test veritabanı diğer testlerin instance'larını
+        # da biriktirdiği için "global" kapsam gerçekçi biçimde yavaş olabilir.
+        for _ in range(300):
             await asyncio.sleep(0.05)
             body = (await c.get(f"/api/reports/{queued['id']}")).json()
             if body["status"] in ("done", "failed"):
@@ -209,7 +210,7 @@ async def test_latest_report_endpoint_powers_the_dashboard_card():
         before = (await c.get("/api/reports/latest?scope_type=global")).json()
         r = await c.post("/api/reports/run", json={"scope_type": "global", "period_days": 1})
         report_id = r.json()["id"]
-        for _ in range(50):
+        for _ in range(300):
             await asyncio.sleep(0.05)
             if (await c.get(f"/api/reports/{report_id}")).json()["status"] == "done":
                 break

@@ -1,6 +1,6 @@
 """Faz 16 İŞ 6 — günlük rollup: dünün MetricSample satırları tek bir MetricRollupDaily satırına
-indirgeniyor mu, retention'ın süpürdüğü ham veriden bağımsız olarak. Şema taraması tarafı (tablo/
-index boyutları) canlı bir bağlantı gerektirdiğinden burada monkeypatch'leniyor."""
+indirgeniyor mu, retention'ın süpürdüğü ham veriden bağımsız olarak. Şema taraması ve (Faz 17 İŞ 2
+ile eklenen) parametre/ön koşul fotoğrafı canlı bağlantı gerektirdiğinden monkeypatch'leniyor."""
 
 from __future__ import annotations
 
@@ -13,6 +13,21 @@ import app.services.rollup as rollup_module
 from app.database import SessionLocal, init_db
 from app.models import Instance, MetricRollupDaily, MetricSample
 from app.services.credentials import encrypt_secret
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_live_probes(monkeypatch):
+    """Rollup canlı bağlantı açan üç probe içeriyor (şema taraması + parametre/ön koşul
+    fotoğrafı). Testler gerçek bir sunucuya bağlanmamalı; her biri no-op'a çevriliyor."""
+
+    async def _noop(*args, **kwargs):
+        return 0
+
+    monkeypatch.setattr(rollup_module, "_rollup_schema_objects_for_instance", _noop)
+    monkeypatch.setattr(rollup_module, "_rollup_state_for_instance", _noop)
 
 
 async def _make_instance() -> Instance:
@@ -33,14 +48,8 @@ async def _make_instance() -> Instance:
         return instance
 
 
-async def test_daily_rollup_summarizes_yesterdays_metric_samples(monkeypatch):
+async def test_daily_rollup_summarizes_yesterdays_metric_samples():
     await init_db()
-
-    async def no_schema_objects(session, instance, day):
-        return 0
-
-    monkeypatch.setattr(rollup_module, "_rollup_schema_objects_for_instance", no_schema_objects)
-
     instance = await _make_instance()
     yesterday = (datetime.now(UTC) - timedelta(days=1)).date()
     window_start = datetime.combine(yesterday, datetime.min.time(), tzinfo=UTC)
@@ -78,14 +87,8 @@ async def test_daily_rollup_summarizes_yesterdays_metric_samples(monkeypatch):
         assert row.sample_count == 3
 
 
-async def test_daily_rollup_is_idempotent_on_rerun(monkeypatch):
+async def test_daily_rollup_is_idempotent_on_rerun():
     await init_db()
-
-    async def no_schema_objects(session, instance, day):
-        return 0
-
-    monkeypatch.setattr(rollup_module, "_rollup_schema_objects_for_instance", no_schema_objects)
-
     instance = await _make_instance()
     yesterday = (datetime.now(UTC) - timedelta(days=1)).date()
     window_start = datetime.combine(yesterday, datetime.min.time(), tzinfo=UTC)

@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.collectors.base import ConnectionTarget
 from app.collectors.registry import get_collector
 from app.domain.engines import DatabaseEngine
-from app.models import Instance, MetricRollupDaily, MetricSample, SchemaObjectDailySample
+from app.collectors.base import ConnectionTarget as _ConnectionTarget  # noqa: F401  (tip netliği)
+from app.models import DailyStateSnapshot, Instance, MetricRollupDaily, MetricSample, SchemaObjectDailySample
 from app.services.credentials import decrypt_secret
 
 logger = logging.getLogger(__name__)
@@ -149,6 +150,76 @@ async def _rollup_schema_objects_for_instance(session: AsyncSession, instance: I
     return written
 
 
+async def _upsert_state_snapshot(
+    session: AsyncSession, instance_id: int, day: date, kind: str, payload: dict[str, Any]
+) -> None:
+    existing = (
+        await session.execute(
+            select(DailyStateSnapshot).where(
+                DailyStateSnapshot.instance_id == instance_id,
+                DailyStateSnapshot.kind == kind,
+                DailyStateSnapshot.day == day,
+            )
+        )
+    ).scalar_one_or_none()
+    if existing is None:
+        existing = DailyStateSnapshot(instance_id=instance_id, day=day, kind=kind)
+        session.add(existing)
+    existing.payload = payload
+
+
+async def _rollup_state_for_instance(session: AsyncSession, instance: Instance, day: date) -> int:
+    """Faz 17 İŞ 2: parametrelerin ve ön koşulların günlük fotoğrafı.
+
+    Sağlık raporu "biri dün elle bir parametre değiştirdi mi?" sorusuna cevap verebilsin diye
+    saklanıyor — rapor canlı probe yapmadığından bu bilgi başka türlü elde edilemez. Şema
+    taramasıyla aynı yerde (günde bir kez) çalışıyor; toplama döngüsüne dokunmuyor.
+
+    Her iki probe da bağımsız: biri başarısız olursa diğeri yine kaydedilir ve başarısızlığın
+    kendisi "unknown" olarak saklanır (sessizce atlanmaz — rapor bunu "ölçülemedi" diye
+    gösterebilmeli).
+    """
+    written = 0
+
+    if instance.engine == "postgresql":
+        try:
+            from app.services.parameter_audit import collect_instance_parameters
+
+            payload = await collect_instance_parameters(instance)
+        except Exception as exc:  # noqa: BLE001
+            payload = {"error": str(exc)[:500]}
+            logger.warning("daily rollup: parameter probe failed for instance %s", instance.name)
+        await _upsert_state_snapshot(session, instance.id, day, "parameters", payload)
+        written += 1
+
+    if instance.engine in ("postgresql", "sqlserver"):
+        try:
+            from app.collectors.base import ConnectionTarget
+            from app.domain.engines import DatabaseEngine
+            from app.services.prerequisites import run_prerequisite_checks
+
+            target = ConnectionTarget(
+                host=instance.host,
+                port=instance.port,
+                database=instance.database,
+                username=instance.username,
+                password=decrypt_secret(instance.password),
+                options=instance.options,
+            )
+            checks = await run_prerequisite_checks(DatabaseEngine(instance.engine), target)
+            payload = {
+                "checks": [vars(c) for c in checks],
+                "ignored": list(instance.ignored_prerequisites or []),
+            }
+        except Exception as exc:  # noqa: BLE001
+            payload = {"error": str(exc)[:500]}
+            logger.warning("daily rollup: prerequisite probe failed for instance %s", instance.name)
+        await _upsert_state_snapshot(session, instance.id, day, "prerequisites", payload)
+        written += 1
+
+    return written
+
+
 async def run_daily_rollup(session: AsyncSession) -> dict[str, int]:
     """Dünün (UTC gün sınırı) verisini özetler — bugünün verisi henüz eksik olabileceğinden
     bugünü değil, tamamlanmış son günü rollup'lar."""
@@ -159,10 +230,14 @@ async def run_daily_rollup(session: AsyncSession) -> dict[str, int]:
     instances = (await session.execute(select(Instance).where(Instance.enabled.is_(True)))).scalars().all()
     metric_rows = 0
     schema_rows = 0
+    state_rows = 0
     for instance in instances:
         metric_rows += await _rollup_metrics_for_instance(session, instance, yesterday, window_start, window_end)
         if instance.engine == "postgresql":
             schema_rows += await _rollup_schema_objects_for_instance(session, instance, yesterday)
+        # Parametre/ön koşul fotoğrafı BUGÜNÜN tarihiyle saklanıyor: dünün ayarını geriye dönük
+        # okumak mümkün değil, elimizdeki en doğru bilgi "şu an ne olduğu".
+        state_rows += await _rollup_state_for_instance(session, instance, datetime.now(UTC).date())
 
     await session.commit()
-    return {"metric_rows": metric_rows, "schema_rows": schema_rows}
+    return {"metric_rows": metric_rows, "schema_rows": schema_rows, "state_rows": state_rows}

@@ -501,3 +501,28 @@ class FindingAcknowledgement(Base):
     # NULL = süresiz. Arayüz varsayılan olarak 30 gün öneriyor.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class DailyStateSnapshot(Base):
+    """Faz 17 İŞ 2: günde bir kez alınan durum fotoğrafı — parametreler ve ön koşullar.
+
+    Sağlık raporu canlı probe yapmaz; ama "DÜN'e göre DEĞİŞEN parametreler" (biri elle
+    değişiklik yaptıysa görünsün) ve "ön koşul eksikliği yüzünden yapılamayan analizler"
+    soruları geçmişe dönük veri ister. `pg_settings` ve ön koşul denetimi 15 saniyelik toplama
+    döngüsüne konulamayacak kadar pahalı; bunun yerine zaten günde bir kez çalışan rollup işine
+    eklendi (şema taramasıyla aynı desen).
+
+    `kind`: "parameters" | "prerequisites". `payload` ilgili servisin ham çıktısı.
+    """
+
+    __tablename__ = "daily_state_snapshots"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "kind", "day", name="uq_daily_state_instance_kind_day"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    day: Mapped[date] = mapped_column(Date, nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

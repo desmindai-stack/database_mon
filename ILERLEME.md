@@ -2601,6 +2601,111 @@ veritabanının kapalı olduğunu tek başına kanıtlamaz.
 **Testler:** `tests/test_health_report_engine.py` (11) +
 `tests/test_health_report_api.py` (13). Toplam: 204 test yeşil.
 
+## Faz 17 — İŞ 2: Teknik rapor bölümleri (DBA)
+
+12 bölümün tamamı `services/report_sections.py` içinde. Her bölüm
+`SectionResult` döndürüyor: durum, özet, serbest veri (tablolar) ve
+bulgular. Her bulgu kanıt (hangi metrik, hangi değer, hangi eşik, ne
+zaman ölçüldü), öneri ve mümkün olduğunda çalıştırılacak komut taşıyor.
+
+**Motor eklentisi — özet bölümleri.** Yönetici özeti, "dünden beri
+değişenler" ve "bilinen konular" diğer bölümlerin ÇIKTISINA bakmak
+zorunda. Motora `register_summary_section` eklendi: bu bölümler normal
+bölümlerden SONRA çalışıyor ama raporda ÖNDE görünüyor (özet,
+özetlediği şeyin üstünde durmalı).
+
+**1. Yönetici özeti.** En yüksek öncelikli 3-5 kritik/uyarı bulgusunu
+listeler. Kendi bulgusunu ÜRETMEZ — aksi halde aynı sorun hem özette hem
+asıl bölümde sayılır, kritik sayısı şişerdi. Değerlendirilemeyen
+bölümler (`unknown`) de özette görünür; "bulgu yok" ile "bakamadık"
+karıştırılmaz.
+
+**2. Dünden beri değişenler.** Motorla AYNI `make_fingerprint`
+fonksiyonunu kullanır — bu bölümde "yeni" görünen bir bulgu, kaydedilen
+satırda da `change_state="new"` olur; iki yerin farklı cevap vermesi
+mümkün değil. Yeni / kötüleşen / kapanan / süregelen olarak dört liste,
+süregelenler "kaç gündür açık" bilgisiyle sıralı.
+
+**3. Erişilebilirlik.** (İŞ 1'de eklendi.) Toplama boşluklarından kesinti
+pencereleri; ölçümün sınırı bulgu metninde yazılı.
+
+**4. Cluster sağlığı.** Lider değişimleri `MetricSample.metrics_json`
+içine gömülü cluster anlık görüntülerinden geriye dönük okunuyor
+(canlı probe yok). Ayrıca: lidersiz kalınan ölçüm sayısı, servis bazında
+"down" görülen ölçüm sayısı, replikasyon lag zirvesi ve zirvenin
+yarısının üstünde geçirilen süre. Grup seviyesinde
+`GroupHealthSnapshot`'tan etcd quorum kaybı, split-brain şüphesi ve DR
+düğümü olmayan gruplar. Cluster yapılandırılmamış instance'lar için bölüm
+`ok` döner (yokluğu sorun değil); cluster tanımlı ama veri yoksa
+`unknown`.
+
+**5. Performans.** En pahalı sorgular, Faz 16-B İŞ 4'teki mantıkla
+DÖNEM FARKINDAN sıralanıyor (kümülatif toplamdan değil). Her sorgu bir
+önceki eşit uzunluktaki dönemle karşılaştırılıp `new` / `worse` /
+`better` / `stable` etiketleniyor. Darboğaz sınıfı (I/O, CPU, bellek,
+kilit) mevcut `diagnose_query` ile — bu fonksiyon zaten saklanan
+sütunlardan çalışıyor, ek sorgu çalıştırmıyor. Bulgu yalnızca YENİ ya da
+BELİRGİN KÖTÜLEŞEN ve ortalaması ≥50 ms olan sorgular için üretiliyor;
+"en pahalı 10"un tamamını bulguya çevirmek her gün 10 bulgu demek olurdu.
+
+**6. Kaynak kullanımı.** Bağlantı zirvesi (saatiyle), cache hit
+ortalaması/en düşüğü, geçici dosya zirvesi, checkpoint davranışı.
+Checkpoint bulgusu, istek üzerine checkpoint'lerin zamanlanmışlardan
+baskın olması durumunda çıkıyor (max_wal_size baskısı). Bölüm notunda
+sunucu seviyesi CPU/RAM/disk metriklerinin dbace tarafından
+TOPLANMADIĞI açıkça yazıyor.
+
+**7. Şema sağlığı.** Günlük şema anlık görüntülerinden (Faz 16 İŞ 6'da
+eklenen `SchemaObjectDailySample`) büyüyen nesneler ve kullanılmayan
+indexler. Notta, anlık ölçülen ama geçmişe dönük saklanmayan şeylerin
+(autovacuum gecikmesi, dead tuple oranı) bu bölümde raporlanamadığı
+belirtiliyor.
+
+**8. Parametre denetimi.** Baseline sapmaları ve **DÜN'E GÖRE DEĞİŞEN
+parametreler** — bu bölümün asıl değeri. Rapor canlı probe yapmadığı için
+bu bilgi başka türlü elde edilemezdi; bkz. aşağıdaki günlük durum
+fotoğrafı.
+
+**9. Alarmlar.** Dönemdeki tetiklemeler kural bazında gruplanıp
+10'dan fazla tetikleyen kurallar "gürültü yapan" olarak işaretleniyor
+(alarm körlüğü yaratır). Dönemden ÖNCE açılıp hâlâ kapanmamış olaylar
+"uzun süredir açık" bulgusu üretiyor. `AlertEvent` kural adını/eşiğini
+taşımadığı için okunabilir bir rapor adına `AlertRule` ile join ediliyor.
+
+**10. Kapasite.** Açık `PredictionInsight` kayıtları, %90 güven
+aralığıyla birlikte. Öneri ve komut tahminin kendi alanlarından geliyor
+(Faz 16-B İŞ 7'de eklenen adım adım plan bu bulgunun devamı).
+
+**11. Ön koşullar.** Eksik eklenti/yetki ve bunların engellediği
+analizler. Yoksayılan (ignored) kontroller bulgu ÜRETMEZ ama ayrı
+listede görünür — "bu analiz neden yok?" sorusunun cevabı orada.
+`unknown` durumundaki kontroller eksiklik sayılmıyor.
+
+**12. Bilinen konular.** Kabul edilmiş bulgular; kim, ne zaman, hangi
+notla kabul etmiş, kaç gündür açık, kabul süresi dolmuş mu, bulgu bu
+raporda hâlâ var mı.
+
+**Yeni: günlük durum fotoğrafı (`DailyStateSnapshot`).** 8 ve 11
+numaralı bölümler geçmişe dönük veri istiyor; `pg_settings` okuması ve ön
+koşul denetimi 15 saniyelik toplama döngüsüne konulamayacak kadar pahalı.
+Bunun yerine zaten günde bir kez çalışan rollup işine eklendi (şema
+taramasıyla aynı desen): her gün bir parametre ve bir ön koşul fotoğrafı
+saklanıyor. İki probe birbirinden bağımsız — biri başarısız olursa
+diğeri yine kaydediliyor ve başarısızlığın kendisi `error` olarak
+saklanıyor, böylece rapor "ölçülemedi" diyebiliyor (sessizce "sorunsuz"
+göstermiyor). Supabase migration:
+`20260905100000_daily_state_snapshots.sql` (DEPLOY.md 24 numara).
+
+`parameter_audit.py`'ye `collect_instance_parameters()` eklendi: aynı
+`CRITICAL_PARAMETERS` baseline'ını ve aynı `_evaluate_parameter`
+değerlendirmesini kullanır ama Node/Server yerine Instance üzerinden
+çalışır — gruba bağlanmamış standalone sunucular da kapsansın diye.
+
+**Testler:** `tests/test_report_sections.py` (28 test) — her bölüm için
+doğru bulgu, kanıttaki gerçek sayılar, veri yokken "unknown" davranışı ve
+gürültü üretmeme. Ayrıca `tests/test_rollup.py` yeni probe'lara karşı
+izole edildi. Toplam: 232 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

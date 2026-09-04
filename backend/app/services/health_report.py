@@ -119,19 +119,32 @@ class ReportContext:
 
 
 SectionBuilder = Callable[[ReportContext], Awaitable[SectionResult]]
+# Özet bölümleri diğer bölümlerin ÇIKTISINI görür (yönetici özeti, değişenler, bilinen konular).
+SummaryBuilder = Callable[[ReportContext, list["SectionResult"]], Awaitable["SectionResult"]]
 
-# Bölüm sırası raporun okunma sırasıdır; kayıt (registry) İŞ 2'de doldurulur.
 _SECTION_BUILDERS: list[SectionBuilder] = []
+_SUMMARY_BUILDERS: list[SummaryBuilder] = []
 
 
 def register_section(builder: SectionBuilder) -> SectionBuilder:
-    """Bölüm builder'ını rapora ekler. Sıra, kayıt sırasıdır."""
+    """Normal bölüm. Kayıt sırası, raporda görünme sırasıdır."""
     _SECTION_BUILDERS.append(builder)
+    return builder
+
+
+def register_summary_section(builder: SummaryBuilder) -> SummaryBuilder:
+    """Diğer bölümlerin sonucuna bakan bölüm (yönetici özeti, dünden beri değişenler, bilinen
+    konular). SONRA çalışır ama raporda ÖNDE görünür — özet, özetlediği şeyin üstünde durmalı."""
+    _SUMMARY_BUILDERS.append(builder)
     return builder
 
 
 def registered_sections() -> list[SectionBuilder]:
     return list(_SECTION_BUILDERS)
+
+
+def registered_summary_sections() -> list[SummaryBuilder]:
+    return list(_SUMMARY_BUILDERS)
 
 
 def as_utc(value: datetime) -> datetime:
@@ -253,28 +266,49 @@ def _priority(draft: FindingDraft, change_state: str, open_days: int, acknowledg
     return round(score, 3)
 
 
+def _failed_section(builder, index: int) -> SectionResult:
+    """Bölüm çökerse rapor tamamen düşmesin — o bölüm "bilinmiyor" olarak işaretlensin.
+    Sessizce "sorunsuz" göstermek dürüstlük kuralına aykırı olurdu."""
+    return SectionResult(
+        key=getattr(builder, "section_key", f"section_{index}"),
+        title=getattr(builder, "section_title", "Bölüm"),
+        status="unknown",
+        summary="Bu bölüm üretilirken hata oluştu.",
+        unknown_reason="Bölüm üretimi hata verdi; ayrıntı sunucu loglarında.",
+    )
+
+
 async def _run_sections(ctx: ReportContext, report: HealthReport, session: AsyncSession) -> list[SectionResult]:
     builders = registered_sections()
+    summary_builders = registered_summary_sections()
+    total = len(builders) + len(summary_builders)
     results: list[SectionResult] = []
+
     for index, builder in enumerate(builders):
         try:
             result = await builder(ctx)
         except Exception:
             logger.exception("Rapor bölümü başarısız: %s", getattr(builder, "__name__", builder))
-            # Bölüm çökerse rapor tamamen düşmesin — o bölüm "bilinmiyor" olarak işaretlensin.
-            # Sessizce "sorunsuz" göstermek dürüstlük kuralına aykırı olurdu.
-            result = SectionResult(
-                key=getattr(builder, "section_key", f"section_{index}"),
-                title=getattr(builder, "section_title", "Bölüm"),
-                status="unknown",
-                summary="Bu bölüm üretilirken hata oluştu.",
-                unknown_reason="Bölüm üretimi hata verdi; ayrıntı sunucu loglarında.",
-            )
+            result = _failed_section(builder, index)
         results.append(result)
-        report.progress_pct = int((index + 1) * 100 / max(len(builders), 1))
+        report.progress_pct = int((index + 1) * 100 / max(total, 1))
         report.progress_label = result.title
         await session.commit()
-    return results
+
+    summary_results: list[SectionResult] = []
+    for offset, builder in enumerate(summary_builders):
+        try:
+            result = await builder(ctx, results)
+        except Exception:
+            logger.exception("Özet bölümü başarısız: %s", getattr(builder, "__name__", builder))
+            result = _failed_section(builder, len(builders) + offset)
+        summary_results.append(result)
+        report.progress_pct = int((len(builders) + offset + 1) * 100 / max(total, 1))
+        report.progress_label = result.title
+        await session.commit()
+
+    # Özetler sonra hesaplanır ama raporda önce görünür.
+    return summary_results + results
 
 
 def _validated_drafts(results: list[SectionResult]) -> list[FindingDraft]:
