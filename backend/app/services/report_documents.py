@@ -49,6 +49,7 @@ EXECUTIVE_SECTION_KEYS = [
     "availability",
     "inventory",
     "risks",
+    "decisions",
     "trend",
     "work_done",
     "recommendations",
@@ -395,6 +396,18 @@ def build_executive_document(
                 for r in executive.risks
             ]
             doc.blocks.append(table(["Risk", "Alan", "Uygulama", "Durum", "İş etkisi"], rows))
+
+    if _wanted("decisions", selected):
+        # Ek İŞ A: planlanan işler ve bilinçli kabul edilen riskler. Yoksayılanlar burada YOK.
+        doc.blocks.append(heading("Planlanan çalışmalar ve kabul edilen riskler", 2))
+        if not executive.decisions:
+            doc.blocks.append(paragraph("Bu dönemde planlanmış çalışma ya da kabul edilmiş risk yok."))
+        else:
+            rows = [
+                [d["label"], d["area"], d["application"], d["statement"], d.get("reference") or "—"]
+                for d in executive.decisions
+            ]
+            doc.blocks.append(table(["Durum", "Alan", "Uygulama", "Konu", "Referans"], rows))
 
     if _wanted("trend", selected):
         doc.blocks.append(heading("Önceki döneme göre", 2))

@@ -189,14 +189,17 @@ async def test_disappearing_finding_is_recorded_as_resolved():
 
 
 async def test_acknowledged_finding_does_not_drive_overall_status():
+    """Ek İŞ A sonrası: karar artık bir DURUM. En dar kapsam (instance) fingerprint ile eşleşir."""
     async with SessionLocal() as session:
         scope = _scope()
         fingerprint = make_fingerprint("test", "acked")
         session.add(
             FindingAcknowledgement(
                 fingerprint=fingerprint,
-                scope_type="group",
-                scope_id=scope.scope_id,
+                finding_type="test:acked",
+                scope_type="instance",
+                scope_id=None,
+                status="ignored",
                 acknowledged_by="tester",
                 expires_at=datetime.now(UTC) + timedelta(days=30),
                 note="bilinen konu",
@@ -212,6 +215,7 @@ async def test_acknowledged_finding_does_not_drive_overall_status():
                 ReportFinding.__table__.select().where(ReportFinding.report_id == report.id)
             )).mappings()
         )
+        assert rows[0]["status"] == "ignored"
         assert rows[0]["acknowledged"] is True
         # Bulgu duruyor (silinmiyor) ama raporun genel durumunu kritik yapmıyor.
         assert rows[0]["severity"] == "critical"
@@ -225,8 +229,10 @@ async def test_expired_acknowledgement_stops_suppressing():
         session.add(
             FindingAcknowledgement(
                 fingerprint=fingerprint,
-                scope_type="group",
-                scope_id=scope.scope_id,
+                finding_type="test:expired",
+                scope_type="instance",
+                scope_id=None,
+                status="ignored",
                 acknowledged_by="tester",
                 expires_at=datetime.now(UTC) - timedelta(days=1),
             )

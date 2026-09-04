@@ -48,6 +48,10 @@ async def _seed_report(scope_id: int, findings: list[dict]) -> int:
                     fingerprint=f["fingerprint"],
                     priority=f.get("priority", 1.0),
                     acknowledged=f.get("acknowledged", False),
+                    # Ek İŞ A: sayaçların kaynağı artık `status`.
+                    status=f.get("status", "ignored" if f.get("acknowledged") else
+                                 "resolved" if f.get("change_state") == "resolved" else "open"),
+                    finding_type=f.get("finding_type", "test:generic"),
                     change_state=f.get("change_state", "new"),
                 )
             )

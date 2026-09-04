@@ -15,10 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.scheduler import reschedule_health_report
 from app.database import get_db
-from app.models import FindingAcknowledgement, HealthReport, ReportFinding, User
+from app.models import FindingAcknowledgement, FindingStatusHistory, HealthReport, ReportFinding, User
 from app.schemas import (
     AcknowledgeFindingRequest,
+    BulkFindingStatusUpdate,
     ExecutiveReportOut,
+    FindingDecisionOut,
+    FindingStatusHistoryOut,
     FindingAcknowledgementOut,
     HealthReportOut,
     HealthReportScheduleOut,
@@ -29,6 +32,12 @@ from app.schemas import (
 )
 from app.services.auth_deps import get_current_user
 from app.services.executive_report import build_executive_report
+from app.services.finding_status import (
+    COUNTED_STATUSES,
+    STATUS_IGNORED,
+    STATUS_OPEN,
+    apply_decision,
+)
 from app.services.report_documents import (
     EXECUTIVE_SECTION_KEYS,
     build_executive_document,
@@ -57,9 +66,10 @@ async def _counts(db: AsyncSession, report_ids: list[int]) -> dict[int, tuple[in
         await db.execute(
             select(ReportFinding.report_id, ReportFinding.severity, func.count())
             .where(
+                # Ek İŞ A: yalnızca "açık" bulgular sayılır — yoksayılan/ertelenen/planlanan
+                # ya da kapanan bulgular kritik sayısını şişirmez.
                 ReportFinding.report_id.in_(report_ids),
-                ReportFinding.acknowledged.is_(False),
-                ReportFinding.change_state != "resolved",
+                ReportFinding.status.in_(list(COUNTED_STATUSES)),
             )
             .group_by(ReportFinding.report_id, ReportFinding.severity)
         )
@@ -185,6 +195,10 @@ async def acknowledge_finding(
     existing.acknowledged_at = datetime.now(UTC)
     existing.expires_at = expires_at
     existing.note = payload.note
+    # Ek İŞ A: "kabul" artık durum makinesindeki "yoksayıldı"ya karşılık geliyor. Bu eski uç
+    # geriye dönük uyumluluk için duruyor ve aynı duruma yazıyor — iki mekanizmanın ayrışması
+    # (biri sayaçları düşürüp diğerinin düşürmemesi) kaçınılmaz bir tutarsızlık olurdu.
+    existing.status = STATUS_IGNORED
     await db.commit()
     await db.refresh(existing)
 
@@ -193,7 +207,7 @@ async def acknowledge_finding(
     await db.execute(
         ReportFinding.__table__.update()
         .where(ReportFinding.fingerprint == payload.fingerprint)
-        .values(acknowledged=True)
+        .values(acknowledged=True, status=STATUS_IGNORED)
     )
     await db.commit()
     return existing
@@ -209,9 +223,75 @@ async def remove_acknowledgement(ack_id: int, db: AsyncSession = Depends(get_db)
     await db.execute(
         ReportFinding.__table__.update()
         .where(ReportFinding.fingerprint == fingerprint)
-        .values(acknowledged=False)
+        .values(acknowledged=False, status=STATUS_OPEN)
     )
     await db.commit()
+
+
+@router.post("/findings/status", response_model=list[FindingDecisionOut])
+async def set_finding_status(
+    payload: BulkFindingStatusUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[FindingDecisionOut]:
+    """Bir veya birden çok bulgunun durumunu değiştirir (Faz 17 Ek İŞ A).
+
+    Toplu işlem tek uçtan yapılıyor: arayüzde "seçilenlere aynı durumu ver" akışı, tek bulgu
+    için de aynı yolu kullanıyor — iki ayrı uç iki ayrı hata yolu demek olurdu.
+    """
+    out: list[FindingDecisionOut] = []
+    for item in payload.findings:
+        try:
+            decision = await apply_decision(
+                db,
+                fingerprint=item.fingerprint,
+                finding_type=item.finding_type,
+                scope_type=item.scope_type,
+                scope_id=item.scope_id,
+                status=item.status,
+                note=item.note,
+                changed_by=user.username,
+                reference=item.reference,
+                expires_at=item.until,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        # Açık raporlardaki aynı bulguyu da hemen güncelle — kullanıcı yenilemeden sonucu görsün.
+        # Bulgunun etkin durumu bir sonraki rapor üretiminde yeniden hesaplanır; buradaki
+        # güncelleme yalnızca mevcut görünümü tazelemek için.
+        effective_status = item.status
+        await db.execute(
+            ReportFinding.__table__.update()
+            .where(ReportFinding.fingerprint == item.fingerprint)
+            .values(
+                status=effective_status,
+                acknowledged=effective_status not in COUNTED_STATUSES,
+                decision_note=item.note,
+                decision_reference=item.reference,
+                decision_until=item.until,
+            )
+        )
+        if decision is not None:
+            out.append(FindingDecisionOut.model_validate(decision))
+    await db.commit()
+    return out
+
+
+@router.get("/findings/{fingerprint}/history", response_model=list[FindingStatusHistoryOut])
+async def get_finding_history(fingerprint: str, db: AsyncSession = Depends(get_db)) -> list[FindingStatusHistory]:
+    """Bir bulgunun durum değişikliği geçmişi — otomatik geçişler dahil."""
+    rows = (
+        await db.execute(
+            select(FindingStatusHistory)
+            .where(FindingStatusHistory.fingerprint == fingerprint)
+            # id ikinci ölçüt: SQLite'ın zaman damgası saniye hassasiyetinde, aynı saniyede
+            # yapılan iki değişiklik eşitlenir ve sıra rastgeleleşir (aynı düzeltme
+            # _previous_report'ta da yapıldı).
+            .order_by(FindingStatusHistory.changed_at.desc(), FindingStatusHistory.id.desc())
+        )
+    ).scalars().all()
+    return list(rows)
 
 
 @router.post("/run", response_model=HealthReportSummaryOut, status_code=202)
@@ -336,6 +416,7 @@ async def list_exportable_sections(report_id: int, view: str = Query(default="te
             "availability": "Erişilebilirlik",
             "inventory": "Sistem envanteri",
             "risks": "Risk özeti",
+            "decisions": "Planlanan çalışmalar ve kabul edilen riskler",
             "trend": "Önceki döneme göre",
             "work_done": "Bu dönemde yapılanlar",
             "recommendations": "Öneriler",

@@ -3,6 +3,52 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — Ek İŞ A: Tablo adı korundu, model genişletildi
+
+`FindingAcknowledgement` artık "kabul" değil bir DURUM KARARI tutuyor;
+adı yanıltıcı hale geldi. Yine de tabloyu yeniden adlandırmadım: rename +
+veri taşıma migration'ı, repo'daki yerleşik "ALTER TABLE ADD COLUMN"
+desenine göre çok daha riskli ve kullanıcının isteği de zaten "modelini
+genişlet" idi. Sınıf ve tablo adı korundu, docstring'de ne tuttuğu açıkça
+yazıldı.
+
+## Faz 17 — Ek İŞ A: Bulgu tipi için ayrı bir anahtar gerekti
+
+"Bu bulgu tipi (küresel)" kapsamını fingerprint ile uygulamak imkânsızdı:
+fingerprint hedef nesneyi içeriyor (`("collection_gap", "42")`), yani
+farklı sunuculardaki aynı tip bulgular farklı fingerprint'lere sahip.
+Bu yüzden `finding_type = "<bölüm>:<fingerprint_parts[0]>"` eklendi —
+bölüm builder'ları ilk parçayı zaten tutarlı biçimde bulgu tipi olarak
+kullanıyordu.
+
+Sonuç: dar kapsam (instance) fingerprint ile, geniş kapsamlar
+(grup/uygulama/müşteri/küresel) tip ile eşleşiyor. Bu ayrım bilinçli:
+"bu sunucudaki bu bulguyu sustur" ile "bu tip bulguyu bu müşteride
+sustur" farklı niyetler.
+
+## Faz 17 — Ek İŞ A: "Çözüldü" kullanıcı beyanıyla kalıcı olmuyor
+
+Kullanıcı bir bulguyu doğrudan "çözüldü" işaretlese bile, bulgu bir
+sonraki raporda hâlâ tespit ediliyorsa durum "açık"a dönüyor ve
+"doğrulanamadı" işareti alıyor. Kullanıcının beyanına güvenip bulguyu
+kapalı tutmak, raporun en temel işlevini (gerçekte ne olduğunu söylemek)
+bozardı. `çözüldü` yalnızca bulgunun gerçekten kaybolmasıyla kalıcı hale
+geliyor.
+
+Aynı sebeple `risk_kabul` ve `planlandı` durumlarında bitiş tarihi
+saklanmıyor: o durumlarda bir tarih, bulgunun beklenmedik biçimde geri
+açılmasına yol açardı. Tarih yalnızca `ertelendi` ve `yoksayıldı` için
+anlamlı.
+
+## Faz 17 — Ek İŞ A: Migration geriye dönük doldurma içeriyor
+
+`status` kolonunun varsayılanı `open`. Bu, yükseltmeden sonra daha önce
+"kabul edildi" işaretlenmiş TÜM bulguların bir anda kritik olarak geri
+dönmesi demekti — kullanıcı sabah raporu açtığında aylardır susturulmuş
+onlarca konuyla karşılaşırdı. Migration'a
+`UPDATE report_findings SET status='ignored' WHERE acknowledged = true`
+doldurması eklendi (SQLite tarafında `migrate_schema()` içinde aynısı).
+
 ## Faz 17 — İŞ 6: Önerisiz kritik bulgu atılmıyor, nedeni yazılıyor
 
 "Her kritik/uyarı bulgusunun bir önerisi olsun; öneri veremiyorsa

@@ -89,6 +89,11 @@ async def _report(session, customer, *, findings: list[dict], sections: dict | N
                 priority=f.get("priority", 100.0),
                 change_state=f.get("change_state", "new"),
                 acknowledged=f.get("acknowledged", False),
+                # Ek İŞ A: risk listesi artık `status` alanına bakıyor.
+                status=f.get("status", "ignored" if f.get("acknowledged") else
+                             "resolved" if f.get("change_state") == "resolved" else "open"),
+                finding_type=f.get("finding_type", f"{f.get('section', 'performance')}:generic"),
+                decision_reference=f.get("decision_reference"),
                 open_since_days=f.get("open_since_days", 0),
             )
         )

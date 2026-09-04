@@ -33,11 +33,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import SessionLocal
+from app.services.finding_status import (
+    COUNTED_STATUSES,
+    STATUS_OPEN,
+    STATUS_RESOLVED,
+    DecisionIndex,
+    build_scope_membership,
+    decision_payload,
+    load_decisions,
+    make_finding_type,
+    record_history,
+    resolve_status,
+)
 from app.models import (
     Application,
     Customer,
     DatabaseGroup,
-    FindingAcknowledgement,
     HealthReport,
     Instance,
     ReportFinding,
@@ -237,23 +248,6 @@ async def _previous_report(session: AsyncSession, scope: ReportScope, before: da
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def _active_acknowledgements(
-    session: AsyncSession, scope: ReportScope, now: datetime
-) -> dict[str, FindingAcknowledgement]:
-    """Süresi dolmamış kabuller. Süresi dolan kayıt SİLİNMEZ (kim ne zaman neyi kabul etmişti
-    bilgisi kalsın diye), sadece etkisiz sayılır — bulgu kendiliğinden öne çıkar."""
-    rows = (await session.execute(select(FindingAcknowledgement))).scalars().all()
-    active: dict[str, FindingAcknowledgement] = {}
-    for row in rows:
-        if row.expires_at is not None and as_utc(row.expires_at) <= now:
-            continue
-        # scope_id NULL = her kapsamda geçerli; doluysa sadece o kapsamda.
-        if row.scope_id is not None and (row.scope_type != scope.scope_type or row.scope_id != scope.scope_id):
-            continue
-        active[row.fingerprint] = row
-    return active
-
-
 def _priority(draft: FindingDraft, change_state: str, open_days: int, acknowledged: bool) -> float:
     """Etki × aciliyet. Büyük olan üstte."""
     base = _SEVERITY_WEIGHT.get(draft.severity, 5.0)
@@ -397,7 +391,11 @@ async def generate_report(
 
         results = await _run_sections(ctx, report, session)
         drafts = _validated_drafts(results)
-        acks = await _active_acknowledgements(session, scope, started)
+
+        # Durum makinesi (Ek İŞ A): kararlar, kapsam üyeliği ve otomatik geçişler.
+        decisions = await load_decisions(session)
+        membership = await build_scope_membership(session, instances)
+        index = DecisionIndex(decisions, membership)
 
         seen: set[str] = set()
         findings: list[ReportFinding] = []
@@ -416,7 +414,32 @@ async def generate_report(
                 worsened = SEVERITY_ORDER.get(draft.severity, 0) > SEVERITY_ORDER.get(prior.severity, 0)
                 change_state = "regressed" if worsened else "ongoing"
 
-            acknowledged = fingerprint in acks
+            finding_type = make_finding_type(draft.section, draft.fingerprint_parts)
+            instance_id = draft.related_object_id if draft.related_object_type == "instance" else None
+            decision = index.find(fingerprint, finding_type, instance_id)
+            effective = resolve_status(decision, still_detected=True, now=started)
+
+            if effective.auto_transition:
+                from_status, to_status, note = effective.auto_transition
+                await record_history(
+                    session,
+                    fingerprint=fingerprint,
+                    finding_type=finding_type,
+                    scope_type=decision.scope_type if decision else "instance",
+                    scope_id=decision.scope_id if decision else instance_id,
+                    from_status=from_status,
+                    to_status=to_status,
+                    note=note,
+                    changed_by="sistem",
+                )
+                # Karar kaydı da güncellenir: aksi halde her raporda aynı otomatik geçiş
+                # tekrar tekrar yazılır ve geçmiş gürültüye boğulur.
+                if decision is not None:
+                    decision.status = to_status
+                    if to_status == STATUS_OPEN:
+                        decision.expires_at = None
+
+            payload = decision_payload(effective.decision)
             findings.append(
                 ReportFinding(
                     report_id=report.id,
@@ -430,10 +453,18 @@ async def generate_report(
                     related_object_type=draft.related_object_type,
                     related_object_id=draft.related_object_id,
                     fingerprint=fingerprint,
-                    priority=_priority(draft, change_state, open_days, acknowledged),
+                    finding_type=finding_type,
+                    status=effective.status,
+                    verification_failed=effective.verification_failed,
+                    decision_note=payload["note"],
+                    decision_reference=payload["reference"],
+                    decision_until=payload["until"],
+                    priority=_priority(draft, change_state, open_days, effective.status not in COUNTED_STATUSES),
                     open_since_days=open_days,
                     change_state=change_state,
-                    acknowledged=acknowledged,
+                    # Geriye dönük uyumluluk: eski `acknowledged` bayrağı artık "açık değil"
+                    # anlamına geliyor (arayüzün eski sürümleri ve sayaç sorguları için).
+                    acknowledged=effective.status not in COUNTED_STATUSES,
                 )
             )
 
@@ -442,6 +473,24 @@ async def generate_report(
         for fingerprint, prior in previous_findings.items():
             if fingerprint in seen or prior.change_state == "resolved":
                 continue
+            finding_type = prior.finding_type or ""
+            decision = index.find(fingerprint, finding_type, prior.related_object_id)
+            effective = resolve_status(decision, still_detected=False, now=started)
+            if effective.auto_transition:
+                from_status, to_status, note = effective.auto_transition
+                await record_history(
+                    session,
+                    fingerprint=fingerprint,
+                    finding_type=finding_type,
+                    scope_type=decision.scope_type if decision else "instance",
+                    scope_id=decision.scope_id if decision else prior.related_object_id,
+                    from_status=from_status,
+                    to_status=to_status,
+                    note=note,
+                    changed_by="sistem",
+                )
+                if decision is not None:
+                    decision.status = to_status
             findings.append(
                 ReportFinding(
                     report_id=report.id,
@@ -455,6 +504,8 @@ async def generate_report(
                         "open_since_days": prior.open_since_days,
                     },
                     fingerprint=fingerprint,
+                    finding_type=finding_type,
+                    status=STATUS_RESOLVED,
                     priority=_priority(
                         FindingDraft(
                             section=prior.section,
@@ -481,7 +532,10 @@ async def generate_report(
 
         # Genel durum: KABUL EDİLMEMİŞ bulguların en kötüsü. Kabul edilmiş bir kritik bulgu
         # raporun tamamını kırmızıya boyamamalı (talep edilen "kritik sayısını şişirmesin").
-        counted = [f for f in findings if not f.acknowledged and f.change_state != "resolved"]
+        # Kritik/uyarı sayaçları ve genel durum YALNIZCA "açık" bulguları sayar (Ek İŞ A):
+        # yoksayılan, ertelenen, planlanan, risk kabul edilen ya da kapanan bulgular raporun
+        # tamamını kırmızıya boyamaz.
+        counted = [f for f in findings if f.status in COUNTED_STATUSES]
         worst = max((SEVERITY_ORDER.get(f.severity, 0) for f in counted), default=0)
         report.overall_status = {3: "critical", 2: "warning", 1: "info", 0: "ok"}[worst]
         report.sections = {

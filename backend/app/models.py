@@ -467,6 +467,18 @@ class ReportFinding(Base):
     related_object_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     related_object_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # "<bölüm>:<bulgu tipi>" — hedef nesne kimliği içermez. Grup/uygulama/müşteri/küresel
+    # kapsamlı durum kararlarının aynı TİPTEKİ bulguları eşleştirebilmesi için (Ek İŞ A).
+    finding_type: Mapped[str] = mapped_column(String(96), nullable=False, default="", index=True)
+    # Bu rapordaki etkin durum: open | ignored | deferred | risk_accepted | planned |
+    # resolved_pending_verification | resolved.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    # "çözüldü_doğrulanacak" denmişti ama bulgu hâlâ tespit ediliyor — yanlış kapatma işareti.
+    verification_failed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Kararın kendisi (not/referans/süre) bulguyla birlikte gösterilebilsin diye kopyalanıyor.
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    decision_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Etki × aciliyet sıralaması için hesaplanan puan (Faz 17 İŞ 6) — büyük olan üstte.
     priority: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
     # Bu fingerprint kaç gündür kesintisiz açık (önceki raporlardan devralınır).
@@ -479,11 +491,26 @@ class ReportFinding(Base):
 
 
 class FindingAcknowledgement(Base):
-    """DBA'nın "bunu biliyorum, susturabilirsin" dediği bulgular (Faz 17 İŞ 1).
+    """Bir bulgu için verilmiş DURUM KARARI (Faz 17 Ek İŞ A).
 
-    Kabul edilen bulgu RAPORDAN SİLİNMEZ — "Bilinen konular" bölümüne düşer ve kritik sayısını
-    şişirmez. Süreli kabul destekleniyor: `expires_at` geçtiğinde bulgu tekrar normal
-    bölümüne döner (kalıcı susturma, unutulan bir sorunun sessizce büyümesi demek olurdu).
+    Başlangıçta yalnızca "kabul edildi" bilgisini tutuyordu; artık bir durum makinesinin
+    kaydı: açık / yoksayıldı / ertelendi / risk_kabul / planlandı / çözüldü_doğrulanacak /
+    çözüldü. Tablo adı `finding_acknowledgements` olarak KORUNDU — yeniden adlandırmak var
+    olan kurulumlarda veri taşıma gerektirirdi; kolon eklemek yeterli (repo'daki yerleşik
+    migration deseni).
+
+    **Kapsam (scope) artık kararın GENİŞLİĞİ.** Kullanıcı kararı şu seviyelerden birine
+    uygular:
+
+    * `instance` (varsayılan, en dar) — yalnızca bu tekil bulgu. `fingerprint` ile eşleşir;
+      fingerprint hedef nesneyi zaten içerdiği için başka bir sunucudaki aynı tip bulgu
+      etkilenmez.
+    * `group` / `application` / `customer` — bu bulgu TİPİ, o birime bağlı tüm
+      instance'larda. `finding_type` ile eşleşir.
+    * `global` — bu bulgu tipi her yerde.
+
+    En dar kapsamın varsayılan olması bilinçli: bir sunucuda verilen "yoksay" kararının
+    sessizce tüm filoyu susturması, raporun amacına aykırı olurdu.
     """
 
     __tablename__ = "finding_acknowledgements"
@@ -492,15 +519,52 @@ class FindingAcknowledgement(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # instance kapsamında tekil bulgunun kimliği; daha geniş kapsamlarda bu alan kararın
+    # verildiği ilk bulgunun fingerprint'ini taşır (izlenebilirlik için) ama eşleşme
+    # finding_type üzerinden yapılır.
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="global")
-    # NULL = bu fingerprint'i tüm kapsamlarda sustur.
+    # "<bölüm>:<bulgu tipi>" — hedef nesne kimliği İÇERMEZ, bu yüzden birim/küresel kapsamda
+    # aynı tip bulguları eşleştirebilir.
+    finding_type: Mapped[str | None] = mapped_column(String(96), nullable=True, index=True)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="instance")
+    # NULL = global (bu bulgu tipi her yerde).
     scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ignored")
     acknowledged_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    # NULL = süresiz. Arayüz varsayılan olarak 30 gün öneriyor.
+    # "ertelendi" için erteleme bitiş tarihi; "yoksayıldı" için opsiyonel süre. Geçtiğinde
+    # bulgu kendiliğinden "açık"a döner.
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # "planlandı" için serbest metin referans: değişiklik talebi no, ticket no, planlanan tarih.
+    reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Not her durum değişikliğinde ZORUNLU (router'da doğrulanıyor) — "neden bu karar verildi"
+    # sorusunun cevabı olmadan bir susturma kaydı altı ay sonra anlamsız hale gelir.
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class FindingStatusHistory(Base):
+    """Durum değişikliği geçmişi (Faz 17 Ek İŞ A).
+
+    Her geçiş ayrı bir satır: kim, ne zaman, hangi durumdan hangisine, hangi notla. Otomatik
+    geçişler (erteleme süresi doldu, çözüm doğrulanamadı, bulgu kayboldu) de buraya yazılır ve
+    `changed_by="sistem"` ile işaretlenir — böylece "bunu kim açtı?" sorusu her zaman
+    cevaplanabilir.
+    """
+
+    __tablename__ = "finding_status_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    finding_type: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="instance")
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reference: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    changed_by: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
 
 
 class DailyStateSnapshot(Base):

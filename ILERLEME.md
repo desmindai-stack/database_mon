@@ -2948,6 +2948,83 @@ halde aynı sorun iki kez sayılır ve kritik sayısı şişerdi.
 **Testler:** `tests/test_report_quality_rules.py` (11 test) + şema
 bölümüne 1 yeni test. Toplam: 278 test yeşil.
 
+## Faz 17 — Ek İŞ A (arka uç): Bulgu durum makinesi
+
+Tek "kabul edildi" bayrağı gerçek bir DBA akışını taşıyamıyordu: "şimdi
+bakamıyorum, salıya ertele", "bu riski bilerek kabul ediyoruz",
+"değişiklik talebi açtık", "düzelttim ama doğrulanmalı" birbirinden çok
+farklı kararlar. Yeni `services/finding_status.py` bunları yedi durumlu
+bir makineye bağlıyor: **açık / yoksayıldı / ertelendi / risk_kabul /
+planlandı / çözüldü_doğrulanacak / çözüldü**.
+
+**Model.** `FindingAcknowledgement` genişletildi (`status`,
+`finding_type`, `reference`); tablo adı korundu — yeniden adlandırmak var
+olan kurulumlarda veri taşıma gerektirirdi. Yeni `FindingStatusHistory`
+tablosu her geçişi saklıyor: kim, ne zaman, hangi durumdan hangisine,
+hangi notla. `ReportFinding`'e `status`, `finding_type`,
+`verification_failed`, `decision_note/reference/until` eklendi.
+Supabase migration `20260906090000_finding_status_machine.sql`
+(DEPLOY.md 25), **geriye dönük doldurma dahil**: eski `acknowledged=true`
+satırları `status='ignored'`e çevriliyor — yoksa yükseltmeden sonra daha
+önce susturulmuş bütün konular topluca kritik olarak geri dönerdi.
+
+**Not zorunlu.** Durum değişikliği notsuz kabul edilmiyor (uçta 422).
+Notsuz bir susturma kaydı altı ay sonra "bunu neden kapattık?" sorusunu
+cevapsız bırakır.
+
+**Kapsam seçimi.** Karar beş seviyeden birine uygulanabiliyor:
+`instance` (varsayılan, en dar) | `group` | `application` | `customer` |
+`global`. En dar kapsam tekil bulgunun fingerprint'iyle eşleşiyor; daha
+geniş kapsamlar bulgu TİPİYLE (`<bölüm>:<tip>`, hedef nesne kimliği
+içermez) eşleşiyor. Yeni `finding_type` alanı bunun için gerekliydi:
+fingerprint hedef nesneyi zaten içerdiğinden, onunla "bu tipi her yerde
+yoksay" demek imkânsızdı.
+
+Birden fazla karar eşleşirse **en dar olan kazanır** — bir sunucu için
+verilmiş özel karar, aynı tip için verilmiş küresel kararı ezer; istisna
+yönetimi böyle çalışmalı.
+
+**Üç otomatik geçiş** (rapor üretimi sırasında, hepsi geçmişe
+`changed_by="sistem"` olarak yazılıyor):
+
+1. `ertelendi` + süre doldu → `açık`.
+2. `çözüldü_doğrulanacak` + bulgu HÂLÂ tespit ediliyor → `açık` +
+   **"çözüm doğrulanamadı"** işareti. Yanlış kapatmaları yakalayan asıl
+   mekanizma; rapor bu bulguyu tekrar kritik sayıyor.
+3. Bulgu artık tespit edilmiyor → `çözüldü`, "düzelenler" bölümünde.
+
+Elle `çözüldü` denmiş ama bulgu duruyorsa o da doğrulanamamış sayılıyor —
+`çözüldü` yalnızca bulgunun gerçekten kaybolmasıyla kalıcı olabiliyor.
+
+**Rapora etkisi.**
+
+- Kritik/uyarı sayaçları ve genel durum **yalnızca "açık"** bulguları
+  sayıyor.
+- "Bilinen konular" bölümü artık yalnızca kabul edilenleri değil, açık
+  olmayan TÜM durumları kararlarıyla (kim, ne zaman, not, referans,
+  bitiş tarihi, kaç gün sonra geri açılacak) listeliyor. Süresi dolmuş
+  bir karar bu listeden düşüyor — artık bilinen konu değil, açık bulgu.
+- Yönetici raporuna yeni bir bölüm: **"Planlanan çalışmalar ve kabul
+  edilen riskler"**. `planlandı` ekibin çalıştığını, `risk_kabul`
+  bilinçli kararı gösteriyor. **`yoksayıldı` bu bölüme hiç girmiyor** —
+  o, ekibin kendi iç gürültü yönetimi kararı, müşteriye rapor edilecek
+  bir şey değil. Referans (ticket/CR no) yöneticinin takip edebilmesi
+  için taşınıyor ve o da sızıntı taramasından geçiyor.
+- Dışa aktarmada bölüm seçicisine eklendi.
+
+**Uçlar.** `POST /api/reports/findings/status` (tekil ve toplu aynı uçtan
+— iki ayrı uç iki ayrı hata yolu demek olurdu),
+`GET /api/reports/findings/{fingerprint}/history`. Eski
+`/acknowledgements` ucu geriye dönük uyumluluk için duruyor ve artık aynı
+duruma (`yoksayıldı`) yazıyor; iki mekanizmanın ayrışması kaçınılmaz bir
+tutarsızlık olurdu.
+
+**Testler:** `tests/test_finding_status.py` (24 test). Bu testler ikinci
+bir saniye-hassasiyeti hatası yakaladı: durum geçmişi sorgusu yalnızca
+`changed_at` ile sıralanıyordu ve aynı saniyedeki iki değişiklik rastgele
+sıralanıyordu (`_previous_report`'takiyle aynı düzeltme uygulandı).
+Toplam: 303 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

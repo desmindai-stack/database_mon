@@ -556,26 +556,76 @@ async def test_changes_section_classifies_new_regressed_and_resolved():
     assert result.status == "warning"
 
 
-async def test_known_issues_section_lists_acknowledgements_and_marks_expired():
+async def test_known_issues_section_lists_non_open_decisions_with_their_status():
+    """Ek İŞ A: bölüm artık yalnızca "kabul edilenleri" değil, açık olmayan TÜM durumları
+    (yoksayıldı/ertelendi/risk kabul/planlandı) kararlarıyla birlikte listeliyor."""
     from app.models import FindingAcknowledgement
+    from app.services.report_sections import known_issues_section
 
     async with SessionLocal() as session:
-        fingerprint = hr.make_fingerprint("x", uuid.uuid4().hex[:8])
+        instance = await _instance(session)
+        draft = hr.FindingDraft(
+            section="schema", severity="warning", title="Şişen tablo", detail="d",
+            evidence={"metric": "m", "value": 1}, fingerprint_parts=("bloat", str(instance.id)),
+            related_object_type="instance", related_object_id=instance.id,
+        )
+        fingerprint = hr.make_fingerprint("schema", "bloat", str(instance.id))
         session.add(
             FindingAcknowledgement(
-                fingerprint=fingerprint, scope_type="global", scope_id=None,
-                acknowledged_by="dba", expires_at=datetime.now(UTC) - timedelta(days=1),
-                note="süresi dolmuş",
+                fingerprint=fingerprint,
+                finding_type="schema:bloat",
+                scope_type="instance",
+                scope_id=instance.id,
+                status="planned",
+                acknowledged_by="dba",
+                reference="CHG-1234",
+                note="Değişiklik talebi açıldı",
             )
         )
         await session.commit()
 
-        result = await known_issues_section(_ctx(session, []), [])
+        results = [hr.SectionResult(key="schema", title="Şema", status="warning", summary="", findings=[draft])]
+        result = await known_issues_section(_ctx(session, [instance]), results)
 
-    item = next(i for i in result.data["items"] if i["fingerprint"] == fingerprint)
-    assert item["expired"] is True
-    assert item["note"] == "süresi dolmuş"
-    assert "süresi dolmuş" in result.summary or result.status == "info"
+    assert len(result.data["items"]) == 1
+    item = result.data["items"][0]
+    assert item["status"] == "planned"
+    assert item["status_label"] == "Planlandı"
+    assert item["reference"] == "CHG-1234"
+    assert item["note"] == "Değişiklik talebi açıldı"
+    assert result.data["by_status"] == {"planned": 1}
+
+
+async def test_known_issues_section_drops_a_decision_whose_deadline_passed():
+    """Süresi dolmuş erteleme artık "bilinen konu" değil — açık bir bulgudur."""
+    from app.models import FindingAcknowledgement
+    from app.services.report_sections import known_issues_section
+
+    async with SessionLocal() as session:
+        instance = await _instance(session)
+        draft = hr.FindingDraft(
+            section="schema", severity="warning", title="Ertelenmişti", detail="d",
+            evidence={"metric": "m", "value": 1}, fingerprint_parts=("late", str(instance.id)),
+            related_object_type="instance", related_object_id=instance.id,
+        )
+        session.add(
+            FindingAcknowledgement(
+                fingerprint=hr.make_fingerprint("schema", "late", str(instance.id)),
+                finding_type="schema:late",
+                scope_type="instance",
+                scope_id=instance.id,
+                status="deferred",
+                acknowledged_by="dba",
+                expires_at=datetime.now(UTC) - timedelta(days=1),
+                note="salıya bak",
+            )
+        )
+        await session.commit()
+
+        results = [hr.SectionResult(key="schema", title="Şema", status="warning", summary="", findings=[draft])]
+        result = await known_issues_section(_ctx(session, [instance]), results)
+
+    assert result.data["items"] == []
 
 
 # --- Parametreler ve ön koşullar (günlük durum fotoğrafından) ---------------------------

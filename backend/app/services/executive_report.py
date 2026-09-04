@@ -27,6 +27,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.finding_status import (
+    EXECUTIVE_VISIBLE_DECISIONS,
+    STATUS_OPEN,
+    STATUS_PLANNED,
+    STATUS_RESOLVED,
+)
 from app.models import (
     Application,
     DatabaseGroup,
@@ -155,6 +161,10 @@ class ExecutiveReport:
     trend: dict[str, Any] = field(default_factory=dict)
     work_done: dict[str, Any] = field(default_factory=dict)
     recommendations: list[dict[str, Any]] = field(default_factory=list)
+    # Ek İŞ A: "planlandı" ve "risk kabul" durumundaki konular. Biri ekibin çalıştığını,
+    # diğeri bilinçli bir kararı gösterir — ikisi de yöneticinin bilmesi gereken şeyler.
+    # "Yoksayıldı" BURAYA GİRMEZ: o, ekibin kendi iç gürültü yönetimi kararıdır.
+    decisions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _period_label(start: datetime, end: datetime) -> str:
@@ -311,8 +321,9 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
             )
         ).scalars().all()
     )
-    open_findings = [f for f in findings if not f.acknowledged and f.change_state != "resolved"]
-    resolved = [f for f in findings if f.change_state == "resolved"]
+    # Ek İŞ A: yalnızca "açık" bulgular riske dönüşür.
+    open_findings = [f for f in findings if f.status == STATUS_OPEN and f.change_state != "resolved"]
+    resolved = [f for f in findings if f.change_state == "resolved" or f.status == STATUS_RESOLVED]
 
     critical = sum(1 for f in open_findings if f.severity == "critical")
     warning = sum(1 for f in open_findings if f.severity == "warning")
@@ -453,6 +464,32 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         ),
     }
 
+    # "Planlandı" / "risk kabul" konuları — teknik detay olmadan, iş etkisiyle.
+    decision_rows: list[dict[str, Any]] = []
+    decision_seen: set[tuple[str, str]] = set()
+    for finding in findings:
+        if finding.status not in EXECUTIVE_VISIBLE_DECISIONS:
+            continue
+        template = _SECTION_TEMPLATES.get(finding.section, _DEFAULT_TEMPLATE)
+        target = _safe_label(await _target_label(session, finding, report.scope_label), "İzlenen sistem")
+        key = (finding.status, template["area"] + target)
+        if key in decision_seen:
+            continue
+        decision_seen.add(key)
+        decision_rows.append(
+            {
+                "kind": "planned" if finding.status == STATUS_PLANNED else "risk_accepted",
+                "label": "Çalışma planlandı" if finding.status == STATUS_PLANNED else "Risk bilinçli kabul edildi",
+                "area": template["area"],
+                "application": target,
+                "statement": template["statement"].format(target=target),
+                "business_impact": template["impact"],
+                # Referans (ticket/CR no) yöneticinin takip edebilmesi için tek teknik olmayan
+                # tanımlayıcı — serbest metin, sunucu/sorgu bilgisi içermez.
+                "reference": finding.decision_reference,
+            }
+        )
+
     executive = ExecutiveReport(
         scope_label=report.scope_label,
         period_start=report.period_start,
@@ -467,6 +504,7 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         trend=trend,
         work_done=work_done,
         recommendations=recommendations,
+        decisions=decision_rows,
     )
 
     # Savunma katmanı: üretilen tüm serbest metin taranır.
@@ -480,5 +518,10 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         assert_no_technical_leak(recommendation["if_not_done"], "recommendation.if_not_done")
     assert_no_technical_leak(executive.grade_reason, "grade_reason")
     assert_no_technical_leak(executive.work_done["note"], "work_done.note")
+    for decision in executive.decisions:
+        assert_no_technical_leak(decision["statement"], "decision.statement")
+        assert_no_technical_leak(decision["business_impact"], "decision.business_impact")
+        if decision["reference"]:
+            assert_no_technical_leak(decision["reference"], "decision.reference")
 
     return executive

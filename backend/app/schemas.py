@@ -1277,6 +1277,13 @@ class ReportFindingOut(BaseModel):
     open_since_days: int
     change_state: str
     acknowledged: bool
+    # Ek İŞ A — durum makinesi.
+    finding_type: str = ""
+    status: str = "open"
+    verification_failed: bool = False
+    decision_note: str | None = None
+    decision_reference: str | None = None
+    decision_until: datetime | None = None
 
     @field_validator("evidence", mode="before")
     @classmethod
@@ -1390,3 +1397,69 @@ class ExecutiveReportOut(BaseModel):
     trend: dict[str, Any] = {}
     work_done: dict[str, Any] = {}
     recommendations: list[dict[str, Any]] = []
+    # Ek İŞ A: "planlandı" / "risk kabul" konuları. Yoksayılanlar bu listeye HİÇ girmez.
+    decisions: list[dict[str, Any]] = []
+
+
+# --- Bulgu durum makinesi (Faz 17 Ek İŞ A) ---
+
+
+class FindingStatusUpdate(BaseModel):
+    """Tek bir bulgu için durum kararı.
+
+    `note` zorunlu: notsuz bir susturma kaydı altı ay sonra "bunu neden kapattık?" sorusunu
+    cevapsız bırakır. Kapsam varsayılanı en dar seviye (instance).
+    """
+
+    fingerprint: str
+    finding_type: str
+    status: Literal[
+        "open", "ignored", "deferred", "risk_accepted", "planned",
+        "resolved_pending_verification", "resolved",
+    ]
+    scope_type: Literal["instance", "group", "application", "customer", "global"] = "instance"
+    scope_id: int | None = None
+    note: str = Field(min_length=1)
+    # "ertelendi"/"yoksayıldı" için bitiş tarihi; geçince bulgu otomatik açılır.
+    until: datetime | None = None
+    # "planlandı" için serbest metin referans (değişiklik talebi no, ticket no, tarih).
+    reference: str | None = None
+
+
+class BulkFindingStatusUpdate(BaseModel):
+    """Toplu işlem: birden çok bulguya aynı durum."""
+
+    findings: list[FindingStatusUpdate] = Field(min_length=1)
+
+
+class FindingStatusHistoryOut(BaseModel):
+    id: int
+    fingerprint: str
+    finding_type: str | None
+    scope_type: str
+    scope_id: int | None
+    from_status: str | None
+    to_status: str
+    note: str | None
+    reference: str | None
+    expires_at: datetime | None
+    changed_by: str
+    changed_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class FindingDecisionOut(BaseModel):
+    id: int
+    fingerprint: str
+    finding_type: str | None
+    scope_type: str
+    scope_id: int | None
+    status: str
+    acknowledged_by: str
+    acknowledged_at: datetime
+    expires_at: datetime | None
+    reference: str | None
+    note: str | None
+
+    model_config = {"from_attributes": True}

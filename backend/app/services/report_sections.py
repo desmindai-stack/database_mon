@@ -29,6 +29,14 @@ from app.models import (
     SlowQuerySample,
 )
 from app.services.collection import effective_collect_interval
+from app.services.finding_status import (
+    STATUS_LABELS_TR,
+    STATUS_OPEN,
+    DecisionIndex,
+    build_scope_membership,
+    make_finding_type,
+    resolve_status,
+)
 from app.services.health_report import (
     FindingDraft,
     ReportContext,
@@ -1806,59 +1814,77 @@ async def changes_section(ctx: ReportContext, results: list[SectionResult]) -> S
 
 @register_summary_section
 async def known_issues_section(ctx: ReportContext, results: list[SectionResult]) -> SectionResult:
-    """12. Bilinen konular — kabul edilmiş bulgular, kaç gündür açık.
+    """12. Bilinen konular — açık olmayan durumdaki bulgular, kararlarıyla birlikte.
 
-    Bu bölüm de kendi bulgusunu üretmez; kabul edilmiş bulgular asıl bölümlerinde durur ve
-    burada listelenir. Amaç, "susturulan" şeylerin gözden kaybolmaması.
+    Ek İŞ A sonrası bu bölüm yalnızca "kabul edilenleri" değil, açık olmayan TÜM durumları
+    (yoksayıldı / ertelendi / risk kabul / planlandı) taşıyor. Bulgular asıl bölümlerinden
+    çıkarılmıyor — rapor yapısında duruyorlar, sadece burada durumlarıyla listeleniyorlar ki
+    "susturulan" şeyler gözden kaybolmasın.
     """
-    acks = (
+    decisions = (
         await ctx.session.execute(select(FindingAcknowledgement).order_by(FindingAcknowledgement.acknowledged_at.desc()))
     ).scalars().all()
-    if not acks:
+    if not decisions:
         return SectionResult(
             key="known_issues",
             title="Bilinen konular",
             status="ok",
-            summary="Kabul edilmiş (susturulmuş) bulgu yok.",
+            summary="Açık dışında bir duruma alınmış bulgu yok.",
             data={"items": []},
         )
 
     now = datetime.now(UTC)
-    current = {make_fingerprint(d.section, *d.fingerprint_parts): d for d in _all_drafts(results)}
+    membership = await build_scope_membership(ctx.session, ctx.instances)
+    index = DecisionIndex(list(decisions), membership)
+
+    current: dict[str, FindingDraft] = {}
+    for draft in (d for r in results for d in r.findings):
+        current[make_fingerprint(draft.section, *draft.fingerprint_parts)] = draft
 
     items = []
-    for ack in acks:
-        if ack.scope_id is not None and (
-            ack.scope_type != ctx.scope.scope_type or ack.scope_id != ctx.scope.scope_id
-        ):
+    for fingerprint, draft in current.items():
+        finding_type = make_finding_type(draft.section, draft.fingerprint_parts)
+        instance_id = draft.related_object_id if draft.related_object_type == "instance" else None
+        decision = index.find(fingerprint, finding_type, instance_id)
+        if decision is None or decision.status == STATUS_OPEN:
             continue
-        expired = ack.expires_at is not None and as_utc(ack.expires_at) <= now
-        draft = current.get(ack.fingerprint)
-        prior = ctx.previous_findings.get(ack.fingerprint)
+        effective = resolve_status(decision, still_detected=True, now=now)
+        if effective.status == STATUS_OPEN:
+            # Süresi dolmuş ya da doğrulanamamış — artık bilinen konu değil, açık bir bulgu.
+            continue
+        expires = as_utc(decision.expires_at) if decision.expires_at else None
         items.append(
             {
-                "fingerprint": ack.fingerprint,
-                "title": draft.title if draft else (prior.title if prior else "(bu raporda görünmüyor)"),
-                "section": draft.section if draft else (prior.section if prior else None),
-                "severity": draft.severity if draft else (prior.severity if prior else None),
-                "acknowledged_by": ack.acknowledged_by,
-                "acknowledged_at": as_utc(ack.acknowledged_at).isoformat(),
-                "expires_at": as_utc(ack.expires_at).isoformat() if ack.expires_at else None,
-                "expired": expired,
-                "note": ack.note,
-                "open_since_days": (prior.open_since_days + 1) if prior else 0,
-                "still_present": draft is not None,
+                "fingerprint": fingerprint,
+                "finding_type": finding_type,
+                "title": draft.title,
+                "section": draft.section,
+                "severity": draft.severity,
+                "status": effective.status,
+                "status_label": STATUS_LABELS_TR.get(effective.status, effective.status),
+                "scope_type": decision.scope_type,
+                "scope_id": decision.scope_id,
+                "decided_by": decision.acknowledged_by,
+                "decided_at": as_utc(decision.acknowledged_at).isoformat() if decision.acknowledged_at else None,
+                "until": expires.isoformat() if expires else None,
+                "reference": decision.reference,
+                "note": decision.note,
+                "days_until_reopen": (expires - now).days if expires else None,
             }
         )
 
-    expired_count = sum(1 for i in items if i["expired"])
+    by_status: dict[str, int] = {}
+    for item in items:
+        by_status[item["status"]] = by_status.get(item["status"], 0) + 1
+
     return SectionResult(
         key="known_issues",
         title="Bilinen konular",
-        status="info" if expired_count else "ok",
+        status="info" if items else "ok",
         summary=(
-            f"{len(items)} kabul edilmiş bulgu"
-            + (f"; {expired_count} tanesinin kabul süresi dolmuş ve tekrar öne çıktı." if expired_count else ".")
+            ", ".join(f"{STATUS_LABELS_TR.get(k, k)}: {v}" for k, v in sorted(by_status.items())) + "."
+            if items
+            else "Açık dışında bir duruma alınmış bulgu yok."
         ),
-        data={"items": items},
+        data={"items": items, "by_status": by_status},
     )

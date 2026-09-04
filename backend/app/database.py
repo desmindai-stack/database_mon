@@ -189,6 +189,28 @@ async def migrate_schema() -> None:
             conn, "instances", "ignored_prerequisites", "ignored_prerequisites JSON"
         )
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "playbook", "playbook JSON")
+        # Faz 17 Ek İŞ A — bulgu durum makinesi.
+        await _sqlite_add_column_if_missing(conn, "finding_acknowledgements", "finding_type", "finding_type VARCHAR(96)")
+        await _sqlite_add_column_if_missing(
+            conn, "finding_acknowledgements", "status", "status VARCHAR(32) DEFAULT 'ignored'"
+        )
+        await _sqlite_add_column_if_missing(conn, "finding_acknowledgements", "reference", "reference VARCHAR(255)")
+        await _sqlite_add_column_if_missing(conn, "report_findings", "finding_type", "finding_type VARCHAR(96) DEFAULT ''")
+        await _sqlite_add_column_if_missing(conn, "report_findings", "status", "status VARCHAR(32) DEFAULT 'open'")
+        await _sqlite_add_column_if_missing(
+            conn, "report_findings", "verification_failed", "verification_failed BOOLEAN DEFAULT 0"
+        )
+        await _sqlite_add_column_if_missing(conn, "report_findings", "decision_note", "decision_note TEXT")
+        await _sqlite_add_column_if_missing(conn, "report_findings", "decision_reference", "decision_reference VARCHAR(255)")
+        await _sqlite_add_column_if_missing(conn, "report_findings", "decision_until", "decision_until TIMESTAMP")
+        # Eski "acknowledged" bayrağını yeni durum modeline taşı — yoksa yükseltmeden sonra
+        # daha önce susturulmuş bulgular topluca kritik olarak geri döner.
+        await conn.execute(
+            text("UPDATE report_findings SET status = 'ignored' WHERE acknowledged = 1 AND status = 'open'")
+        )
+        await conn.execute(
+            text("UPDATE report_findings SET status = 'resolved' WHERE change_state = 'resolved' AND status = 'open'")
+        )
 
 
 async def init_db() -> None:
