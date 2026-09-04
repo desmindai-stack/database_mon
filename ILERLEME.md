@@ -2769,6 +2769,62 @@ girmiyor; kapanmışlar "yapılan işler" sayısını besliyor.
 `tests/test_health_report_api.py`'ye 3 uç testi (viewer da yönetici
 raporunu görebiliyor; tamamlanmamış rapor 409). Toplam: 249 test yeşil.
 
+## Faz 17 — İŞ 4: Rapor dışa aktarma (PDF / HTML / Markdown)
+
+**Mimari: tek içerik, üç renderer.** Rapor önce biçimden bağımsız bir
+"blok belgesine" (`Document`: başlık, paragraf, madde listesi, tablo,
+anahtar-değer, not, kod) çevriliyor; PDF, HTML ve Markdown bu AYNI
+belgeden üretiliyor. Üç ayrı şablon yazmak, zamanla üçünün ayrışması
+demekti (PDF'de olan bir bölümün HTML'de olmaması gibi); bu yapıda bir
+bölüm eklendiğinde üç çıktıda da otomatik görünüyor.
+
+- `services/report_export.py` — belge modeli ve üç renderer.
+- `services/report_documents.py` — raporu bloklara çeviren iki builder
+  (teknik ve yönetici).
+
+**PDF motoru: ReportLab** (gerekçe SORULAR.md'de). Özetle: WeasyPrint
+HTML/CSS render ettiği için tek şablonla çalışmayı mümkün kılardı ama
+cairo/pango gibi işletim sistemi kütüphaneleri istiyor; bunları kurmak
+`deploy/onprem/Dockerfile.backend` dosyasını değiştirmeyi gerektirirdi ve
+deploy dosyalarına dokunulmaması kuralı bunu kapatıyor. ReportLab saf
+Python — `requirements.txt`'e tek satır yetti.
+
+**Türkçe karakter sorunu çözüldü.** ReportLab'ın varsayılan Helvetica'sı
+WinAnsi kodlamasıyla sınırlı ve ğ/ş/ı/İ basamıyor. ReportLab'ın kendi
+paketiyle gelen Bitstream Vera TTF'leri gömülü font olarak kaydediliyor;
+ek dosya ya da sistem fontu gerekmiyor. Fontun tüm Türkçe karakterleri ve
+tipografik tırnakları içerdiği doğrulandı, PDF üretimi testle kanıtlandı.
+
+**Bölüm seçimi.** `GET /api/reports/{id}/export?sections=a,b,c` ile
+yalnızca istenen bölümler dahil ediliyor — müşteriye gönderilecek
+çıktıdan teknik bölümler çıkarılabiliyor. Seçici için
+`GET /api/reports/{id}/export-sections` mevcut bölümleri (teknik ya da
+yönetici görünümü için ayrı ayrı) döndürüyor.
+
+**Kurumsal görünüm.** HTML çıktısı kendi kendine yeten tek dosya (stil
+gömülü, dışarıdan hiçbir kaynak çekmiyor), `@media print` kurallarıyla
+yazdırılabilir; tablolar ve notlar sayfa ortasından bölünmüyor. PDF A4,
+başlık bloğu + dönem/durum meta satırı, çizgili tablolar, renkli kenarlı
+not kutuları, her sayfada alt bilgi ve sayfa numarası. Markdown çıktısı
+e-posta/Slack'e yapıştırmak için — tablolar GFM biçiminde, komutlar
+` ```sql ` bloklarında.
+
+**Anlamlı dosya adı.** `x-bank_rapor_2026-09-04.pdf`, yönetici görünümü
+için `x-bank_rapor-yonetici_2026-09-04.pdf`. Türkçe harfler ASCII'ye elle
+eşleniyor: NFKD normalizasyonu tek başına 'ı' ve 'ğ' harflerini tamamen
+düşürüp "Iğdır"ı "gdr" yapardı.
+
+**Yetki.** Export uçları GET olduğu için viewer rolü de dışa
+aktarabiliyor (İŞ 5'te istenen davranış); elle tetikleme ve bulgu kabulü
+hâlâ admin'e kapalı.
+
+**Testler:** `tests/test_report_export.py` (17 test) — üç renderer'ın her
+blok tipini basması, HTML'in kendi kendine yetmesi ve içeriği kaçırması
+(XSS), PDF'in gerçek PDF olması ve Türkçe basması, boş tablonun üç
+biçimde de atlanması, dosya adı üretimi, bölüm filtresi, yönetici
+çıktısına teknik detay sızmaması, viewer'ın export alabilmesi,
+tamamlanmamış raporun 409 dönmesi. Toplam: 266 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,6 +29,12 @@ from app.schemas import (
 )
 from app.services.auth_deps import get_current_user
 from app.services.executive_report import build_executive_report
+from app.services.report_documents import (
+    EXECUTIVE_SECTION_KEYS,
+    build_executive_document,
+    build_technical_document,
+)
+from app.services.report_export import RENDERERS, export_filename
 from app.services.health_report import ReportScope, enqueue_report, resolve_scope_label
 from app.services.settings import get_health_report_schedule, set_health_report_schedule
 
@@ -264,6 +270,83 @@ async def get_executive_report(report_id: int, db: AsyncSession = Depends(get_db
         raise HTTPException(status_code=409, detail="Rapor henüz tamamlanmadı")
     executive = await build_executive_report(db, report)
     return ExecutiveReportOut(**vars(executive))
+
+
+@router.get("/{report_id}/export")
+async def export_report(
+    report_id: int,
+    format: str = Query(default="pdf", pattern="^(pdf|html|md)$"),
+    view: str = Query(default="technical", pattern="^(technical|executive)$"),
+    sections: str | None = Query(
+        default=None,
+        description="Virgülle ayrılmış bölüm anahtarları. Verilmezse tüm bölümler dahil edilir.",
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Raporu PDF/HTML/Markdown olarak indirir (Faz 17 İŞ 4).
+
+    GET olduğu için viewer rolü de dışa aktarabilir — istenen davranış bu. `sections` ile
+    müşteriye gönderilecek çıktıdan teknik bölümler çıkarılabilir.
+    """
+    report = await db.get(HealthReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadı")
+    if report.status != "done":
+        raise HTTPException(status_code=409, detail="Rapor henüz tamamlanmadı")
+
+    selected = [s.strip() for s in sections.split(",") if s.strip()] if sections else None
+
+    if view == "executive":
+        executive = await build_executive_report(db, report)
+        document = build_executive_document(executive, selected)
+    else:
+        findings = list(
+            (
+                await db.execute(
+                    select(ReportFinding)
+                    .where(ReportFinding.report_id == report_id)
+                    .order_by(ReportFinding.priority.desc())
+                )
+            ).scalars().all()
+        )
+        document = build_technical_document(report, findings, selected)
+
+    render, media_type, extension = RENDERERS[format]
+    payload = render(document)
+    body = payload if isinstance(payload, bytes) else payload.encode("utf-8")
+    filename = export_filename(
+        report.scope_label, report.generated_at, extension, view="yonetici" if view == "executive" else ""
+    )
+    return Response(
+        content=body,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{report_id}/export-sections", response_model=list[dict])
+async def list_exportable_sections(report_id: int, view: str = Query(default="technical"), db: AsyncSession = Depends(get_db)) -> list[dict]:
+    """Dışa aktarma öncesi bölüm seçimi için kullanılabilir bölümlerin listesi."""
+    report = await db.get(HealthReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadı")
+    if view == "executive":
+        labels = {
+            "summary": "Genel değerlendirme",
+            "availability": "Erişilebilirlik",
+            "inventory": "Sistem envanteri",
+            "risks": "Risk özeti",
+            "trend": "Önceki döneme göre",
+            "work_done": "Bu dönemde yapılanlar",
+            "recommendations": "Öneriler",
+        }
+        return [{"key": k, "title": labels[k]} for k in EXECUTIVE_SECTION_KEYS]
+    sections = report.sections or {}
+    items = sections.get("items") or {}
+    return [
+        {"key": key, "title": (items.get(key) or {}).get("title") or key}
+        for key in (sections.get("order") or [])
+    ]
 
 
 @router.delete("/{report_id}", status_code=204)

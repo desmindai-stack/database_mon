@@ -3,6 +3,64 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — İŞ 4: PDF için ReportLab seçildi (WeasyPrint değil)
+
+İstenen seçim buydu: "weasyprint veya reportlab — hangisini seçtiğini
+gerekçesiyle yaz."
+
+**WeasyPrint'in avantajı** açıktı: HTML/CSS render ediyor, yani HTML
+export'u için yazdığım şablonu PDF için de kullanabilirdim; tek şablon,
+tek bakım noktası, daha zengin tipografi.
+
+**Ama kuramazdım.** WeasyPrint saf Python değil: cairo, pango,
+gdk-pixbuf ve harfbuzz sistem kütüphanelerine bağlı. Bunları kurmak
+`deploy/onprem/Dockerfile.backend` içindeki `apt-get install` satırını
+değiştirmeyi gerektiriyor (şu an yalnızca `libpq5` kurulu). Görevin
+kuralları deploy dosyalarına dokunmayı açıkça yasaklıyor. Dokunmadan
+eklersem üretimde `ImportError`/`OSError` ile patlayan, sadece benim
+geliştirme makinemde çalışan bir özellik olurdu — sessizce bozuk bir
+şey teslim etmektense çalışan bir şey teslim etmeyi seçtim.
+
+**ReportLab** saf Python (yalnızca Pillow'u opsiyonel olarak ister,
+onu da kullanmıyorum). `requirements.txt`'e bir satır ekleyince
+Dockerfile'daki `pip install -r requirements.txt` adımı onu zaten
+kuruyor — deploy dosyalarına hiç dokunulmuyor.
+
+**Tek şablon avantajını kaybetmemek için** araya biçimden bağımsız bir
+blok belgesi katmanı koydum: rapor önce `Document`'e çevriliyor, üç
+renderer da ondan besleniyor. Yani WeasyPrint'in vaat ettiği "tek içerik
+kaynağı" faydası, sistem bağımlılığı olmadan elde edildi. Bedeli,
+renderer'ları elle yazmak oldu (~250 satır); kazancı, çıktı biçimlerinin
+yapısal olarak birbirinden ayrışamaması.
+
+İleride Docker imajı değiştirilebilir hale gelirse WeasyPrint dördüncü
+bir renderer olarak eklenebilir — mimari buna açık, `RENDERERS`
+sözlüğüne bir satır.
+
+## Faz 17 — İŞ 4: Türkçe karakterler için gömülü font
+
+ReportLab'ın varsayılan Helvetica'sı WinAnsi (cp1252) kodlamasıyla
+sınırlı; ğ, Ğ, ş, Ş, ı, İ bu kümede YOK. Türkçe bir ürün için PDF
+çıktısında "Ig˘dır" gibi bozuk metin kabul edilemezdi.
+
+Sistem fontuna güvenmek (ör. DejaVu) `python:3.12-slim` imajında font
+paketi bulunmadığı için çalışmazdı ve yine Dockerfile değişikliği
+gerektirirdi. Bunun yerine ReportLab'ın KENDİ paketiyle gelen Bitstream
+Vera TTF'lerini gömüyorum — pip ile zaten geliyorlar, ek dosya yok,
+lisansları serbest. Vera'nın gerekli tüm Türkçe karakterleri (ve tire/
+tırnak gibi tipografik işaretleri) içerdiğini kontrol edip teste bağladım.
+
+## Faz 17 — İŞ 4: Grafikler PDF'e konmadı
+
+İŞ 3'te yönetici raporu için "birkaç basit grafik" isteniyordu. Dışa
+aktarımda grafik yerine SAYISAL TABLO kullandım (önceki dönem / bu dönem
+karşılaştırması). Sebep: PDF'e grafik basmak ya ReportLab'ın kendi çizim
+API'siyle ikinci bir görselleştirme katmanı yazmayı ya da matplotlib
+bağımlılığı eklemeyi gerektirirdi; ikisi de bu işin kapsamını ciddi
+biçimde büyütürdü. Karşılaştırma tablosu aynı bilgiyi (iyileşti mi,
+kötüleşti mi, ne kadar) kayıpsız veriyor. Grafikler arayüzde (İŞ 5)
+gösterilecek; export'ta tablo olarak yer alıyor.
+
 ## Faz 17 — İŞ 3: Yönetici cümleleri şablondan üretiliyor, bulgudan çevrilmiyor
 
 "Aynı veriden türeyecek, aynı gerçeği anlatacak, sadece derinlik ve dil
