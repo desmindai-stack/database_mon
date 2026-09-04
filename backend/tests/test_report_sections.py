@@ -351,6 +351,25 @@ async def test_schema_section_unknown_without_daily_snapshots():
 async def test_schema_section_states_what_it_cannot_measure():
     async with SessionLocal() as session:
         instance = await _instance(session)
+        today = datetime.now(UTC).date()
+        # İki gün gerekiyor: tek fotoğraftan büyüme çıkarılamaz (Faz 17 İŞ 6).
+        for offset in (1, 0):
+            session.add(
+                SchemaObjectDailySample(
+                    instance_id=instance.id, day=today - timedelta(days=offset), object_kind="table",
+                    schema_name="app", object_name="t", size_bytes=1,
+                )
+            )
+        await session.commit()
+        result = await schema_section(_ctx(session, [instance]))
+
+    assert "Autovacuum gecikmesi" in result.data["note"]
+
+
+async def test_schema_section_needs_two_days_before_claiming_anything():
+    """Tek günlük fotoğraftan "büyüme yok" sonucu çıkarmak yanlış olurdu."""
+    async with SessionLocal() as session:
+        instance = await _instance(session)
         session.add(
             SchemaObjectDailySample(
                 instance_id=instance.id, day=datetime.now(UTC).date(), object_kind="table",
@@ -360,7 +379,9 @@ async def test_schema_section_states_what_it_cannot_measure():
         await session.commit()
         result = await schema_section(_ctx(session, [instance]))
 
-    assert "Autovacuum gecikmesi" in result.data["note"]
+    assert result.status == "unknown"
+    assert "1 gün daha gerekli" in result.unknown_reason
+    assert result.data["days_observed"] == 1
 
 
 # --- Alarmlar --------------------------------------------------------------------------

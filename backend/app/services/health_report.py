@@ -226,7 +226,11 @@ async def _previous_report(session: AsyncSession, scope: ReportScope, before: da
             HealthReport.status == "done",
             HealthReport.generated_at < before,
         )
-        .order_by(HealthReport.generated_at.desc())
+        # id ikinci sıralama ölçütü: SQLite'ın CURRENT_TIMESTAMP'i SANİYE hassasiyetinde,
+        # yani aynı saniyede üretilen iki rapor eşitlenir ve "önceki rapor" zinciri kopar
+        # ("kaç gündür açık" sayacı ilerlemez). id her zaman artan olduğu için beraberliği
+        # doğru yönde bozar.
+        .order_by(HealthReport.generated_at.desc(), HealthReport.id.desc())
         .limit(1)
     )
     stmt = stmt.where(HealthReport.scope_id.is_(None) if scope.scope_id is None else HealthReport.scope_id == scope.scope_id)
@@ -311,13 +315,37 @@ async def _run_sections(ctx: ReportContext, report: HealthReport, session: Async
     return summary_results + results
 
 
+# Öneri üretilemeyen kritik/uyarı bulguları için standart açıklama. Kural (Faz 17 İŞ 6):
+# "her kritik/uyarı bulgusunun bir önerisi olsun; öneri veremiyorsa NEDENİNİ yazsın." Sessizce
+# boş bırakmak, kullanıcıyı "bu bulguyla ne yapacağım?" sorusuyla baş başa bırakırdı.
+NO_RECOMMENDATION_EXPLANATION = (
+    "Bu bulgu için otomatik bir öneri üretilemedi: dbace'in elindeki veri sorunun nedenini "
+    "belirlemeye yetmiyor. Bulgunun kanıt satırındaki metrikten yola çıkıp ilgili detay "
+    "sayfasını inceleyin."
+)
+
+
 def _validated_drafts(results: list[SectionResult]) -> list[FindingDraft]:
+    """Kalite kurallarını (Faz 17 İŞ 6) rapor kaydedilmeden ÖNCE uygular.
+
+    * **Kanıt zorunluluğu** — kanıtsız bulgu rapora giremez, hata verir. Kanıt bulgunun
+      doğruluğunun tek dayanağı; eksikse bulgunun kendisi güvenilmezdir.
+    * **Aksiyon edilebilirlik** — kritik/uyarı bulgusunun önerisi yoksa bulgu ATILMAZ, yerine
+      neden öneri verilemediği yazılır. Bulguyu atmak gerçek bir sorunu gizlemek olurdu;
+      hata vermek de tek bir bölümün eksiği yüzünden tüm raporu düşürürdü.
+    """
     drafts: list[FindingDraft] = []
     for result in results:
         for draft in result.findings:
             if not draft.evidence:
-                # Kalite kuralı kodda zorlanıyor: kanıtsız bulgu rapora giremez.
                 raise ValueError(f"Kanıtsız bulgu üretildi: {result.key}/{draft.title}")
+            if draft.severity in ("critical", "warning") and not (draft.recommendation or "").strip():
+                logger.warning(
+                    "Öneri üretilmeyen bulgu: %s/%s — standart açıklama eklendi",
+                    result.key,
+                    draft.title,
+                )
+                draft.recommendation = NO_RECOMMENDATION_EXPLANATION
             drafts.append(draft)
     return drafts
 

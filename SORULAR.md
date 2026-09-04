@@ -3,6 +3,47 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — İŞ 6: Önerisiz kritik bulgu atılmıyor, nedeni yazılıyor
+
+"Her kritik/uyarı bulgusunun bir önerisi olsun; öneri veremiyorsa
+nedenini yazsın" kuralını üç şekilde uygulayabilirdim:
+
+1. Önerisiz bulguyu rapordan çıkarmak — gerçek bir sorunu gizlemek olurdu.
+2. Üretimi hata ile durdurmak (kanıt kuralında yaptığım gibi) — tek bir
+   bölümün eksiği yüzünden tüm rapor düşerdi; rapor 06:00'da otomatik
+   çalışıyor, kimse fark etmeden günlerce rapor üretilmeyebilirdi.
+3. Standart bir "neden öneri verilemedi" açıklaması koymak ve durumu
+   loga düşmek.
+
+3'ü seçtim. Kanıt kuralında ise 1/2 arasından hata vermeyi seçmiştim,
+çünkü kanıt bulgunun DOĞRULUĞUNUN dayanağı: kanıtsız bulgu güvenilmez bir
+iddiadır ve raporda hiç yer almamalı. Öneri ise sunum katmanı — eksikliği
+bulguyu yanlış yapmaz, sadece daha az kullanışlı kılar.
+
+## Faz 17 — İŞ 6: Şema bölümü iki günlük veri istiyor
+
+Tek bir günlük şema fotoğrafından tablo büyümesi hesaplanamaz. Önceden
+tek fotoğrafla da bölüm çalışıyor ve "0 büyüyen nesne" diyordu — bu,
+"büyüme yok" gibi okunuyordu, oysa doğrusu "henüz bilmiyoruz". Artık iki
+farklı gün görülmeden bölüm `unknown` dönüyor ve kaç gün daha gerektiğini
+söylüyor. Bunun bedeli: yeni kurulan bir dbace'te bu bölüm ilk gün boş
+kalıyor. Yanlış bir "sorun yok" mesajından iyi.
+
+## Faz 17 — İŞ 6: Kalite kuralları bölüm bazında değil, genel test ediliyor
+
+`tests/test_report_quality_rules.py` her bölümü ayrı ayrı test etmek
+yerine tüm bölümleri gerçek veriyle çalıştırıp üretilen BÜTÜN bulgulara
+aynı değişmezleri uyguluyor (kanıt var mı, kritik/uyarının önerisi var
+mı, öncelik sıralaması doğru mu). Sebep: bölüm başına test yazmak, yeni
+bir bölüm eklendiğinde testin eklenmesini unutmayı mümkün kılar — kural
+sessizce delinir. Genel test, yeni bölüm kaydedildiği anda onu da
+kapsıyor.
+
+Bu testin kendisi bir hata yakaladı: "önceki rapor" sorgusu yalnızca
+`generated_at` ile sıralandığı için, SQLite'ın saniye hassasiyetli
+zaman damgasıyla aynı saniyede üretilen raporlarda zincir kopuyor ve
+"kaç gündür açık" sayacı ilerlemiyordu.
+
 ## Faz 17 — İŞ 5: Rapor geçmişi karşılaştırması sayısal, bulgu bazında değil
 
 "İki rapor yan yana karşılaştırılabilsin" isteğini genel durum, kritik/

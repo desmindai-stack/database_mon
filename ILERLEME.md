@@ -2888,6 +2888,66 @@ ayrı / ikisi birden). Diğer operasyonel ayarların yanında duruyor.
 nedeni de yazılı. Backend tarafında zaten `require_write_access` ile
 korunuyor (export uçları GET olduğu için viewer'a açık).
 
+## Faz 17 — İŞ 6: Kalite kuralları (raporun işe yarar olmasını belirleyen kurallar)
+
+Beş kural. Üçü İŞ 1–5 boyunca zaten uygulanmıştı; bu iş eksikleri
+tamamladı ve **hepsini kodda zorlanan / testle korunan** hale getirdi.
+Yeni `tests/test_report_quality_rules.py` tek tek bölümleri değil, TÜM
+bölümlerin uymak zorunda olduğu değişmezleri test ediyor — yeni bir bölüm
+eklendiğinde kuralı çiğnerse test kırılıyor, kimsenin kuralları
+hatırlamasına gerek kalmıyor.
+
+**1. Gürültü kontrolü.** Aynı fingerprint'e sahip bulgu her raporda
+`open_since_days` bir artırılarak `ongoing` işaretleniyor; arayüzde
+"N gündür açık" rozeti çıkıyor, "yeni" gibi sunulmuyor. Test üç ardışık
+rapor üretip sayacın gerçekten ilerlediğini doğruluyor.
+
+*Bu test gerçek bir hata yakaladı:* "önceki rapor" sorgusu yalnızca
+`generated_at DESC` ile sıralanıyordu. SQLite'ın `CURRENT_TIMESTAMP`'i
+SANİYE hassasiyetinde olduğu için aynı saniyede üretilen iki rapor
+eşitleniyor, zincir kopuyor ve sayaç ilerlemiyordu. Sıralamaya `id DESC`
+eklendi.
+
+**2. Kanıt zorunluluğu.** `evidence` boş bırakan bir bölüm üretim
+sırasında `ValueError` alıyor (İŞ 1'den beri). Yeni test bunu genişletti:
+tüm bölümleri gerçek veriyle çalıştırıp üretilen HER bulgunun kanıt
+taşıdığını ve kanıtın ölçüm zamanını (`measured_at`/`triggered_at`)
+içerdiğini doğruluyor.
+
+**3. Dürüstlük.**
+
+- Yeni `needs_more_days()` yardımcısı: "yeterli veri yok" yerine
+  "en az 2 günlük veri gerekiyor; şu an 1 gün var — yaklaşık 1 gün daha
+  gerekli". Şema, parametre ve ön koşul bölümleri bunu kullanıyor.
+- Şema bölümü artık **iki günlük** fotoğraf istiyor: tek fotoğraftan
+  büyüme çıkarılamaz, "büyüme yok" demek yanlış olurdu.
+- Ölçmediğimiz şey açık bir alan olarak "bilinmiyor" işaretleniyor:
+  kaynak bölümünün verisine `os_metrics: {status: "unknown", reason: …}`
+  eklendi. Dipnot değil, veri yapısında bir alan — "bu bölümdeki 'sorun
+  yok' değerlendirmesi YALNIZCA veritabanı içi göstergeler içindir".
+- Test, veri olmayan bölümlerin (`cluster`, `performance`, `schema`,
+  `parameters`, `prerequisites`) `ok` değil `unknown` döndürdüğünü ve
+  nedenini yazdığını doğruluyor.
+
+**4. Aksiyon edilebilirlik.** Yeni kural motora eklendi: kritik/uyarı
+bulgusunun önerisi yoksa bulgu **atılmıyor**, yerine neden öneri
+verilemediği yazılıyor (`NO_RECOMMENDATION_EXPLANATION`) ve durum loga
+düşüyor. Bulguyu atmak gerçek bir sorunu gizlemek olurdu; hata vermek de
+tek bir bölümün eksiği yüzünden tüm raporu düşürürdü. Bilgi (`info`)
+bulguları bu zorunluluğun dışında — oraya zorla öneri uydurmuyoruz.
+
+**5. Öncelik.** `priority = ciddiyet × ortam × değişim × yaş` (İŞ 1).
+Test, kaydedilen bulgular arasında en yüksek önceliklinin kritik
+olduğunu ve hiçbir `info` bulgusunun herhangi bir kritik bulgunun önüne
+geçemediğini doğruluyor.
+
+**Ek olarak** özet bölümlerinin (yönetici özeti, dünden beri değişenler,
+bilinen konular) kendi bulgularını üretmediği testle sabitlendi — aksi
+halde aynı sorun iki kez sayılır ve kritik sayısı şişerdi.
+
+**Testler:** `tests/test_report_quality_rules.py` (11 test) + şema
+bölümüne 1 yeni test. Toplam: 278 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

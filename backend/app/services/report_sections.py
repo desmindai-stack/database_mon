@@ -61,6 +61,8 @@ SLOW_QUERY_MEAN_MS = 50.0
 TOP_QUERIES = 10
 # Bir alarm kuralının "gürültü yapıyor" sayılması için dönemdeki tetikleme sayısı.
 NOISY_RULE_THRESHOLD = 10
+# Büyüme trendi için gereken en az gün sayısı — tek fotoğraftan büyüme çıkarılamaz.
+SCHEMA_MIN_DAYS = 2
 
 _SEVERITY_RANK = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
 _ENV_RANK = {"prod": 1.6, "production": 1.6, "preprod": 1.1, "test": 0.9, "dev": 0.8}
@@ -93,6 +95,21 @@ def _format_bytes(value: float) -> str:
             return f"{amount:.1f} {unit}"
         amount /= step
     return f"{amount:.1f} PB"
+
+
+def needs_more_days(have_days: float, need_days: float, what: str) -> str:
+    """Faz 17 İŞ 6 dürüstlük kuralı: "veri yetersizse 'X gün daha veri gerekli' desin".
+
+    Belirsiz bir "yeterli veri yok" cümlesi kullanıcıya ne zaman geri gelmesi gerektiğini
+    söylemez; eksik gün sayısını yazmak bunu somutlaştırır.
+    """
+    missing = max(need_days - have_days, 0)
+    if missing <= 0:
+        return f"{what} için yeterli veri var."
+    return (
+        f"{what} için en az {need_days:.0f} günlük veri gerekiyor; şu an {have_days:.0f} gün var — "
+        f"yaklaşık {missing:.0f} gün daha gerekli."
+    )
 
 
 async def _samples_in_period(ctx: ReportContext, instance: Instance) -> list[MetricSample]:
@@ -974,6 +991,16 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
         findings=findings,
         data={
             "instances": rows,
+            # Dürüstlük kuralı (Faz 17 İŞ 6): ölçmediğimiz şey "sorunsuz" değil "bilinmiyor".
+            # Bu, veri yapısında açık bir alan olarak duruyor; sadece bir dipnot değil.
+            "os_metrics": {
+                "status": "unknown",
+                "reason": (
+                    "Sunucu seviyesi CPU/RAM/disk metrikleri dbace tarafından toplanmıyor. Bu "
+                    "bölümdeki 'sorun yok' değerlendirmesi YALNIZCA veritabanı içi göstergeler "
+                    "içindir; işletim sistemi tarafında sorun olup olmadığı bilinmiyor."
+                ),
+            },
             "note": (
                 "Sunucu seviyesi CPU/RAM/disk metrikleri dbace tarafından toplanmıyor; bu bölüm "
                 "yalnızca veritabanı içi kaynak göstergelerini kapsar."
@@ -1012,9 +1039,21 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
             status="unknown",
             summary="Henüz şema anlık görüntüsü alınmamış.",
             unknown_reason=(
-                "Şema verisi günde bir kez toplanıyor (günlük rollup işi). En az bir gün geçmeden "
-                "tablo/index büyümesi hakkında bir şey söylenemez."
+                "Şema verisi günde bir kez toplanıyor (günlük rollup işi). "
+                + needs_more_days(0, SCHEMA_MIN_DAYS, "Tablo/index büyümesi")
             ),
+        )
+
+    distinct_days = len({r.day for r in rows})
+    if distinct_days < SCHEMA_MIN_DAYS:
+        # Tek günlük fotoğraftan büyüme çıkarılamaz; "büyüme yok" demek yanlış olurdu.
+        return SectionResult(
+            key="schema",
+            title="Şema sağlığı",
+            status="unknown",
+            summary="Büyüme trendi için henüz yeterli gün yok.",
+            data={"days_observed": distinct_days, "days_required": SCHEMA_MIN_DAYS},
+            unknown_reason=needs_more_days(distinct_days, SCHEMA_MIN_DAYS, "Tablo/index büyümesi"),
         )
 
     by_object: dict[tuple, list] = {}
@@ -1408,8 +1447,8 @@ async def parameters_section(ctx: ReportContext) -> SectionResult:
             status="unknown",
             summary="Parametre fotoğrafı henüz alınmamış.",
             unknown_reason=(
-                "Parametreler günde bir kez (günlük rollup işi) kaydediliyor. En az bir gün "
-                "geçmeden sapma veya değişiklik raporlanamaz."
+                "Parametreler günde bir kez (günlük rollup işi) kaydediliyor. "
+                + needs_more_days(0, 1, "Parametre denetimi")
             ),
         )
 
@@ -1546,8 +1585,8 @@ async def prerequisites_section(ctx: ReportContext) -> SectionResult:
             status="unknown",
             summary="Ön koşul fotoğrafı henüz alınmamış.",
             unknown_reason=(
-                "Ön koşullar günde bir kez (günlük rollup işi) kaydediliyor. En az bir gün "
-                "geçmeden raporlanamaz."
+                "Ön koşullar günde bir kez (günlük rollup işi) kaydediliyor. "
+                + needs_more_days(0, 1, "Ön koşul denetimi")
             ),
         )
 
