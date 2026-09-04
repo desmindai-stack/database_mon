@@ -16,6 +16,7 @@ import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import LoginPage from "./pages/LoginPage";
 import PredictionsPage from "./pages/PredictionsPage";
+import ReportsPage from "./pages/ReportsPage";
 import ServersPage from "./pages/ServersPage";
 
 // Real navigation tree: Customer → Application → DatabaseGroup → Node (public mode) or
@@ -325,6 +326,9 @@ function AppShell() {
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Instances
           </NavLink>
+          <NavLink to="/reports" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
+            Raporlar
+          </NavLink>
           <NavLink to="/predictions" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Predictions
           </NavLink>
@@ -352,6 +356,7 @@ function AppShell() {
           <Route path="/" element={<DashboardPage />} />
           <Route path="/instances" element={<InstancesPage />} />
           <Route path="/instances/:id" element={<InstanceDetailPage />} />
+          <Route path="/reports" element={<ReportsPage />} />
           <Route path="/predictions" element={<PredictionsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/alerts/new" element={<CustomAlertRuleFormPage />} />

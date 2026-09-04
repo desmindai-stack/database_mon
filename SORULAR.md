@@ -3,6 +3,26 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — İŞ 5: Rapor geçmişi karşılaştırması sayısal, bulgu bazında değil
+
+"İki rapor yan yana karşılaştırılabilsin" isteğini genel durum, kritik/
+uyarı ve toplam bulgu sayılarını yan yana koyan bir tabloyla uyguladım —
+bulgu bulguya bir diff göstermedim. Sebep: bulgu bazında karşılaştırma
+zaten raporun KENDİ "Dünden beri değişenler" bölümünde var (fingerprint
+eşleştirmesiyle, yeni/kötüleşen/kapanan/süregelen olarak). Aynı bilgiyi
+ikinci bir yerde, farklı bir mantıkla üretmek iki cevabın zamanla
+ayrışması riskini getirirdi. Yan yana karşılaştırma, o bölümün
+kapsamadığı soruyu ("iki hafta önceki durumla bugünkü durum") cevaplıyor.
+
+## Faz 17 — İŞ 5: Yönetici görünümü teknik veriyi hiç almıyor
+
+`ExecutiveReportView` bileşeni `ReportFinding` tipini import bile
+etmiyor; yalnızca backend'in ürettiği `ExecutiveReport` yapısını alıyor.
+Teknik raporu alıp arayüzde filtrelemek daha az ağ trafiği demek olurdu
+(tek istek), ama o durumda teknik veri tarayıcıya iner ve "müşteriye
+gösterilen ekranda teknik detay yok" garantisi yalnızca render mantığına
+kalırdı. Ayrı uç ile veri hiç gelmiyor.
+
 ## Faz 17 — İŞ 4: PDF için ReportLab seçildi (WeasyPrint değil)
 
 İstenen seçim buydu: "weasyprint veya reportlab — hangisini seçtiğini

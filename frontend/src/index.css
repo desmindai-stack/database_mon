@@ -928,6 +928,237 @@ td code,
   font-size: 0.8rem;
 }
 
+/* ---- Faz 17 İŞ 5: Sağlık Raporu sayfası ---- */
+.report-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.report-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.report-toolbar label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.report-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 300px) 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .report-layout { grid-template-columns: 1fr; }
+}
+
+.report-history {
+  position: sticky;
+  top: 1rem;
+  max-height: calc(100vh - 3rem);
+  overflow-y: auto;
+}
+
+.report-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.report-history-item {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  cursor: pointer;
+  color: var(--text);
+  display: grid;
+  gap: 0.25rem;
+}
+
+.report-history-item.active {
+  border-color: var(--accent);
+  background: rgba(59, 130, 246, 0.08);
+}
+
+.report-history-date { font-size: 0.82rem; }
+
+.report-history-meta {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+}
+
+.report-main { display: grid; gap: 1rem; }
+
+.report-summary-card,
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.report-counts { display: grid; gap: 0.2rem; justify-items: end; }
+
+.progress-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border);
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}
+
+/* Bulgu kartı */
+.finding-card {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  margin-top: 0.5rem;
+}
+
+.finding-card.critical { border-left-color: var(--danger); }
+.finding-card.warning { border-left-color: #f59e0b; }
+.finding-card.info { border-left-color: var(--accent); }
+.finding-card.ok { border-left-color: var(--success); }
+.finding-card.acknowledged { opacity: 0.7; }
+
+.finding-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.finding-title { color: var(--text); font-size: 0.88rem; }
+
+.finding-tags { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.finding-tags .tag { font-size: 0.7rem; }
+.tag.change-regressed { background: rgba(239, 68, 68, 0.2); }
+.tag.change-resolved { background: rgba(34, 197, 94, 0.2); }
+.tag.acknowledged-tag { background: rgba(148, 163, 184, 0.25); }
+
+.finding-body { padding: 0.5rem 0 0.2rem 1.3rem; }
+.finding-body p { margin: 0 0 0.4rem; font-size: 0.84rem; }
+.finding-evidence { color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 0.76rem; }
+
+.finding-recommendation {
+  background: rgba(59, 130, 246, 0.08);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.5rem;
+  font-size: 0.84rem;
+}
+
+.finding-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.4rem; }
+
+.ack-form {
+  margin-top: 0.6rem;
+  padding: 0.6rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.ack-form label { display: grid; gap: 0.2rem; font-size: 0.78rem; color: var(--muted); }
+
+/* Dışa aktarma paneli */
+.export-panel { margin-top: 1rem; display: grid; gap: 0.7rem; }
+.export-sections { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+
+/* Yönetici raporu */
+.executive-report { display: grid; gap: 1rem; }
+
+.exec-cover {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+  border-left: 4px solid var(--border);
+}
+
+.exec-cover.ok { border-left-color: var(--success); }
+.exec-cover.warning { border-left-color: #f59e0b; }
+.exec-cover.critical { border-left-color: var(--danger); }
+
+.exec-grade { display: grid; justify-items: end; gap: 0.2rem; }
+.exec-grade-value { font-size: 1.5rem; font-weight: 600; color: var(--text); }
+.exec-grade-reason { font-size: 0.8rem; color: var(--muted); max-width: 380px; text-align: right; }
+
+.risk-list { display: grid; gap: 0.6rem; }
+
+.risk-item {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 0.6rem 0.75rem;
+}
+
+.risk-item.critical { border-left-color: var(--danger); }
+.risk-item.warning { border-left-color: #f59e0b; }
+.risk-item.info { border-left-color: var(--accent); }
+.risk-item p { margin: 0.3rem 0 0; font-size: 0.85rem; }
+.risk-head { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+.trend-bars { display: grid; gap: 0.5rem; margin: 0.6rem 0; }
+.trend-row { display: grid; grid-template-columns: 150px 1fr 80px; gap: 0.6rem; align-items: center; font-size: 0.8rem; }
+.trend-label { color: var(--muted); }
+.trend-bar-wrap { display: grid; gap: 3px; }
+.trend-bar { height: 8px; border-radius: 4px; display: block; min-width: 2px; }
+.trend-bar.prev { background: var(--border); }
+.trend-bar.now { background: var(--accent); }
+.trend-values { text-align: right; color: var(--muted); }
+
+/* Dashboard'daki rapor kartı */
+.report-teaser {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  border-left: 4px solid var(--accent);
+  text-decoration: none;
+  color: inherit;
+}
+
+.report-teaser.critical { border-left-color: var(--danger); }
+.report-teaser.warning { border-left-color: #f59e0b; }
+.report-teaser.ok { border-left-color: var(--success); }
+.report-teaser strong { color: var(--text); }
+.report-teaser p { margin: 0.15rem 0 0; }
+.report-teaser-counts { display: flex; align-items: baseline; gap: 0.4rem; }
+.report-teaser-critical { font-size: 1.6rem; font-weight: 600; color: var(--danger); }
+.report-teaser-cta { color: var(--accent); font-size: 0.85rem; }
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);

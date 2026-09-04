@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, AppConfig, DashboardSummary, formatRelativeTime, GroupOverallStatus, HealthResponse } from "../api";
+import {
+  api,
+  AppConfig,
+  DashboardSummary,
+  formatRelativeTime,
+  GroupOverallStatus,
+  HealthReportSummary,
+  HealthResponse,
+} from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
@@ -89,6 +97,8 @@ export default function DashboardPage() {
   const [groupSummaryError, setGroupSummaryError] = useState<string | null>(null);
   const [groupSummaryLoading, setGroupSummaryLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Faz 17 İŞ 5: dashboard'daki "bugünün raporu" kartı.
+  const [latestReport, setLatestReport] = useState<HealthReportSummary | null>(null);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   // The interval value itself is now only changeable from the admin screen (Faz 15 İŞ 2) —
   // still read here so the auto-refresh timer below uses whatever's currently configured.
@@ -105,6 +115,7 @@ export default function DashboardPage() {
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setGroupSummaryLoading(false));
     api.getRefreshInterval().then((r) => setRefreshSeconds(r.seconds)).catch(() => undefined);
+    api.getLatestReport("global").then(setLatestReport).catch(() => undefined);
   }, []);
 
   // Dashboard'ı seçilen aralıkta kendini otomatik güncelle — sadece önbellekten okur
@@ -195,6 +206,27 @@ export default function DashboardPage() {
 
       {error && <div className="error">{error}</div>}
       {groupSummaryError && <div className="error">{groupSummaryError}</div>}
+
+      {/* Faz 17 İŞ 5: bugünün sağlık raporu kartı — tıklayınca doğrudan o rapora gider. */}
+      {latestReport && (
+        <Link
+          to={`/reports?report=${latestReport.id}`}
+          className={`card report-teaser ${latestReport.overall_status}`}
+        >
+          <div>
+            <strong>Bugünün sağlık raporu</strong>
+            <p className="muted-note">
+              {latestReport.scope_label} · {formatRelativeTime(latestReport.generated_at)}
+            </p>
+          </div>
+          <div className="report-teaser-counts">
+            <span className="report-teaser-critical">{latestReport.critical_count}</span>
+            <span className="muted-note">kritik bulgu</span>
+            <span className="muted-note">· {latestReport.warning_count} uyarı</span>
+          </div>
+          <span className="report-teaser-cta">Raporu aç →</span>
+        </Link>
+      )}
 
       <div className="activity-toolbar" style={{ marginBottom: "1rem" }}>
         <span className="muted-note">

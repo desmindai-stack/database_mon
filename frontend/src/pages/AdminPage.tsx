@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { api, RefreshInterval, RetentionStatus, UserOut, UserRoleType } from "../api";
+import { api, HealthReportSchedule, RefreshInterval, RetentionStatus, UserOut, UserRoleType } from "../api";
 import { formatTime } from "../api";
 import { useAuth } from "../auth";
 
@@ -40,11 +40,16 @@ export default function AdminPage() {
   const [resetResult, setResetResult] = useState<{ id: number; password: string } | null>(null);
 
   const [refreshInterval, setRefreshInterval] = useState<RefreshInterval | null>(null);
+  // Faz 17 İŞ 1/5: günlük sağlık raporunun saati ve kapsamı — diğer operasyonel ayarların yanında.
+  const [reportSchedule, setReportSchedule] = useState<HealthReportSchedule | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
 
   const loadRetention = () => api.getRetention().then(setRetention).catch((e) => setError(String(e.message || e)));
   const loadUsers = () => api.getUsers().then(setUsers).catch((e) => setError(String(e.message || e)));
-  const loadSettings = () => api.getRefreshInterval().then(setRefreshInterval).catch((e) => setError(String(e.message || e)));
+  const loadSettings = () => {
+    api.getReportSchedule().then(setReportSchedule).catch(() => undefined);
+    return api.getRefreshInterval().then(setRefreshInterval).catch((e) => setError(String(e.message || e)));
+  };
 
   useEffect(() => {
     loadRetention();
@@ -135,6 +140,15 @@ export default function AdminPage() {
       const result = await api.resetUserPassword(u.id);
       setResetResult({ id: u.id, password: result.temporary_password });
       await loadUsers();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
+  const saveReportSchedule = async (patch: { hour?: number; enabled?: boolean; scope_mode?: string }) => {
+    setError(null);
+    try {
+      setReportSchedule(await api.updateReportSchedule(patch));
     } catch (err) {
       setError(String((err as Error).message));
     }
@@ -342,6 +356,48 @@ export default function AdminPage() {
               {(refreshInterval?.options ?? []).map((s) => (
                 <option key={s} value={s}>{INTERVAL_LABELS[s] ?? `${s}sn`}</option>
               ))}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {tab === "settings" && (
+        <div className="card" style={{ marginTop: "1rem", maxWidth: 420 }}>
+          <h3 className="chart-title">Günlük sağlık raporu</h3>
+          <p className="muted-note">
+            Zamanlanmış rapor üretimi. Rapor arka planda çalışır; toplama döngüsünü etkilemez.
+          </p>
+          <label style={{ display: "block", marginBottom: "0.6rem" }}>
+            <input
+              type="checkbox"
+              checked={reportSchedule?.enabled ?? false}
+              disabled={!reportSchedule}
+              onChange={(e) => saveReportSchedule({ enabled: e.target.checked })}
+            />{" "}
+            Zamanlanmış üretim açık
+          </label>
+          <label style={{ maxWidth: 220, display: "block", marginBottom: "0.6rem" }}>
+            Saat
+            <select
+              value={reportSchedule?.hour ?? 6}
+              disabled={!reportSchedule}
+              onChange={(e) => saveReportSchedule({ hour: Number(e.target.value) })}
+            >
+              {Array.from({ length: 24 }, (_, h) => (
+                <option key={h} value={h}>{String(h).padStart(2, "0")}:00</option>
+              ))}
+            </select>
+          </label>
+          <label style={{ maxWidth: 260, display: "block" }}>
+            Kapsam
+            <select
+              value={reportSchedule?.scope_mode ?? "both"}
+              disabled={!reportSchedule}
+              onChange={(e) => saveReportSchedule({ scope_mode: e.target.value })}
+            >
+              <option value="global">Sadece tüm sistem</option>
+              <option value="customers">Her müşteri için ayrı</option>
+              <option value="both">İkisi birden</option>
             </select>
           </label>
         </div>

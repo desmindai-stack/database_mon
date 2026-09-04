@@ -2825,6 +2825,69 @@ biçimde de atlanması, dosya adı üretimi, bölüm filtresi, yönetici
 çıktısına teknik detay sızmaması, viewer'ın export alabilmesi,
 tamamlanmamış raporun 409 dönmesi. Toplam: 266 test yeşil.
 
+## Faz 17 — İŞ 5: Rapor arayüzü
+
+**Sol menüde üst seviye "Raporlar"** öğesi ve ayrı bir sayfa
+(`/reports`).
+
+**Üst çubuk:** kapsam seçici (Tüm sistem / Müşteri / Uygulama /
+Veritabanı grubu / Instance — seçime göre hedef listesi doldurulur),
+dönem seçici (Gün / Hafta / Ay / Özel aralık), rapor tipi seçici
+(**Teknik | Yönetici**), "Şimdi çalıştır" ve "Dışa aktar" butonları.
+
+**Rapor geçmişi** sol sütunda: tarih, genel durum ve kritik/uyarı
+sayılarıyla liste. Herhangi bir satırdaki "Karşılaştır" butonu o raporu
+seçili raporla **yan yana** koyuyor (genel durum, kritik, uyarı ve bulgu
+sayıları tablo halinde).
+
+**Üretim ilerlemesi.** Rapor arka planda üretildiği için sayfa
+`queued`/`running` durumundayken ilerleme çubuğu ve o an çalışan bölümün
+adını gösteriyor, 1,5 saniyede bir tazeliyor; bitince listeyi
+yeniliyor. Hata durumunda raporun kendi `error` alanı gösteriliyor.
+
+**Bulgu kartları.** Her bölüm altında, öncelik sırasına göre. Kart
+kapalıyken ciddiyet, başlık, değişim etiketi (Yeni/Kötüleşti/Kapandı) ve
+"N gündür açık" rozeti görünüyor — gürültü kontrolü arayüze de yansıyor.
+Açıldığında detay, **kanıt satırı** (metrik · ölçülen · eşik · ölçüm
+zamanı), öneri ve kopyalanabilir komutlar. Öneri üretilememişse bunun
+kendisi yazılı, boş bırakılmıyor.
+
+**"Kabul et"** butonu not ve süre (gün) alarak bulguyu susturuyor;
+formun altında ne olacağı açıkça yazıyor ("rapordan silinmez, Bilinen
+konular bölümüne düşer, süre dolunca tekrar öne çıkar"). Kabul sonrası
+rapor ve geçmiş anında tazeleniyor.
+
+**Derin bağlantı.** Her bulgu, bölümüne göre doğru sekmeye gidiyor:
+performans → Yavaş Sorgular, kapasite → Tahminler, şema → Şema, cluster →
+Cluster, parametre/ön koşul → Tuning, alarm kuralı → Alarmlar sayfası.
+Genel bir sayfaya değil, sorunun görüleceği yere.
+
+**Dışa aktarma paneli.** Biçim (PDF/HTML/Markdown) ve bölüm seçimi
+(checkbox). Seçili görünüme göre bölüm listesi backend'den geliyor.
+Panel, teknik görünüm dışa aktarılırken müşteriye gönderim için
+Yönetici görünümüne geçmeyi hatırlatıyor. İndirme, dosya adını
+`Content-Disposition` başlığından alıyor.
+
+**Yönetici görünümü** ayrı bir bileşen (`ExecutiveReportView`) ve
+backend'in teknik detaydan arındırdığı yapıdan besleniyor — teknik
+bulgulara hiç erişmiyor, böylece sızıntı riski tek yerde kalıyor. Kapak
+kartı (sağlık notu ve gerekçesi), erişilebilirlik istatistikleri ve
+uygulama bazında tablo, envanter, risk listesi, basit trend çubukları,
+yapılan işler ve öneri tablosu.
+
+**Dashboard kartı.** Üstte "Bugünün sağlık raporu" kartı: kapsam, üretim
+zamanı ve **N kritik bulgu** sayısı; tıklayınca `/reports?report=<id>`
+ile doğrudan o rapora gidiyor.
+
+**Rapor zamanlaması** Yönetim → Ayarlar sekmesine eklendi: açık/kapalı,
+saat (00:00–23:00) ve kapsam modu (sadece tüm sistem / her müşteri için
+ayrı / ikisi birden). Diğer operasyonel ayarların yanında duruyor.
+
+**Viewer rolü.** Raporu görüntüleyebiliyor ve dışa aktarabiliyor;
+"Şimdi çalıştır" butonu ve "Kabul et" butonu görünmüyor. Sayfada bunun
+nedeni de yazılı. Backend tarafında zaten `require_write_access` ile
+korunuyor (export uçları GET olduğu için viewer'a açık).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

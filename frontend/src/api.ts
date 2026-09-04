@@ -329,6 +329,101 @@ export interface InstanceDependencies {
   linked_nodes: { id: number; name: string; group_id: number; port: number }[];
 }
 
+
+/* --- Sağlık Raporu (Faz 17) --- */
+
+export type ReportScopeType = "global" | "customer" | "application" | "group" | "instance";
+
+export interface ReportFinding {
+  id: number;
+  section: string;
+  severity: "critical" | "warning" | "info" | "ok";
+  title: string;
+  detail: string;
+  evidence: Record<string, unknown>;
+  recommendation: string | null;
+  commands: string[];
+  related_object_type: string | null;
+  related_object_id: number | null;
+  fingerprint: string;
+  priority: number;
+  open_since_days: number;
+  change_state: "new" | "ongoing" | "regressed" | "resolved";
+  acknowledged: boolean;
+}
+
+export interface HealthReportSummary {
+  id: number;
+  scope_type: ReportScopeType;
+  scope_id: number | null;
+  scope_label: string;
+  period_start: string;
+  period_end: string;
+  generated_at: string;
+  generated_by: "schedule" | "manual";
+  overall_status: string;
+  status: "queued" | "running" | "done" | "failed";
+  progress_pct: number;
+  progress_label: string | null;
+  error: string | null;
+  duration_ms: number;
+  previous_report_id: number | null;
+  critical_count: number;
+  warning_count: number;
+}
+
+export interface ReportSectionItem {
+  title: string;
+  status: string;
+  summary: string;
+  data: Record<string, any>;
+  unknown_reason: string | null;
+}
+
+export interface HealthReport extends HealthReportSummary {
+  sections: { order?: string[]; items?: Record<string, ReportSectionItem> };
+  findings: ReportFinding[];
+}
+
+export interface ExecutiveReport {
+  scope_label: string;
+  period_start: string;
+  period_end: string;
+  period_label: string;
+  generated_at: string;
+  grade: string;
+  grade_reason: string;
+  availability: Record<string, any>;
+  inventory: Record<string, any>;
+  risks: Record<string, any>[];
+  trend: Record<string, any>;
+  work_done: Record<string, any>;
+  recommendations: Record<string, any>[];
+}
+
+export interface FindingAcknowledgement {
+  id: number;
+  fingerprint: string;
+  scope_type: string;
+  scope_id: number | null;
+  acknowledged_by: string;
+  acknowledged_at: string;
+  expires_at: string | null;
+  note: string | null;
+}
+
+export interface HealthReportSchedule {
+  hour: number;
+  enabled: boolean;
+  scope_mode: string;
+  scope_mode_options: string[];
+}
+
+export interface ExportSection {
+  key: string;
+  title: string;
+}
+
 export interface SchemaHealth {
   unused_indexes: {
     schema_name: string;
@@ -952,6 +1047,10 @@ let refreshTokenValue: string | null = null;
 let onUnauthorized: (() => void) | null = null;
 let refreshInFlight: Promise<boolean> | null = null;
 
+export function getAuthToken(): string | null {
+  return authToken;
+}
+
 export function setAuthTokens(access: string | null, refresh: string | null): void {
   authToken = access;
   refreshTokenValue = refresh;
@@ -1108,6 +1207,73 @@ export const api = {
   getPredictions: () => request<Prediction[]>("/api/predictions"),
   ackPrediction: (id: number) =>
     request<Prediction>(`/api/predictions/${id}/ack`, { method: "POST" }),
+
+  /* --- Sağlık Raporu (Faz 17) --- */
+
+  getReports: (params: { scope_type?: string; scope_id?: number | null; limit?: number } = {}) => {
+    const q = new URLSearchParams();
+    if (params.scope_type) q.set("scope_type", params.scope_type);
+    if (params.scope_id != null) q.set("scope_id", String(params.scope_id));
+    q.set("limit", String(params.limit ?? 30));
+    return request<HealthReportSummary[]>(`/api/reports?${q.toString()}`);
+  },
+  getReport: (id: number) => request<HealthReport>(`/api/reports/${id}`),
+  getExecutiveReport: (id: number) => request<ExecutiveReport>(`/api/reports/${id}/executive`),
+  getLatestReport: (scope_type = "global", scope_id?: number | null) => {
+    const q = new URLSearchParams({ scope_type });
+    if (scope_id != null) q.set("scope_id", String(scope_id));
+    return request<HealthReportSummary | null>(`/api/reports/latest?${q.toString()}`);
+  },
+  runReport: (body: {
+    scope_type: ReportScopeType;
+    scope_id?: number | null;
+    period_days?: number;
+    period_start?: string;
+    period_end?: string;
+  }) => request<HealthReportSummary>("/api/reports/run", { method: "POST", body: JSON.stringify(body) }),
+  deleteReport: (id: number) => request<void>(`/api/reports/${id}`, { method: "DELETE" }),
+  getReportExportSections: (id: number, view: "technical" | "executive") =>
+    request<ExportSection[]>(`/api/reports/${id}/export-sections?view=${view}`),
+  /** Dışa aktarma dosya indirmesi — request() JSON beklediği için burada doğrudan fetch. */
+  exportReportUrl: (
+    id: number,
+    opts: { format: "pdf" | "html" | "md"; view: "technical" | "executive"; sections?: string[] },
+  ) => {
+    const q = new URLSearchParams({ format: opts.format, view: opts.view });
+    if (opts.sections?.length) q.set("sections", opts.sections.join(","));
+    return `/api/reports/${id}/export?${q.toString()}`;
+  },
+  downloadReport: async (
+    id: number,
+    opts: { format: "pdf" | "html" | "md"; view: "technical" | "executive"; sections?: string[] },
+  ) => {
+    const path = api.exportReportUrl(id, opts);
+    const headers: Record<string, string> = {};
+    if (getAuthToken()) headers.Authorization = `Bearer ${getAuthToken()}`;
+    const res = await fetch(`${API_BASE}${path}`, { headers });
+    if (!res.ok) throw new Error((await res.text()) || res.statusText);
+    const blob = await res.blob();
+    const disposition = res.headers.get("content-disposition") || "";
+    const match = /filename="([^"]+)"/.exec(disposition);
+    return { blob, filename: match ? match[1] : `rapor.${opts.format}` };
+  },
+  getReportSchedule: () => request<HealthReportSchedule>("/api/reports/schedule"),
+  updateReportSchedule: (body: { hour?: number; enabled?: boolean; scope_mode?: string }) =>
+    request<HealthReportSchedule>("/api/reports/schedule", { method: "PUT", body: JSON.stringify(body) }),
+  getAcknowledgements: () => request<FindingAcknowledgement[]>("/api/reports/acknowledgements"),
+  acknowledgeFinding: (body: {
+    fingerprint: string;
+    scope_type?: ReportScopeType;
+    scope_id?: number | null;
+    expires_in_days?: number | null;
+    note?: string | null;
+  }) =>
+    request<FindingAcknowledgement>("/api/reports/acknowledgements", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  removeAcknowledgement: (id: number) =>
+    request<void>(`/api/reports/acknowledgements/${id}`, { method: "DELETE" }),
 
   getCustomers: () => request<Customer[]>("/api/customers"),
   createCustomer: (data: CustomerCreate) =>
