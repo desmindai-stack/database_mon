@@ -3,6 +3,50 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 — İŞ 3: Yönetici cümleleri şablondan üretiliyor, bulgudan çevrilmiyor
+
+"Aynı veriden türeyecek, aynı gerçeği anlatacak, sadece derinlik ve dil
+farklı olacak" isteğini iki türlü uygulayabilirdim: (a) teknik bulgunun
+metnini sadeleştirerek/temizleyerek, (b) bölüm türüne göre sabit
+şablonlardan yeniden yazarak.
+
+(b)'yi seçtim. Sebep, "ASLA sorgu metni / parametre adı / komut /
+IP-host" kuralının güvenilir biçimde uygulanabilmesi. Teknik metni
+temizlemek (kara liste ile silmek) kırılgan: bir gün yeni bir bulgu türü
+eklendiğinde ya da bir sorgu metni beklenmedik bir biçimde geldiğinde
+sızıntı olur ve bunu kimse fark etmez — üstelik sızıntının gittiği yer
+müşteri. Şablon yaklaşımında sızıntı için birinin şablona bilerek teknik
+bir alan eklemesi gerekir, o da ikinci katmandaki taramaya takılır.
+
+Bedeli: yönetici raporu bulgu bazında değil ALAN bazında konuşuyor
+("Performans alanında sorun var"), tek tek sorgulardan bahsetmiyor. Bu
+zaten istenen davranışa yakın; yönetici hangi sorgunun yavaşladığını
+değil, hangi uygulamanın etkilendiğini ve ne zaman yatırım gerekeceğini
+soruyor.
+
+## Faz 17 — İŞ 3: Hedef etiketi uygulama adı; instance adı hiç kullanılmıyor
+
+Risk cümlelerindeki hedef için sırasıyla uygulama adı → veritabanı grubu
+adı → kapsam adı deneniyor. Instance adı bilerek hiç kullanılmıyor (son
+çare olarak bile), çünkü dbace kurulumlarında instance adı neredeyse her
+zaman sunucu adını içeriyor (`boa-pg-prod-01`) ve bu, istenmeyen bir
+altyapı detayı. Hiçbiri bulunamazsa raporun kendi kapsam adı kullanılıyor.
+
+## Faz 17 — İŞ 3: Sağlık notu eşiği %99 uptime
+
+"Sağlıklı / Dikkat / Riskli" notunun eşiklerini şöyle belirledim: kritik
+bulgu varsa VEYA dönem erişilebilirliği %99'un altındaysa Riskli; sadece
+uyarı varsa Dikkat; hiçbiri yoksa Sağlıklı. %99 seçimi, yaygın kurumsal
+SLA tabanına (aylık ~7 saat kesinti) denk geldiği için; daha yüksek bir
+eşik (%99.9) dbace'in ölçüm yönteminin hassasiyetinin üzerinde iddia
+olurdu — erişilebilirlik toplama boşluklarından türetiliyor ve tek bir
+kaçırılan döngü bile yüzdeyi oynatabiliyor.
+
+Not: uptime ölçümünün sınırı (bkz. Faz 17 İŞ 1) yönetici raporunda
+tekrar edilmiyor — orada "kesinti yaşandı" deniyor. Bu bilinçli: yönetici
+raporunun amacı ölçüm metodolojisini tartışmak değil. Metodoloji teknik
+raporun erişilebilirlik bölümünde yazılı duruyor.
+
 ## Faz 17 — İŞ 2: Parametre/ön koşul geçmişi için yeni bir günlük fotoğraf tablosu eklendi
 
 "Parametre denetimi — DÜN'e göre DEĞİŞEN parametreler (biri elle

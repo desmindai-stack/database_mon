@@ -246,3 +246,50 @@ async def test_report_list_filters_by_scope():
 
     assert len(rows) == 1
     assert rows[0]["scope_id"] == scope_id
+
+
+async def test_executive_endpoint_returns_a_customer_safe_view():
+    """Faz 17 İŞ 3: aynı rapor, yönetici görünümü — teknik detay içermez."""
+    report_id = await _seed_report(
+        uuid.uuid4().int % 1_000_000_000,
+        [
+            {
+                "severity": "critical",
+                "title": "SELECT * FROM orders yavaşladı",
+                "fingerprint": f"fp-{uuid.uuid4().hex[:8]}",
+                "section": "performance",
+            }
+        ],
+    )
+    async with await authed_client() as c:
+        body = (await c.get(f"/api/reports/{report_id}/executive")).json()
+
+    assert body["grade"] in ("Sağlıklı", "Dikkat", "Riskli")
+    assert "SELECT" not in str(body)
+    assert body["risks"][0]["area"] == "Performans"
+
+
+async def test_executive_endpoint_refuses_an_unfinished_report():
+    from datetime import UTC, datetime, timedelta
+
+    async with SessionLocal() as session:
+        now = datetime.now(UTC)
+        report = HealthReport(
+            scope_type="global", scope_id=None, scope_label="Tüm sistem",
+            period_start=now - timedelta(days=1), period_end=now,
+            status="running", progress_pct=40,
+        )
+        session.add(report)
+        await session.commit()
+        report_id = report.id
+
+    async with await authed_client() as c:
+        r = await c.get(f"/api/reports/{report_id}/executive")
+
+    assert r.status_code == 409
+
+
+async def test_viewer_can_read_the_executive_report():
+    report_id = await _seed_report(uuid.uuid4().int % 1_000_000_000, [])
+    async with await authed_client(role="viewer") as c:
+        assert (await c.get(f"/api/reports/{report_id}/executive")).status_code == 200

@@ -1367,3 +1367,26 @@ class HealthReportScheduleUpdate(BaseModel):
     hour: int | None = Field(default=None, ge=0, le=23)
     enabled: bool | None = None
     scope_mode: Literal["global", "customers", "both"] | None = None
+
+
+class ExecutiveReportOut(BaseModel):
+    """Yönetici raporu (Faz 17 İŞ 3) — müşteriye gösterilen görünüm.
+
+    Teknik raporla aynı veriden türer; teknik alanların (sorgu metni, parametre adı, komut,
+    host) hiçbiri bu şemada yoktur — services/executive_report.py bunu üretim sırasında da
+    tarayarak zorlar.
+    """
+
+    scope_label: str
+    period_start: datetime
+    period_end: datetime
+    period_label: str
+    generated_at: datetime
+    grade: str
+    grade_reason: str
+    availability: dict[str, Any] = {}
+    inventory: dict[str, Any] = {}
+    risks: list[dict[str, Any]] = []
+    trend: dict[str, Any] = {}
+    work_done: dict[str, Any] = {}
+    recommendations: list[dict[str, Any]] = []

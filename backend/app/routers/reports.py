@@ -18,6 +18,7 @@ from app.database import get_db
 from app.models import FindingAcknowledgement, HealthReport, ReportFinding, User
 from app.schemas import (
     AcknowledgeFindingRequest,
+    ExecutiveReportOut,
     FindingAcknowledgementOut,
     HealthReportOut,
     HealthReportScheduleOut,
@@ -27,6 +28,7 @@ from app.schemas import (
     RunReportRequest,
 )
 from app.services.auth_deps import get_current_user
+from app.services.executive_report import build_executive_report
 from app.services.health_report import ReportScope, enqueue_report, resolve_scope_label
 from app.services.settings import get_health_report_schedule, set_health_report_schedule
 
@@ -250,6 +252,18 @@ async def get_report(report_id: int, db: AsyncSession = Depends(get_db)) -> Heal
         sections=report.sections or {},
         findings=[ReportFindingOut.model_validate(f) for f in findings],
     )
+
+
+@router.get("/{report_id}/executive", response_model=ExecutiveReportOut)
+async def get_executive_report(report_id: int, db: AsyncSession = Depends(get_db)) -> ExecutiveReportOut:
+    """Aynı raporun yönetici (müşteri) görünümü — teknik detay içermez."""
+    report = await db.get(HealthReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail="Rapor bulunamadı")
+    if report.status != "done":
+        raise HTTPException(status_code=409, detail="Rapor henüz tamamlanmadı")
+    executive = await build_executive_report(db, report)
+    return ExecutiveReportOut(**vars(executive))
 
 
 @router.delete("/{report_id}", status_code=204)

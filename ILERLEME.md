@@ -2706,6 +2706,69 @@ doğru bulgu, kanıttaki gerçek sayılar, veri yokken "unknown" davranışı ve
 gürültü üretmeme. Ayrıca `tests/test_rollup.py` yeni probe'lara karşı
 izole edildi. Toplam: 232 test yeşil.
 
+## Faz 17 — İŞ 3: Yönetici raporu (müşteri görünümü)
+
+Yeni `services/executive_report.py` + `GET /api/reports/{id}/executive`.
+Aynı `HealthReport`/`ReportFinding` satırlarından türeyen, teknik terim
+içermeyen ikinci bir görünüm.
+
+**"ASLA teknik detay" kuralı kodda zorlanıyor — iki katman.**
+
+1. *Şablon yaklaşımı:* yönetici görünümü bulguların `title`, `detail`,
+   `commands` ve `evidence` alanlarını **kopyalamaz**. Her cümle bölüm
+   türüne göre sabit bir şablondan üretilir; bulgudan yalnızca beyaz
+   listeye alınmış SAYISAL alanlar okunur (ör. `horizon_days`,
+   `uptime_pct`). Yani sorgu metninin ya da parametre adının yönetici
+   metnine ulaşacağı bir yol yok.
+2. *Tarama katmanı:* üretilen tüm serbest metin `assert_no_technical_leak()`
+   ile taranıyor — SQL anahtar kelimeleri, `pg_*` tanımlayıcıları, IPv4,
+   `host:port`, dosya yolları ve bilinen parametre adları. Bulunursa
+   `TechnicalLeakError`. Bu, ileride biri şablonlara teknik bir alan
+   eklediğinde sessizce sızmasını önler.
+
+Testler bunu kasten teknik bulgularla kanıtlıyor: sorgu metni, komut,
+`work_mem`, `pg_settings`, `10.20.30.40`, `postgresql.conf` içeren
+bulgular verilip yönetici çıktısının tamamı bu dizeler için taranıyor.
+
+**Hedef adı sunucu adı değil.** Risk cümlelerindeki `{target}`,
+instance/host adı değil **uygulama adı** (yoksa veritabanı grubu adı).
+Instance adları çoğu kurulumda sunucu adını içerdiği için son çare olarak
+bile kullanılmıyor. Erişilebilirlik özeti de uygulama bazında toplanıyor;
+teknik bölümün instance satırlarındaki sunucu adları dışarı çıkmıyor.
+
+**Kötü adlandırılmış uygulama raporu düşürmüyor.** Bir uygulama IP gibi
+adlandırılmışsa (`10.0.0.1`) etiket "İzlenen sistem"e düşürülüyor — rapor
+hata vermiyor. Müşterinin kötü adlandırma tercihi, yöneticinin raporu hiç
+görememesine yol açmamalı.
+
+**Bölümler:**
+
+- **Kapak:** kapsam adı, dönem (Günlük/Haftalık/Aylık — pencere
+  uzunluğundan türetiliyor), genel sağlık notu **Sağlıklı / Dikkat /
+  Riskli** ve notun gerekçesi. Kritik bulgu VEYA %99'un altında
+  erişilebilirlik → Riskli.
+- **Erişilebilirlik:** yüzde uptime, kesinti sayısı, toplam ve en uzun
+  kesinti süresi; uygulama bazında ayrı satırlar.
+- **Sistem envanteri:** veritabanı ve küme sayısı, ortam ve topoloji
+  dağılımı, DR kapsamı ("2/3 kümenin ikinci merkez kapsamı var").
+- **Risk özeti:** yüksek/orta/düşük, alan bazında (Erişilebilirlik,
+  Performans, Kapasite, Yapılandırma…), her madde iş etkisiyle. Aynı
+  alan + aynı uygulama için tek madde — 10 yavaş sorgu bulgusu yöneticiye
+  tek satır olarak iniyor.
+- **Trend:** önceki dönem raporuyla karşılaştırma (iyileşti / kötüleşti /
+  değişmedi), kritik-uyarı sayıları ve uptime yan yana.
+- **Yapılan işler:** dönemde kapatılan bulgu sayısı (motorun `resolved`
+  kayıtlarından — uydurma değil, gerçek veri).
+- **Öneriler:** yalnızca yüksek/orta riskler için; her biri "bu
+  yapılmazsa şu risk" cümlesiyle.
+
+Kabul edilmiş (acknowledged) ve kapanmış bulgular risk listesine
+girmiyor; kapanmışlar "yapılan işler" sayısını besliyor.
+
+**Testler:** `tests/test_executive_report.py` (14) +
+`tests/test_health_report_api.py`'ye 3 uç testi (viewer da yönetici
+raporunu görebiliyor; tamamlanmamış rapor 409). Toplam: 249 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
