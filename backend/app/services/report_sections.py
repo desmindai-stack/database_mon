@@ -76,6 +76,11 @@ SLOW_QUERY_MEAN_MS = 50.0
 TOP_QUERIES = 10
 # Bir alarm kuralının "gürültü yapıyor" sayılması için dönemdeki tetikleme sayısı.
 NOISY_RULE_THRESHOLD = 10
+# Dönemde bu kadar geçici dosya yazılmışsa work_mem sorgulanmaya değer. Birkaç kilobayt her
+# veritabanında olur; eşiksiz bir kontrol kalıcı yanlış pozitif üretirdi (Faz 18 İŞ 5).
+TEMP_BYTES_WARN = 1_048_576.0
+# Bir servisin gerçekten kapalı sayılması için gereken ardışık "down" ölçümü.
+SERVICE_DOWN_MIN_SAMPLES = 2
 # Büyüme trendi için gereken en az gün sayısı — tek fotoğraftan büyüme çıkarılamaz.
 SCHEMA_MIN_DAYS = 2
 
@@ -265,6 +270,36 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
                     "unknown_reason": "Bu instance için hiç metrik toplanmamış.",
                 }
             )
+            # Faz 18 İŞ 5 denetimi: bu bulgu eskiden `continue`'dan SONRA yazılmıştı, yani
+            # ulaşılamaz koddu ve hiç üretilmiyordu. Etkin ama hiç veri gelmeyen bir instance
+            # sessizce görünmez kalıyordu — oysa bu, raporun söylemesi gereken en temel şey.
+            if instance.enabled:
+                findings.append(
+                    FindingDraft(
+                        section="availability",
+                        severity="critical",
+                        title=f"{instance.name}: hiç metrik toplanmamış",
+                        detail=f"{instance.name} etkin ama tek bir ölçüm bile kaydedilmemiş.",
+                        facts=[
+                            fact("Ölçüm sayısı", "0", "bad"),
+                            fact("Durum", "etkin"),
+                        ],
+                        evidence={
+                            "metric": "metric_sample_count",
+                            "value": 0,
+                            "measured_at": ctx.period_end.isoformat(),
+                        },
+                        fingerprint_parts=("no_samples", str(instance.id)),
+                        recommendation=(
+                            "Bağlantı ayarlarını 'Bağlantı testi' ile doğrulayın; worker'ın çalıştığını "
+                            "kontrol edin."
+                        ),
+                        related_object_type="instance",
+                        related_object_id=instance.id,
+                        link_hint=f"/instances/{instance.id}?tab=overview",
+                        environment=_environment_of(instance),
+                    )
+                )
             continue
 
         total_down = sum(o["seconds"] for o in outages)
@@ -355,26 +390,6 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
                             "-- Bir sonraki rapor bu instance için kesinti göstermiyorsa sorun giderilmiştir."
                         ),
                     ),
-                    related_object_type="instance",
-                    related_object_id=instance.id,
-                    environment=_environment_of(instance),
-                )
-            )
-
-        if instance.enabled and first_sample is None:
-            findings.append(
-                FindingDraft(
-                    section="availability",
-                    severity="warning",
-                    title=f"{instance.name}: hiç metrik toplanmamış",
-                    detail="Instance etkin ama bu dönemde tek bir ölçüm bile kaydedilmemiş.",
-                    evidence={
-                        "metric": "metric_sample_count",
-                        "value": 0,
-                        "measured_at": ctx.period_end.isoformat(),
-                    },
-                    fingerprint_parts=("no_samples", str(instance.id)),
-                    recommendation="Bağlantı ayarlarını 'Bağlantı testi' ile doğrulayın; worker çalışıyor mu kontrol edin.",
                     related_object_type="instance",
                     related_object_id=instance.id,
                     environment=_environment_of(instance),
@@ -557,6 +572,10 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
             )
 
         for service, count in down_services.items():
+            # Faz 18 İŞ 5 denetimi: tek ölçümlük "down" bir probe hıçkırığı olabilir; gerçek
+            # bir kesinti en az iki ardışık ölçümde görünür.
+            if count < SERVICE_DOWN_MIN_SAMPLES:
+                continue
             findings.append(
                 FindingDraft(
                     section="cluster",
@@ -589,6 +608,17 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
         ).scalars().all()
         for snapshot in snapshots:
             report = snapshot.report_json or {}
+            checked_at = as_utc(snapshot.checked_at) if snapshot.checked_at else None
+            # Anlık görüntü rapor döneminin DIŞINDAysa bunu açıkça söylüyoruz.
+            snapshot_note = (
+                "Bu bilgi grubun anlık sağlık görüntüsünden geliyor; dönem boyunca sürekli "
+                "izlenmiş bir değer değil."
+            )
+            if checked_at is not None and not (ctx.period_start <= checked_at <= ctx.period_end):
+                snapshot_note += (
+                    f" Görüntü {checked_at.strftime('%d.%m.%Y %H:%M')} tarihli, yani rapor "
+                    "döneminin dışında."
+                )
             quorum = report.get("etcd_quorum") or {}
             dr_nodes = [n for n in (report.get("nodes") or []) if n.get("site") == "disaster"]
             group_rows.append(
@@ -625,6 +655,7 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
                             else ctx.period_end.isoformat(),
                         },
                         fingerprint_parts=("split_brain", str(snapshot.group_id)),
+                        note=snapshot_note,
                         recommendation="Keepalived/VIP sahipliğini derhal doğrulayın; yanlış düğümde VIP varsa servisi durdurun.",
                         commands=["ip -4 addr show", "systemctl status keepalived"],
                         related_object_type="group",
@@ -652,6 +683,7 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
                             else ctx.period_end.isoformat(),
                         },
                         fingerprint_parts=("etcd_quorum", str(snapshot.group_id)),
+                        note=snapshot_note,
                         recommendation="Kapalı etcd düğümlerini ayağa kaldırın; disk/ağ sorunlarını kontrol edin.",
                         commands=["etcdctl endpoint health --cluster", "systemctl status etcd"],
                         related_object_type="group",
@@ -672,6 +704,7 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
                             "measured_at": ctx.period_end.isoformat(),
                         },
                         fingerprint_parts=("no_dr_node", str(snapshot.group_id)),
+                        note=snapshot_note,
                         recommendation="DR gereksinimi varsa disaster sitesine bir replika düğüm ekleyin.",
                         related_object_type="group",
                         related_object_id=snapshot.group_id,
@@ -1044,8 +1077,19 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
         cache_avg = round(sum(cache_values) / len(cache_values), 2) if cache_values else None
         cache_min = round(min(cache_values), 2) if cache_values else None
 
-        temp_bytes = [float(s.temp_bytes or 0) for s in samples]
-        temp_peak = max(temp_bytes, default=0.0)
+        # Faz 18 İŞ 5 denetimi: temp_bytes KÜMÜLATİF bir sayaç (pg_stat_database.temp_bytes).
+        # Eskiden max() alınıyordu; bu yalnızca son değeri verir, yani geçmişte bir kez geçici
+        # dosya kullanmış her veritabanı sonsuza kadar bu bulguyu üretirdi. Doğrusu dönem farkı.
+        temp_values = [float(s.temp_bytes or 0) for s in samples]
+        if len(temp_values) >= 2:
+            # Sayaç sıfırlanmışsa (pg_stat_reset) son değeri olduğu gibi al.
+            temp_delta = (
+                temp_values[-1]
+                if temp_values[-1] < temp_values[0]
+                else temp_values[-1] - temp_values[0]
+            )
+        else:
+            temp_delta = 0.0
 
         checkpoints_req = [float(s.get_metric("checkpoints_req") or 0) for s in samples]
         checkpoints_timed = [float(s.get_metric("checkpoints_timed") or 0) for s in samples]
@@ -1063,7 +1107,7 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                 "peak_utilization_pct": peak_util,
                 "cache_hit_avg": cache_avg,
                 "cache_hit_min": cache_min,
-                "temp_bytes_peak": temp_peak,
+                "temp_bytes_in_period": temp_delta,
                 "checkpoints_requested": req_delta,
                 "checkpoints_timed": timed_delta,
                 "sample_count": len(samples),
@@ -1217,19 +1261,23 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                 )
             )
 
-        if temp_peak > 0:
+        # Eşik: dönemde en az 1 MB geçici dosya. Birkaç kilobayt her veritabanında olur.
+        if temp_delta >= TEMP_BYTES_WARN:
             findings.append(
                 FindingDraft(
                     section="resources",
                     severity="info",
                     title=f"{instance.name}: geçici dosya kullanımı var",
-                    detail=(
-                        f"Zirve {_format_bytes(temp_peak)} geçici dosya. Sıralama/hash işlemleri work_mem'e "
-                        "sığmayıp diske taşıyor."
-                    ),
+                    detail=f"{instance.name} üzerinde sıralama/hash işlemleri diske taşıyor.",
+                    facts=[
+                        fact("Dönemde geçici dosya", _format_bytes(temp_delta), "bad"),
+                        fact("Eşik", _format_bytes(TEMP_BYTES_WARN)),
+                    ],
+                    note="work_mem sıralama/hash için yetersiz kalıyor olabilir.",
                     evidence={
-                        "metric": "temp_bytes",
-                        "value": temp_peak,
+                        "metric": "temp_bytes (dönem farkı)",
+                        "value": temp_delta,
+                        "threshold": TEMP_BYTES_WARN,
                         "measured_at": ctx.period_end.isoformat(),
                     },
                     fingerprint_parts=("temp_files", str(instance.id)),

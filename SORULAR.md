@@ -3,6 +3,41 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 18 — İŞ 5: Şema bölümü günlük fotoğrafa dayanıyor, canlı sekmeyle ayrışabilir
+
+Rapordaki Şema sağlığı bölümü `SchemaObjectDailySample` (günde bir kez
+alınan fotoğraf) okuyor; arayüzdeki Şema sekmesi ise tıklandığında CANLI
+katalog taraması yapıyor. Yani bulgu "dün 500 MB kullanılmayan index
+vardı" derken sekme bugünkü durumu gösteriyor; gün içinde index silinmişse
+ikisi ayrışır.
+
+Bunu bu işte düzeltmedim. Düzeltmenin iki yolu vardı ve ikisi de bu işin
+kapsamını aşıyordu:
+
+1. Raporu canlı taramaya bağlamak — raporun temel kuralını (canlı probe
+   yok) çiğnerdi ve 06:00'da onlarca instance'ta katalog taraması demek
+   olurdu.
+2. Şema sekmesini günlük fotoğrafa bağlamak — sekmenin asıl değeri
+   "şu anda ne var" olduğu için işlevini bozardı.
+
+Doğru çözüm muhtemelen sekmede iki görünüm sunmak ("şu an" / "raporun
+gördüğü gün") ama bu ayrı bir iş. Şimdilik bulgu, verinin hangi güne ait
+olduğunu kanıtında (`measured_at`) taşıyor.
+
+## Faz 18 — İŞ 5: Cluster grup bulguları için dönemsel veri yok
+
+Split-brain, etcd quorum ve DR düğümü bilgisi `GroupHealthSnapshot`'tan
+geliyor; o tablo grup başına TEK satır tutuyor (son kontrolün sonucu).
+Dolayısıyla "dönem boyunca quorum kaybı yaşandı mı?" sorusunu
+cevaplayamıyoruz — yalnızca "şu an durum ne" biliniyor.
+
+Dönemsel yapmak için grup sağlık geçmişini saklayan yeni bir tablo
+gerekirdi (instance seviyesinde bu geçmiş zaten `MetricSample.metrics_json`
+içinde var — lider değişimi ve servis kesintileri oradan dönemsel olarak
+çıkarılıyor). Bunu eklemedim; bunun yerine bulgular anlık olduklarını
+açıkça söylüyor ve görüntü rapor döneminin dışındaysa tarihi yazılıyor.
+Sessizce dönemsel bir ölçüm gibi sunmak yanıltıcı olurdu.
+
 ## Faz 18 — İŞ 3: EXPLAIN uygulanabilirliği metinden çıkarılıyor, denenerek değil
 
 Rapor bir sorgu için "EXPLAIN'e bakın" demeden önce EXPLAIN'in mümkün

@@ -3445,6 +3445,74 @@ için testle korunuyor; ayrıca tekilleştirmenin fazla agresif olmadığı
 **Testler:** `tests/test_report_readability.py` (10 test). Toplam: 436
 test yeşil.
 
+## Faz 18 — İŞ 5: Bölüm bölüm doğruluk denetimi
+
+12 bölümün ürettiği her bulgu tipi için dört soru soruldu: **(a)** veri
+kaynağı doğru mu, **(b)** eşik mantıklı mı, **(c)** işaret ettiği hedef
+sayfada var mı, **(d)** önerisi uygulanabilir mi.
+
+### Bulunan ve düzeltilen hatalar
+
+**A. "Hiç metrik toplanmamış" bulgusu hiç üretilmiyordu (a).** Kod
+`if first_sample is None: … continue` yazıyor, ardından AYNI koşulu
+tekrar kontrol edip bulguyu üretmeye çalışıyordu — yani bulgu ulaşılamaz
+koddaydı. Sonuç: etkin ama hiç veri gelmeyen bir instance raporda
+sessizce görünmüyordu, ki bu raporun söylemesi gereken en temel şey.
+Bulgu `continue`'dan öncesine taşındı ve kritik olarak işaretlendi;
+kapalı (disabled) instance'lar için üretilmiyor (oradan veri gelmemesi
+beklenen durum).
+
+**B. `temp_bytes` kümülatif sayaç, gauge gibi kullanılıyordu (a + b).**
+Bölüm `max(temp_bytes)` alıyordu; kümülatif bir sayaçta bu yalnızca "son
+değer" demek. Yani geçmişte bir kez geçici dosya kullanmış her veritabanı
+**sonsuza kadar** bu bulguyu üretiyordu — kalıcı yanlış pozitif. Artık
+dönem farkı alınıyor (checkpoint'lerde zaten yapıldığı gibi), sayaç
+sıfırlaması ele alınıyor ve 1 MB'lık bir eşik kondu; birkaç kilobayt her
+veritabanında olur.
+
+**C. Tek ölçümlük "servis down" bulgu üretiyordu (b).** 15 saniyelik bir
+probe hıçkırığı gerçek bir kesinti değil. Artık en az iki ardışık "down"
+ölçümü isteniyor.
+
+**D. Grup cluster bulguları dönemsel değil, anlık (a).**
+`GroupHealthSnapshot` grup başına TEK satır tutuyor (son kontrolün
+sonucu). Split-brain, etcd quorum ve DR düğümü bulguları bu yüzden
+"dönem boyunca izlenmiş" bir ölçüm değil. Bunu gizlemek yerine bulgunun
+notuna yazdık; anlık görüntü rapor döneminin DIŞINDAysa tarihiyle
+birlikte ayrıca belirtiliyor.
+
+(İŞ 1'de bulunan iki yanlış hedef — parametre bulgularının instance
+tuning sekmesine gitmesi, kullanılmayan index bulgusunun hiçbir nesneye
+bağlı olmaması — ve şema bölümündeki veri yeterliliği hatası orada
+düzeltilmişti.)
+
+### Denetimden temiz geçen bulgu tipleri
+
+| Bölüm | Bulgu | Not |
+|---|---|---|
+| Erişilebilirlik | toplama boşluğu | Eşik: toplama aralığının 3 katı, min 60 sn |
+| Cluster | lider değişimi, lidersizlik | Anlık görüntü geçmişinden, dönemsel ✓ |
+| Performans | yavaş sorgu | İŞ 1-4'te elden geçti |
+| Kaynak | bağlantı zirvesi, cache hit | Gauge metrikler, doğru kullanım |
+| Kaynak | checkpoint baskısı | Zaten dönem farkı alıyordu ✓ |
+| Şema | büyüme, kullanılmayan index | İŞ 1'de eşik ayrıştırıldı |
+| Alarmlar | gürültülü kural, uzun süre açık | Eşik 10 tetikleme, hedef /alerts ✓ |
+| Kapasite | tahmin riskleri | PredictionInsight, güven aralığıyla ✓ |
+| Parametreler | sapma, değişiklik | İŞ 1'de hedef düzeltildi |
+| Ön koşullar | eksik kontrol | Yoksayılanlar ayrı, `unknown` eksiklik sayılmıyor ✓ |
+
+### Düzeltilmeyenler
+
+Kalan iki sınırlılık SORULAR.md'ye yazıldı: şema bölümünün günlük
+fotoğrafa dayanması (canlı Şema sekmesiyle gün içinde ayrışabilir) ve
+sistem sorgusu tespitinin desen tabanlı olması.
+
+**Testler:** `tests/test_report_audit.py` (9 test) — dört hatanın her biri
+için hem hatalı davranışın döndüğünü hem de düzeltmenin fazla agresif
+olmadığını (kapalı instance bulgu üretmiyor, gerçek temp kullanımı hâlâ
+yakalanıyor, tekrarlayan down hâlâ bulgu) doğruluyor. Toplam: 445 test
+yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
