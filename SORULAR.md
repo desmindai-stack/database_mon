@@ -3,6 +3,38 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 17 sonrası düzeltme: Yerel Python 3.14 ↔ canlı 3.12 farkı kapatılmadı
+
+`AdviceOut` ileri referansı canlıyı düşürdü çünkü yerelde 3.14 (PEP 649,
+ertelemeli annotation), canlıda 3.12 (hemen değerlendiren annotation)
+çalışıyor. Doğru kalıcı çözüm yerel sanal ortamı canlıyla aynı sürüme
+almak ya da CI'yı `python:3.12-slim` imajında koşturmak.
+
+Bu düzeltmede onu YAPMADIM. Sebep: `backend/.venv`'i 3.12'ye taşımak tüm
+bağımlılıkların yeniden kurulmasını gerektiriyor (pydantic-core, asyncpg,
+aioodbc gibi derlenmiş paketler dahil) ve bu, "canlı çöktü" acil
+düzeltmesinin kapsamını kullanıcının onayı olmadan genişletmek olurdu.
+Ayrıca CI yapılandırması `deploy/` altında ve kurallar gereği ona
+dokunulmuyor.
+
+Bunun yerine bu bug SINIFINI sürümden bağımsız olarak kapattım
+(`tests/test_definition_order.py`, AST taraması). Yani aynı hata bir daha
+kaçmaz; ama 3.12 ile 3.14 arasındaki BAŞKA uyumsuzluklar hâlâ yerelde
+görünmez kalabilir. Sürüm hizalaması ayrı bir iş olarak durmalı.
+
+## Faz 17 sonrası düzeltme: Denetim tırnaklı ileri referansları serbest bırakıyor
+
+AST tarayıcı yalnızca TIRNAKSIZ ileri referansları hata sayıyor;
+`b: "B | None"` gibi tırnaklı olanlar muaf. Sebep: tırnaklı annotation
+hiçbir Python sürümünde sınıf gövdesinde değerlendirilmiyor, pydantic
+onu sonradan çözüyor — yani gerçek bir risk değil. Hepsini yasaklamak,
+karşılıklı referanslı modelleri (A → B → A) imkânsız kılardı.
+
+Bunun bedeli: tırnaklı ama ASLA tanımlanmayan bir tip, tarayıcıdan
+geçer. O durumu ikinci savunma hattı yakalıyor —
+`__pydantic_complete__` kontrolü, çözülemeyen tipi import sonrası eksik
+model olarak raporluyor.
+
 ## Faz 17 — Ek İŞ B: Eski öneri alanları kaldırılmadı
 
 `recommendation`, `commands`, `steps`, `action` ve `playbook` alanları

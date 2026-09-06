@@ -636,6 +636,34 @@ class CustomRuleTestRequest(BaseModel):
     group_id: int | None = None
 
 
+# --- Standart öneri yapısı (Faz 17 Ek İŞ B) ---
+# Bu iki model, kendisini KULLANAN her modelden önce tanımlı olmak zorunda: Python <= 3.13
+# sınıf gövdesindeki annotation'ı hemen değerlendirir, sonra tanımlanan bir isim import anında
+# NameError verir. (Python 3.14 PEP 649 ile ertelemeli değerlendirdiğinden bu hata geliştirme
+# makinesinde görünmez; bkz. tests/test_definition_order.py.)
+
+
+class AdviceStepOut(BaseModel):
+    action: str
+    command: str | None = None
+
+
+class AdviceOut(BaseModel):
+    """Standart öneri yapısı (Faz 17 Ek İŞ B) — rapor, dashboard, DPA ve tahminlerde AYNI şekil.
+
+    Öneri üretilemiyorsa `unavailable_reason` dolu gelir; boş bir öneri hiçbir zaman dönmez.
+    """
+
+    title: str
+    why: str = ""
+    steps: list[AdviceStepOut] = []
+    cautions: list[str] = []
+    estimated_duration: str | None = None
+    rollback: str | None = None
+    verification: str | None = None
+    unavailable_reason: str | None = None
+
+
 class PredictionStepOut(BaseModel):
     """Tahmin için tek bir çözüm adımı (Faz 16-B İŞ 7). Arayüzde numaralanır; `command` varsa
     ayrı satırda, kopyalanabilir bir kutuda gösterilir."""
@@ -1334,27 +1362,6 @@ class AlwaysOnHealthOut(BaseModel):
 
 
 # --- Sağlık Raporu (Faz 17) ---
-
-
-class AdviceStepOut(BaseModel):
-    action: str
-    command: str | None = None
-
-
-class AdviceOut(BaseModel):
-    """Standart öneri yapısı (Faz 17 Ek İŞ B) — rapor, dashboard, DPA ve tahminlerde AYNI şekil.
-
-    Öneri üretilemiyorsa `unavailable_reason` dolu gelir; boş bir öneri hiçbir zaman dönmez.
-    """
-
-    title: str
-    why: str = ""
-    steps: list[AdviceStepOut] = []
-    cautions: list[str] = []
-    estimated_duration: str | None = None
-    rollback: str | None = None
-    verification: str | None = None
-    unavailable_reason: str | None = None
 
 
 class ReportFindingOut(BaseModel):

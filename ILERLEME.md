@@ -3139,6 +3139,84 @@ API'de duruyor ve arayüz `advice` yoksa onlara düşüyor — bu değişiklikte
 üretilememe gerekçesi bulunmalı, adımlar eylemsiz veya boş komutlu
 olamaz. Toplam: 318 test yeşil.
 
+## Faz 17 sonrası düzeltme — canlıda `NameError: name 'AdviceOut' is not defined`
+
+**Belirti.** Ek İŞ B commit'inden sonra canlı API import anında çöktü:
+`backend/app/schemas.py` satır 668, `PredictionOut` sınıfı `AdviceOut`
+tipini kullanıyor ama tanım dosyada 1344. satırda geliyordu. Aynı ileri
+referans üç yerde vardı: `PredictionOut` (668), `DashboardRecommendationOut`
+(815), `IndexAdviceOut` (951).
+
+### Neden yerelde yakalanmadı — doğrulama zincirindeki boşluk
+
+Kontrol çalıştı ama **yanlış Python sürümüyle** çalıştı:
+
+| | Yerel | Canlı |
+|---|---|---|
+| Python | 3.14.6 (`backend/.venv`) | 3.12 (`deploy/onprem/Dockerfile.backend`: `FROM python:3.12-slim`) |
+
+Python 3.14 ile gelen **PEP 649**, annotation'ları *ertelemeli*
+değerlendiriyor: sınıf gövdesi çalışırken `advice: AdviceOut | None`
+ifadesi hiç çalıştırılmıyor. Python ≤ 3.13 ise annotation'ı sınıf
+gövdesinde **hemen** değerlendirip tanımsız isimde `NameError` atıyor.
+
+İki kontrol de bu yüzden sessiz kaldı:
+
+1. **`python -c "from app.main import app"`** — 3.14'te import gerçekten
+   başarılı oluyor. Pydantic, çözemediği tipi görünce modeli `incomplete`
+   işaretleyip hatayı yutuyor.
+2. **318 test** — pydantic, eksik modeli ilk kullanımda modül
+   ad-uzayından yeniden kuruyor (`AdviceOut` o an artık tanımlı), bu
+   yüzden `advice` testleri dahil hepsi yeşil geçiyordu.
+
+Ölçülen kanıt: düzeltmeden önce, import biter bitmez tam olarak
+`AdviceOut`'a bakan modeller eksik kalıyordu —
+`['PredictionOut', 'DashboardRecommendationOut', 'DashboardIssueOut',
+'DashboardSummaryOut', 'IndexAdviceOut', 'IndexAdviceReportOut']`.
+
+Hata, indirilen **gerçek Python 3.12.9** yorumlayıcısıyla birebir yeniden
+üretildi (`NameError: name 'AdviceOut' is not defined`); aynı kaynak
+3.14'te o noktaya hiç gelmiyordu.
+
+### Düzeltme
+
+`AdviceStepOut` ve `AdviceOut`, ilk kullanımlarından (satır 648,
+`PredictionOut`) önceye taşındı ve başlarına neden orada durmaları
+gerektiğini açıklayan bir yorum konuldu. Dosyanın tamamı — ve `app/`
+altındaki 66 modülün hepsi — tanım sırası açısından tarandı; başka ileri
+referans yok.
+
+### Bir daha kaçmaması için: `tests/test_definition_order.py`
+
+Mevcut duman kontrolü yanlış değildi, **yetersizdi**: yorumlayıcı
+sürümüne bağımlıydı. Yeni testler sürümden bağımsız çalışıyor:
+
+1. **AST taraması** — `app/` altındaki her dosyada, her sınıf/fonksiyon
+   annotation'ı için "bu isim dosyada daha sonra mı tanımlanıyor?"
+   sorusu soruluyor. Tırnaklı ileri referanslar (`"AdviceOut"`) kasıtlı
+   olarak muaf; onlar zaten değerlendirilmiyor.
+2. **`__pydantic_complete__` kontrolü** — import sonrası hiçbir model
+   eksik kalmamalı. Bu, 3.14'te ileri referansın bıraktığı izi yakalar:
+   `NameError` görünmese bile model eksik işaretlenir.
+3. **Denetleyicinin kendi testi** — canlıyı düşüren kalıbın aynısı geçici
+   bir dosyaya yazılıp taranıyor. Bu olmadan tarayıcı sessizce hiçbir şey
+   bulmayan bir no-op'a dönüşse fark edilmezdi.
+
+Her iki koruma da düzeltmeden önce kırmızıydı, sonra yeşil. Tarayıcı
+ayrıca gerçek Python 3.12.9 ile de çalıştırılıp aynı sonucu verdiği
+doğrulandı.
+
+### Kalan risk
+
+Yerel geliştirme (3.14) ile canlı (3.12) arasında iki minör sürüm fark
+var. Yeni test bu bug sınıfını kapatıyor ama sürüm farkı başka
+uyumsuzluklar da doğurabilir — kalıcı çözüm yerel sanal ortamı 3.12'ye
+almak ya da CI'yı `python:3.12-slim` üzerinde koşturmak. Bu düzeltmenin
+kapsamı dışında bırakıldı, notu SORULAR.md'de.
+
+**Testler:** 387 yeşil (69'u yeni tanım sırası denetimi). Frontend build
+temiz.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
