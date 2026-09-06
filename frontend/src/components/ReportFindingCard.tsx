@@ -151,6 +151,8 @@ export default function ReportFindingCard({
       {open && (
         <div className="finding-body">
           <p>{finding.detail}</p>
+          {/* Faz 18 İŞ 3: sınırlılık notu ayrı ve sönük — bulgunun önüne geçmemeli. */}
+          {finding.note && <p className="finding-note">{finding.note}</p>}
           {evidence && <p className="finding-evidence">Kanıt — {evidence}</p>}
           {/* Faz 17 Ek İŞ B: standart öneri yapısı — dashboard, DPA ve tahminlerle aynı bileşen.
               Eski recommendation/commands alanları yalnızca advice yoksa (eski kayıtlar) devreye

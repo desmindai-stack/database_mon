@@ -205,6 +205,7 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "report_findings", "decision_until", "decision_until TIMESTAMP")
         await _sqlite_add_column_if_missing(conn, "report_findings", "advice", "advice JSON")
         await _sqlite_add_column_if_missing(conn, "report_findings", "link_hint", "link_hint VARCHAR(512)")
+        await _sqlite_add_column_if_missing(conn, "report_findings", "note", "note VARCHAR(512)")
         # Eski "acknowledged" bayrağını yeni durum modeline taşı — yoksa yükseltmeden sonra
         # daha önce susturulmuş bulgular topluca kritik olarak geri döner.
         await conn.execute(

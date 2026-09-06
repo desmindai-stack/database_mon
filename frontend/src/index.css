@@ -1356,6 +1356,16 @@ td code,
   color: var(--muted);
 }
 
+/* ---- Faz 18 İŞ 3: bulgunun kısa sınırlılık notu ---- */
+.finding-note {
+  margin: 0.3rem 0;
+  padding-left: 0.6rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-style: italic;
+}
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);

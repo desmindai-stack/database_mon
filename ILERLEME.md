@@ -3365,6 +3365,42 @@ sistem sorgusu ayarının varsayılan görünümü değiştirmesi, sorgu
 parametresinin ayarı geçersiz kılması, uç doğrulaması ve viewer yetkisi.
 Toplam: 416 test yeşil.
 
+## Faz 18 — İŞ 3: Öneri geçerliliği
+
+Rapor "DPA'da EXPLAIN'e bakın" diyordu ama EXPLAIN'in o sorgu için
+alınabilir olup olmadığını hiç kontrol etmiyordu. Bir UPDATE/INSERT ya da
+çoklu statement için EXPLAIN reddedilir — kullanıcı bağlantıya tıklayıp
+boşa gidiyordu.
+
+**Yönlendirmeden önce doğrulama.** `validate_explainable` (DPA'nın EXPLAIN
+ucunun kullandığı kontrolün aynısı) canlı bağlantı gerektirmiyor; rapor
+kendi kuralını çiğnemeden (canlı probe yok) yönlendirmenin geçerli olup
+olmadığını bilebiliyor. Geçerliyse öneri EXPLAIN adımlarını veriyor;
+değilse **"şu yüzden öneremiyorum"** biçiminde nedeni yazıp yerine
+uygulanabilir bir alternatif sunuyor (çağrı sıklığını azaltmak, hedef
+tablodaki index sayısını gözden geçirmek). Boş yönlendirme yok.
+
+**Sınırlılıklar artık ayrı ve kısa bir not.** "Darboğaz belirlenemedi
+çünkü exec_user_time verisi yok" gibi cümleler bulgu metninin içine
+gömülüydü ve asıl bulgunun önüne geçiyordu. Yeni `note` alanı
+(kolon + migration `20260907100000_report_finding_note.sql`, DEPLOY.md 28)
+bunları ayırıyor; arayüzde sönük, italik ve kenar çizgili küçük bir satır
+olarak, bulgunun altında duruyor. Nota taşınanlar:
+
+- Darboğaz sınıfının kesin olmaması (ölçüm verisi eksikse).
+- Pencerede tek toplama döngüsü olması (değerler fark değil kümülatif).
+- EXPLAIN'in o sorgu için alınamaması.
+
+Bulgu metni böylece kısa ve yapılandırılmış kalıyor; bir test detay
+metninin 240 karakteri geçmediğini ve sınırlılık cümlelerinin oraya
+sızmadığını doğruluyor.
+
+**Testler:** `tests/test_advice_validity.py` (10 test) — EXPLAIN
+uygulanabilirliği tespiti, uygulanabilirken doğru yönlendirme,
+uygulanamazken gerekçe + alternatif, sınırlılığın nota taşınması, ve
+"bir sayfaya yönlendiren her bulgunun orada ne yapılacağını da söylemesi"
+kuralı. Toplam: 426 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

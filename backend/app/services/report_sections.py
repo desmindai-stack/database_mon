@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.services.collection import effective_collect_interval
 from app.services.advice import Advice, AdviceStep
+from app.services.explain_service import validate_explainable
 from app.services.finding_status import (
     STATUS_LABELS_TR,
     STATUS_OPEN,
@@ -708,6 +709,70 @@ def slow_query_link(instance_id: int, entry, start, end) -> str:
     return f"/instances/{instance_id}?" + "&".join(params)
 
 
+def explain_feasibility(query: str) -> tuple[bool, str | None]:
+    """"EXPLAIN'e bakın" demeden ÖNCE EXPLAIN'in gerçekten alınabildiğini doğrular (Faz 18 İŞ 3).
+
+    `validate_explainable` DPA'nın EXPLAIN ucunun kullandığı aynı kontrol ve canlı bağlantı
+    gerektirmiyor — yani rapor, kendi kuralını çiğnemeden (canlı probe yok) yönlendirmenin
+    geçerli olup olmadığını bilebiliyor. Geçersizse NEDENİ döndürülüyor ki öneri
+    "şu yüzden öneremiyorum" biçiminde yazılabilsin.
+    """
+    try:
+        validate_explainable(query)
+    except ValueError as exc:
+        return False, str(exc)
+    return True, None
+
+
+def _slow_query_advice(entry, diagnosis, explainable: bool, explain_reason: str | None) -> Advice:
+    """Yavaş sorgu bulgusunun önerisi — yönlendirdiği yerin var olduğu doğrulanmış."""
+    if not explainable:
+        # Boş yönlendirme yapma: neden EXPLAIN'e bakılamayacağını ve bunun yerine ne
+        # yapılabileceğini söyle.
+        return Advice(
+            title="Bu sorgu için plan analizi yapılamıyor — çağrı sıklığını ve uygulama tarafını inceleyin",
+            why=(
+                f"Sorgu {diagnosis.resource} darboğazı gösteriyor ama EXPLAIN alınamıyor: {explain_reason} "
+                "Plan analizi olmadan index önerisi de üretilemez."
+            ),
+            steps=[
+                AdviceStep(
+                    "Sorgunun nereden çağrıldığını uygulama tarafında bulun; çağrı sıklığı "
+                    "azaltılabiliyorsa en etkili çözüm budur."
+                ),
+                AdviceStep(
+                    "Sorgu bir DML (INSERT/UPDATE/DELETE) ise etkilenen satır sayısını ve "
+                    "hedef tablodaki index sayısını gözden geçirin — her index yazma maliyeti ekler.",
+                    "SELECT indexrelname, idx_scan, pg_size_pretty(pg_relation_size(indexrelid)) AS boyut\n"
+                    "FROM pg_stat_user_indexes WHERE relname = '<tablo>' ORDER BY idx_scan;",
+                ),
+            ],
+            verification=(
+                "-- Bir sonraki raporda bu sorgunun toplam süresi düşmüş olmalı."
+            ),
+        )
+
+    return Advice(
+        title="Bu sorgunun planına ve index önerisine bakın",
+        why=(
+            f"Sorgu dönemde {entry.total_time_ms:.0f} ms harcadı ve darboğaz {diagnosis.resource} "
+            "tarafında görünüyor. Plan, sürenin nereye gittiğini kesin olarak gösterir."
+        ),
+        steps=[
+            AdviceStep(
+                "Bulgudaki bağlantıyla DPA'daki Yavaş Sorgular sekmesine gidin — bağlantı aynı "
+                "sorguyu ve aynı zaman aralığını açar."
+            ),
+            AdviceStep("Sorgu satırını açıp EXPLAIN planını alın (sorguyu çalıştırmaz)."),
+            AdviceStep("Aynı satırdaki 'Index önerisi' ile aday index'leri değerlendirin."),
+        ],
+        cautions=[
+            "EXPLAIN ANALYZE sorguyu GERÇEKTEN çalıştırır; yalnızca plan için düz EXPLAIN yeterli."
+        ],
+        verification="-- Değişiklikten sonra bir sonraki raporda bu sorgunun süresi düşmüş olmalı.",
+    )
+
+
 def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct, mode: str):
     """Yavaş sorgu bulgusu — yapılandırılmış metin ve doğrulanmış derin bağlantıyla."""
     what = "Yeni pahalı sorgu" if change == "new" else "Pahalı sorgu kötüleşti"
@@ -716,8 +781,19 @@ def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct
         if change_pct is not None
         else "Önceki dönemde bu sorgu hiç görülmemişti."
     )
+
+    explainable, explain_reason = explain_feasibility(entry.query)
+
+    # Faz 18 İŞ 3: sınırlılıklar bulgu metnine gömülmüyor, ayrı ve kısa bir nota taşınıyor.
+    notes: list[str] = []
+    if diagnosis.confidence != "observed":
+        notes.append(f"Darboğaz sınıfı kesin değil: {diagnosis.reason}")
     if mode == "snapshot":
-        compared += " (Pencerede tek toplama döngüsü var; değerler fark değil kümülatif toplam.)"
+        notes.append(
+            "Pencerede tek toplama döngüsü var; değerler dönem farkı değil kümülatif toplam."
+        )
+    if not explainable:
+        notes.append(f"Bu sorgu için EXPLAIN alınamıyor: {explain_reason}")
 
     return FindingDraft(
         section="performance",
@@ -728,6 +804,7 @@ def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct
             f"Dönemde {entry.calls} çağrı, toplam {entry.total_time_ms:.0f} ms, "
             f"ortalama {entry.mean_time_ms:.1f} ms. {compared}"
         ),
+        note=" ".join(notes) or None,
         evidence={
             "metric": "pg_stat_statements.total_exec_time (dönem farkı)",
             "value": entry.total_time_ms,
@@ -740,14 +817,18 @@ def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct
             "query_key": entry.key,
             "query": entry.query,
             "selection_mode": mode,
+            "explainable": explainable,
             "measured_at": ctx.period_end.isoformat(),
         },
         # Kimlik olarak `key` kullanılıyor: queryid NULL gelebiliyor ve eskiden bu, farklı
-        # sorguların AYNI fingerprint'e düşüp birbirini elemesine yol açıyordu (Faz 18 İŞ 4).
+        # sorguların AYNI fingerprint'e düşüp birbirini elemesine yol açıyordu.
         fingerprint_parts=("slow_query", str(instance.id), entry.key),
         recommendation=(
-            "Bu sorgu için DPA'daki Yavaş Sorgular sekmesinde EXPLAIN planına ve index önerisine bakın."
+            "Bu sorgunun planına ve index önerisine bakın."
+            if explainable
+            else f"Bu sorgu için plan analizi yapılamıyor ({explain_reason}); uygulama tarafını inceleyin."
         ),
+        advice=_slow_query_advice(entry, diagnosis, explainable, explain_reason),
         related_object_type="instance",
         related_object_id=instance.id,
         link_hint=slow_query_link(instance.id, entry, ctx.period_start, ctx.period_end),

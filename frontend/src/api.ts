@@ -432,6 +432,8 @@ export interface ReportFinding {
   related_object_id: number | null;
   /** Bulgunun kesin hedefi (Faz 18 İŞ 1). Boşsa bölüm→sekme eşlemesine düşülür. */
   link_hint: string | null;
+  /** Kısa sınırlılık notu (Faz 18 İŞ 3) — bulgunun önüne geçmeyecek şekilde gösterilir. */
+  note: string | null;
   fingerprint: string;
   priority: number;
   open_since_days: number;

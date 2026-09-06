@@ -3,6 +3,21 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 18 — İŞ 3: EXPLAIN uygulanabilirliği metinden çıkarılıyor, denenerek değil
+
+Rapor bir sorgu için "EXPLAIN'e bakın" demeden önce EXPLAIN'in mümkün
+olduğunu doğruluyor — ama bunu sorguyu gerçekten EXPLAIN ederek değil,
+`validate_explainable` ile sorgu METNİNE bakarak yapıyor. Sebep: raporun
+temel kuralı canlı probe yapmamak (bkz. Faz 17 İŞ 1); üstelik onlarca
+instance için rapor üretilirken her sorgu için bağlantı açmak toplama
+döngüsüyle yarışırdı.
+
+Bunun bir sınırı var ve kabul edilmiş bir sınır: metin kontrolünden geçen
+bir sorgu, çalıştırıldığında yine de EXPLAIN hatası verebilir (ör. sorgu
+metnindeki `$1` yer tutucularının tipi çıkarılamazsa). O durumda kullanıcı
+DPA'da hatayı görüyor — ama en azından açıkça reddedilecek sorgu tipleri
+(DML/DDL, çoklu statement) için artık boş yönlendirme yapılmıyor.
+
 ## Faz 18 — İŞ 1: DPA'nın varsayılan görünümü değişti (API davranışı)
 
 `GET /api/queries/{id}` aralıksız çağrıldığında eskiden "yalnızca son

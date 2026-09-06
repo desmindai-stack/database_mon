@@ -469,6 +469,8 @@ class ReportFinding(Base):
     # Faz 18 İŞ 1: bulgunun işaret ettiği kesin hedef URL'i (sorgu anahtarı + pencere dahil).
     # Boşsa arayüz bölüm→sekme eşlemesine düşer.
     link_hint: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Faz 18 İŞ 3: kısa sınırlılık notu (ör. "darboğaz belirlenemedi: CPU verisi yok").
+    note: Mapped[str | None] = mapped_column(String(512), nullable=True)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # "<bölüm>:<bulgu tipi>" — hedef nesne kimliği içermez. Grup/uygulama/müşteri/küresel
     # kapsamlı durum kararlarının aynı TİPTEKİ bulguları eşleştirebilmesi için (Ek İŞ A).

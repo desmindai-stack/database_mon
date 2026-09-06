@@ -81,6 +81,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 25 | `20260906090000_finding_status_machine.sql` | **YENİ** — bulgu durum makinesi: finding_acknowledgements/report_findings yeni kolonlar + finding_status_history tablosu |
 | 26 | `20260906100000_finding_advice.sql` | **YENİ** — report_findings.advice (standart öneri yapısı) |
 | 27 | `20260907090000_report_finding_link_hint.sql` | **YENİ** — report_findings.link_hint (bulgunun kesin hedef bağlantısı) |
+| 28 | `20260907100000_report_finding_note.sql` | **YENİ** — report_findings.note (kısa sınırlılık notu) |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun
