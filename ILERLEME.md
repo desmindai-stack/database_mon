@@ -3401,6 +3401,50 @@ uygulanamazken gerekçe + alternatif, sınırlılığın nota taşınması, ve
 "bir sayfaya yönlendiren her bulgunun orada ne yapılacağını da söylemesi"
 kuralı. Toplam: 426 test yeşil.
 
+## Faz 18 — İŞ 4: Rapor okunabilirliği
+
+**Bulgu metni parçalara ayrıldı.** Eskiden tek uzun paragraftı ve sayılar
+cümlenin içinde kayboluyordu. Yeni `facts` alanı (kolon + migration
+`20260907110000_report_finding_facts.sql`, DEPLOY.md 29) dört parçalı
+yapıyı kuruyor:
+
+| Parça | Nerede |
+|---|---|
+| Ne oldu | `detail` — tek kısa cümle |
+| Ne kadar / neye göre | `facts` — etiketli satırlar |
+| Sınırlılık | `note` (İŞ 3) — sönük, ayrı |
+| Ne yapmalı | `advice` (Ek İŞ B) |
+
+Yavaş sorgu, erişilebilirlik, bağlantı doluluğu ve cache hit bulguları bu
+yapıya geçti. Örnek: eskiden "Dönemde 40 çağrı, toplam 8000 ms, ortalama
+200 ms (önceki döneme göre %+229). Darboğaz: …" tek cümlesiydi; şimdi
+"Pahalı sorgu kötüleşti." cümlesi + Toplam süre / Çağrı / Ortalama /
+Darboğaz / Önceki döneme göre etiketli satırları.
+
+**Önemli sayılar vurgulanıyor.** Her `fact` bir `tone` taşıyor
+(neutral/good/bad); arayüzde büyük, kalın ve `tabular-nums` ile hizalı
+gösteriliyor, kötü yönde olanlar kırmızıya çalıyor.
+
+**Sorgu metni kesme düzeltildi.** `_short_query` artık kelime sınırında
+kesiyor — eskiden tanımlayıcının ortasından kesip okunmaz hale
+getirebiliyordu. Tam metin `evidence["query"]` içinde korunuyor ve
+arayüzde "Tam sorgu metni" katlanabilir alanında; bilgi kaybı yok.
+
+**Kanıt satırı kompaktlaştı.** Ölçülen değer artık `facts` içinde vurgulu
+gösterildiği için kanıt satırında TEKRARLANMIYOR; satır yalnızca kaynak
+bilgisini (hangi metrik, hangi eşik, ne zaman ölçüldü) taşıyor ve daha
+küçük/soluk bir stille bulgunun önüne geçmiyor. Kanıt zorunluluğu (Faz 17
+İŞ 6) korunuyor — yalnızca sunumu değişti.
+
+**Aynı bulgunun iki kez listelenmesi.** Kök neden İŞ 1'de bulunup
+düzeltildi: `queryid` bazı satırlarda NULL geldiği için tek sorgu iki
+kimliğe bölünüyordu. Bu işte tekillik hem veri tablosu hem bulgu listesi
+için testle korunuyor; ayrıca tekilleştirmenin fazla agresif olmadığı
+(gerçekten farklı iki sorgunun iki bulgu ürettiği) da doğrulanıyor.
+
+**Testler:** `tests/test_report_readability.py` (10 test). Toplam: 436
+test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

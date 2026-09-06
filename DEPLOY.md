@@ -82,6 +82,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 26 | `20260906100000_finding_advice.sql` | **YENİ** — report_findings.advice (standart öneri yapısı) |
 | 27 | `20260907090000_report_finding_link_hint.sql` | **YENİ** — report_findings.link_hint (bulgunun kesin hedef bağlantısı) |
 | 28 | `20260907100000_report_finding_note.sql` | **YENİ** — report_findings.note (kısa sınırlılık notu) |
+| 29 | `20260907110000_report_finding_facts.sql` | **YENİ** — report_findings.facts (bulgunun sayısal özeti) |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun

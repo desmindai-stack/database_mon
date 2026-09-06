@@ -54,14 +54,17 @@ function deepLink(finding: ReportFinding): string | null {
   return target ? `/instances/${id}?tab=${target}` : `/instances/${id}`;
 }
 
-/** Kanıtı okunur bir satıra indirger — her bulgu neye dayandığını göstermeli (Faz 17 İŞ 6). */
+/** Kanıtı tek kompakt satıra indirger — her bulgu neye dayandığını göstermeli (Faz 17 İŞ 6).
+ *
+ *  Faz 18 İŞ 4: ölçülen değer artık `facts` içinde vurgulu gösterildiği için burada
+ *  tekrarlanmıyor; kanıt satırı yalnızca KAYNAK bilgisini (hangi metrik, hangi eşik, ne zaman)
+ *  taşıyor ve sönük bir stille bulgunun önüne geçmiyor. */
 function evidenceLine(evidence: Record<string, unknown>): string {
   const parts: string[] = [];
-  if (evidence.metric) parts.push(`metrik: ${String(evidence.metric)}`);
-  if (evidence.value !== undefined && evidence.value !== null) parts.push(`ölçülen: ${String(evidence.value)}`);
+  if (evidence.metric) parts.push(String(evidence.metric));
   if (evidence.threshold !== undefined && evidence.threshold !== null)
-    parts.push(`eşik: ${String(evidence.threshold)}`);
-  if (evidence.measured_at) parts.push(`ölçüm: ${String(evidence.measured_at).slice(0, 16).replace("T", " ")}`);
+    parts.push(`eşik ${String(evidence.threshold)}`);
+  if (evidence.measured_at) parts.push(String(evidence.measured_at).slice(0, 16).replace("T", " "));
   return parts.join(" · ");
 }
 
@@ -150,10 +153,32 @@ export default function ReportFindingCard({
 
       {open && (
         <div className="finding-body">
-          <p>{finding.detail}</p>
+          <p className="finding-detail">{finding.detail}</p>
+
+          {/* Faz 18 İŞ 4: "ne kadar / neye göre" — etiketli satırlar, sayılar vurgulu. */}
+          {finding.facts.length > 0 && (
+            <dl className="finding-facts">
+              {finding.facts.map((f, i) => (
+                <div key={i} className={`finding-fact ${f.tone}`}>
+                  <dt>{f.label}</dt>
+                  <dd>{f.value}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+
           {/* Faz 18 İŞ 3: sınırlılık notu ayrı ve sönük — bulgunun önüne geçmemeli. */}
           {finding.note && <p className="finding-note">{finding.note}</p>}
-          {evidence && <p className="finding-evidence">Kanıt — {evidence}</p>}
+
+          {/* Faz 18 İŞ 4: tam sorgu metni katlanabilir alanda; başlıkta kısaltılmış hali var. */}
+          {typeof finding.evidence?.query === "string" && (
+            <details className="finding-query">
+              <summary>Tam sorgu metni</summary>
+              <pre>{String(finding.evidence.query)}</pre>
+            </details>
+          )}
+
+          {evidence && <p className="finding-evidence">{evidence}</p>}
           {/* Faz 17 Ek İŞ B: standart öneri yapısı — dashboard, DPA ve tahminlerle aynı bileşen.
               Eski recommendation/commands alanları yalnızca advice yoksa (eski kayıtlar) devreye
               girer. */}

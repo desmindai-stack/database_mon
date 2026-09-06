@@ -83,6 +83,10 @@ class FindingDraft:
     commands: list[str] = field(default_factory=list)
     related_object_type: str | None = None
     related_object_id: int | None = None
+    # Faz 18 İŞ 4: bulgunun sayısal özeti — [{label, value, tone}]. Uzun bir paragraf yerine
+    # "ne kadar / neye göre" bilgisi etiketli ve vurgulu satırlar olarak gösteriliyor; `detail`
+    # ise yalnızca "ne oldu" cümlesi olarak kısa kalıyor.
+    facts: list[dict[str, Any]] = field(default_factory=list)
     # Faz 18 İŞ 3: kısa sınırlılık notu — "darboğaz belirlenemedi çünkü şu veri yok" gibi
     # bilgiler bulgu metninin içine gömülü uzun bir cümle olarak değil, ayrı ve kısa bir not
     # olarak gösteriliyor; bulgunun kendisinin önüne geçmesin.
@@ -490,6 +494,7 @@ async def generate_report(
                     related_object_id=draft.related_object_id,
                     link_hint=draft.link_hint,
                     note=draft.note,
+                    facts=draft.facts or None,
                     fingerprint=fingerprint,
                     finding_type=finding_type,
                     status=effective.status,

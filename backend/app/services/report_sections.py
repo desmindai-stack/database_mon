@@ -98,8 +98,26 @@ def _count_by(rows: list[dict], key: str) -> dict[str, int]:
 
 
 def _short_query(query: str, limit: int = 120) -> str:
-    collapsed = " ".join(query.split())
-    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "…"
+    """Sorgunun ANLAMLI baş kısmı (Faz 18 İŞ 4).
+
+    Kesme kelime sınırında yapılıyor: ortasından ya da bir tanımlayıcının ortasından kesmek
+    okunmayı zorlaştırıyordu. Tam metin her zaman `evidence["query"]` içinde duruyor ve
+    arayüzde katlanabilir alanda gösteriliyor — bilgi kaybı yok.
+    """
+    collapsed = " ".join((query or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    cut = collapsed[:limit]
+    boundary = cut.rfind(" ")
+    # Boşluk çok başta kaldıysa (tek uzun jeton) sert kesme yapmak zorundayız.
+    if boundary > limit * 0.6:
+        cut = cut[:boundary]
+    return cut.rstrip(" ,(") + "…"
+
+
+def fact(label: str, value: str, tone: str = "neutral") -> dict:
+    """Bulgunun sayısal özetinde tek satır. `tone`: neutral | good | bad."""
+    return {"label": label, "value": value, "tone": tone}
 
 
 def _format_bytes(value: float) -> str:
@@ -280,12 +298,17 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
                     section="availability",
                     severity=severity,
                     title=f"{instance.name}: veri toplanamayan {len(outages)} dönem",
-                    detail=(
-                        f"Toplam {_fmt_duration(total_down)} boyunca metrik toplanamadı "
-                        f"(en uzunu {_fmt_duration(longest)}, {worst['start'][11:16]} civarı). "
+                    detail=f"{instance.name} için dönem içinde {len(outages)} kez veri toplanamadı.",
+                    facts=[
+                        fact("Toplam kesinti", _fmt_duration(total_down), "bad"),
+                        fact("En uzunu", _fmt_duration(longest), "bad"),
+                        fact("En uzun kesintinin başlangıcı", worst["start"][11:16]),
+                        fact("Erişilebilirlik", f"%{uptime_pct:.2f}", "bad" if uptime_pct < 99 else "good"),
+                    ],
+                    note=(
                         "Bu ölçüm 'dbace veri toplayamadı' demektir; veritabanının kapalı olduğunu "
-                        "tek başına kanıtlamaz (worker duruşu, ağ kopması veya kimlik bilgisi "
-                        "sorunu da aynı boşluğu yaratır)."
+                        "tek başına kanıtlamaz (worker duruşu, ağ kopması veya kimlik bilgisi sorunu "
+                        "da aynı boşluğu yaratır)."
                     ),
                     evidence={
                         "metric": "metric_sample_gap",
@@ -776,12 +799,6 @@ def _slow_query_advice(entry, diagnosis, explainable: bool, explain_reason: str 
 def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct, mode: str):
     """Yavaş sorgu bulgusu — yapılandırılmış metin ve doğrulanmış derin bağlantıyla."""
     what = "Yeni pahalı sorgu" if change == "new" else "Pahalı sorgu kötüleşti"
-    compared = (
-        f"Önceki eşit uzunluktaki döneme göre %{change_pct:+.0f}."
-        if change_pct is not None
-        else "Önceki dönemde bu sorgu hiç görülmemişti."
-    )
-
     explainable, explain_reason = explain_feasibility(entry.query)
 
     # Faz 18 İŞ 3: sınırlılıklar bulgu metnine gömülmüyor, ayrı ve kısa bir nota taşınıyor.
@@ -795,15 +812,30 @@ def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct
     if not explainable:
         notes.append(f"Bu sorgu için EXPLAIN alınamıyor: {explain_reason}")
 
+    # Faz 18 İŞ 4: "ne oldu" cümlede, "ne kadar / neye göre" etiketli satırlarda.
+    facts = [
+        fact("Toplam süre", f"{entry.total_time_ms:,.0f} ms".replace(",", "."), "bad"),
+        fact("Çağrı", f"{entry.calls:,}".replace(",", ".")),
+        fact("Ortalama", f"{entry.mean_time_ms:,.1f} ms".replace(",", "."), "bad"),
+        fact("Darboğaz", diagnosis.resource),
+    ]
+    if change_pct is not None:
+        facts.append(
+            fact(
+                "Önceki döneme göre",
+                f"%{change_pct:+.0f}",
+                "bad" if change_pct > 0 else "good",
+            )
+        )
+    else:
+        facts.append(fact("Önceki dönem", "görülmemişti"))
+
     return FindingDraft(
         section="performance",
         severity="warning" if change == "worse" else "info",
         title=f"{instance.name}: {what.lower()} — {diagnosis.resource} darboğazı",
-        detail=(
-            f"{what}. "
-            f"Dönemde {entry.calls} çağrı, toplam {entry.total_time_ms:.0f} ms, "
-            f"ortalama {entry.mean_time_ms:.1f} ms. {compared}"
-        ),
+        detail=f"{what}. {_short_query(entry.query)}",
+        facts=facts,
         note=" ".join(notes) or None,
         evidence={
             "metric": "pg_stat_statements.total_exec_time (dönem farkı)",
@@ -1044,11 +1076,13 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                     section="resources",
                     severity="critical" if peak_util >= CONNECTION_UTIL_CRITICAL else "warning",
                     title=f"{instance.name}: bağlantı doluluğu zirvede %{peak_util}",
-                    detail=(
-                        f"En yüksek {peak_conn}/{max_conn} bağlantı "
-                        f"({peak_conn_at.strftime('%H:%M') if peak_conn_at else '—'} civarı). "
-                        "Doluluk %100'e ulaşırsa yeni bağlantılar reddedilir."
-                    ),
+                    detail=f"{instance.name} bağlantı doluluğunda zirve yaptı.",
+                    facts=[
+                        fact("Zirve doluluk", f"%{peak_util:.0f}", "bad"),
+                        fact("Bağlantı", f"{peak_conn}/{max_conn}", "bad"),
+                        fact("Zirve saati", peak_conn_at.strftime("%H:%M") if peak_conn_at else "—"),
+                    ],
+                    note="Doluluk %100'e ulaşırsa yeni bağlantılar reddedilir.",
                     evidence={
                         "metric": "connection_utilization_pct",
                         "value": peak_util,
@@ -1120,10 +1154,13 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                     section="resources",
                     severity="warning",
                     title=f"{instance.name}: cache hit oranı düşük (%{cache_avg})",
-                    detail=(
-                        f"Dönem ortalaması %{cache_avg}, en düşük %{cache_min}. Veri diskten okunuyor; "
-                        "shared_buffers yetersiz ya da sorgular gereksiz çok veri tarıyor olabilir."
-                    ),
+                    detail=f"{instance.name} üzerinde veri diskten okunuyor.",
+                    facts=[
+                        fact("Dönem ortalaması", f"%{cache_avg}", "bad"),
+                        fact("En düşük", f"%{cache_min}", "bad"),
+                        fact("Eşik", f"%{CACHE_HIT_WARN:.0f}"),
+                    ],
+                    note="shared_buffers yetersiz ya da sorgular gereksiz çok veri tarıyor olabilir.",
                     evidence={
                         "metric": "cache_hit_ratio",
                         "value": cache_avg,

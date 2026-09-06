@@ -434,6 +434,8 @@ export interface ReportFinding {
   link_hint: string | null;
   /** Kısa sınırlılık notu (Faz 18 İŞ 3) — bulgunun önüne geçmeyecek şekilde gösterilir. */
   note: string | null;
+  /** Sayısal özet (Faz 18 İŞ 4): "ne kadar / neye göre" etiketli, vurgulu satırlar. */
+  facts: { label: string; value: string; tone: "neutral" | "good" | "bad" }[];
   fingerprint: string;
   priority: number;
   open_since_days: number;

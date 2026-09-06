@@ -471,6 +471,8 @@ class ReportFinding(Base):
     link_hint: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # Faz 18 İŞ 3: kısa sınırlılık notu (ör. "darboğaz belirlenemedi: CPU verisi yok").
     note: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Faz 18 İŞ 4: sayısal özet — [{label, value, tone}]. Uzun paragraf yerine etiketli satırlar.
+    facts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # "<bölüm>:<bulgu tipi>" — hedef nesne kimliği içermez. Grup/uygulama/müşteri/küresel
     # kapsamlı durum kararlarının aynı TİPTEKİ bulguları eşleştirebilmesi için (Ek İŞ A).

@@ -324,8 +324,11 @@ async def test_availability_section_derives_outages_from_collection_gaps():
         assert finding.evidence["outage_count"] == 1
         assert finding.evidence["longest_seconds"] == pytest.approx(1200, abs=1)
         assert finding.recommendation
-        # Dürüstlük: "veritabanı kapalıydı" diye kesin iddia yok.
-        assert "kanıtlamaz" in finding.detail
+        # Dürüstlük: "veritabanı kapalıydı" diye kesin iddia yok. Faz 18 İŞ 4'te bu sınırlılık
+        # detay paragrafından ayrı bir nota taşındı — garanti aynı, yeri değişti.
+        assert "kanıtlamaz" in finding.note
+        # Sayılar artık etiketli satırlarda (uzun paragraf yerine).
+        assert any(f["label"] == "En uzunu" for f in finding.facts)
 
 
 async def test_customer_scope_includes_ungrouped_legacy_instances():
