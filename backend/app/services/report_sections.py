@@ -13,6 +13,7 @@ Kalite kuralları (Faz 17 İŞ 6) burada uygulanır:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 from sqlalchemy import select
 
@@ -47,6 +48,7 @@ from app.services.health_report import (
     register_summary_section,
 )
 from app.services.query_diagnostics import diagnose_query
+from app.services.slow_query_selection import select_slow_queries
 
 # Toplama aralığının kaç katı boşluk "kesinti" sayılır. 1 kaçırılan döngü ağ gecikmesi veya
 # yavaş bir sorgu yüzünden olabilir; 3 katı artık gerçek bir kopukluktur.
@@ -67,6 +69,10 @@ CONNECTION_UTIL_CRITICAL = 95.0
 CACHE_HIT_WARN = 90.0
 # Bir sorgunun rapora bulgu olarak girmesi için gereken en düşük ortalama süre.
 SLOW_QUERY_MEAN_MS = 50.0
+# Bulgu üretmek için gereken MUTLAK eşikler (Faz 18 İŞ 2). Yüzde değişimi tek başına
+# yanıltıcı: 1 çağrıda 200 ms harcayan bir sorgu "%229 arttı" görünür ama pratikte önemsizdir.
+FINDING_MIN_CALLS = 5
+FINDING_MIN_TOTAL_MS = 1000.0
 TOP_QUERIES = 10
 # Bir alarm kuralının "gürültü yapıyor" sayılması için dönemdeki tetikleme sayısı.
 NOISY_RULE_THRESHOLD = 10
@@ -684,144 +690,171 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
 # --------------------------------------------------------------------------------------
 
 
-async def _query_window(ctx: ReportContext, instance_id: int, start: datetime, end: datetime) -> dict[str, dict]:
-    """queryid → pencere içindeki DEĞİŞİM (kümülatif sayaç farkı).
+def slow_query_link(instance_id: int, entry, start, end) -> str:
+    """Bulgudan DPA'ya derin bağlantı — sorgunun kimliği VE penceresiyle birlikte.
 
-    Faz 16-B İŞ 4'te yavaş sorgu listesi için kurulan mantığın aynısı: pencerede en çok süre
-    harcayan sorgu, son kümülatif değeri en büyük olan sorgu DEĞİLDİR.
+    Faz 18 İŞ 1: eskiden bağlantı yalnızca `?tab=queries` idi; DPA varsayılan penceresinde
+    (son toplama döngüsü) açılıyor ve raporun bahsettiği sorgu orada bulunamıyordu. Artık
+    bağlantı raporun kullandığı pencereyi ve sorgu anahtarını taşıyor, dolayısıyla DPA aynı
+    veriyi gösteriyor.
     """
-    rows = (
-        await ctx.session.execute(
-            select(SlowQuerySample)
-            .where(
-                SlowQuerySample.instance_id == instance_id,
-                SlowQuerySample.collected_at >= start,
-                SlowQuerySample.collected_at <= end,
-            )
-            .order_by(SlowQuerySample.collected_at.asc())
-        )
-    ).scalars().all()
+    params = [
+        "tab=queries",
+        f"qkey={quote(entry.key, safe='')}",
+        f"start={quote(start.isoformat(), safe='')}",
+        f"end={quote(end.isoformat(), safe='')}",
+    ]
+    if entry.queryid:
+        params.append(f"queryid={quote(str(entry.queryid), safe='')}")
+    return f"/instances/{instance_id}?" + "&".join(params)
 
-    grouped: dict[str, list] = {}
-    for row in rows:
-        grouped.setdefault(row.queryid or row.query, []).append(row)
 
-    out: dict[str, dict] = {}
-    for key, group in grouped.items():
-        first, last = group[0], group[-1]
-        reset = last.total_time_ms < first.total_time_ms or last.calls < first.calls
-        total = last.total_time_ms if reset else last.total_time_ms - first.total_time_ms
-        calls = last.calls if reset else last.calls - first.calls
-        if total <= 0:
-            continue
-        out[key] = {
-            "queryid": last.queryid,
-            "query": last.query,
-            "total_time_ms": round(total, 2),
-            "calls": calls,
-            "mean_time_ms": round(total / calls, 2) if calls > 0 else last.mean_time_ms,
-            "row": last,
-        }
-    return out
+def _slow_query_finding(ctx, instance, entry, diagnosis, change: str, change_pct, mode: str):
+    """Yavaş sorgu bulgusu — yapılandırılmış metin ve doğrulanmış derin bağlantıyla."""
+    what = "Yeni pahalı sorgu" if change == "new" else "Pahalı sorgu kötüleşti"
+    compared = (
+        f"Önceki eşit uzunluktaki döneme göre %{change_pct:+.0f}."
+        if change_pct is not None
+        else "Önceki dönemde bu sorgu hiç görülmemişti."
+    )
+    if mode == "snapshot":
+        compared += " (Pencerede tek toplama döngüsü var; değerler fark değil kümülatif toplam.)"
+
+    return FindingDraft(
+        section="performance",
+        severity="warning" if change == "worse" else "info",
+        title=f"{instance.name}: {what.lower()} — {diagnosis.resource} darboğazı",
+        detail=(
+            f"{what}. "
+            f"Dönemde {entry.calls} çağrı, toplam {entry.total_time_ms:.0f} ms, "
+            f"ortalama {entry.mean_time_ms:.1f} ms. {compared}"
+        ),
+        evidence={
+            "metric": "pg_stat_statements.total_exec_time (dönem farkı)",
+            "value": entry.total_time_ms,
+            "mean_time_ms": entry.mean_time_ms,
+            "calls": entry.calls,
+            "change_pct": change_pct,
+            "resource": diagnosis.resource,
+            "resource_confidence": diagnosis.confidence,
+            "queryid": entry.queryid,
+            "query_key": entry.key,
+            "query": entry.query,
+            "selection_mode": mode,
+            "measured_at": ctx.period_end.isoformat(),
+        },
+        # Kimlik olarak `key` kullanılıyor: queryid NULL gelebiliyor ve eskiden bu, farklı
+        # sorguların AYNI fingerprint'e düşüp birbirini elemesine yol açıyordu (Faz 18 İŞ 4).
+        fingerprint_parts=("slow_query", str(instance.id), entry.key),
+        recommendation=(
+            "Bu sorgu için DPA'daki Yavaş Sorgular sekmesinde EXPLAIN planına ve index önerisine bakın."
+        ),
+        related_object_type="instance",
+        related_object_id=instance.id,
+        link_hint=slow_query_link(instance.id, entry, ctx.period_start, ctx.period_end),
+        environment=_environment_of(instance),
+    )
 
 
 @register_section
 async def performance_section(ctx: ReportContext) -> SectionResult:
-    """Performans — en pahalı 10 sorgu, düne göre değişim, darboğaz sınıfı."""
+    """Performans — en pahalı sorgular, düne göre değişim, darboğaz sınıfı.
+
+    Sorgu seçimi DPA ile AYNI servisten (`services/slow_query_selection.py`) geliyor. Bu,
+    raporun bahsettiği her sorgunun DPA'da da bulunabilmesini yapısal olarak garanti ediyor —
+    Faz 18 İŞ 1'de düzeltilen tutarsızlığın kaynağı iki ayrı seçim mantığıydı.
+    """
     window = ctx.period_end - ctx.period_start
     previous_start, previous_end = ctx.period_start - window, ctx.period_start
 
     findings: list[FindingDraft] = []
     all_rows: list[dict] = []
     instances_without_data: list[str] = []
+    filtered_system = 0
+    filtered_insignificant = 0
 
     for instance in ctx.instances:
-        current = await _query_window(ctx, instance.id, ctx.period_start, ctx.period_end)
-        if not current:
+        selection = await select_slow_queries(
+            ctx.session,
+            instance.id,
+            start=ctx.period_start,
+            end=ctx.period_end,
+            sort="total",
+            limit=TOP_QUERIES,
+        )
+        filtered_system += selection.filtered_system
+        filtered_insignificant += selection.filtered_insignificant
+        if not selection.entries:
             instances_without_data.append(instance.name)
             continue
-        previous = await _query_window(ctx, instance.id, previous_start, previous_end)
 
-        ranked = sorted(current.values(), key=lambda q: q["total_time_ms"], reverse=True)[:TOP_QUERIES]
-        for entry in ranked:
-            key = entry["queryid"] or entry["query"]
-            before = previous.get(key)
+        previous = await select_slow_queries(
+            ctx.session,
+            instance.id,
+            start=previous_start,
+            end=previous_end,
+            limit=10_000,
+            min_total_ms=0.0,
+            min_calls=0,
+            include_system=True,
+        )
+        previous_by_key = {e.key: e for e in previous.entries}
+
+        for entry in selection.entries:
+            before = previous_by_key.get(entry.key)
             if before is None:
-                change = "new"
-                change_pct = None
+                change, change_pct = "new", None
             else:
-                base = before["total_time_ms"] or 1
-                change_pct = round((entry["total_time_ms"] - base) / base * 100, 1)
+                base = before.total_time_ms or 1
+                change_pct = round((entry.total_time_ms - base) / base * 100, 1)
                 change = "worse" if change_pct >= 25 else "better" if change_pct <= -25 else "stable"
 
-            diagnosis = diagnose_query(entry["row"])
+            diagnosis = diagnose_query(entry.sample)
             all_rows.append(
                 {
                     "instance_id": instance.id,
                     "instance": instance.name,
-                    "queryid": entry["queryid"],
-                    "query": entry["query"][:500],
-                    "total_time_ms": entry["total_time_ms"],
-                    "calls": entry["calls"],
-                    "mean_time_ms": entry["mean_time_ms"],
+                    "key": entry.key,
+                    "queryid": entry.queryid,
+                    "query": entry.query[:500],
+                    "total_time_ms": entry.total_time_ms,
+                    "calls": entry.calls,
+                    "mean_time_ms": entry.mean_time_ms,
                     "change": change,
                     "change_pct": change_pct,
                     "resource": diagnosis.resource,
                     "resource_reason": diagnosis.reason,
                     "resource_confidence": diagnosis.confidence,
+                    "mode": selection.mode,
                 }
             )
 
-            # Bulgu yalnızca gerçekten dikkat isteyen sorgular için: yeni ortaya çıkmış ya da
-            # belirgin kötüleşmiş olanlar. "En pahalı 10" listesinin tamamını bulguya çevirmek
-            # her gün 10 bulgu üretir ve gürültü olurdu.
-            if change in ("new", "worse") and entry["mean_time_ms"] >= SLOW_QUERY_MEAN_MS:
-                findings.append(
-                    FindingDraft(
-                        section="performance",
-                        severity="warning" if change == "worse" else "info",
-                        title=(
-                            f"{instance.name}: {'kötüleşen' if change == 'worse' else 'yeni'} pahalı sorgu "
-                            f"({diagnosis.resource} darboğazı)"
-                        ),
-                        detail=(
-                            f"{_short_query(entry['query'])} — dönemde {entry['calls']} çağrı, "
-                            f"toplam {entry['total_time_ms']:.0f} ms, ortalama {entry['mean_time_ms']:.1f} ms"
-                            + (f" (önceki döneme göre %{change_pct:+.0f})." if change_pct is not None else " (önceki dönemde yoktu).")
-                            + f" Darboğaz: {diagnosis.reason}"
-                        ),
-                        evidence={
-                            "metric": "pg_stat_statements.total_exec_time (dönem farkı)",
-                            "value": entry["total_time_ms"],
-                            "mean_time_ms": entry["mean_time_ms"],
-                            "calls": entry["calls"],
-                            "change_pct": change_pct,
-                            "resource": diagnosis.resource,
-                            "resource_confidence": diagnosis.confidence,
-                            "queryid": entry["queryid"],
-                            "measured_at": ctx.period_end.isoformat(),
-                        },
-                        fingerprint_parts=("slow_query", str(instance.id), str(entry["queryid"] or "")[:32]),
-                        recommendation=(
-                            "Instance detayındaki Yavaş Sorgular sekmesinde bu sorgu için EXPLAIN planına ve "
-                            "index önerisine bakın."
-                        ),
-                        related_object_type="instance",
-                        related_object_id=instance.id,
-                        environment=_environment_of(instance),
-                    )
-                )
+            if not _is_finding_worthy(entry, change):
+                continue
+
+            findings.append(
+                _slow_query_finding(ctx, instance, entry, diagnosis, change, change_pct, selection.mode)
+            )
 
     if not all_rows:
         return SectionResult(
             key="performance",
             title="Performans",
             status="unknown",
-            summary="Bu dönem için yavaş sorgu örneği yok.",
-            data={"instances_without_data": instances_without_data},
+            summary="Bu dönem için değerlendirilebilir yavaş sorgu yok.",
+            data={
+                "instances_without_data": instances_without_data,
+                "filtered_system": filtered_system,
+                "filtered_insignificant": filtered_insignificant,
+            },
             unknown_reason=(
-                "Dönem içinde hiç yavaş sorgu örneği kaydedilmemiş. pg_stat_statements ön koşulları "
-                "eksik olabilir — Ön koşullar bölümüne bakın."
+                "Dönem içinde eşikleri geçen bir sorgu kaydedilmemiş. pg_stat_statements ön "
+                "koşulları eksik olabilir — Ön koşullar bölümüne bakın."
+                if not (filtered_system or filtered_insignificant)
+                else (
+                    f"Kaydedilen sorguların tamamı filtrelendi: {filtered_system} sistem/platform "
+                    f"sorgusu, {filtered_insignificant} eşik altı sorgu."
+                )
             ),
         )
 
@@ -842,8 +875,28 @@ async def performance_section(ctx: ReportContext) -> SectionResult:
             "top_queries": all_rows[: TOP_QUERIES * 2],
             "by_resource": _count_by(all_rows, "resource"),
             "instances_without_data": instances_without_data,
+            "filtered_system": filtered_system,
+            "filtered_insignificant": filtered_insignificant,
         },
     )
+
+
+def _is_finding_worthy(entry, change: str) -> bool:
+    """Bir sorgunun BULGU üretmeye değip değmediği (Faz 18 İŞ 2 — gürültü filtresi).
+
+    Listede görünmek ile bulgu üretmek farklı eşikler: liste "en pahalı N"i gösterir, bulgu
+    ise DBA'nın bugün bakması gereken şeydir.
+    """
+    if change not in ("new", "worse"):
+        return False
+    if entry.mean_time_ms < SLOW_QUERY_MEAN_MS:
+        return False
+    # Tek çağrılık bir sorgudan yüzde değişimi anlamsız — trend bulgusu üretme.
+    if entry.calls < FINDING_MIN_CALLS:
+        return False
+    if entry.total_time_ms < FINDING_MIN_TOTAL_MS:
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------------------
@@ -1161,17 +1214,13 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
             ),
         )
 
+    # Faz 18 İŞ 5 denetimi: iki farklı bulgu tipinin VERİ İHTİYACI farklı.
+    #   * Büyüme trendi  → en az iki günlük fotoğraf (fark alınabilmesi için).
+    #   * Kullanılmayan index → tek fotoğraf yeter (idx_scan = 0 bugünün gerçeği).
+    # Eskiden ikisi de büyüme eşiğinin arkasındaydı; sonuç olarak ilk iki gün boyunca
+    # kullanılmayan indexler HİÇ raporlanmıyor, bölüm tamamen "bilinmiyor" dönüyordu.
     distinct_days = len({r.day for r in rows})
-    if distinct_days < SCHEMA_MIN_DAYS:
-        # Tek günlük fotoğraftan büyüme çıkarılamaz; "büyüme yok" demek yanlış olurdu.
-        return SectionResult(
-            key="schema",
-            title="Şema sağlığı",
-            status="unknown",
-            summary="Büyüme trendi için henüz yeterli gün yok.",
-            data={"days_observed": distinct_days, "days_required": SCHEMA_MIN_DAYS},
-            unknown_reason=needs_more_days(distinct_days, SCHEMA_MIN_DAYS, "Tablo/index büyümesi"),
-        )
+    growth_ready = distinct_days >= SCHEMA_MIN_DAYS
 
     by_object: dict[tuple, list] = {}
     for row in rows:
@@ -1198,7 +1247,7 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
                 }
             )
 
-        if growth > 0 and len(group) >= 2:
+        if growth_ready and growth > 0 and len(group) >= 2:
             growing.append(
                 {
                     "instance": instance.name if instance else instance_id,
@@ -1215,28 +1264,43 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
     growing.sort(key=lambda g: g["growth_per_day"], reverse=True)
     unused_total = sum(i["size_bytes"] for i in unused_indexes)
 
-    if unused_indexes:
+    # Faz 18 İŞ 1: bulgu instance BAŞINA üretiliyor. Eskiden kapsam seviyesinde tek bir bulgu
+    # vardı ve hiçbir nesneye bağlı olmadığı için hiçbir sayfaya bağlantı veremiyordu —
+    # "Şema sekmesinden DROP komutlarını alın" diyordu ama hangi instance'ın sekmesi belirsizdi.
+    by_instance: dict[int, list[dict]] = {}
+    for index in unused_indexes:
+        by_instance.setdefault(index["instance_id"], []).append(index)
+
+    for instance_id, indexes in by_instance.items():
+        instance = ctx.instance_by_id(instance_id)
+        total_bytes = sum(i["size_bytes"] for i in indexes)
         findings.append(
             FindingDraft(
                 section="schema",
                 severity="info",
-                title=f"{len(unused_indexes)} kullanılmayan index ({_format_bytes(unused_total)})",
+                title=(
+                    f"{instance.name if instance else instance_id}: {len(indexes)} kullanılmayan index "
+                    f"({_format_bytes(total_bytes)})"
+                ),
                 detail=(
                     "Hiç taranmamış (idx_scan = 0) indexler hem disk kaplıyor hem de her yazma işlemine "
                     "maliyet ekliyor: "
-                    + ", ".join(f"{i['object']} ({_format_bytes(i['size_bytes'])})" for i in unused_indexes[:5])
+                    + ", ".join(f"{i['object']} ({_format_bytes(i['size_bytes'])})" for i in indexes[:5])
                 ),
                 evidence={
                     "metric": "pg_stat_user_indexes.idx_scan",
-                    "value": len(unused_indexes),
-                    "total_bytes": unused_total,
+                    "value": len(indexes),
+                    "total_bytes": total_bytes,
                     "measured_at": ctx.period_end.isoformat(),
                 },
-                fingerprint_parts=("unused_indexes", ctx.scope.scope_type, str(ctx.scope.scope_id or "all")),
+                fingerprint_parts=("unused_indexes", str(instance_id)),
                 recommendation=(
-                    "Instance detayındaki Şema sekmesinden DROP komutlarını alın; indexin gerçekten "
-                    "gereksiz olduğunu (ör. sadece ayda bir çalışan bir rapor kullanmıyor mu) doğrulayın."
+                    "Şema sekmesindeki DROP komutlarını kullanın; indexin gerçekten gereksiz olduğunu "
+                    "(ör. sadece ayda bir çalışan bir rapor kullanmıyor mu) önce doğrulayın."
                 ),
+                related_object_type="instance",
+                related_object_id=instance_id,
+                environment=_environment_of(instance) if instance else "prod",
             )
         )
 
@@ -1267,18 +1331,33 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
         )
 
     status = _worst_status([f.severity for f in findings]) if findings else "ok"
+    growth_note = (
+        None
+        if growth_ready
+        else needs_more_days(distinct_days, SCHEMA_MIN_DAYS, "Tablo/index büyümesi")
+    )
+    summary = (
+        f"{len(growing)} büyüyen nesne, {len(unused_indexes)} kullanılmayan index "
+        f"({_format_bytes(unused_total)})."
+        if growth_ready
+        else (
+            f"{len(unused_indexes)} kullanılmayan index ({_format_bytes(unused_total)}). "
+            "Büyüme trendi için henüz yeterli gün yok."
+        )
+    )
     return SectionResult(
         key="schema",
         title="Şema sağlığı",
         status=status,
-        summary=(
-            f"{len(growing)} büyüyen nesne, {len(unused_indexes)} kullanılmayan index "
-            f"({_format_bytes(unused_total)})."
-        ),
+        summary=summary,
         findings=findings,
         data={
             "growing_objects": growing[:20],
             "unused_indexes": unused_indexes[:20],
+            "days_observed": distinct_days,
+            "days_required": SCHEMA_MIN_DAYS,
+            "growth_ready": growth_ready,
+            "growth_note": growth_note,
             "note": (
                 "Bu bölüm günlük şema anlık görüntüsüne dayanır. Autovacuum gecikmesi ve tablo "
                 "şişmesi (dead tuple) anlık olarak Şema sekmesinde ölçülür; geçmişe dönük "
@@ -1549,6 +1628,20 @@ async def _state_snapshots(ctx: ReportContext, kind: str) -> dict[int, list[Dail
     return out
 
 
+def _parameter_link(instance) -> str | None:
+    """Parametre bulgusunun hedefi.
+
+    Faz 18 İŞ 1: parametre denetimi arayüzü GRUP sayfasında (`/groups/{id}?tab=parameters`);
+    instance detayının "tuning" sekmesinde parametre yok, ön koşullar ve tanı var. Bölüm→sekme
+    varsayılan eşlemesi bu yüzden yanlış sayfaya götürüyordu.
+
+    Gruba bağlı olmayan bir instance için parametre denetimi sayfası YOK; böyle bir durumda
+    bağlantı üretmiyoruz (var olmayan bir sayfaya söz vermektense bağlantısız bırakmak doğru).
+    """
+    group_id = getattr(instance, "group_id", None) if instance else None
+    return f"/groups/{group_id}?tab=parameters" if group_id else None
+
+
 @register_section
 async def parameters_section(ctx: ReportContext) -> SectionResult:
     """Parametre denetimi — baseline sapmaları ve DÜN'e göre DEĞİŞEN parametreler.
@@ -1614,6 +1707,7 @@ async def parameters_section(ctx: ReportContext) -> SectionResult:
                         recommendation=finding.get("recommendation"),
                         related_object_type="instance",
                         related_object_id=instance_id,
+                        link_hint=_parameter_link(instance),
                         environment=_environment_of(instance) if instance else "prod",
                     )
                 )
@@ -1659,6 +1753,7 @@ async def parameters_section(ctx: ReportContext) -> SectionResult:
                         commands=[f"SHOW {key};", f"SELECT name, setting, source FROM pg_settings WHERE name = '{key}';"],
                         related_object_type="instance",
                         related_object_id=instance_id,
+                        link_hint=_parameter_link(instance),
                         environment=_environment_of(instance) if instance else "prod",
                     )
                 )

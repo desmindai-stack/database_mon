@@ -3217,6 +3217,99 @@ kapsamı dışında bırakıldı, notu SORULAR.md'de.
 **Testler:** 387 yeşil (69'u yeni tanım sırası denetimi). Frontend build
 temiz.
 
+## Faz 18 — İŞ 1: Rapor ve DPA tek gerçeklik kaynağına bağlandı
+
+**Bildirilen hata.** Rapor "en pahalı sorgular"da bir sorgu gösteriyor
+(Supabase iç sorgusu `pg_walfile_name_offset…`, 1 çağrı, 206 ms,
+"%+229"), aynı sorgu DPA'da hiç yok. Öneri "DPA'da EXPLAIN'e bakın"
+diyor ama tıklanınca sorgu orada bulunamıyor.
+
+### Kök nedenler (üç ayrı kusur)
+
+**1. İki ayrı seçim mantığı.** Rapor dönemin TAMAMI üzerinde kümülatif
+sayaç farkına bakıyordu; DPA'nın varsayılan görünümü ise yalnızca EN SON
+toplama döngüsünün anlık görüntüsüydü. Collector her döngüde
+pg_stat_statements'ın ilk 20 satırını sakladığı için, dönem içinde bir
+kez öne çıkıp sonra listeden düşen bir sorgu raporda görünüyor ama DPA'da
+görünmüyordu. Aynı veriden iki farklı gerçek.
+
+**2. Kimlik parçalanması.** Gruplama `queryid or query` ile yapılıyordu.
+pg_stat_statements ayrıcalıksız rollerde bazı satırların `queryid`
+alanını NULL döndürür (bkz. Faz 16-B İŞ 1); aynı sorgunun bir örneği
+queryid'li, diğeri queryid'siz gelince tek sorgu İKİ gruba bölünüyor ve
+raporda **aynı sorgu iki kez** listeleniyordu — kullanıcının fark ettiği
+tekrar buydu.
+
+**3. Bulgu fingerprint'i çakışıyordu.** `str(queryid or "")[:32]`
+kullanıldığı için queryid'siz TÜM sorgular aynı fingerprint'e düşüyor,
+motorun tekilleştirmesi bunları birbirini eleyerek kaybediyordu.
+
+### Yeni `services/slow_query_selection.py`
+
+Seçim tek yere toplandı; rapor da DPA da buradan besleniyor, dolayısıyla
+ayrışmaları yapısal olarak mümkün değil.
+
+- Sıralama her zaman pencere içindeki değişime göre.
+- Kimlik: `queryid` esas, ama aynı sorgu metni daha önce queryid'siz
+  görülmüşse gruplar **birleştiriliyor** (metinden türeyen kararlı parmak
+  izi üzerinden). Bulgu fingerprint'i de artık bu `key` ile üretiliyor.
+- Pencerede tek toplama döngüsü varsa fark alınamaz; liste boş
+  bırakılmıyor, kümülatif değerler `mode="snapshot"` etiketiyle
+  gösteriliyor ve arayüz bunu açıkça yazıyor.
+
+**API davranış değişikliği (bilinçli).** `GET /api/queries/{id}` aralıksız
+çağrıldığında artık "son toplama döngüsü" değil **son 24 saatlik pencere**
+döndürüyor ve yanıt düz liste yerine zarflanmış
+(`items` + `mode` + `window_start/end` + filtrelenen sayıları). Bu, iki
+görünümü tek kaynağa bağlamanın gereğiydi; kural gereği burada yazılı.
+
+### Derin bağlantı artık hedefe iniyor
+
+Bulgular `link_hint` taşıyor (yeni kolon + migration
+`20260907090000_report_finding_link_hint.sql`, DEPLOY.md 27). Sorgu
+bulgusunun bağlantısı sorgu anahtarını VE raporun kullandığı pencereyi
+taşıyor; DPA o bağlantıyla açıldığında aynı pencereyi kuruyor, sorguyu
+vurguluyor ve gerekiyorsa sistem sorgusu filtresini açıyor. Rapor bir
+sorgudan bahsediyorsa o sorgu DPA'da mutlaka bulunuyor.
+
+### Tüm bulgu hedeflerinin denetimi
+
+Dokuz bölümün hedefleri tek tek kontrol edildi; **iki yanlış hedef**
+bulundu ve düzeltildi:
+
+1. **Parametre bulguları** `/instances/{id}?tab=tuning`'e gidiyordu, oysa
+   parametre denetimi arayüzü GRUP sayfasında
+   (`/groups/{id}?tab=parameters`); tuning sekmesinde ön koşullar ve tanı
+   var, parametre yok. Artık doğru sayfaya gidiyor. Gruba bağlı olmayan
+   bir instance için parametre denetimi sayfası olmadığından bağlantı
+   üretilmiyor (var olmayan bir sayfaya söz vermek yerine).
+2. **Kullanılmayan index bulgusu** kapsam seviyesinde tek bir bulgu
+   olarak üretiliyordu ve hiçbir nesneye bağlı olmadığı için hiçbir
+   sayfaya bağlantı veremiyordu. Artık instance başına üretiliyor.
+
+Ayrıca bir **veri yeterliliği hatası** bulundu: şema bölümü, trend
+GEREKTİRMEYEN "kullanılmayan index" bulgusunu da büyüme eşiğinin
+(≥2 gün) arkasında tutuyordu; ilk iki gün boyunca bölüm tamamen
+"bilinmiyor" dönüyor ve kullanılmayan indexler hiç raporlanmıyordu. İki
+bulgu tipinin veri ihtiyacı ayrıştırıldı.
+
+### Gürültü filtresinin temeli
+
+Seçim servisi sistem/platform sorgularını tanıyor (pg_catalog, pg_stat_*,
+pg_walfile_*, information_schema, Supabase/RDS/Cloud SQL/Azure iç
+sorguları ve **dbace'in kendi toplama sorguları**) ve varsayılan olarak
+eliyor; kaç sorgunun elendiği yanıtta görünüyor, arayüzden
+"Sistem sorgularını göster" ile açılabiliyor. Bulgu üretimi için ayrıca
+mutlak eşikler kondu (en az 5 çağrı, en az 1000 ms) — bildirilen
+örnekteki tek çağrılık 206 ms'lik sorgu artık bulgu üretmiyor. (Eşiklerin
+ayarlanabilir hale gelmesi İŞ 2'de.)
+
+**Testler:** `tests/test_report_dpa_consistency.py` (17 test) — bildirilen
+senaryonun birebir regresyonu, her bulgu bağlantısının gerçekten bir
+sorguya inmesi, rapor ve DPA'nın aynı pencerede aynı sırayı vermesi,
+kimlik parçalanmasının giderilmesi, sistem sorgusu sınıflandırması ve tek
+çağrılık sorgunun bulgu üretmemesi. Toplam: 407 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

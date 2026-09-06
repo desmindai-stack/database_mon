@@ -3,6 +3,54 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 18 — İŞ 1: DPA'nın varsayılan görünümü değişti (API davranışı)
+
+`GET /api/queries/{id}` aralıksız çağrıldığında eskiden "yalnızca son
+toplama döngüsü"nü döndürüyordu. Artık son 24 saatlik pencerede fark
+alıyor ve yanıt zarflanmış geliyor.
+
+Bu bilinçli bir kırılma: iki görünümü tek kaynağa bağlamanın başka yolu
+yoktu. Alternatif, raporu DPA'ya benzetip "son döngü"ye çekmekti — ama o
+zaman rapor "dün ne oldu" sorusuna cevap veremezdi, ki raporun varlık
+sebebi bu. Doğru olan DPA'nın pencereye geçmesiydi.
+
+Yan etki: yeni eklenmiş bir instance'ta pencerede tek döngü olabilir ve
+fark alınamaz. Listeyi boş bırakmak yerine kümülatif değerleri
+`mode="snapshot"` etiketiyle gösteriyorum ve arayüz bunu açıkça yazıyor —
+sessizce yanlış sayı göstermektense ne gösterildiğini söylemek.
+
+## Faz 18 — İŞ 1: Sistem sorgusu tespiti desen tabanlı, kusursuz değil
+
+Sistem/platform sorguları düzenli ifadelerle tanınıyor (pg_catalog,
+pg_stat_*, pg_walfile_*, information_schema, Supabase/RDS/Cloud SQL/Azure
+iç sorguları, dbace'in kendi sorguları). Bu yaklaşımın iki bilinen sınırı
+var:
+
+1. **Yanlış pozitif:** uygulamanın kendi sorgusu bir katalog görünümüne
+   bakıyorsa (ör. bir yönetim ekranı `pg_stat_activity` sorguluyorsa)
+   sistem sorgusu sayılır ve varsayılan listede görünmez.
+2. **Yanlış negatif:** listede olmayan bir platformun iç sorgusu
+   filtrelenmez.
+
+İkisini de tamamen çözmenin yolu sorguyu ÇALIŞTIRAN rolü bilmek
+(`pg_stat_statements.userid` → `pg_roles`), ama collector şu an o alanı
+toplamıyor. Bunu bir sonraki adıma bıraktım; bu arada iki koruma var:
+filtrelenen sorgu sayısı arayüzde görünüyor, sınıflandırmanın SEBEBİ de
+(hangi kurala takıldı) taşınıyor, ve "Sistem sorgularını göster"
+seçeneğiyle liste tam haliyle açılabiliyor.
+
+## Faz 18 — İŞ 1: Şema bölümünde bulunan veri yeterliliği hatası
+
+Denetim sırasında çıktı: "kullanılmayan index" bulgusu trend
+gerektirmiyor (bugünkü `idx_scan = 0` tek başına yeterli) ama büyüme
+trendinin ≥2 günlük eşiğinin arkasında bekletiliyordu. Sonuç olarak yeni
+bir kurulumda ilk iki gün boyunca bölüm tamamen "bilinmiyor" dönüyor ve
+kullanılmayan indexler hiç raporlanmıyordu.
+
+İki bulgu tipinin veri ihtiyacını ayırdım. Buradan çıkan genel ders şu ve
+İŞ 5 denetiminde bunu diğer bölümlerde de aradım: **bölüm seviyesinde tek
+bir yeterlilik eşiği koymak yanlış** — eşik bulgu tipine ait olmalı.
+
 ## Faz 17 sonrası düzeltme: Yerel Python 3.14 ↔ canlı 3.12 farkı kapatılmadı
 
 `AdviceOut` ileri referansı canlıyı düşürdü çünkü yerelde 3.14 (PEP 649,

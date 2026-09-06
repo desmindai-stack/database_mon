@@ -39,6 +39,7 @@ import {
   SchemaHealth,
   SlowQuery,
   SlowQueryAvailability,
+  SlowQueryList,
   TuningReport,
 } from "../api";
 import ActivityPanel from "../components/ActivityPanel";
@@ -199,6 +200,11 @@ export default function InstanceDetailPage() {
   const [querySort, setQuerySort] = useState<"total" | "mean" | "calls">("total");
   // Faz 16-B İŞ 4: liste artık "en sorunlu N" — N kullanıcı seçimi.
   const [queryTopN, setQueryTopN] = useState<5 | 10 | 20>(10);
+  // Faz 18: pencere/mod/filtre bilgisi (yanıt zarfı) ve sistem sorgusu görünürlüğü.
+  const [queryList, setQueryList] = useState<SlowQueryList | null>(null);
+  const [showSystemQueries, setShowSystemQueries] = useState(false);
+  // Rapordan gelen derin bağlantının işaret ettiği sorgu — vurgulanır ve açılır.
+  const [focusQueryKey, setFocusQueryKey] = useState<string | null>(null);
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
   const [advice, setAdvice] = useState<Record<number, IndexAdviceReport>>({});
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
@@ -371,6 +377,31 @@ export default function InstanceDetailPage() {
       setBulkAdviceRunning(false);
     }
   };
+
+  // Faz 18 İŞ 1: rapor bulgusundan gelen derin bağlantı. Rapor hangi pencereye bakarak o
+  // sorguyu bulduysa DPA da aynı pencereyi açar — aksi halde sorgu listede olmayabilir
+  // (bildirilen hata tam olarak bu yüzden ortaya çıkmıştı).
+  useEffect(() => {
+    const qkey = searchParams.get("qkey");
+    const linkStart = searchParams.get("start");
+    const linkEnd = searchParams.get("end");
+    if (!qkey && !linkStart) return;
+
+    if (linkStart && linkEnd) {
+      setCustomRange({ start: linkStart, end: linkEnd });
+      setZoom(null);
+      setTimelineRange(null);
+    }
+    if (qkey) {
+      setFocusQueryKey(qkey);
+      // Rapor bir sistem sorgusundan bahsediyorsa DPA'da da görünür olmalı.
+      setShowSystemQueries(true);
+    }
+    const next = new URLSearchParams(searchParams);
+    ["qkey", "queryid", "start", "end"].forEach((k) => next.delete(k));
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   // Hazır aralık mı özel aralık mı — tek yerden karar verilsin (Faz 16-B İŞ 3).
   const fetchMetrics = () =>
@@ -650,9 +681,12 @@ export default function InstanceDetailPage() {
           sort: querySort,
           start: activeQueryRange?.start,
           end: activeQueryRange?.end,
+          includeSystem: showSystemQueries,
         })
-        .then((rows) => {
-          if (mounted) setQueries(rows);
+        .then((list) => {
+          if (!mounted) return;
+          setQueries(list.items);
+          setQueryList(list);
         })
         .catch(() => undefined);
     fetchQueries();
@@ -662,7 +696,7 @@ export default function InstanceDetailPage() {
       mounted = false;
       if (timer) clearInterval(timer);
     };
-  }, [instanceId, queryTopN, querySort, activeQueryRange]);
+  }, [instanceId, queryTopN, querySort, activeQueryRange, showSystemQueries]);
 
 
   useEffect(() => {
@@ -1298,23 +1332,48 @@ export default function InstanceDetailPage() {
 
           <div className="card">
             <h3 className="chart-title">En sorunlu sorgular ({queries.length})</h3>
+            {/* Faz 18 İŞ 1: hangi pencereye bakıldığı ve neyin filtrelendiği açıkça yazılı —
+                rapor ile DPA'nın aynı veriyi gösterdiğini kullanıcı buradan doğrulayabiliyor. */}
             <p className="muted-note">
-              {activeQueryRange ? (
+              {queryList?.window_start && queryList?.window_end ? (
                 <>
-                  {new Date(activeQueryRange.start).toLocaleString("tr-TR")} –{" "}
-                  {new Date(activeQueryRange.end).toLocaleString("tr-TR")} aralığındaki{" "}
-                  <strong>değişime</strong> göre sıralandı (kümülatif sayaç farkı); bu aralıkta kayda
-                  değer iş yapmayan sorgular listeye alınmadı.
+                  {new Date(queryList.window_start).toLocaleString("tr-TR")} –{" "}
+                  {new Date(queryList.window_end).toLocaleString("tr-TR")} aralığında,{" "}
+                  {querySort === "total" ? "toplam süreye" : querySort === "mean" ? "ortalama süreye" : "çağrı sayısına"}{" "}
+                  göre ilk {queryTopN}.{" "}
+                  {queryList.mode === "delta" ? (
+                    <>Sıralama bu aralıktaki <strong>değişime</strong> göre (kümülatif sayaç farkı).</>
+                  ) : (
+                    <>
+                      Bu aralıkta tek toplama döngüsü var; fark alınamadığı için{" "}
+                      <strong>kümülatif</strong> değerler gösteriliyor.
+                    </>
+                  )}
                 </>
               ) : (
-                <>
-                  En son toplama döngüsünün anlık görüntüsü,{" "}
-                  {querySort === "total" ? "toplam süreye" : querySort === "mean" ? "ortalama süreye" : "çağrı sayısına"}{" "}
-                  göre ilk {queryTopN}. Bir aralık seçmek için üstteki sorgu yükü çizelgesinde
-                  sürükleyin.
-                </>
+                <>Sorgu listesi yükleniyor…</>
               )}
+              {!activeQueryRange && " Farklı bir aralık için sorgu yükü çizelgesinde sürükleyin."}
             </p>
+            <div className="query-filter-bar">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={showSystemQueries}
+                  onChange={(e) => setShowSystemQueries(e.target.checked)}
+                />
+                Sistem sorgularını göster
+              </label>
+              {queryList && (queryList.filtered_system > 0 || queryList.filtered_insignificant > 0) && (
+                <span className="muted-note">
+                  {queryList.filtered_system > 0 && `${queryList.filtered_system} sistem/platform sorgusu`}
+                  {queryList.filtered_system > 0 && queryList.filtered_insignificant > 0 && " · "}
+                  {queryList.filtered_insignificant > 0 &&
+                    `${queryList.filtered_insignificant} eşik altı sorgu`}{" "}
+                  filtrelendi
+                </span>
+              )}
+            </div>
             {queries.length === 0 ? (
               <SlowQueryAvailabilityNote availability={slowQueryAvailability} fallback="Yavaş sorgu verisi yok." />
             ) : (
@@ -1333,7 +1392,7 @@ export default function InstanceDetailPage() {
                     {queries.map((q) => (
                       <Fragment key={q.id}>
                         <tr
-                          className="query-row"
+                          className={`query-row${focusQueryKey && q.key === focusQueryKey ? " query-focused" : ""}`}
                           onClick={() => {
                             const next = expandedQuery === q.id ? null : q.id;
                             setExpandedQuery(next);

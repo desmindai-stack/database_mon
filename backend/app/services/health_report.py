@@ -83,6 +83,10 @@ class FindingDraft:
     commands: list[str] = field(default_factory=list)
     related_object_type: str | None = None
     related_object_id: int | None = None
+    # Faz 18 İŞ 1: bulgunun işaret ettiği KESİN hedef (sorgu anahtarı, pencere, sekme dahil).
+    # Boşsa arayüz bölüm→sekme eşlemesinden genel bir bağlantı üretir; dolu olduğunda bulgu
+    # tam olarak bahsettiği veriye götürür.
+    link_hint: str | None = None
     # Ortam etiketi (prod/preprod/test) — öncelik sıralamasında kullanılır.
     environment: str = "prod"
     # Faz 17 Ek İŞ B: standart öneri yapısı. Bölüm doldurmazsa motor `recommendation` ve
@@ -480,6 +484,7 @@ async def generate_report(
                     commands=draft.commands or None,
                     related_object_type=draft.related_object_type,
                     related_object_id=draft.related_object_id,
+                    link_hint=draft.link_hint,
                     fingerprint=fingerprint,
                     finding_type=finding_type,
                     status=effective.status,

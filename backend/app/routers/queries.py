@@ -19,6 +19,7 @@ from app.schemas import (
     QueryHistoryListOut,
     QueryHistorySeriesOut,
     SlowQueryAvailabilityOut,
+    SlowQueryListOut,
     SlowQueryOut,
 )
 from app.services import query_cache
@@ -28,6 +29,7 @@ from app.services.advice import Advice, AdviceStep, advice_to_dict
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
+from app.services.slow_query_selection import DEFAULT_WINDOW_HOURS, select_slow_queries
 from app.services.slow_query_status import get_slow_query_availability
 
 router = APIRouter(prefix="/queries", tags=["queries"])
@@ -120,133 +122,83 @@ async def get_slow_query_availability_endpoint(
     return SlowQueryAvailabilityOut(**vars(report))
 
 
-_SLOW_QUERY_SORT_KEYS = {
-    "total": lambda r: r.total_time_ms,
-    "mean": lambda r: r.mean_time_ms,
-    "calls": lambda r: r.calls,
-}
-
-# Aralık modunda bu eşiğin altındaki sorgular listeye alınmaz: pencerede toplam 1 ms'den az
-# harcamış bir sorgu "en sorunlu N" listesinde yer kaplamamalı (Faz 16-B İŞ 4 — kullanıcı
-# listede sorunlu olmayan sorgular görüyordu).
-_NEGLIGIBLE_TOTAL_MS = 1.0
-
-
-def _window_delta(rows: list[SlowQuerySample]) -> SlowQuerySample:
-    """Bir queryid'nin pencere içindeki DEĞİŞİMİ — kümülatif sayaçlardan fark alınarak.
-
-    pg_stat_statements sayaçları sıfırlanana kadar birikir; "14:00–14:30 arasında en çok süre
-    harcayan sorgu" sorusunun cevabı son değerin kendisi değil, pencerenin başı ile sonu
-    arasındaki farktır. Sayaç pencerede sıfırlanmışsa (son < ilk) son değer olduğu gibi alınır.
-    """
-    first, last = rows[0], rows[-1]
-    reset = last.total_time_ms < first.total_time_ms or last.calls < first.calls
-    total = last.total_time_ms if reset else last.total_time_ms - first.total_time_ms
-    calls = last.calls if reset else last.calls - first.calls
-    delta = SlowQuerySample(
-        instance_id=last.instance_id,
-        queryid=last.queryid,
-        query=last.query,
-        calls=calls,
-        total_time_ms=total,
-        mean_time_ms=(total / calls) if calls > 0 else last.mean_time_ms,
-        rows=last.rows,
-        shared_blks_hit=last.shared_blks_hit,
-        shared_blks_read=last.shared_blks_read,
-        local_blks_hit=last.local_blks_hit,
-        local_blks_read=last.local_blks_read,
-        temp_blks_read=last.temp_blks_read,
-        temp_blks_written=last.temp_blks_written,
-        plan_user_time=last.plan_user_time,
-        plan_sys_time=last.plan_sys_time,
-        exec_user_time=last.exec_user_time,
-        exec_sys_time=last.exec_sys_time,
-    )
-    # Bu nesne veritabanına EKLENMİYOR; sadece yanıt şemasını doldurmak için var. id/collected_at
-    # son gerçek örnekten geliyor ki frontend EXPLAIN/index önerisi için onu kullanabilsin.
-    delta.id = last.id
-    delta.collected_at = last.collected_at
-    return delta
-
-
-@router.get("/{instance_id}", response_model=list[SlowQueryOut])
+@router.get("/{instance_id}", response_model=SlowQueryListOut)
 async def get_slow_queries(
     instance_id: int,
     limit: int = Query(default=20, ge=1, le=100),
-    sort: str = Query(default="mean", pattern="^(total|mean|calls)$"),
+    sort: str = Query(default="total", pattern="^(total|mean|calls)$"),
     start: datetime | None = Query(default=None, description="Aralık başlangıcı (ISO-8601)"),
     end: datetime | None = Query(default=None, description="Aralık bitişi (ISO-8601)"),
+    include_system: bool = Query(
+        default=False, description="Sistem/platform sorgularını da göster (pg_catalog, Supabase iç sorguları…)"
+    ),
     db: AsyncSession = Depends(get_db),
-) -> list[SlowQuerySample]:
-    """En sorunlu N sorgu (Faz 16-B İŞ 4).
+) -> SlowQueryListOut:
+    """En sorunlu N sorgu — rapor ile ORTAK seçim servisinden (Faz 18 İŞ 1).
 
-    İki mod:
-
-    * **Aralık verilmezse** — en son toplama döngüsünün anlık görüntüsü, seçilen ölçüte göre
-      sıralanıp ilk N. (Eski davranış; sadece sıralama ve N artık parametre.)
-    * **`start`/`end` verilirse** — pencere içindeki DEĞİŞİM. Kümülatif sayaçlardan fark
-      alınır, böylece "bu aralıkta en çok süre harcayan sorgu" gerçekten o aralığın sorusu
-      olur; pencerede kayda değer iş yapmamış sorgular listeden düşer.
+    Aralık verilmezse varsayılan pencere son `DEFAULT_WINDOW_HOURS` saat. Eskiden aralıksız
+    çağrı "yalnızca son toplama döngüsü"nü döndürüyordu; rapor ise dönemin tamamına bakıyordu
+    ve bu yüzden raporda görünen bir sorgu DPA'da bulunamıyordu. Artık ikisi de aynı pencere
+    mantığını kullanıyor (davranış değişikliği ILERLEME.md'de yazılı).
     """
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
 
-    key = _SLOW_QUERY_SORT_KEYS[sort]
+    window_end = end or datetime.now(UTC)
+    window_start = start or (window_end - timedelta(hours=DEFAULT_WINDOW_HOURS))
 
-    if start or end:
-        conditions = [SlowQuerySample.instance_id == instance_id]
-        if start:
-            conditions.append(SlowQuerySample.collected_at >= _as_utc(start))
-        if end:
-            conditions.append(SlowQuerySample.collected_at <= _as_utc(end))
-        rows = list(
-            (
-                await db.execute(
-                    select(SlowQuerySample).where(*conditions).order_by(SlowQuerySample.collected_at.asc())
-                )
-            )
-            .scalars()
-            .all()
-        )
-        by_queryid: dict[str, list[SlowQuerySample]] = {}
-        for row in rows:
-            # queryid yoksa (çok eski örnekler) sorgu metni parmak izi olarak kullanılır.
-            by_queryid.setdefault(row.queryid or row.query, []).append(row)
-        deltas = [_window_delta(group) for group in by_queryid.values()]
-        deltas = [d for d in deltas if d.total_time_ms >= _NEGLIGIBLE_TOTAL_MS]
-        deltas.sort(key=key, reverse=True)
-        return deltas[:limit]
-
-    latest_at = (
-        await db.execute(
-            select(SlowQuerySample.collected_at)
-            .where(SlowQuerySample.instance_id == instance_id)
-            .order_by(SlowQuerySample.collected_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    if not latest_at:
-        return []
-
-    rows = list(
-        (
-            await db.execute(
-                select(SlowQuerySample).where(
-                    SlowQuerySample.instance_id == instance_id,
-                    SlowQuerySample.collected_at == latest_at,
-                )
-            )
-        )
-        .scalars()
-        .all()
+    selection = await select_slow_queries(
+        db,
+        instance_id,
+        start=window_start,
+        end=window_end,
+        sort=sort,
+        limit=limit,
+        include_system=include_system,
     )
-    rows.sort(key=key, reverse=True)
-    return rows[:limit]
+    return selection_to_out(selection, window_start, window_end)
 
 
-def _as_utc(value: datetime) -> datetime:
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
+def selection_to_out(selection, window_start: datetime, window_end: datetime) -> SlowQueryListOut:
+    """SlowQuerySelection → API şeması. Rapor derin bağlantısının hedef ucu da bunu kullanıyor."""
+    return SlowQueryListOut(
+        mode=selection.mode,
+        window_start=window_start,
+        window_end=window_end,
+        filtered_system=selection.filtered_system,
+        filtered_insignificant=selection.filtered_insignificant,
+        items=[
+            SlowQueryOut(
+                id=e.sample.id,
+                instance_id=e.sample.instance_id,
+                collected_at=e.sample.collected_at,
+                key=e.key,
+                queryid=e.queryid,
+                query=e.query,
+                calls=e.calls,
+                total_time_ms=e.total_time_ms,
+                mean_time_ms=e.mean_time_ms,
+                rows=e.rows,
+                shared_blks_hit=e.sample.shared_blks_hit,
+                shared_blks_read=e.sample.shared_blks_read,
+                local_blks_hit=e.sample.local_blks_hit,
+                local_blks_read=e.sample.local_blks_read,
+                temp_blks_read=e.sample.temp_blks_read,
+                temp_blks_written=e.sample.temp_blks_written,
+                plan_user_time=e.sample.plan_user_time,
+                plan_sys_time=e.sample.plan_sys_time,
+                exec_user_time=e.sample.exec_user_time,
+                exec_sys_time=e.sample.exec_sys_time,
+                is_system=e.is_system,
+                system_reason=e.system_reason,
+                sample_count=e.sample_count,
+            )
+            for e in selection.entries
+        ],
+    )
+
+
 
 
 @router.get("/{instance_id}/diagnostics", response_model=QueryDiagnosticsReportOut)

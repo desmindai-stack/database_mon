@@ -194,9 +194,13 @@ async def test_performance_section_ranks_by_period_delta_and_flags_regression():
     assert top["change"] == "worse"
     assert top["resource"] == "io"
 
-    finding = _finding(result, "kötüleşen pahalı sorgu")
+    finding = _finding(result, "pahalı sorgu kötüleşti")
     assert finding.evidence["value"] == 5000.0
     assert finding.evidence["resource"] == "io"
+    # Faz 18 İŞ 1: bulgu, DPA'da AYNI sorguya ve AYNI pencereye götüren bir bağlantı taşımalı.
+    assert finding.link_hint and "tab=queries" in finding.link_hint
+    assert "qkey=" in finding.link_hint and "start=" in finding.link_hint
+    assert finding.evidence["query_key"]
 
 
 async def test_performance_section_ignores_fast_queries():
@@ -366,8 +370,13 @@ async def test_schema_section_states_what_it_cannot_measure():
     assert "Autovacuum gecikmesi" in result.data["note"]
 
 
-async def test_schema_section_needs_two_days_before_claiming_anything():
-    """Tek günlük fotoğraftan "büyüme yok" sonucu çıkarmak yanlış olurdu."""
+async def test_schema_section_does_not_claim_growth_from_a_single_day():
+    """Tek günlük fotoğraftan "büyüme yok" sonucu çıkarmak yanlış olurdu.
+
+    Faz 18 İŞ 5 denetimi: eskiden bu durumda BÖLÜMÜN TAMAMI "bilinmiyor" dönüyordu ve trend
+    gerektirmeyen bulgular (kullanılmayan index) da ilk iki gün boyunca kayboluyordu. Artık
+    yalnızca büyüme değerlendirilemiyor; bu da açıkça yazılıyor.
+    """
     async with SessionLocal() as session:
         instance = await _instance(session)
         session.add(
@@ -379,9 +388,28 @@ async def test_schema_section_needs_two_days_before_claiming_anything():
         await session.commit()
         result = await schema_section(_ctx(session, [instance]))
 
-    assert result.status == "unknown"
-    assert "1 gün daha gerekli" in result.unknown_reason
+    assert result.data["growth_ready"] is False
+    assert result.data["growing_objects"] == [], "tek günden büyüme çıkarılmamalı"
+    assert "1 gün daha gerekli" in result.data["growth_note"]
     assert result.data["days_observed"] == 1
+
+
+async def test_unused_index_is_reported_on_the_very_first_day():
+    """Kullanılmayan index tespiti trend gerektirmez; büyüme eşiğinin arkasında beklememeli."""
+    async with SessionLocal() as session:
+        instance = await _instance(session)
+        session.add(
+            SchemaObjectDailySample(
+                instance_id=instance.id, day=datetime.now(UTC).date(), object_kind="index",
+                schema_name="app", object_name="t.idx_unused", size_bytes=400_000,
+                extra={"idx_scan": 0},
+            )
+        )
+        await session.commit()
+        result = await schema_section(_ctx(session, [instance]))
+
+    assert any("kullanılmayan index" in f.title for f in result.findings)
+    assert result.data["growth_ready"] is False
 
 
 # --- Alarmlar --------------------------------------------------------------------------

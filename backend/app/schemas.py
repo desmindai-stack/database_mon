@@ -525,6 +525,10 @@ class SlowQueryOut(BaseModel):
     id: int
     instance_id: int
     collected_at: datetime
+    # Faz 18 İŞ 1: sorgunun kararlı kimliği. queryid NULL gelebildiği için (ayrıcalıksız rolde
+    # pg_stat_statements maskeler) tek başına queryid'ye güvenilemiyor; rapor derin bağlantısı
+    # da bu anahtarla eşleşiyor.
+    key: str = ""
     queryid: str | None
     query: str
     calls: int
@@ -543,8 +547,30 @@ class SlowQueryOut(BaseModel):
     plan_sys_time: float | None
     exec_user_time: float | None
     exec_sys_time: float | None
+    # Faz 18 İŞ 2: sistem/platform sorgusu mu, öyleyse hangi kurala takıldı.
+    is_system: bool = False
+    system_reason: str | None = None
+    # Pencerede kaç örnek görüldü — 1 ise fark hesaplanamamıştır.
+    sample_count: int = 0
 
     model_config = {"from_attributes": True}
+
+
+class SlowQueryListOut(BaseModel):
+    """Yavaş sorgu listesi + pencerenin kendisi hakkında bilgi (Faz 18 İŞ 1).
+
+    Düz bir liste yerine zarflanmış bir yanıt: arayüzün "hangi pencereye bakıyorum",
+    "fark mı anlık görüntü mü" ve "kaç sorgu filtrelendi" sorularını cevaplayabilmesi için.
+    Rapor ile DPA'nın aynı veriyi gösterdiğini kullanıcıya kanıtlayan bilgi de bu.
+    """
+
+    items: list[SlowQueryOut] = []
+    # "delta" | "snapshot" — pencerede tek toplama döngüsü varsa fark alınamaz.
+    mode: str = "delta"
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    filtered_system: int = 0
+    filtered_insignificant: int = 0
 
 
 class QueryDiagnosisOut(BaseModel):
@@ -1375,6 +1401,8 @@ class ReportFindingOut(BaseModel):
     commands: list[str] = []
     related_object_type: str | None = None
     related_object_id: int | None = None
+    # Faz 18 İŞ 1: bulgunun tam hedefi. Boşsa arayüz bölüm→sekme eşlemesine düşer.
+    link_hint: str | None = None
     fingerprint: str
     priority: float
     open_since_days: int

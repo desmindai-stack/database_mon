@@ -26,9 +26,14 @@ const CHANGE_TR: Record<string, string> = {
   resolved: "Kapandı",
 };
 
-/** Bulgudan ilgili detay sayfasına derin bağlantı (Faz 17 İŞ 5). Bölüm, kullanıcıyı
- *  doğrudan sorunun görüleceği sekmeye götürür — genel bir sayfaya değil. */
+/** Bulgudan ilgili detay sayfasına derin bağlantı (Faz 17 İŞ 5).
+ *
+ *  Faz 18 İŞ 1: bulgu kendi `link_hint`'ini taşıyorsa O kullanılır — bölüm→sekme eşlemesi
+ *  yalnızca genel bir hedef verir ve bazı durumlarda YANLIŞ sayfaya götürüyordu (parametre
+ *  bulguları instance "tuning" sekmesine gidiyordu, oysa parametre denetimi grup sayfasında).
+ *  Sorgu bulguları da artık sorgu anahtarını ve pencereyi taşıyor. */
 function deepLink(finding: ReportFinding): string | null {
+  if (finding.link_hint) return finding.link_hint;
   const id = finding.related_object_id;
   if (!id) return null;
   if (finding.related_object_type === "group") return `/groups/${id}`;

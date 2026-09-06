@@ -1,9 +1,9 @@
-"""Faz 16-B İŞ 4 — "en sorunlu N sorgu" listesi.
+"""Faz 16-B İŞ 4 + Faz 18 İŞ 1 — "en sorunlu N sorgu" listesi.
 
-Bildirilen sorun: liste tek bir ana bağlıydı ("14:29 civarında öne çıkan sorgular") ve içinde
-sorunlu olmayan sorgular vardı. Artık varsayılan görünüm seçilebilir bir Top N; aralık
-verildiğinde de liste o aralıktaki DEĞİŞİME göre sıralanıyor (kümülatif sayaç farkı), yani
-pencerede iş yapmamış sorgular listeye girmiyor.
+Liste her zaman bir PENCERE içindeki değişime göre sıralanıyor. Faz 18 İŞ 1'de varsayılan
+davranış değişti: aralık verilmediğinde artık "yalnızca son toplama döngüsü" değil, son 24
+saatlik pencere kullanılıyor — rapor da aynı servisi kullandığı için ikisinin ayrışması
+mümkün değil. Yanıt da düz liste değil zarflanmış (mod, pencere, filtrelenen sayısı).
 """
 
 from __future__ import annotations
@@ -48,27 +48,51 @@ def _at(minutes_ago: float) -> datetime:
     return datetime.now(UTC) - timedelta(minutes=minutes_ago)
 
 
-async def test_default_view_is_top_n_of_latest_cycle_sorted_by_requested_metric():
+async def test_default_view_uses_the_shared_window_and_sorts_by_requested_metric():
+    """Aralık verilmediğinde varsayılan pencere (son 24 saat) kullanılır — raporla aynı."""
     async with await authed_client() as c:
         inst = await _make_instance(c)
-        now = _at(0)
+        old_at, new_at = _at(120), _at(5)
+        # Pencere içinde iki döngü: fark alınabilir.
         await _seed(
             inst["id"],
             [
-                dict(collected_at=now, queryid="a", query="SELECT a", calls=10, total_time_ms=1000, mean_time_ms=100),
-                dict(collected_at=now, queryid="b", query="SELECT b", calls=500, total_time_ms=2500, mean_time_ms=5),
-                dict(collected_at=now, queryid="c", query="SELECT c", calls=2, total_time_ms=600, mean_time_ms=300),
+                dict(collected_at=old_at, queryid="a", query="SELECT a", calls=0, total_time_ms=0, mean_time_ms=0),
+                dict(collected_at=new_at, queryid="a", query="SELECT a", calls=10, total_time_ms=1000, mean_time_ms=100),
+                dict(collected_at=old_at, queryid="b", query="SELECT b", calls=0, total_time_ms=0, mean_time_ms=0),
+                dict(collected_at=new_at, queryid="b", query="SELECT b", calls=500, total_time_ms=2500, mean_time_ms=5),
+                dict(collected_at=old_at, queryid="c", query="SELECT c", calls=0, total_time_ms=0, mean_time_ms=0),
+                dict(collected_at=new_at, queryid="c", query="SELECT c", calls=2, total_time_ms=600, mean_time_ms=300),
             ],
         )
 
-        by_total = (await c.get(f"/api/queries/{inst['id']}?sort=total&limit=2")).json()
-        assert [r["queryid"] for r in by_total] == ["b", "a"]
+        body = (await c.get(f"/api/queries/{inst['id']}?sort=total&limit=2")).json()
+        assert body["mode"] == "delta"
+        assert body["window_start"] and body["window_end"]
+        assert [r["queryid"] for r in body["items"]] == ["b", "a"]
 
         by_mean = (await c.get(f"/api/queries/{inst['id']}?sort=mean&limit=2")).json()
-        assert [r["queryid"] for r in by_mean] == ["c", "a"]
+        assert [r["queryid"] for r in by_mean["items"]] == ["c", "a"]
 
         by_calls = (await c.get(f"/api/queries/{inst['id']}?sort=calls&limit=1")).json()
-        assert [r["queryid"] for r in by_calls] == ["b"]
+        assert [r["queryid"] for r in by_calls["items"]] == ["b"]
+
+
+async def test_single_cycle_window_falls_back_to_snapshot_instead_of_empty_list():
+    """Yeni eklenmiş bir instance'ta pencerede tek döngü vardır; fark alınamaz. Listeyi boş
+    bırakmak yerine kümülatif değerler gösterilip mod açıkça bildiriliyor."""
+    async with await authed_client() as c:
+        inst = await _make_instance(c)
+        await _seed(
+            inst["id"],
+            [dict(collected_at=_at(5), queryid="only", query="SELECT only", calls=3,
+                  total_time_ms=900, mean_time_ms=300)],
+        )
+
+        body = (await c.get(f"/api/queries/{inst['id']}")).json()
+
+        assert body["mode"] == "snapshot"
+        assert [r["queryid"] for r in body["items"]] == ["only"]
 
 
 async def test_range_mode_ranks_by_change_inside_the_window_not_cumulative_total():
@@ -91,7 +115,7 @@ async def test_range_mode_ranks_by_change_inside_the_window_not_cumulative_total
 
         start = quote(_at(31).isoformat())
         end = quote(_at(5).isoformat())
-        rows = (await c.get(f"/api/queries/{inst['id']}?sort=total&start={start}&end={end}")).json()
+        rows = (await c.get(f"/api/queries/{inst['id']}?sort=total&start={start}&end={end}")).json()["items"]
 
         assert [r["queryid"] for r in rows] == ["fresh"], "pencerede iş yapmayan sorgu listede olmamalı"
         assert rows[0]["total_time_ms"] == 5000
@@ -112,7 +136,7 @@ async def test_range_mode_handles_counter_reset():
         )
 
         start = quote(_at(31).isoformat())
-        rows = (await c.get(f"/api/queries/{inst['id']}?sort=total&start={start}")).json()
+        rows = (await c.get(f"/api/queries/{inst['id']}?sort=total&start={start}")).json()["items"]
 
         assert len(rows) == 1
         assert rows[0]["total_time_ms"] == 400
@@ -133,7 +157,7 @@ async def test_range_mode_drops_negligible_queries():
         )
 
         start = quote(_at(31).isoformat())
-        rows = (await c.get(f"/api/queries/{inst['id']}?sort=total&start={start}")).json()
+        rows = (await c.get(f"/api/queries/{inst['id']}?sort=total&start={start}")).json()["items"]
 
         assert [r["queryid"] for r in rows] == ["real"]
 

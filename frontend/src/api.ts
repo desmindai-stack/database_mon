@@ -72,10 +72,23 @@ export interface InstanceSummary {
   predictions_open: number;
 }
 
+/** Yavaş sorgu listesi zarfı (Faz 18 İŞ 1). */
+export interface SlowQueryList {
+  items: SlowQuery[];
+  /** "delta" — pencerede fark alındı; "snapshot" — tek toplama döngüsü var, kümülatif değerler. */
+  mode: "delta" | "snapshot";
+  window_start: string | null;
+  window_end: string | null;
+  filtered_system: number;
+  filtered_insignificant: number;
+}
+
 export interface SlowQuery {
   id: number;
   instance_id: number;
   collected_at: string;
+  /** Kararlı kimlik — queryid NULL gelebildiği için eşleştirme bununla yapılır (Faz 18 İŞ 1). */
+  key: string;
   queryid: string | null;
   query: string;
   calls: number;
@@ -92,6 +105,10 @@ export interface SlowQuery {
   plan_sys_time?: number;
   exec_user_time?: number;
   exec_sys_time?: number;
+  /** Sistem/platform sorgusu mu; öyleyse hangi kurala takıldı (Faz 18 İŞ 2). */
+  is_system: boolean;
+  system_reason: string | null;
+  sample_count: number;
 }
 
 export type QueryResourceType = "io" | "cpu" | "memory" | "lock" | "unknown";
@@ -413,6 +430,8 @@ export interface ReportFinding {
   commands: string[];
   related_object_type: string | null;
   related_object_id: number | null;
+  /** Bulgunun kesin hedefi (Faz 18 İŞ 1). Boşsa bölüm→sekme eşlemesine düşülür. */
+  link_hint: string | null;
   fingerprint: string;
   priority: number;
   open_since_days: number;
@@ -1229,17 +1248,26 @@ export const api = {
     ),
   getLatestMetrics: (id: number) =>
     request<MetricSample>(`/api/metrics/${id}/latest`),
-  /** En sorunlu N sorgu (Faz 16-B İŞ 4). Aralık verilirse sıralama o aralıktaki DEĞİŞİME göre. */
+  /** En sorunlu N sorgu. Faz 18 İŞ 1: rapor ile AYNI seçim servisinden; aralık verilmezse
+   *  son 24 saat. Yanıt zarflanmış — hangi pencereye bakıldığı ve kaç sorgunun filtrelendiği
+   *  arayüzde gösterilebilsin diye. */
   getSlowQueries: (
     id: number,
-    opts: { limit?: number; sort?: "total" | "mean" | "calls"; start?: string; end?: string } = {},
+    opts: {
+      limit?: number;
+      sort?: "total" | "mean" | "calls";
+      start?: string;
+      end?: string;
+      includeSystem?: boolean;
+    } = {},
   ) => {
     const params = new URLSearchParams();
     params.set("limit", String(opts.limit ?? 20));
-    params.set("sort", opts.sort ?? "mean");
+    params.set("sort", opts.sort ?? "total");
     if (opts.start) params.set("start", opts.start);
     if (opts.end) params.set("end", opts.end);
-    return request<SlowQuery[]>(`/api/queries/${id}?${params.toString()}`);
+    if (opts.includeSystem) params.set("include_system", "true");
+    return request<SlowQueryList>(`/api/queries/${id}?${params.toString()}`);
   },
   getSlowQueryAvailability: (id: number) =>
     request<SlowQueryAvailability>(`/api/queries/${id}/availability`),

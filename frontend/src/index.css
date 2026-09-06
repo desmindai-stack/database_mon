@@ -1319,6 +1319,29 @@ td code,
 
 .advice-cautions strong { color: var(--text); }
 
+/* ---- Faz 18 İŞ 1: rapordan gelen derin bağlantının işaret ettiği sorgu ---- */
+.query-row.query-focused {
+  background: rgba(59, 130, 246, 0.14);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.query-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.query-filter-bar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
 .error {
   color: #fecaca;
   background: rgba(239, 68, 68, 0.12);
