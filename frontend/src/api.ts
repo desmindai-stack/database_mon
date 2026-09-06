@@ -509,6 +509,18 @@ export interface FindingAcknowledgement {
   note: string | null;
 }
 
+/** Faz 18 İŞ 2: rapor ve DPA'nın ORTAK gürültü eşikleri. */
+export interface NoiseSettings {
+  /** Listeye girmek için gereken en az toplam süre / çağrı. */
+  list_min_total_ms: number;
+  list_min_calls: number;
+  /** Bulgu üretmek için gereken eşikler — listeden daha yüksektir. */
+  finding_min_total_ms: number;
+  finding_min_calls: number;
+  show_system_queries: boolean;
+  defaults: Record<string, number | boolean>;
+}
+
 export interface HealthReportSchedule {
   hour: number;
   enabled: boolean;
@@ -1368,6 +1380,12 @@ export const api = {
     return { blob, filename: match ? match[1] : `rapor.${opts.format}` };
   },
   getReportSchedule: () => request<HealthReportSchedule>("/api/reports/schedule"),
+  getNoiseSettings: () => request<NoiseSettings>("/api/admin/noise-settings"),
+  updateNoiseSettings: (patch: Partial<Omit<NoiseSettings, "defaults">>) =>
+    request<NoiseSettings>("/api/admin/noise-settings", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   updateReportSchedule: (body: { hour?: number; enabled?: boolean; scope_mode?: string }) =>
     request<HealthReportSchedule>("/api/reports/schedule", { method: "PUT", body: JSON.stringify(body) }),
   /** Tekil ve toplu durum değişikliği aynı uçtan (Ek İŞ A). */

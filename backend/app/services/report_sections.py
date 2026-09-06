@@ -47,6 +47,7 @@ from app.services.health_report import (
     register_section,
     register_summary_section,
 )
+from app.services.noise_settings import get_noise_settings
 from app.services.query_diagnostics import diagnose_query
 from app.services.slow_query_selection import select_slow_queries
 
@@ -69,10 +70,8 @@ CONNECTION_UTIL_CRITICAL = 95.0
 CACHE_HIT_WARN = 90.0
 # Bir sorgunun rapora bulgu olarak girmesi için gereken en düşük ortalama süre.
 SLOW_QUERY_MEAN_MS = 50.0
-# Bulgu üretmek için gereken MUTLAK eşikler (Faz 18 İŞ 2). Yüzde değişimi tek başına
-# yanıltıcı: 1 çağrıda 200 ms harcayan bir sorgu "%229 arttı" görünür ama pratikte önemsizdir.
-FINDING_MIN_CALLS = 5
-FINDING_MIN_TOTAL_MS = 1000.0
+# Bulgu eşikleri artık yönetim ayarından geliyor (services/noise_settings.py) — gömülü
+# sabitler her ortam için doğru olamazdı.
 TOP_QUERIES = 10
 # Bir alarm kuralının "gürültü yapıyor" sayılması için dönemdeki tetikleme sayısı.
 NOISY_RULE_THRESHOLD = 10
@@ -773,6 +772,9 @@ async def performance_section(ctx: ReportContext) -> SectionResult:
     filtered_system = 0
     filtered_insignificant = 0
 
+    # Gürültü eşikleri DPA ile ORTAK ayardan (Faz 18 İŞ 2).
+    noise = await get_noise_settings(ctx.session)
+
     for instance in ctx.instances:
         selection = await select_slow_queries(
             ctx.session,
@@ -781,6 +783,9 @@ async def performance_section(ctx: ReportContext) -> SectionResult:
             end=ctx.period_end,
             sort="total",
             limit=TOP_QUERIES,
+            include_system=noise["show_system_queries"],
+            min_total_ms=noise["list_min_total_ms"],
+            min_calls=noise["list_min_calls"],
         )
         filtered_system += selection.filtered_system
         filtered_insignificant += selection.filtered_insignificant
@@ -829,7 +834,7 @@ async def performance_section(ctx: ReportContext) -> SectionResult:
                 }
             )
 
-            if not _is_finding_worthy(entry, change):
+            if not _is_finding_worthy(entry, change, noise):
                 continue
 
             findings.append(
@@ -881,20 +886,22 @@ async def performance_section(ctx: ReportContext) -> SectionResult:
     )
 
 
-def _is_finding_worthy(entry, change: str) -> bool:
+def _is_finding_worthy(entry, change: str, noise: dict) -> bool:
     """Bir sorgunun BULGU üretmeye değip değmediği (Faz 18 İŞ 2 — gürültü filtresi).
 
-    Listede görünmek ile bulgu üretmek farklı eşikler: liste "en pahalı N"i gösterir, bulgu
-    ise DBA'nın bugün bakması gereken şeydir.
+    Listede görünmek ile bulgu üretmek FARKLI eşikler: liste "en pahalı N"i gösteren bir
+    keşif aracı, bulgu ise DBA'dan dikkat isteyen bir talep. Eşikler yönetim ayarından
+    geliyor; ortamdan ortama doğru değer değişir (OLTP'de 1 sn ciddi, raporlama
+    veritabanında sıradan).
     """
     if change not in ("new", "worse"):
         return False
     if entry.mean_time_ms < SLOW_QUERY_MEAN_MS:
         return False
     # Tek çağrılık bir sorgudan yüzde değişimi anlamsız — trend bulgusu üretme.
-    if entry.calls < FINDING_MIN_CALLS:
+    if entry.calls < noise["finding_min_calls"]:
         return False
-    if entry.total_time_ms < FINDING_MIN_TOTAL_MS:
+    if entry.total_time_ms < noise["finding_min_total_ms"]:
         return False
     return True
 

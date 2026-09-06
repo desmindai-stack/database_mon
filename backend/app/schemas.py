@@ -1595,3 +1595,25 @@ class FindingDecisionOut(BaseModel):
     note: str | None
 
     model_config = {"from_attributes": True}
+
+
+# --- Gürültü filtresi ayarları (Faz 18 İŞ 2) ---
+
+
+class NoiseSettingsOut(BaseModel):
+    """Rapor ve DPA'nın ORTAK eşikleri. İkisinin farklı eşik kullanması tutarsızlık yaratırdı."""
+
+    list_min_total_ms: float
+    list_min_calls: int
+    finding_min_total_ms: float
+    finding_min_calls: int
+    show_system_queries: bool
+    defaults: dict[str, Any] = {}
+
+
+class NoiseSettingsUpdate(BaseModel):
+    list_min_total_ms: float | None = Field(default=None, ge=0)
+    list_min_calls: int | None = Field(default=None, ge=0)
+    finding_min_total_ms: float | None = Field(default=None, ge=0)
+    finding_min_calls: int | None = Field(default=None, ge=0)
+    show_system_queries: bool | None = None

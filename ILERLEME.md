@@ -3310,6 +3310,61 @@ sorguya inmesi, rapor ve DPA'nın aynı pencerede aynı sırayı vermesi,
 kimlik parçalanmasının giderilmesi, sistem sorgusu sınıflandırması ve tek
 çağrılık sorgunun bulgu üretmemesi. Toplam: 407 test yeşil.
 
+## Faz 18 — İŞ 2: Gürültü filtresi ayarlanabilir hale getirildi
+
+İŞ 1'de filtre mekanizması kuruldu ama eşikler koda gömülüydü. Gömülü bir
+eşik her ortam için doğru olamaz: OLTP bir veritabanında 1 saniyelik bir
+sorgu ciddi, raporlama veritabanında sıradan.
+
+**Yeni `services/noise_settings.py`.** Beş ayar, `AppSetting` üzerinde
+saklanıyor:
+
+| Ayar | Varsayılan | Ne yapar |
+|---|---|---|
+| `list_min_total_ms` | 100 ms | Altındaki sorgu listede görünmez |
+| `list_min_calls` | 1 | Aynı, çağrı sayısı için |
+| `finding_min_total_ms` | 1000 ms | Altındaki sorgu **bulgu üretmez** |
+| `finding_min_calls` | 5 | Tek çağrılık sorgu trend bulgusu üretmez |
+| `show_system_queries` | kapalı | Sistem/platform sorgularının görünürlüğü |
+
+**İki ayrı eşik kümesi olması bilinçli.** Liste ve bulgu farklı sorular
+soruyor: liste "bu sorgu en pahalı N'de görünmeye değer mi?" (keşif
+aracı, düşük eşik), bulgu ise "DBA'nın bugün buna bakması gerekir mi?"
+(dikkat talebi, yüksek eşik). Bildirilen örnekteki 1 çağrılık 206 ms'lik
+sorgu artık listede görünebilir ama bulgu üretmez.
+
+**Rapor ve DPA aynı ayarı okuyor.** İkisinin farklı eşik kullanması,
+İŞ 1'de düzelttiğimiz tutarsızlığın aynısını geri getirirdi — bunu bir
+test doğruluyor.
+
+**Sistem sorgusu görünürlüğü iki katmanlı.** Yönetim ayarı varsayılanı
+belirliyor; `?include_system=true` sorgu parametresi tek seferlik
+geçersiz kılıyor. Rapordan gelen derin bağlantı bir sistem sorgusuna
+işaret ediyorsa DPA filtreyi kendiliğinden açıyor — aksi halde bağlantı
+gene boş sayfaya çıkardı.
+
+**Filtrelenen sorgu sayısı hep görünür.** Yanıt zarfı
+`filtered_system` ve `filtered_insignificant` taşıyor; DPA'da
+"N sistem/platform sorgusu · M eşik altı sorgu filtrelendi" yazıyor ve
+yanında "Sistem sorgularını göster" onay kutusu var. Bir şeyin gizlendiği
+asla gizli değil.
+
+**Bozuk ayar raporu düşürmüyor.** Okunamayan/geçersiz bir kayıt sessizce
+varsayılana düşüyor: ayar hatası yüzünden rapor üretiminin çökmesi,
+yanlış eşikle çalışmaktan daha kötü olurdu. Kaydetme tarafında ise
+değerler doğrulanıyor (negatif ya da saçma büyük değer kabul edilmiyor).
+
+**Uçlar:** `GET/PUT /api/admin/noise-settings` (viewer değiştiremez).
+Yönetim ekranının Ayarlar sekmesine "Gürültü filtresi" paneli eklendi;
+her alanın altında ne işe yaradığı yazılı.
+
+**Testler:** `tests/test_noise_settings.py` (8 test) — varsayılanlar,
+liste eşiğinin gerçekten filtrelemesi, bulgu eşiği yükseltilince bulgunun
+susup sorgunun listede kalması, rapor ve DPA'nın aynı ayarı okuması,
+sistem sorgusu ayarının varsayılan görünümü değiştirmesi, sorgu
+parametresinin ayarı geçersiz kılması, uç doğrulaması ve viewer yetkisi.
+Toplam: 416 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

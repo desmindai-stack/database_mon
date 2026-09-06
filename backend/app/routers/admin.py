@@ -10,6 +10,8 @@ from app.database import get_db
 from app.models import User
 from app.schemas import (
     AdminPasswordResetOut,
+    NoiseSettingsOut,
+    NoiseSettingsUpdate,
     RetentionDaysIn,
     RetentionStatusOut,
     UserCreate,
@@ -17,6 +19,7 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services.auth_deps import get_current_user
+from app.services.noise_settings import get_noise_settings, set_noise_settings
 from app.services.retention import get_retention_status, run_retention_cleanup, set_retention_days
 from app.services.security import hash_password
 
@@ -113,3 +116,27 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)) -> Ad
     user.must_change_password = True
     await db.commit()
     return AdminPasswordResetOut(temporary_password=temp_password)
+
+
+@router.get("/noise-settings", response_model=NoiseSettingsOut)
+async def read_noise_settings(db: AsyncSession = Depends(get_db)) -> NoiseSettingsOut:
+    """Rapor/DPA gürültü eşikleri (Faz 18 İŞ 2)."""
+    return NoiseSettingsOut(**await get_noise_settings(db))
+
+
+@router.put("/noise-settings", response_model=NoiseSettingsOut)
+async def update_noise_settings(
+    payload: NoiseSettingsUpdate, db: AsyncSession = Depends(get_db)
+) -> NoiseSettingsOut:
+    try:
+        updated = await set_noise_settings(
+            db,
+            list_min_total_ms=payload.list_min_total_ms,
+            list_min_calls=payload.list_min_calls,
+            finding_min_total_ms=payload.finding_min_total_ms,
+            finding_min_calls=payload.finding_min_calls,
+            show_system_queries=payload.show_system_queries,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return NoiseSettingsOut(**updated)

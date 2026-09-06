@@ -29,6 +29,7 @@ from app.services.advice import Advice, AdviceStep, advice_to_dict
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
+from app.services.noise_settings import get_noise_settings
 from app.services.slow_query_selection import DEFAULT_WINDOW_HOURS, select_slow_queries
 from app.services.slow_query_status import get_slow_query_availability
 
@@ -129,8 +130,12 @@ async def get_slow_queries(
     sort: str = Query(default="total", pattern="^(total|mean|calls)$"),
     start: datetime | None = Query(default=None, description="Aralık başlangıcı (ISO-8601)"),
     end: datetime | None = Query(default=None, description="Aralık bitişi (ISO-8601)"),
-    include_system: bool = Query(
-        default=False, description="Sistem/platform sorgularını da göster (pg_catalog, Supabase iç sorguları…)"
+    include_system: bool | None = Query(
+        default=None,
+        description=(
+            "Sistem/platform sorgularını da göster. Verilmezse yönetim ayarındaki varsayılan "
+            "kullanılır (pg_catalog, pg_stat_*, Supabase/RDS iç sorguları, dbace'in kendi sorguları)."
+        ),
     ),
     db: AsyncSession = Depends(get_db),
 ) -> SlowQueryListOut:
@@ -148,6 +153,9 @@ async def get_slow_queries(
     window_end = end or datetime.now(UTC)
     window_start = start or (window_end - timedelta(hours=DEFAULT_WINDOW_HOURS))
 
+    # Eşikler ve sistem sorgusu görünürlüğü TEK yerden (Faz 18 İŞ 2) — rapor da aynısını
+    # okuyor, ikisinin farklı eşik kullanması Faz 18 İŞ 1'deki tutarsızlığı geri getirirdi.
+    noise = await get_noise_settings(db)
     selection = await select_slow_queries(
         db,
         instance_id,
@@ -155,7 +163,9 @@ async def get_slow_queries(
         end=window_end,
         sort=sort,
         limit=limit,
-        include_system=include_system,
+        include_system=noise["show_system_queries"] if include_system is None else include_system,
+        min_total_ms=noise["list_min_total_ms"],
+        min_calls=noise["list_min_calls"],
     )
     return selection_to_out(selection, window_start, window_end)
 

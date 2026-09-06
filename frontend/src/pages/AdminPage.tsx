@@ -1,5 +1,13 @@
 import { FormEvent, useEffect, useState } from "react";
-import { api, HealthReportSchedule, RefreshInterval, RetentionStatus, UserOut, UserRoleType } from "../api";
+import {
+  api,
+  HealthReportSchedule,
+  NoiseSettings,
+  RefreshInterval,
+  RetentionStatus,
+  UserOut,
+  UserRoleType,
+} from "../api";
 import { formatTime } from "../api";
 import { useAuth } from "../auth";
 
@@ -42,12 +50,14 @@ export default function AdminPage() {
   const [refreshInterval, setRefreshInterval] = useState<RefreshInterval | null>(null);
   // Faz 17 İŞ 1/5: günlük sağlık raporunun saati ve kapsamı — diğer operasyonel ayarların yanında.
   const [reportSchedule, setReportSchedule] = useState<HealthReportSchedule | null>(null);
+  const [noise, setNoise] = useState<NoiseSettings | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
 
   const loadRetention = () => api.getRetention().then(setRetention).catch((e) => setError(String(e.message || e)));
   const loadUsers = () => api.getUsers().then(setUsers).catch((e) => setError(String(e.message || e)));
   const loadSettings = () => {
     api.getReportSchedule().then(setReportSchedule).catch(() => undefined);
+    api.getNoiseSettings().then(setNoise).catch(() => undefined);
     return api.getRefreshInterval().then(setRefreshInterval).catch((e) => setError(String(e.message || e)));
   };
 
@@ -140,6 +150,15 @@ export default function AdminPage() {
       const result = await api.resetUserPassword(u.id);
       setResetResult({ id: u.id, password: result.temporary_password });
       await loadUsers();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
+  const saveNoise = async (patch: Partial<Omit<NoiseSettings, "defaults">>) => {
+    setError(null);
+    try {
+      setNoise(await api.updateNoiseSettings(patch));
     } catch (err) {
       setError(String((err as Error).message));
     }
@@ -400,6 +419,80 @@ export default function AdminPage() {
               <option value="both">İkisi birden</option>
             </select>
           </label>
+        </div>
+      )}
+
+      {tab === "settings" && (
+        <div className="card" style={{ marginTop: "1rem", maxWidth: 520 }}>
+          <h3 className="chart-title">Gürültü filtresi</h3>
+          <p className="muted-note">
+            Rapor ve DPA <strong>aynı</strong> eşikleri kullanır. Doğru değer ortama göre değişir:
+            OLTP bir veritabanında 1 saniye ciddi, raporlama veritabanında sıradan olabilir.
+          </p>
+
+          <div className="noise-settings-grid">
+            <label>
+              Listeye girme eşiği (toplam ms)
+              <input
+                type="number"
+                min={0}
+                value={noise?.list_min_total_ms ?? 0}
+                disabled={!noise}
+                onChange={(e) => saveNoise({ list_min_total_ms: Number(e.target.value) })}
+              />
+              <span className="muted-note">Altındaki sorgular listede görünmez.</span>
+            </label>
+            <label>
+              Listeye girme eşiği (çağrı)
+              <input
+                type="number"
+                min={0}
+                value={noise?.list_min_calls ?? 0}
+                disabled={!noise}
+                onChange={(e) => saveNoise({ list_min_calls: Number(e.target.value) })}
+              />
+            </label>
+            <label>
+              Bulgu eşiği (toplam ms)
+              <input
+                type="number"
+                min={0}
+                value={noise?.finding_min_total_ms ?? 0}
+                disabled={!noise}
+                onChange={(e) => saveNoise({ finding_min_total_ms: Number(e.target.value) })}
+              />
+              <span className="muted-note">Altındaki sorgu, yüzde değişimi ne olursa olsun bulgu üretmez.</span>
+            </label>
+            <label>
+              Bulgu eşiği (çağrı)
+              <input
+                type="number"
+                min={0}
+                value={noise?.finding_min_calls ?? 0}
+                disabled={!noise}
+                onChange={(e) => saveNoise({ finding_min_calls: Number(e.target.value) })}
+              />
+              <span className="muted-note">
+                Tek çağrılık bir sorgudan yüzde değişimi anlamsızdır.
+              </span>
+            </label>
+          </div>
+
+          <label style={{ display: "block", marginTop: "0.8rem" }}>
+            <input
+              type="checkbox"
+              checked={noise?.show_system_queries ?? false}
+              disabled={!noise}
+              onChange={(e) => saveNoise({ show_system_queries: e.target.checked })}
+            />{" "}
+            Sistem sorgularını göster
+          </label>
+          <p className="muted-note">
+            Kapalıyken pg_catalog, pg_stat_*, pg_walfile_*, information_schema üzerinde çalışan
+            sorgular, bilinen platform iç sorguları (Supabase, RDS, Cloud SQL, Azure) ve dbace'in
+            kendi toplama sorguları listelerden ve bulgulardan çıkarılır. Kaç sorgunun
+            filtrelendiği DPA'da yazılı kalır.
+          </p>
         </div>
       )}
     </>
