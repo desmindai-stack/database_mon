@@ -115,7 +115,8 @@ export default function DashboardPage() {
   // Durum filtresi adreste tutuluyor: eskiden yalniz bilesen state'indeydi, bu yuzden
   // filtrelenmis gorunum paylasilamiyor ve geri dugmesi filtreyi kaldirmak yerine
   // kullaniciyi sayfadan atiyordu (Faz 19 IS 2).
-  const [statusFilterParam, setStatusFilterParam] = useUrlFilter("status");
+  // Kart tıklaması bilinçli bir gezinme adımı: geri düğmesi filtreyi kaldırsın (bkz. hook).
+  const [statusFilterParam, setStatusFilterParam] = useUrlFilter("status", "", { history: "push" });
   const statusFilter = (statusFilterParam || null) as GroupOverallStatus | null;
   const setStatusFilter = (next: GroupOverallStatus | null) => setStatusFilterParam(next ?? "");
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());

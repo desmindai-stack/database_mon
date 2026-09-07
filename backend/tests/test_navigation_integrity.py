@@ -199,6 +199,52 @@ def test_pages_with_tabs_keep_the_tab_in_the_url():
     assert not offenders, f"sekmeleri URL'de tutmayan sayfalar: {offenders}"
 
 
+def _without_comments(block: str) -> str:
+    """Yorum satirlarini atar: hem hook hem sayfa, "replace DEGIL, push" gibi yorumlar
+    icerdigi icin ham metinde "replace" aramak yanlis alarm veriyor."""
+    lines = [line for line in block.splitlines() if not line.strip().startswith("//")]
+    return chr(10).join(lines)
+
+
+def test_tab_changes_are_pushed_to_history_not_replaced():
+    """Sekmeyi URL'de TUTMAK yetmiyor: `replace: true` ile yazilirsa gecmise kayit eklenmez ve
+    geri dugmesi kullaniciyi sekmeye degil UYGULAMADAN DISARI cikarir.
+
+    Faz 24'te eklendi: yukaridaki kontrol `useSearchParams` kullanimini yeterli sayiyordu, bu
+    yuzden `InstanceDetailPage` gozden kacmisti — hatayi tarayici testi yakaladi
+    (`e2e/routing.spec.ts`).
+    """
+    hook_source = (FRONTEND / "hooks" / "useUrlState.ts").read_text(encoding="utf-8")
+    hook_setter = re.search(r"const setTab = useCallback\(.*?\n  \);", hook_source, re.S)
+    assert hook_setter, "useUrlTab icindeki setTab bulunamadi — testin dayanagi kaymis"
+    assert "replace" not in _without_comments(hook_setter.group(0)), (
+        "useUrlTab sekmeyi `replace` ile yaziyor; bu hook'u kullanan BUTUN sayfalarda geri "
+        "dugmesi bozulur."
+    )
+
+    offenders = []
+    for path in sorted((FRONTEND / "pages").glob("*.tsx")):
+        source = path.read_text(encoding="utf-8")
+        if "tab-btn" not in source:
+            continue
+        # `useUrlTab<Tab>(...)` da olabiliyor — sadece "useUrlTab(" aramak sayfayi sessizce
+        # denetim disi birakiyordu (ilk yazimda tam bu oldu, test hatayi yakalayamadi).
+        if re.search(r"useUrlTab\s*[<(]", source):
+            continue  # hook push yapiyor, yukarida dogrulandi
+
+        setter = re.search(r"const set(?:ActiveTab|Tab) = \(.*?\n  \};", source, re.S)
+        if setter is None:
+            # Sessizce atlamak, testin hicbir seyi korumadigi hâlde yesil gorunmesi demek.
+            offenders.append(f"{path.name}: sekme ayarlayan fonksiyon bulunamadi")
+        elif "replace" in _without_comments(setter.group(0)):
+            offenders.append(f"{path.name}: sekme degisimi `replace` ile yaziliyor")
+
+    assert not offenders, (
+        f"sekme gecmisi bozuk sayfalar: {offenders}. "
+        "Geri dugmesi sekmeyi geri almak yerine uygulamadan cikarir."
+    )
+
+
 def test_pages_that_load_a_record_handle_a_missing_record():
     """Silinmiş bir kayda gidildiğinde ham hata metni ya da sonsuz "Yükleniyor…" yerine
     geri dönüş yolu olan bir "bulunamadı" ekranı çıkmalı."""

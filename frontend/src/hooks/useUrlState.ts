@@ -48,18 +48,27 @@ export function useUrlTab<T extends string>(
 export function useUrlFilter(
   key: string,
   fallback = "",
+  options: { history?: "replace" | "push" } = {},
 ): [string, (next: string) => void] {
   const [searchParams, setSearchParams] = useSearchParams();
   const value = searchParams.get(key) ?? fallback;
+  // Varsayılan `replace`: bir arama kutusunda her tuş vuruşunu geçmişe yazmak geri düğmesini
+  // kullanılamaz hâle getirir.
+  //
+  // Ama TIKLAMAYLA seçilen bir filtre (dashboard durum kartı gibi) ayrı bir durum: kullanıcı
+  // bunu bilinçli bir gezinme adımı olarak yapıyor ve geri basınca filtrenin kalkmasını
+  // bekliyor. `replace` orada geri düğmesini uygulamadan ÇIKARIYORDU — tarayıcı testi
+  // (Faz 24) yakaladı.
+  const replace = (options.history ?? "replace") === "replace";
 
   const setValue = useCallback(
     (next: string) => {
       const params = new URLSearchParams(searchParams);
       if (!next || next === fallback) params.delete(key);
       else params.set(key, next);
-      setSearchParams(params, { replace: true });
+      setSearchParams(params, { replace });
     },
-    [key, fallback, searchParams, setSearchParams],
+    [key, fallback, replace, searchParams, setSearchParams],
   );
 
   return [value, setValue];

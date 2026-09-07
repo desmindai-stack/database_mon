@@ -240,7 +240,12 @@ export default function InstanceDetailPage() {
     const params = new URLSearchParams(searchParams);
     if (next === "overview") params.delete("tab");
     else params.set("tab", next);
-    setSearchParams(params, { replace: true });
+    // PUSH, replace DEĞİL (Faz 24'te tarayıcı testi yakaladı). `replace` ile sekme değişimi
+    // geçmişe kayıt eklemiyordu: kullanıcı bir sekmeye geçip GERİ bastığında beklediği sekmeye
+    // değil, uygulamadan TAMAMEN DIŞARI çıkıyordu. Faz 19'da diğer sayfalar `useUrlTab` ile
+    // düzeltilmişti ama burası atlanmıştı — statik test `useSearchParams` kullanımını yeterli
+    // saydığı için de fark edilmemişti.
+    setSearchParams(params);
   };
 
   useEffect(() => {
