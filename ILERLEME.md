@@ -3922,6 +3922,101 @@ tahminin öneriyi kaydettiğini ve API'nin gerçekten döndürdüğünü — bu
 sonuncusu, hatanın kendisini (şemada alan var, modelde yok) kalıcı olarak
 kapatıyor.
 
+## Faz 20 — İŞ 2: Tahmin doğruluğu takibi
+
+### Neden gerekliydi
+
+dbace her tahmine bir `confidence` yazıyor ve arayüzde "güven: %85" diye
+gösteriyordu. Bu değer regresyonun **R²**'siydi: "model GEÇMİŞ veriye ne
+kadar iyi oturdu" demek. Tahminin tutup tutmadığıyla ilgisi yok —
+gürültüsüz ama tamamen yanlış eğimli bir seri de R²=0.99 verir. Yani ürün
+doğruluk **iddia ediyordu, ölçmüyordu**.
+
+### Kurulan döngü
+
+**1. Kayıt.** Her tahmin üretildiğinde yeni `prediction_outcomes`
+tablosuna bir satır yazılıyor: ne tahmin edildiği, hangi tarih için,
+güven aralığı, kullanılan yöntem (`linear_regression+weekday` gibi), kaç
+örneğe ve kaç günlük pencereye dayandığı, R²'si. Tahminin kendisiyle aynı
+transaction'da yazılıyor.
+
+**2. Değerlendirme.** Saatlik bir scheduler işi (`prediction_accuracy`)
+hedef tarihi gelmiş satırları alıp gerçekleşen değeri okuyor — kaynağına
+göre `MetricSample` (hedefe en yakın örnek, ±15 dk), `MetricRollupDaily`
+(o günün son değeri) ya da `SchemaObjectDailySample` (o nesnenin o günkü
+boyutu). Mutlak hata, yüzde hata ve güven aralığının tutup tutmadığı
+hesaplanıyor.
+
+Saatlik çalışıyor çünkü kısa vadeli tahminlerin ufku 1 saat; günlük bir iş
+onları değerlendirilemez hale getirirdi (ham örnekler saklama süresi
+dolunca siliniyor).
+
+**3. Metrik.** Tür bazında ortalama mutlak hata, ortalama yüzde hata ve
+güven aralığının tutma oranı. `GET /api/predictions/accuracy` ile
+sunuluyor, Tahminler sayfasının üstünde tablo olarak gösteriliyor.
+
+### Üç tasarım kararı — hepsi dürüstlük gerekçeli
+
+**Kontrol noktası (checkpoint) ufku.** Uzun vadeli tahminlerin manşet ufku
+aylar sürüyor (disk için 180 gün, wraparound için 365). O tarihi beklemek
+**altı ay boyunca hiçbir geri besleme almamak** demekti. Bunun yerine aynı
+modelden 7 gün sonrası için ikinci bir tahmin alınıp o ölçülüyor. Ölçülen
+şey modelin kendisi olduğu için bu geçerli bir vekil; `checkpoint_days`
+kolonu hangi ufukta ölçüldüğünü taşıyor ve `predicted_value`'nun manşet
+sayıdan farklı olabileceği model docstring'inde açıkça yazılı.
+
+**"Ölçülemedi" ile "yanlış" ayrı.** Hedef tarih geçtiği hâlde gerçekleşen
+değer okunamıyorsa (instance kapatılmış, toplama durmuş, ölçülen nesne
+silinmiş) satır `expired` işaretleniyor ve nedeni yazılıyor — doğruluk
+hesabına HİÇ girmiyor. Bunları "isabetsiz tahmin" saymak modeli haksız
+yere cezalandırır ve doğruluk oranını toplama kesintilerinin bir
+fonksiyonu haline getirirdi. Panelde ayrıca gösteriliyor ("12 ölçülemedi")
+çünkü çok yüksek bir ölçülemedi sayısı da kendi başına bir sinyal.
+
+Ayrıca bir tolerans penceresi var: hedefi yeni geçmiş bir satır hemen
+"ölçülemedi" sayılmıyor (günlük kaynaklar için 2 gün, ham örnekler için
+30 dakika) — rollup bir tur gecikmiş olabilir.
+
+**Az ölçümle güven iddia edilmiyor.** En az 5 tamamlanmış ölçüm yoksa
+güvenilirlik `unknown`. Üç ölçümle "%100 isabet" demek, hiç ölçmemekten
+daha yanıltıcı olurdu.
+
+### Güvenilirlik işareti
+
+Her tahmin, ait olduğu **türün** ölçülmüş güvenilirliğini taşıyor
+(`PredictionOut.reliability`): aralık tutma oranı ≥%75 → güvenilir,
+≥%50 → orta, altı → düşük. Arayüzde `high` dışındaki her seviye tahminin
+yanında rozet olarak görünüyor, üzerine gelince açıklaması çıkıyor.
+
+Güvenilirlik **tür bazında ve instance'lar arası** hesaplanıyor. Sorulan
+soru "bu model ne kadar tutuyor", "bu instance'ta ne kadar tutuyor"
+değil; ayrıca tek bir instance'ta beş tamamlanmış ölçüme ulaşmak haftalar
+sürerdi ve rozet pratikte hep "bilinmiyor" kalırdı.
+
+**Düşük güvenilirlikte gizlemek yerine işaretlemeyi seçtim.** Görev ikisini
+de kabul ediyordu ("işaretle veya hiç gösterme"). Gizlemek şu yüzden
+yanlış olurdu: modelin zayıf olması riskin gerçek OLMADIĞI anlamına
+gelmez. Disk gerçekten doluyor olabilir; bizim eğim tahminimizin tutmaması
+DBA'in bunu bilmemesi gerektiği anlamına gelmez. Bir izleme aracının
+sessizce bilgi saklaması, yanlış bilgi vermesinden farklı bir kötülük
+değil. Rozet, kullanıcının sayıya ne kadar güveneceğini bilmesini sağlıyor
+— karar onda kalıyor.
+
+### Migration
+
+`supabase/migrations/20260908100000_prediction_outcomes.sql` — yeni
+`prediction_outcomes` tablosu + dört index (biri değerlendirme işinin
+taradığı `(status, target_at)`). DEPLOY.md tablosuna 31. sıra.
+
+**Testler:** `tests/test_prediction_accuracy.py` (15 test) — döngünün üç
+adımı da: üretilen tahminin kaydedildiği ve tahminle ilişkilendiği,
+kontrol noktasının ölçülebilir bir ufukta olduğu, isabetli/isabetsiz
+tahminlerin doğru puanlandığı, ölçülemeyenin isabetsiz sayılmadığı,
+tolerans penceresinin çalıştığı, ham örnekte hedefe EN YAKIN örneğin
+seçildiği, şema nesnesinde yanlış nesnenin okunmadığı, metriklerin doğru
+hesaplandığı, az ölçümde "bilinmiyor" dendiği, `expired` satırların oranı
+düşürmediği ve API'nin rozeti doğruluk ucuyla TUTARLI döndürdüğü.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

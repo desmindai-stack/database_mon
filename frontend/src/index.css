@@ -3232,3 +3232,38 @@ td code,
   table { font-size: 0.82rem; }
   th, td { padding: 0.55rem 0.6rem; }
 }
+
+/* Tahmin güvenilirlik rozeti — Faz 20 İŞ 2. */
+.reliability-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.reliability-badge.high {
+  color: var(--success);
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.reliability-badge.medium {
+  color: var(--warning);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.reliability-badge.low {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+}
+
+.reliability-badge.unknown {
+  color: var(--muted);
+  background: var(--surface-2);
+  border-color: var(--border);
+}

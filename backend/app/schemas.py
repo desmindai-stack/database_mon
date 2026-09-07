@@ -699,6 +699,35 @@ class PredictionStepOut(BaseModel):
     command: str | None = None
 
 
+class PredictionAccuracyOut(BaseModel):
+    """Bir tahmin türünün ölçülmüş doğruluğu (Faz 20 İŞ 2).
+
+    `confidence` ile karıştırılmamalı: o, regresyonun geçmiş veriye oturma iyiliğidir (R²).
+    Buradakiler tahminin GERÇEKLEŞENE ne kadar yaklaştığını söyler.
+    """
+
+    kind: str
+    label: str
+    evaluated_count: int
+    pending_count: int
+    expired_count: int
+    mean_absolute_error: float | None = None
+    mean_percent_error: float | None = None
+    interval_hit_rate: float | None = None
+    reliability: str
+    window_days: int
+    note: str
+
+
+class PredictionReliabilityOut(BaseModel):
+    """Tek bir tahmine iliştirilen güvenilirlik işareti."""
+
+    level: str  # "unknown" | "low" | "medium" | "high"
+    interval_hit_rate: float | None = None
+    evaluated_count: int = 0
+    note: str = ""
+
+
 class PredictionOut(BaseModel):
     id: int
     instance_id: int
@@ -724,6 +753,9 @@ class PredictionOut(BaseModel):
     # (planı olmayan tahmin türleri ve bu alan eklenmeden önce kaydedilmiş satırlar), bu yüzden
     # None boş listeye çevriliyor — istemci her zaman bir dizi görüyor.
     playbook: list[PredictionStepOut] = []
+    # Faz 20 İŞ 2: bu TÜRÜN ölçülmüş doğruluğu. Tahminin kendisine değil ailesine ait — "bu tür
+    # tahminler son 30 günde ne kadar tuttu" sorusunun cevabı. Router dolduruyor.
+    reliability: PredictionReliabilityOut | None = None
 
     @field_validator("playbook", mode="before")
     @classmethod

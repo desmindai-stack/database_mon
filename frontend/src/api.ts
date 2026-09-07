@@ -672,6 +672,34 @@ export interface Prediction {
   playbook: PredictionStep[];
   /** Playbook'un standart öneri yapısına çevrilmiş hali (Faz 17 Ek İŞ B). */
   advice: Advice | null;
+  /**
+   * Bu tahmin TÜRÜNÜN ölçülmüş güvenilirliği (Faz 20 İŞ 2) — tahminin kendisine değil
+   * ailesine ait. `confidence` ile karıştırmayın: o, regresyonun geçmiş veriye oturma
+   * iyiliğidir (R²); bu, tahminlerin gerçekleşene ne kadar yaklaştığıdır.
+   */
+  reliability: PredictionReliability | null;
+}
+
+export interface PredictionReliability {
+  level: "unknown" | "low" | "medium" | "high";
+  interval_hit_rate: number | null;
+  evaluated_count: number;
+  note: string;
+}
+
+/** Bir tahmin türünün ölçülmüş doğruluğu (Faz 20 İŞ 2). */
+export interface PredictionAccuracy {
+  kind: string;
+  label: string;
+  evaluated_count: number;
+  pending_count: number;
+  expired_count: number;
+  mean_absolute_error: number | null;
+  mean_percent_error: number | null;
+  interval_hit_rate: number | null;
+  reliability: "unknown" | "low" | "medium" | "high";
+  window_days: number;
+  note: string;
 }
 
 export interface PredictionReadiness {
@@ -1416,6 +1444,8 @@ export const api = {
   resolveAlert: (id: number) =>
     request<AlertEvent>(`/api/alerts/events/${id}/resolve`, { method: "POST" }),
   getPredictions: () => request<Prediction[]>("/api/predictions"),
+  getPredictionAccuracy: (days = 30) =>
+    request<PredictionAccuracy[]>(`/api/predictions/accuracy?days=${days}`),
   ackPrediction: (id: number) =>
     request<Prediction>(`/api/predictions/${id}/ack`, { method: "POST" }),
 

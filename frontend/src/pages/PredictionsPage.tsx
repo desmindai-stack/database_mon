@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, errorMessage, formatTime, Prediction } from "../api";
+import { api, errorMessage, formatTime, Prediction, PredictionAccuracy } from "../api";
 import { TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
+import PredictionAccuracyPanel from "../components/PredictionAccuracyPanel";
 import PredictionPlaybook from "../components/PredictionPlaybook";
 import RecommendationHeader from "../components/RecommendationHeader";
 
@@ -14,6 +15,7 @@ export default function PredictionsPage() {
   const [error, setError] = useState<string | null>(null);
   const [listError, setListError] = useState<unknown>(null);
   const [loaded, setLoaded] = useState(false);
+  const [accuracy, setAccuracy] = useState<PredictionAccuracy[]>([]);
 
   const load = () =>
     api
@@ -27,6 +29,8 @@ export default function PredictionsPage() {
 
   useEffect(() => {
     load();
+    // Doğruluk paneli tahmin listesinden bağımsız: ölçüm verisi gelmese de liste açılmalı.
+    api.getPredictionAccuracy().then(setAccuracy).catch(() => undefined);
   }, []);
 
   return (
@@ -39,6 +43,8 @@ export default function PredictionsPage() {
       </header>
 
       {error && <div className="error">{error}</div>}
+
+      <PredictionAccuracyPanel items={accuracy} />
 
       <div className="table-wrap">
         <table>
@@ -81,7 +87,28 @@ export default function PredictionsPage() {
                       )}
                     </div>
                   </td>
-                  <td><span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>{p.severity}</span></td>
+                  <td>
+                    <span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>
+                      {p.severity}
+                    </span>
+                    {/* Bu TÜRÜN ölçülmüş güvenilirliği (Faz 20 İŞ 2). Düşük çıkanları
+                        gizlemiyoruz: modelin zayıf olması riskin gerçek olmadığı anlamına
+                        gelmez — ama kullanıcı neye dayandığını bilmeli. */}
+                    {p.reliability && p.reliability.level !== "high" && (
+                      <div style={{ marginTop: "0.35rem" }}>
+                        <span
+                          className={`reliability-badge ${p.reliability.level}`}
+                          title={p.reliability.note}
+                        >
+                          {p.reliability.level === "low"
+                            ? "düşük güvenilirlik"
+                            : p.reliability.level === "medium"
+                              ? "orta güvenilirlik"
+                              : "doğruluk henüz ölçülmedi"}
+                        </span>
+                      </div>
+                    )}
+                  </td>
                   <td>{p.message}</td>
                   <td style={{ minWidth: "320px" }}>
                     {/* Faz 17 Ek İŞ B: rapor ve dashboard ile aynı öneri yapısı. */}

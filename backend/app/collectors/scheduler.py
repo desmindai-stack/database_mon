@@ -16,6 +16,7 @@ from app.services.retention import run_retention_cleanup
 from app.services.rollup import run_daily_rollup
 from app.services.health_report import run_scheduled_reports
 from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
+from app.services.prediction_accuracy import evaluate_due_outcomes
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ scheduler = AsyncIOScheduler()
 REFRESH_JOB_ID = "refresh_dashboard_snapshots"
 RETENTION_JOB_ID = "retention_cleanup"
 DAILY_ROLLUP_JOB_ID = "daily_rollup"
+PREDICTION_ACCURACY_JOB_ID = "prediction_accuracy"
 HEALTH_REPORT_JOB_ID = "daily_health_report"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
@@ -86,6 +88,25 @@ async def daily_rollup_tick() -> None:
             logger.exception("Failed running daily rollup")
 
 
+async def prediction_accuracy_tick() -> None:
+    """Faz 20 İŞ 2: hedef tarihi gelmiş tahminleri gerçekleşen değerle karşılaştırır.
+
+    Saatlik çalışıyor çünkü kısa vadeli tahminlerin ufku 1 saat — günlük bir iş onları
+    değerlendirilemez hale getirirdi (ham örnekler saklama süresi dolunca siliniyor).
+    """
+    async with SessionLocal() as session:
+        try:
+            counts = await evaluate_due_outcomes(session)
+            await session.commit()
+            if counts["evaluated"] or counts["expired"]:
+                logger.info(
+                    "Tahmin doğruluğu: %s değerlendirildi, %s ölçülemedi, %s bekliyor",
+                    counts["evaluated"], counts["expired"], counts["waiting"],
+                )
+        except Exception:
+            logger.exception("Tahmin doğruluğu değerlendirmesi başarısız")
+
+
 async def daily_health_report_tick() -> None:
     """Faz 17 İŞ 1: günlük sağlık raporu. Saati ayarlanabilir (varsayılan 06:00).
 
@@ -140,6 +161,13 @@ async def start_scheduler() -> None:
         "interval",
         days=1,
         id=DAILY_ROLLUP_JOB_ID,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        prediction_accuracy_tick,
+        "interval",
+        hours=1,
+        id=PREDICTION_ACCURACY_JOB_ID,
         replace_existing=True,
     )
     scheduler.add_job(

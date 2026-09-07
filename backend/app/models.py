@@ -378,6 +378,65 @@ class MetricRollupDaily(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class PredictionOutcome(Base):
+    """Tahmin doğruluğunun ÖLÇÜLDÜĞÜ tablo (Faz 20 İŞ 2).
+
+    Öncesinde dbace her tahmine bir `confidence` yazıyordu ama bu yalnızca regresyonun
+    R² değeriydi — "model geçmiş veriye ne kadar iyi oturdu" demek, "tahmin tuttu mu"
+    demek DEĞİL. Doğruluk iddia edilemez, ölçülür: her tahmin üretildiğinde buraya bir
+    satır yazılır, hedef tarih geldiğinde gerçekleşen değer okunur ve sapma hesaplanır.
+
+    **`predicted_value` neden `PredictionInsight.predicted_value` ile aynı olmayabilir:**
+    uzun vadeli tahminlerin manşet ufku aylar sürer (disk için 180 gün) — o tarihi beklemek
+    altı ay boyunca hiçbir geri besleme almamak demekti. Bunun yerine AYNI modelden
+    `checkpoint_days` gün sonrası için ikinci bir tahmin alınıp burada saklanıyor. Ölçülen
+    şey modelin kendisidir; kısa bir kontrol noktası bunu aylar beklemeden ölçer. Kısa
+    vadeli tahminlerde kontrol noktası zaten manşet ufkun kendisidir.
+    """
+
+    __tablename__ = "prediction_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    prediction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("prediction_insights.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    # Tahmin AİLESİ — doğruluk metrikleri bu kırılımda tutuluyor (metric_key değil: tablo/index
+    # tahminlerinde metric_key nesne adını taşır ve her nesne ayrı bir kova olurdu).
+    kind: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    metric_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    target_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    checkpoint_days: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    predicted_value: Mapped[float] = mapped_column(Float, nullable=False)
+    lower_bound: Mapped[float | None] = mapped_column(Float, nullable=True)
+    upper_bound: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Kullanılan yöntem ve dayandığı veri — "kara kutu olmasın" (İŞ 3).
+    method: Mapped[str] = mapped_column(String(64), nullable=False, default="linear_regression")
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    span_days: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    r_squared: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+
+    # Gerçekleşen değerin nereden okunacağı: "sample" (MetricSample), "rollup"
+    # (MetricRollupDaily), "schema_object" (SchemaObjectDailySample).
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    schema_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    object_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Değerlendirme sonucu. status: "pending" | "evaluated" | "expired".
+    # "expired" = hedef tarih geçti ama gerçekleşen değer okunamadı (instance kapatılmış,
+    # toplama durmuş, nesne silinmiş) — bunu "hatalı tahmin" saymak yanlış olurdu.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending", index=True)
+    evaluated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    actual_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    absolute_error: Mapped[float | None] = mapped_column(Float, nullable=True)
+    percent_error: Mapped[float | None] = mapped_column(Float, nullable=True)
+    within_interval: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    unevaluable_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
 class SchemaObjectDailySample(Base):
     """Faz 16 İŞ 6: tablo/index boyutunun günlük anlık görüntüsü — `collect_schema_health()`'in
     (zaten var olan, on-demand kullanılan) tek bir katalog taramasından günde bir kez türetilir.

@@ -15,6 +15,7 @@ from app.services.prediction_playbooks import (
 )
 from app.models import MetricRollupDaily, MetricSample, PredictionInsight, SchemaObjectDailySample
 from app.services.advice import advice_to_dict
+from app.services.prediction_accuracy import LONG_HORIZON_CHECKPOINT_DAYS, record_prediction
 from app.services.prediction_advice import (
     database_size_advice,
     index_bloat_advice,
@@ -33,6 +34,22 @@ WRAPAROUND_DANGER_AGE = 1_900_000_000
 # table_growth/index_bloat kaç nesne için tahmin üretilecek (en hızlı büyüyenler) — sınırsız
 # olursa büyük şemalarda PredictionInsight tablosu şişer.
 TOP_N_OBJECTS = 5
+
+# Doğruluk ölçümü için tahmin AİLESİ (Faz 20 İŞ 2). metric_key doğrudan kullanılamaz: tablo/index
+# tahminlerinde nesne adını taşır ve her nesne ayrı bir kova olurdu.
+_SHORT_HORIZON_KIND = {
+    "connection_utilization_pct": "connection_trend",
+    "active_connections": "connection_trend",
+    "cache_hit_ratio": "cache_hit_ratio",
+    "replication_lag_bytes": "replication_lag",
+    "transactions_per_sec": "throughput",
+    "ops_per_sec": "throughput",
+}
+
+
+def _method_label(forecast) -> str:
+    """Kullanılan modelin kısa adı — arayüzde gösteriliyor, kara kutu olmasın."""
+    return f"linear_regression+{forecast.seasonality}"
 
 
 def _format_bytes(n: float) -> str:
@@ -195,6 +212,28 @@ async def _short_horizon_predictions(
         session.add(insight)
         created.append(insight)
 
+        # Doğruluk geri beslemesi (Faz 20 İŞ 2): kısa vadeli tahminlerde kontrol noktası
+        # manşet ufkun kendisidir — hedef zamanda ham örneğe bakılıp sapma ölçülecek.
+        await session.flush()
+        span_days = (points[-1].timestamp - points[0].timestamp).total_seconds() / 86400.0
+        record_prediction(
+            session,
+            prediction_id=insight.id,
+            instance_id=instance_id,
+            kind=_SHORT_HORIZON_KIND.get(metric_key, metric_key),
+            metric_key=metric_key,
+            target_at=target,
+            checkpoint_days=horizon_minutes / 1440.0,
+            predicted_value=forecast.point,
+            lower_bound=forecast.lower,
+            upper_bound=forecast.upper,
+            method=_method_label(forecast),
+            sample_count=len(points),
+            span_days=span_days,
+            r_squared=forecast.r_squared,
+            source="sample",
+        )
+
     return created
 
 
@@ -242,6 +281,51 @@ def _recommendation_for(metric_key: str, engine: str, current: float, predicted:
     if metric_key in ("transactions_per_sec", "ops_per_sec"):
         return "Artan yükü karşılamak için bağlantı havuzu ve kapasite planlaması yapın.", None
     return None, None
+
+
+def _record_long_horizon(
+    session: AsyncSession,
+    insight: PredictionInsight,
+    points: list[SeasonalPoint],
+    *,
+    kind: str,
+    metric_key: str,
+    instance_id: int,
+    source: str,
+    schema_name: str | None = None,
+    object_name: str | None = None,
+) -> None:
+    """Uzun vadeli bir tahminin doğruluğunu ÖLÇÜLEBİLİR bir ufukta kaydeder (Faz 20 İŞ 2).
+
+    Manşet ufuk aylar sürüyor (disk için 180 gün) — o tarihi beklemek altı ay boyunca hiçbir
+    geri besleme almamak demekti. Aynı modelden `LONG_HORIZON_CHECKPOINT_DAYS` gün sonrası için
+    ikinci bir tahmin alınıp o ölçülüyor: ölçülen şey modelin kendisi olduğundan bu geçerli bir
+    vekil ve arayüzde hangi ufukta ölçüldüğü açıkça yazılıyor.
+    """
+    if not points:
+        return
+    checkpoint_target = points[-1].timestamp + timedelta(days=LONG_HORIZON_CHECKPOINT_DAYS)
+    checkpoint = forecast_with_seasonality(points, checkpoint_target, seasonality="weekday")
+    span_days = (points[-1].timestamp - points[0].timestamp).total_seconds() / 86400.0
+    record_prediction(
+        session,
+        prediction_id=insight.id,
+        instance_id=instance_id,
+        kind=kind,
+        metric_key=metric_key,
+        target_at=checkpoint_target,
+        checkpoint_days=LONG_HORIZON_CHECKPOINT_DAYS,
+        predicted_value=checkpoint.point,
+        lower_bound=checkpoint.lower,
+        upper_bound=checkpoint.upper,
+        method=_method_label(checkpoint),
+        sample_count=len(points),
+        span_days=span_days,
+        r_squared=checkpoint.r_squared,
+        source=source,
+        schema_name=schema_name,
+        object_name=object_name,
+    )
 
 
 async def _rollup_points(session: AsyncSession, instance_id: int, metric_key: str) -> list[SeasonalPoint]:
@@ -320,6 +404,11 @@ async def _database_size_prediction(session: AsyncSession, instance_id: int) -> 
         ),
     )
     session.add(insight)
+    await session.flush()
+    _record_long_horizon(
+        session, insight, points, kind="database_size", metric_key=metric_key,
+        instance_id=instance_id, source="rollup",
+    )
     return [insight]
 
 
@@ -386,6 +475,11 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
         ),
     )
     session.add(insight)
+    await session.flush()
+    _record_long_horizon(
+        session, insight, points, kind="wraparound", metric_key=metric_key,
+        instance_id=instance_id, source="rollup",
+    )
     return [insight]
 
 
@@ -476,6 +570,12 @@ async def _object_growth_predictions(
         )
         session.add(insight)
         created.append(insight)
+        await session.flush()
+        _record_long_horizon(
+            session, insight, points, kind=requirement_kind, metric_key=metric_key,
+            instance_id=instance_id, source="schema_object",
+            schema_name=schema_name, object_name=object_name,
+        )
     return created
 
 
