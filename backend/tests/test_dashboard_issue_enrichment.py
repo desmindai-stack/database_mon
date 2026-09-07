@@ -9,12 +9,25 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.database import SessionLocal, init_db
 from app.models import GroupHealthSnapshot
 from app.services.dashboard import collect_dashboard_summary
 from tests.auth_helper import authed_client
+
+
+async def _isolate_snapshots(session, keep_group_id: int) -> None:
+    """Bu testin grubunu `top_issues` listesinde garanti eder.
+
+    `collect_dashboard_summary` en fazla 10 sorun döndürüyor ve test veritabanı ayrı pytest
+    çalıştırmaları arasında KALICI. Zamanla biriken `GroupHealthSnapshot` satırları testin
+    kendi grubunu ilk 10'un dışına itiyor ve `next(...)` StopIteration ile patlıyordu — kodla
+    ilgisi olmayan, sıraya bağlı bir kırılganlık. Diğer grupların anlık görüntüleri siliniyor;
+    bu tablo grup başına TEK satır tutan bir önbellek (geçmiş değil), yeniden üretilir.
+    """
+    await session.execute(delete(GroupHealthSnapshot).where(GroupHealthSnapshot.group_id != keep_group_id))
+    await session.commit()
 
 
 async def test_issue_and_recommendation_enrichment():
@@ -60,6 +73,7 @@ async def test_issue_and_recommendation_enrichment():
         )
         session.add(snapshot)
         await session.commit()
+        await _isolate_snapshots(session, group["id"])
 
         summary = await collect_dashboard_summary(session)
 
@@ -136,6 +150,7 @@ async def test_recommendation_own_link_hint_overrides_group_default():
         )
         session.add(snapshot)
         await session.commit()
+        await _isolate_snapshots(session, group["id"])
 
         summary = await collect_dashboard_summary(session)
 

@@ -689,6 +689,14 @@ class AdviceOut(BaseModel):
     verification: str | None = None
     unavailable_reason: str | None = None
 
+    @field_validator("steps", "cautions", mode="before")
+    @classmethod
+    def _lists_never_null(cls, v):
+        """`advice` serbest biçimli bir JSON kolonunda saklanıyor; eski bir kayıtta bu anahtar
+        `null` olabilir. Varsayılan yalnızca anahtar EKSİKSE devreye girer — açıkça `null` ise
+        Pydantic doğrulama hatası verir ve raporun TAMAMI 500 döner. Boşa çeviriyoruz."""
+        return v or []
+
 
 class PredictionStepOut(BaseModel):
     """Tahmin için tek bir çözüm adımı (Faz 16-B İŞ 7). Arayüzde numaralanır; `command` varsa
@@ -1432,6 +1440,28 @@ class AlwaysOnHealthOut(BaseModel):
 # --- Sağlık Raporu (Faz 17) ---
 
 
+class FindingFactOut(BaseModel):
+    """Bulgunun sayısal özetinden tek satır (Faz 18 İŞ 4): "ne kadar / neye göre".
+
+    `tone` arayüzde vurgu rengini belirler; bilinmeyen bir değer gelirse (eski kayıt, elle
+    yazılmış veri) "neutral" kabul edilir — geçersiz bir ton yüzünden tüm rapor patlamamalı.
+    """
+
+    label: str = ""
+    value: str = ""
+    tone: str = "neutral"
+
+    @field_validator("tone", mode="before")
+    @classmethod
+    def _known_tone(cls, v):
+        return v if v in ("neutral", "good", "bad") else "neutral"
+
+    @field_validator("label", "value", mode="before")
+    @classmethod
+    def _stringify(cls, v):
+        return "" if v is None else str(v)
+
+
 class ReportFindingOut(BaseModel):
     id: int
     section: str
@@ -1445,6 +1475,13 @@ class ReportFindingOut(BaseModel):
     related_object_id: int | None = None
     # Faz 18 İŞ 1: bulgunun tam hedefi. Boşsa arayüz bölüm→sekme eşlemesine düşer.
     link_hint: str | None = None
+    # Faz 18 İŞ 3/İŞ 4 — GERİLEME DÜZELTMESİ (Faz 20): bu iki alan `ReportFinding` MODELİNDE
+    # vardı ve rapor motoru ikisini de yazıyordu, ama bu şemada HİÇ tanımlı değildi. Pydantic
+    # tanımsız alanı sessizce kırptığı için API her bulguda `facts`/`note` DÖNDÜRMÜYORDU:
+    # arayüzde `finding.facts` her zaman `undefined` oluyor ve `.length` okunduğunda
+    # "Cannot read properties of undefined" ile patlıyordu. Yani iki özellik hiç görünmedi.
+    note: str | None = None
+    facts: list[FindingFactOut] = []
     fingerprint: str
     priority: float
     open_since_days: int
@@ -1467,6 +1504,13 @@ class ReportFindingOut(BaseModel):
     @field_validator("commands", mode="before")
     @classmethod
     def _commands_never_null(cls, v):
+        return v or []
+
+    @field_validator("facts", mode="before")
+    @classmethod
+    def _facts_never_null(cls, v):
+        """Kolon nullable ve bu alan eklenmeden ÖNCE üretilmiş raporlarda NULL. İstemci her
+        zaman bir dizi görmeli — `null` dönmek arayüzde dizi işlemlerini patlatıyordu."""
         return v or []
 
     model_config = {"from_attributes": True}

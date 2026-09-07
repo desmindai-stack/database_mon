@@ -91,6 +91,9 @@ export default function ReportFindingCard({
 
   const link = deepLink(finding);
   const evidence = evidenceLine(finding.evidence || {});
+  // Sonradan eklenen, nullable kolonlardan gelen alanlar — eski raporlarda boş gelir.
+  const facts = finding.facts ?? [];
+  const commands = finding.commands ?? [];
   const isOpenStatus = finding.status === "open";
 
   const loadHistory = async () => {
@@ -155,10 +158,13 @@ export default function ReportFindingCard({
         <div className="finding-body">
           <p className="finding-detail">{finding.detail}</p>
 
-          {/* Faz 18 İŞ 4: "ne kadar / neye göre" — etiketli satırlar, sayılar vurgulu. */}
-          {finding.facts.length > 0 && (
+          {/* Faz 18 İŞ 4: "ne kadar / neye göre" — etiketli satırlar, sayılar vurgulu.
+              GERİLEME DÜZELTMESİ (Faz 20): `facts` nullable bir JSON kolonundan geliyor ve
+              backend şemasında hiç tanımlı olmadığı için API'den HİÇ dönmüyordu; buradaki
+              korumasız `.length` "Cannot read properties of undefined" ile patlıyordu. */}
+          {facts.length > 0 && (
             <dl className="finding-facts">
-              {finding.facts.map((f, i) => (
+              {facts.map((f, i) => (
                 <div key={i} className={`finding-fact ${f.tone}`}>
                   <dt>{f.label}</dt>
                   <dd>{f.value}</dd>
@@ -191,7 +197,7 @@ export default function ReportFindingCard({
                   <strong>Öneri:</strong> {finding.recommendation}
                 </div>
               )}
-              {(finding.commands || []).map((command, i) => (
+              {commands.map((command, i) => (
                 <CopyableAction key={i} command={command} />
               ))}
             </>

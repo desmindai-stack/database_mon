@@ -361,8 +361,13 @@ export interface AdviceStep {
 export interface Advice {
   title: string;
   why: string;
-  steps: AdviceStep[];
-  cautions: string[];
+  /**
+   * `advice` serbest biçimli bir JSON kolonunda saklanıyor; eski kayıtlarda bu anahtarlar
+   * eksik/null olabilir. Backend null'ı boşa çeviriyor, tip yine de nullable — "her zaman
+   * var" diyen bir tip, derleyicinin bu sınıftan hataları yakalamasını engelliyor.
+   */
+  steps: AdviceStep[] | null;
+  cautions: string[] | null;
   estimated_duration: string | null;
   rollback: string | null;
   verification: string | null;
@@ -419,15 +424,29 @@ export interface FindingStatusUpdate {
   reference?: string | null;
 }
 
+export interface FindingFact {
+  label: string;
+  value: string;
+  /** Bilinmeyen bir ton backend tarafında "neutral"a indirgeniyor. */
+  tone: "neutral" | "good" | "bad";
+}
+
 export interface ReportFinding {
   id: number;
   section: string;
   severity: "critical" | "warning" | "info" | "ok";
   title: string;
   detail: string;
-  evidence: Record<string, unknown>;
+  /**
+   * Bu üç alan `report_findings` tablosunda NULLABLE JSON kolonları. Backend şeması artık
+   * null'ı boşa çeviriyor, ama tip yine de `null` kabul ediyor: alan sonradan eklendiği için
+   * eski kayıtlarda ve eski bir backend sürümünde null/eksik gelebilir. Tipin "her zaman var"
+   * demesi, tam da bu gerilemede derleyicinin hatayı yakalamasını engellemişti — `facts`
+   * zorunlu dizi yazılmıştı, gerçekte hiç dönmüyordu.
+   */
+  evidence: Record<string, unknown> | null;
   recommendation: string | null;
-  commands: string[];
+  commands: string[] | null;
   related_object_type: string | null;
   related_object_id: number | null;
   /** Bulgunun kesin hedefi (Faz 18 İŞ 1). Boşsa bölüm→sekme eşlemesine düşülür. */
@@ -435,7 +454,7 @@ export interface ReportFinding {
   /** Kısa sınırlılık notu (Faz 18 İŞ 3) — bulgunun önüne geçmeyecek şekilde gösterilir. */
   note: string | null;
   /** Sayısal özet (Faz 18 İŞ 4): "ne kadar / neye göre" etiketli, vurgulu satırlar. */
-  facts: { label: string; value: string; tone: "neutral" | "good" | "bad" }[];
+  facts: FindingFact[] | null;
   fingerprint: string;
   priority: number;
   open_since_days: number;
@@ -668,8 +687,11 @@ export interface Prediction {
   lower_bound: number | null;
   upper_bound: number | null;
   seasonality: string | null;
-  /** Adım adım çözüm planı; plan üretilmeyen tahmin türlerinde boş dizi. */
-  playbook: PredictionStep[];
+  /**
+   * Adım adım çözüm planı. Nullable bir JSON kolonundan geliyor: plan üretilmeyen tahmin
+   * türlerinde ve bu alan eklenmeden önce kaydedilmiş satırlarda null olabilir.
+   */
+  playbook: PredictionStep[] | null;
   /** Playbook'un standart öneri yapısına çevrilmiş hali (Faz 17 Ek İŞ B). */
   advice: Advice | null;
   /**

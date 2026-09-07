@@ -4142,6 +4142,93 @@ her biri, ve bulunan iki hata için ayrı regresyon testleri (yükselen seri
 için düşüş öngörülmemesi; ilan edilen gereksinimin gerçekten uygulanması).
 Toplam 670 test yeşil, `npm run build` yeşil.
 
+## GERİLEME DÜZELTMESİ — Rapor bulgu detayı açılmıyordu
+
+**Belirti (canlı):** `TypeError: Cannot read properties of undefined (reading 'length')` —
+Raporlar sayfasında bir bulgunun detayına tıklayınca. Faz 19'da eklenen hata sınırı yakalayıp
+"Sayfa render hatası" gösteriyordu.
+
+### Kök neden — tahmin edilenden farklı
+
+Teşhis yönü "Faz 18'de eklenen alanlar eski kayıtlarda yok" idi. Gerçek daha kötüsü: **alanlar
+HİÇBİR kayıtta dönmüyordu.**
+
+`ReportFinding` MODELİNDE `facts` ve `note` kolonları vardı, rapor motoru ikisini de yazıyordu,
+migration'lar uygulanmıştı — ama `ReportFindingOut` ŞEMASINDA bu iki alan **hiç tanımlı
+değildi**. Pydantic, `response_model` içinde tanımsız olan alanı sessizce kırpar. Sonuç:
+
+- API her bulguda `facts` ve `note` alanlarını **hiç göndermedi** (null bile değil, yok).
+- Arayüz `finding.facts.length` okudu → `undefined` → çöktü.
+- Faz 18'in iki özelliği (İŞ 4 sayısal özet, İŞ 3 sınırlılık notu) üretildi, veritabanına
+  yazıldı, ama **hiç görünmedi**. Kimse fark etmedi çünkü çökme yalnızca detay açılınca oluyor.
+
+Bu, Faz 20 İŞ 1'deki `advice` hatasının **ayna görüntüsü**: orada şemada alan vardı modelde
+yoktu, burada modelde var şemada yok. İkisi de aynı sınıftan: iki katmandaki alan listesinin
+sessizce ayrışması.
+
+### Neden derleyici yakalamadı
+
+TypeScript tipi yalan söylüyordu:
+
+```ts
+facts: { label: string; value: string; tone: "neutral" | "good" | "bad" }[];  // "her zaman var"
+```
+
+Tip "zorunlu dizi" dediği için `tsc`, `.length` erişimini sorunsuz kabul etti. Hata ancak
+canlıda, kullanıcı tıklayınca ortaya çıktı.
+
+### Düzeltme — dört katman
+
+**1. Backend şeması (kök neden).** `ReportFindingOut`'a `note` ve `facts` eklendi. `facts` için
+ayrı bir `FindingFactOut` modeli yazıldı; null'ı boşa çeviren validator kondu. Model bozuk
+veriye de dayanıklı: bilinmeyen bir `tone` "neutral"a indirgeniyor, eksik `label`/`value`
+boş dizeye — geçersiz tek bir satır yüzünden raporun TAMAMI 500 dönmesin.
+
+**2. `AdviceOut` da korundu.** `steps`/`cautions` varsayılanı vardı ama null koruması yoktu.
+`advice` serbest biçimli bir JSON kolonu; eski bir kayıtta bu anahtarlar `null` olsa Pydantic
+doğrulama hatası verirdi ve **raporun tamamı 500** dönerdi — bir bulgudan değil, RAPORDAN
+olunurdu.
+
+**3. TypeScript tipleri gerçeğe hizalandı.** Nullable JSON kolonlarından gelen alanlar artık
+tipte de nullable: `ReportFinding.facts/commands/evidence`, `Prediction.playbook`,
+`Advice.steps/cautions`. Bu değişiklik **anında iki yeni çökme noktası daha yakaladı**:
+`PredictionsPage` ve `InstanceDetailPage`, olası-null `p.playbook`'u `steps.length` okuyan bir
+bileşene geçiriyordu. Aynı hata, farklı sayfa — tip düzeltilmese sıradaki gerileme oydu.
+
+**4. Bileşen korumaları.** `ReportFindingCard` (`facts ?? []`, `commands ?? []`),
+`PredictionPlaybook` (`steps ?? []`), `AdviceCard` (`steps ?? []`, `cautions ?? []`).
+
+### Frontend geneli tarama
+
+Tüm `.length` / `.map` / `.filter` çağrıları, kaynak alanın backend'deki nullable'lığıyla
+karşılaştırıldı. Bulunan tek gerçek eksik alan `facts` idi; `null` gelebilecek ama korumasız
+kullanılan alanlar yukarıdaki dört yerdi. Denetimde çıkan diğer beş aday
+(`ClusterHealthOut.services`, `NodeHealthOut.services`, `IndexAdviceReportOut.advice`,
+`RefreshIntervalOut.options`, `RetentionStatusOut.options`) isim çakışmasıydı: hepsi kodda
+üretilen yanıtlar, ORM kolonu değil — düzeltme gerektirmiyor.
+
+### Yan bulgu: sıraya bağlı test kırılganlığı
+
+`test_dashboard_issue_enrichment` bu turda kırmızıya döndü ama **kod değişikliğinden bağımsız**
+(stash'lenmiş hâlde de düşüyor). Sebep: `collect_dashboard_summary` en fazla 10 sorun
+döndürüyor, test veritabanı ise pytest çalıştırmaları arasında kalıcı; biriken
+`GroupHealthSnapshot` satırları testin kendi grubunu ilk 10'un dışına itiyordu. Test artık
+kendi grubunun dışındaki anlık görüntüleri temizliyor (o tablo grup başına tek satır tutan bir
+önbellek, geçmiş değil — yeniden üretilir).
+
+**Testler:**
+
+- `tests/test_report_finding_payload.py` (8 test) — şema sürüklenmesi (modeldeki her kolon
+  şemada karşılığını bulmalı), yeni kayıtta değerlerin taşınması, eski kayıtta null kolonların
+  boş koleksiyona çevrilmesi, bozuk `tone`/eksik anahtar dayanıklılığı, `advice` içindeki null
+  listelerin raporu 500'lememesi. **Düzeltme geri alındığında 8 testin 7'si düşüyor** —
+  hatanın kendisini yakaladıkları doğrulandı.
+- `tests/test_api_contract_alignment.py` (69 test) — TS arayüzü ↔ Pydantic şeması hizası:
+  TS'te zorunlu olan her dizi/nesne alanının şemada karşılığı olmalı, ve nullable bir ORM
+  kolonundan besleniyorsa null koruması bulunmalı. 59 çift eşleşiyor, 8'i ORM tabanlı.
+
+Toplam 747 test yeşil, `npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

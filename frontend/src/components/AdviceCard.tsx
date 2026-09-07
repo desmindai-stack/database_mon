@@ -22,6 +22,12 @@ export default function AdviceCard({
   const [open, setOpen] = useState(defaultOpen);
   if (!advice) return null;
 
+  // `advice` serbest biçimli bir JSON kolonunda saklanıyor; eski kayıtlarda bu diziler eksik
+  // olabilir. Backend de boşa çeviriyor, ama bu bileşen dört ayrı yerde kullanıldığı için
+  // (rapor, dashboard, DPA, tahminler) burada da korunuyor.
+  const steps = advice.steps ?? [];
+  const cautions = advice.cautions ?? [];
+
   // Öneri üretilememişse NEDENİ gösteriliyor — boş kutu değil.
   if (advice.unavailable_reason) {
     return (
@@ -33,8 +39,8 @@ export default function AdviceCard({
   }
 
   const hasDetails =
-    advice.steps.length > 0 ||
-    advice.cautions.length > 0 ||
+    steps.length > 0 ||
+    cautions.length > 0 ||
     !!advice.verification ||
     !!advice.rollback ||
     !!advice.estimated_duration;
@@ -47,15 +53,15 @@ export default function AdviceCard({
       {hasDetails && (
         <button type="button" className="advice-toggle" onClick={() => setOpen((v) => !v)}>
           <span className="problem-card-chevron">{open ? "▾" : "▸"}</span>
-          {open ? "Adımları gizle" : `Adımları göster (${advice.steps.length})`}
+          {open ? "Adımları gizle" : `Adımları göster (${steps.length})`}
         </button>
       )}
 
       {open && hasDetails && (
         <div className="advice-body">
-          {advice.steps.length > 0 && (
+          {steps.length > 0 && (
             <ol className="advice-steps">
-              {advice.steps.map((step, i) => (
+              {steps.map((step, i) => (
                 <li key={i}>
                   <span className="advice-step-action">{step.action}</span>
                   {step.command && <CopyableAction command={step.command} />}
@@ -64,11 +70,11 @@ export default function AdviceCard({
             </ol>
           )}
 
-          {(advice.cautions.length > 0 || advice.estimated_duration || advice.rollback) && (
+          {(cautions.length > 0 || advice.estimated_duration || advice.rollback) && (
             <div className="advice-cautions">
               <h5>Dikkat</h5>
               <ul>
-                {advice.cautions.map((caution, i) => (
+                {cautions.map((caution, i) => (
                   <li key={i}>{caution}</li>
                 ))}
                 {advice.estimated_duration && (

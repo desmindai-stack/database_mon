@@ -9,19 +9,23 @@ import CopyableAction from "./CopyableAction";
  * kopyalanabilir. Uzun planlar üstteki özeti boğmasın diye varsayılan olarak katlanmış geliyor
  * (Faz 16 İŞ 5'teki "karmaşık teknik çıktı katlanabilir detayda" ilkesi).
  */
-export default function PredictionPlaybook({ steps }: { steps: PredictionStep[] }) {
+export default function PredictionPlaybook({ steps }: { steps: PredictionStep[] | null }) {
   const [open, setOpen] = useState(false);
-  if (steps.length === 0) return null;
+  // `playbook` nullable bir JSON kolonundan geliyor: planı olmayan tahmin türlerinde ve bu
+  // alan eklenmeden önce kaydedilmiş satırlarda null. Aynı sınıftan bir gerileme burada da
+  // mümkündü (bkz. ReportFindingCard.facts).
+  const items = steps ?? [];
+  if (items.length === 0) return null;
 
   return (
     <div className="playbook">
       <button type="button" className="playbook-toggle" onClick={() => setOpen((v) => !v)}>
         <span className="problem-card-chevron">{open ? "▾" : "▸"}</span>
-        Adım adım çözüm ({steps.length} adım)
+        Adım adım çözüm ({items.length} adım)
       </button>
       {open && (
         <ol className="playbook-steps">
-          {steps.map((step, i) => (
+          {items.map((step, i) => (
             <li key={i}>
               <strong>{step.title}</strong>
               <p>{step.detail}</p>
