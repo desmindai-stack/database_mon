@@ -14,6 +14,7 @@ Kullanım:
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -44,10 +45,10 @@ def main() -> None:
     spec = app.openapi()
     # `sort_keys` + sabit girinti: çıktı anahtar sırasına göre oynamasın, yoksa CI'daki
     # sürüklenme kontrolü kod değişmeden de kırmızı olurdu.
-    out.write_text(
-        json.dumps(spec, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    # `newline="\n"` şart: Windows'ta varsayılan çeviri CRLF yazar, CI (Linux) LF yazar. İkisi
+    # ayrışırsa CI'daki sürüklenme kontrolü kod hiç değişmeden kırmızı görünebilir.
+    with io.open(out, "w", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(spec, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
     paths = len(spec.get("paths", {}))
     schemas = len(spec.get("components", {}).get("schemas", {}))
     print(f"{out} yazıldı ({paths} uç, {schemas} şema)")
