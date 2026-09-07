@@ -48,6 +48,12 @@ from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
 from app.services.performance_insights import analyze_metrics
+from app.services.deletion import (
+    clear_dependents,
+    collect_dependents,
+    commit_or_conflict,
+    describe,
+)
 from app.services.prediction import compute_prediction_readiness
 from app.services.prerequisites import run_prerequisite_checks
 
@@ -205,28 +211,42 @@ async def update_instance(
     return instance
 
 
-async def _collect_dependencies(db: AsyncSession, instance_id: int) -> InstanceDependenciesOut:
-    """Instance'a bağlı kayıtların sayımı — silme onayında kullanıcıya gösterilir."""
+# Şema alanı -> tablo adı. Yalnızca GERİYE DÖNÜK uyumluluk için: arayüz bu adlandırılmış
+# sayaçları okuyor. Asıl kaynak `breakdown`, o da metadata'dan türetiliyor.
+_LEGACY_COUNT_FIELDS = {
+    "metric_samples": "metric_samples",
+    "slow_query_samples": "slow_query_samples",
+    "alert_rules": "alert_rules",
+    "alert_events": "alert_events",
+    "predictions": "prediction_insights",
+    "metric_rollups": "metric_rollup_daily",
+    "schema_object_samples": "schema_object_daily_samples",
+    "prediction_outcomes": "prediction_outcomes",
+    "daily_state_snapshots": "daily_state_snapshots",
+}
 
-    async def count_of(model, column) -> int:
-        return int(
-            (await db.execute(select(func.count()).select_from(model).where(column == instance_id))).scalar_one()
-        )
+
+async def _collect_dependencies(db: AsyncSession, instance_id: int) -> InstanceDependenciesOut:
+    """Instance'a bağlı kayıtların sayımı — silme onayında kullanıcıya gösterilir.
+
+    Faz 23: tablo listesi artık ELLE YAZILMIYOR, `services/deletion.py` onu model
+    metadata'sından türetiyor. Öncesinde liste elle tutuluyordu ve iki tablo (Faz 20'de
+    eklenen `prediction_outcomes`, Faz 17'de eklenen `daily_state_snapshots`) hiç girmemişti:
+    sayım "bağlı kayıt yok" diyor, silme foreign key ihlaliyle 500 veriyordu.
+    """
+    dependents = await collect_dependents(db, "instances", instance_id)
+    breakdown = {d.table: d.count for d in dependents if d.count > 0}
 
     nodes = list((await db.execute(select(Node).where(Node.instance_id == instance_id))).scalars().all())
-    counts = {
-        "metric_samples": await count_of(MetricSample, MetricSample.instance_id),
-        "slow_query_samples": await count_of(SlowQuerySample, SlowQuerySample.instance_id),
-        "alert_rules": await count_of(AlertRule, AlertRule.instance_id),
-        "alert_events": await count_of(AlertEvent, AlertEvent.instance_id),
-        "predictions": await count_of(PredictionInsight, PredictionInsight.instance_id),
-        "metric_rollups": await count_of(MetricRollupDaily, MetricRollupDaily.instance_id),
-        "schema_object_samples": await count_of(SchemaObjectDailySample, SchemaObjectDailySample.instance_id),
-    }
+    # Düğümler ayrı listeleniyor (silinmiyor, bağlantısı kopuyor) — sayıma dahil edilmiyor.
+    record_total = sum(count for table, count in breakdown.items() if table != "nodes")
+
+    legacy = {field: breakdown.get(table, 0) for field, table in _LEGACY_COUNT_FIELDS.items()}
     return InstanceDependenciesOut(
         instance_id=instance_id,
-        **counts,
-        total_records=sum(counts.values()),
+        **legacy,
+        total_records=record_total,
+        breakdown=breakdown,
         linked_nodes=[LinkedNodeOut(id=n.id, name=n.name, group_id=n.group_id, port=n.port) for n in nodes],
     )
 
@@ -270,31 +290,23 @@ async def delete_instance(
 
     deps = await _collect_dependencies(db, instance_id)
     if (deps.total_records or deps.linked_nodes) and not cascade:
+        detail = describe(await collect_dependents(db, "instances", instance_id))
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Bu instance'a bağlı kayıtlar var: {deps.total_records} kayıt, "
-                f"{len(deps.linked_nodes)} düğüm bağlantısı. Birlikte silmek için cascade=true gönderin."
+                f"Bu instance'a bağlı kayıtlar var ({detail}). "
+                "Birlikte silmek için cascade=true gönderin."
             ),
         )
 
     if cascade:
-        for model, column in (
-            (MetricSample, MetricSample.instance_id),
-            (SlowQuerySample, SlowQuerySample.instance_id),
-            (AlertEvent, AlertEvent.instance_id),
-            (AlertRule, AlertRule.instance_id),
-            (PredictionInsight, PredictionInsight.instance_id),
-            (MetricRollupDaily, MetricRollupDaily.instance_id),
-            (SchemaObjectDailySample, SchemaObjectDailySample.instance_id),
-        ):
-            await db.execute(sa_delete(model).where(column == instance_id))
-        # Düğümü silmek yerine bağlantısını koparıyoruz: düğüm cluster topolojisini temsil
-        # ediyor ve instance'ı sonradan yeniden bağlanabilir.
-        await db.execute(sa_update(Node).where(Node.instance_id == instance_id).values(instance_id=None))
+        # Tablo listesi metadata'dan geliyor: nullable bağlar koparılıyor (düğüm cluster
+        # topolojisini temsil ediyor, instance'a yeniden bağlanabilir), zorunlu olanlar
+        # siliniyor. Yeni bir tablo eklendiğinde burayı güncellemek gerekmiyor.
+        await clear_dependents(db, "instances", instance_id)
 
     await db.delete(instance)
-    await db.commit()
+    await commit_or_conflict(db, "instances", instance_id, "Instance")
 
 
 @router.post("/{instance_id}/test-config", response_model=ConnectionTestResult)

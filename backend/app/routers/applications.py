@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Application, Customer
 from app.schemas import ApplicationCreate, ApplicationOut, ApplicationUpdate
+from app.services.deletion import clear_dependents, commit_or_conflict
 
 router = APIRouter(prefix="/applications", tags=["applications"])
 
@@ -66,6 +67,13 @@ async def update_application(
 async def delete_application(application_id: int, db: AsyncSession = Depends(get_db)) -> None:
     application = await db.get(Application, application_id)
     if not application:
-        raise HTTPException(status_code=404, detail="Application not found")
+        raise HTTPException(status_code=404, detail="Uygulama bulunamadı")
+
+    # Faz 23: alt kayıtlar ÖNCE temizleniyor. ORM ilişkileri zincirin yalnızca bir kısmını
+    # kapsıyordu (ör. müşteri → uygulama → grup → düğüm kapsanıyor ama `servers` kapsanmıyor,
+    # grup silmede `group_health_snapshots` kapsanmıyor); kapsanmayan bir tablo foreign key
+    # ihlaline ve 500'e yol açıyordu. `clear_dependents` listeyi model metadata'sından
+    # türetiyor, yani yeni bir tablo eklendiğinde burayı güncellemek gerekmiyor.
+    await clear_dependents(db, "applications", application_id)
     await db.delete(application)
-    await db.commit()
+    await commit_or_conflict(db, "applications", application_id, "Uygulama")

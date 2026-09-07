@@ -7,6 +7,7 @@ from app.domain.engines import DEFAULT_DATABASES, DatabaseEngine
 from app.models import Application, Customer, DatabaseGroup, Instance, Node, Server
 from app.schemas import NodeCreate, NodeOut, NodeUpdate
 from app.services.credentials import encrypt_node_options, encrypt_secret, redact_node_options
+from app.services.deletion import commit_or_conflict
 
 router = APIRouter(prefix="/nodes", tags=["nodes"])
 
@@ -152,5 +153,9 @@ async def delete_node(node_id: int, db: AsyncSession = Depends(get_db)) -> None:
         raise HTTPException(status_code=404, detail="Node not found")
     # The linked Instance (and its metric history) is intentionally kept — it may be an
     # existing Instance the node was linked to rather than one auto-created for it.
+    #
+    # `nodes.id`'ye bağlı başka tablo yok (denetlendi), yani burada temizlenecek bir bağımlılık
+    # da yok. Yine de commit yolu ortak yardımcıdan geçiyor: ileride bir tablo düğüme foreign
+    # key koyarsa kullanıcı ham 500 değil, neyin engellediğini yazan 409 görsün.
     await db.delete(node)
-    await db.commit()
+    await commit_or_conflict(db, "nodes", node_id, "Düğüm")

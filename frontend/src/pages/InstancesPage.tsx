@@ -4,6 +4,7 @@ import {
   api,
   ClusterServiceOptions,
   DbEngine,
+  errorMessage,
   ENGINE_DEFAULTS,
   HealthResponse,
   Instance,
@@ -271,7 +272,9 @@ export default function InstancesPage() {
       if (editingId === deleteTarget.id) cancelForm();
       await load();
     } catch (e) {
-      setDeleteError(String((e as Error).message));
+      // `errorMessage` ApiError'ın sunucudan gelen `detail` metnini veriyor: 409'da hangi
+      // tabloda kaç kayıt engellediği, 500'de sunucu hatası olduğu buradan okunuyor.
+      setDeleteError(errorMessage(e));
     } finally {
       setDeleteBusy(false);
     }

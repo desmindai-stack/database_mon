@@ -1,7 +1,9 @@
+import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 
 from app.collectors.scheduler import start_scheduler, stop_scheduler
@@ -47,6 +49,8 @@ app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)
 _cors_origins = settings.get_cors_origins()
 _allow_credentials = "*" not in _cors_origins
 
+logger = logging.getLogger(__name__)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
@@ -54,6 +58,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Yakalanmamış hatalar için 500 üretir — CORS başlıklarının EKLENEBİLMESİ için.
+
+    Starlette'in yerleşik sunucu-hatası katmanı CORS middleware'inin DIŞINDA duruyor: bir
+    istek işleyicisi patladığında dönen 500 yanıtında `Access-Control-Allow-Origin` yok.
+    Tarayıcı böyle bir yanıtı okuyamıyor ve `fetch` ağ hatası gibi başarısız oluyor —
+    kullanıcı "Sunucuya ulaşılamıyor" görüyor, oysa sunucuya ulaşılmış ve 500 dönmüş.
+    Canlıdaki instance silme hatasının teşhisi tam olarak bu yüzden zorlaştı.
+
+    Bu işleyici middleware zincirinin İÇİNDE çalıştığı için yanıt CORS'tan geçiyor; istemci
+    gerçek durum kodunu ve mesajı görebiliyor.
+    """
+    logger.exception("İşlenmeyen hata: %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": (
+                "Sunucuda beklenmeyen bir hata oluştu. Ayrıntı sunucu günlüklerinde: "
+                f"{type(exc).__name__}"
+            )
+        },
+    )
 
 # Public — no auth (login itself, obviously; health is used by deploy platforms' liveness
 # probes, which don't carry a bearer token).

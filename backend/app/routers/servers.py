@@ -6,6 +6,7 @@ from app.database import get_db
 from app.models import Customer, Node, Server
 from app.schemas import ConnectionTestResult, ServerAgentTestRequest, ServerCreate, ServerOut, ServerUpdate
 from app.services.cluster_health import fetch_agent_snapshot
+from app.services.deletion import commit_or_conflict
 
 router = APIRouter(prefix="/servers", tags=["servers"])
 
@@ -109,4 +110,4 @@ async def delete_server(server_id: int, db: AsyncSession = Depends(get_db)) -> N
             status_code=409, detail=f"Sunucuya bağlı {in_use} düğüm var — önce onları silin veya taşıyın"
         )
     await db.delete(server)
-    await db.commit()
+    await commit_or_conflict(db, "servers", server_id, "Sunucu")

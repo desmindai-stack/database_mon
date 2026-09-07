@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Customer
 from app.schemas import CustomerCreate, CustomerOut, CustomerUpdate
+from app.services.deletion import clear_dependents, commit_or_conflict
 
 router = APIRouter(prefix="/customers", tags=["customers"])
 
@@ -53,6 +54,13 @@ async def update_customer(
 async def delete_customer(customer_id: int, db: AsyncSession = Depends(get_db)) -> None:
     customer = await db.get(Customer, customer_id)
     if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        raise HTTPException(status_code=404, detail="Müşteri bulunamadı")
+
+    # Faz 23: alt kayıtlar ÖNCE temizleniyor. ORM ilişkileri zincirin yalnızca bir kısmını
+    # kapsıyordu (ör. müşteri → uygulama → grup → düğüm kapsanıyor ama `servers` kapsanmıyor,
+    # grup silmede `group_health_snapshots` kapsanmıyor); kapsanmayan bir tablo foreign key
+    # ihlaline ve 500'e yol açıyordu. `clear_dependents` listeyi model metadata'sından
+    # türetiyor, yani yeni bir tablo eklendiğinde burayı güncellemek gerekmiyor.
+    await clear_dependents(db, "customers", customer_id)
     await db.delete(customer)
-    await db.commit()
+    await commit_or_conflict(db, "customers", customer_id, "Müşteri")

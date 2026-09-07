@@ -2,6 +2,7 @@ import logging
 from collections.abc import AsyncGenerator
 
 from sqlalchemy import text
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -49,6 +50,18 @@ def _engine_kwargs_for(url: str) -> dict:
 
 _database_url = _async_url(settings.database_url)
 engine = create_async_engine(_database_url, **_engine_kwargs_for(_database_url))
+
+if _database_url.startswith("sqlite"):
+    # SQLite foreign key zorlamasını VARSAYILAN OLARAK KAPALI tutar. Sonucu ciddi: yerelde ve
+    # testlerde bir üst kaydı silmek, ona işaret eden satırlar dururken sessizce başarılı
+    # oluyor (geride öksüz satırlar kalıyor); aynı silme Postgres'te foreign key ihlaliyle
+    # patlıyor. "Yerelde yeşil, canlıda 500" durumunun bu vakadaki mekanizması tam olarak buydu
+    # — instance silme testleri geçiyordu çünkü kısıt hiç uygulanmıyordu.
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _record):  # pragma: no cover - bağlantı kancası
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

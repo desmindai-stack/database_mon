@@ -3054,6 +3054,18 @@ export interface components {
              * @default 0
              */
             alert_rules: number;
+            /**
+             * Breakdown
+             * @default {}
+             */
+            breakdown: {
+                [key: string]: number;
+            };
+            /**
+             * Daily State Snapshots
+             * @default 0
+             */
+            daily_state_snapshots: number;
             /** Instance Id */
             instance_id: number;
             /**
@@ -3071,6 +3083,11 @@ export interface components {
              * @default 0
              */
             metric_samples: number;
+            /**
+             * Prediction Outcomes
+             * @default 0
+             */
+            prediction_outcomes: number;
             /**
              * Predictions
              * @default 0

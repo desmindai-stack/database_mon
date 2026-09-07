@@ -4697,6 +4697,96 @@ sorusunu cevaplıyor, "piksel doğru mu" sorusunu değil — frontend'in test
 koşucusu ve tarayıcı otomasyonu yok. Gerçek görsel doğrulama için
 `npm run dev` ile bakılmalı.
 
+## CANLI 500 DÜZELTMESİ — instance silme (Faz 23)
+
+**Belirti:** `DELETE /api/instances/1` → 500. Arayüz "Sunucuya ulaşılamıyor"
+diyordu. Silme öncesi kontrol ise "bağlı hiçbir kayıt yok — güvenle
+silinebilir" diyordu; ikisi çelişiyordu.
+
+### Kök neden — dört katmanlı
+
+**1. Bağımlılık listesi elle yazılmıştı ve ayrışmıştı.** `instances.id`'ye
+foreign key ile bağlı **10 tablo** var; sayım ve cascade listesi yalnızca
+**8'ini** biliyordu. Eksik olanlar: Faz 20'de eklenen `prediction_outcomes`
+ve Faz 17'de eklenen `daily_state_snapshots`. `prediction_outcomes`
+üretilen HER tahmin için satır yazıyor, yani instance 1'de kesinlikle
+kayıt vardı.
+
+Bu, projede **üçüncü kez** görülen aynı hata sınıfı: elle tutulan bir liste
+model listesiyle sessizce ayrıştı (önceki ikisi `PredictionOut.advice` ve
+`ReportFindingOut.facts`).
+
+**2. Yerelde yakalanamıyordu.** SQLite foreign key zorlamasını varsayılan
+olarak KAPALI tutuyor (`PRAGMA foreign_keys = 0`). Yerelde ve testlerde
+silme sessizce başarılı oluyor, geride öksüz satır bırakıyordu; Postgres
+her zaman zorluyor. "Yerelde yeşil, canlıda patlak"ın bu vakadaki
+mekanizması buydu.
+
+**3. Hata 500 olarak dönüyordu.** `IntegrityError` yakalanmıyordu.
+
+**4. 500'de CORS başlığı yoktu.** Starlette'in sunucu-hatası katmanı CORS
+middleware'inin DIŞINDA; tarayıcı yanıtı okuyamıyor ve `fetch` ağ hatası
+gibi başarısız oluyor. Kullanıcı "Sunucuya ulaşılamıyor" görüyordu — oysa
+sunucuya ulaşılmış ve 500 dönmüştü. Teşhisi saptıran şey buydu.
+
+### Düzeltme
+
+**Liste artık türetiliyor.** `services/deletion.py` bağımlı tabloları
+SQLAlchemy metadata'sından çıkarıyor. Yeni bir tablo `instances.id`'ye
+foreign key koyduğu anda sayıma ve cascade'e kendiliğinden dahil oluyor —
+unutulması mümkün değil. Metadata boş gelirse fonksiyon sessizce boş liste
+DÖNMÜYOR, hata veriyor (aynı hatanın tekrarı olurdu).
+
+Cascade kuralı FK'nın kendisinden geliyor: **nullable ise bağ koparılır**
+(`nodes.instance_id` — düğüm cluster topolojisinin parçası, veritabanı
+kaydının değil; `instances.group_id` — instance grup silinince yaşamalı),
+**zorunlu ise kayıt silinir**. Temizlik **özyinelemeli**, çünkü bağımlılar
+kendileri de üst kayıt olabiliyor (müşteri → uygulama → grup → düğüm);
+düz bir silme zincirin ortasında ihlale düşerdi.
+
+**SQLite'ta `PRAGMA foreign_keys=ON`.** Bu olmadan aşağıdaki testlerin
+hiçbiri hatayı yakalayamazdı.
+
+**409 + hangi tablo.** `commit_or_conflict` `IntegrityError`'ı yakalayıp
+"Bu instance'a bağlı kayıtlar var (3 tahmin doğruluk kaydı, 1 günlük durum
+fotoğrafı)" biçiminde 409 döndürüyor.
+
+**500'lerde CORS.** `app.main`'e bir `Exception` işleyicisi eklendi;
+middleware zincirinin İÇİNDE çalıştığı için yanıt CORS'tan geçiyor ve
+istemci gerçek durum kodunu görebiliyor.
+
+### Aynı hata diğer silme akışlarında da vardı
+
+Denetim sonucu:
+
+| Akış | Durum |
+|---|---|
+| Müşteri | ORM `applications` zincirini kapsıyordu ama **`servers` kapsanmıyordu** → Postgres'te 500 |
+| Grup | **`group_health_snapshots` hiçbir ilişkiyle kapsanmıyordu** → 500; ayrıca bağlı instance'ların silinmesi değil bağının kopması gerekiyor |
+| Uygulama | Zinciri ORM kapsıyordu, ama grup seviyesindeki eksikler oraya da yansıyordu |
+| Sunucu | Zaten düğüm sayıp 409 dönüyordu — doğruydu, ortak commit yoluna bağlandı |
+| Düğüm | `nodes.id`'ye bağlı tablo yok — güvenli, yine de ortak yola bağlandı |
+
+Beşi de artık aynı türetilmiş listeyi ve aynı hata yolunu kullanıyor.
+
+### Frontend
+
+`ApiError` zaten kullanılıyordu ve davranışı DOĞRUYDU: CORS başlığı
+olmayan bir yanıtı tarayıcı gerçekten okuyamaz, bu ağ hatasından
+ayırt edilemez. Asıl düzeltme sunucu tarafındaydı. Yine de status-0 mesajı
+her iki olasılığı da söyleyecek şekilde güncellendi ("bağlantı kopmuş ya
+da sunucu CORS başlığı olmayan bir hata döndürmüş olabilir"), ve silme
+işleyicisi `errorMessage()` kullanarak sunucudan gelen `detail` metnini
+gösteriyor.
+
+**Testler:** `tests/test_delete_dependencies.py` (17 test) — SQLite'ın
+kısıtları gerçekten uyguladığı (ön koşul), listenin türetildiği ve iki
+eksik tablonun adıyla kilitlendiği, sayımın onları gördüğü, gizli
+bağımlılığın 500 değil 409 verdiği, cascade'in öksüz satır bırakmadığı,
+düğüm/instance bağlarının koparıldığı (silinmediği) ve müşteri/grup
+zincirlerinin eksiksiz temizlendiği. **Düzeltme geri alındığında 5 test
+düşüyor** — hatayı yakaladıkları doğrulandı. Toplam 906 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -4072,6 +4072,19 @@
             "title": "Alert Rules",
             "type": "integer"
           },
+          "breakdown": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Breakdown",
+            "type": "object"
+          },
+          "daily_state_snapshots": {
+            "default": 0,
+            "title": "Daily State Snapshots",
+            "type": "integer"
+          },
           "instance_id": {
             "title": "Instance Id",
             "type": "integer"
@@ -4092,6 +4105,11 @@
           "metric_samples": {
             "default": 0,
             "title": "Metric Samples",
+            "type": "integer"
+          },
+          "prediction_outcomes": {
+            "default": 0,
+            "title": "Prediction Outcomes",
             "type": "integer"
           },
           "predictions": {

@@ -1282,9 +1282,19 @@ async function request<T>(path: string, init?: RequestInit, _retried = false): P
   try {
     res = await fetch(`${API_BASE}${path}`, { ...init, headers });
   } catch {
-    // Ağ seviyesinde düştü (sunucu kapalı, DNS, CORS, çevrimdışı). Status 0 ile işaretliyoruz ki
-    // çağıran taraf bunu 404 sanıp "bulunamadı" ekranı göstermesin.
-    throw new ApiError(0, path, "Sunucuya ulaşılamıyor — bağlantınızı kontrol edip tekrar deneyin.");
+    // Ağ seviyesinde düştü. Status 0 ile işaretleniyor ki çağıran taraf bunu 404 sanıp
+    // "bulunamadı" ekranı göstermesin.
+    //
+    // Mesaj bilerek İKİ olasılığı da söylüyor: tarayıcı, CORS başlığı taşımayan bir yanıtı
+    // da okuyamaz ve bunu ağ hatasından ayıramaz. Canlıda bir 500 tam olarak böyle görünüp
+    // teşhisi saptırmıştı (sunucuya ulaşılmıştı, 500 dönmüştü). Backend artık hata
+    // yanıtlarına da CORS başlığı ekliyor, ama eski bir sürüme karşı bu hâlâ olabilir.
+    throw new ApiError(
+      0,
+      path,
+      "Sunucudan yanıt okunamadı — bağlantı kopmuş ya da sunucu CORS başlığı olmayan bir hata " +
+        "döndürmüş olabilir. Sunucu günlüklerini kontrol edin.",
+    );
   }
 
   if (res.status === 401 && !_retried && !_PUBLIC_PATHS.has(path)) {

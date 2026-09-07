@@ -394,9 +394,16 @@ class InstanceDependenciesOut(BaseModel):
     predictions: int = 0
     metric_rollups: int = 0
     schema_object_samples: int = 0
+    # Faz 23: bu iki alan eksikti — `prediction_outcomes` (Faz 20) ve `daily_state_snapshots`
+    # (Faz 17) sayıma hiç girmiyordu, dolayısıyla "bağlı kayıt yok" denip silme 500 veriyordu.
+    prediction_outcomes: int = 0
+    daily_state_snapshots: int = 0
     total_records: int = 0
     # Düğümler silinmez, sadece bağlantıları koparılır — ayrı listelenmelerinin sebebi bu.
     linked_nodes: list[LinkedNodeOut] = []
+    # Tablo bazında tam döküm — sayım artık model metadata'sından türetildiği için isim
+    # listesi sabit değil; arayüz bunu olduğu gibi gösterebilir.
+    breakdown: dict[str, int] = {}
 
 
 class InstanceCreate(BaseModel):

@@ -26,6 +26,7 @@ from app.services.cluster_health import collect_group_health, group_health_metri
 from app.services.credentials import redact_node_options
 from app.services.dashboard_snapshot import group_status_summaries
 from app.services.parameter_audit import collect_parameter_audit
+from app.services.deletion import clear_dependents, commit_or_conflict
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +125,16 @@ async def convert_to_cluster(
 async def delete_group(group_id: int, db: AsyncSession = Depends(get_db)) -> None:
     group = await db.get(DatabaseGroup, group_id)
     if not group:
-        raise HTTPException(status_code=404, detail="Database group not found")
+        raise HTTPException(status_code=404, detail="Veritabanı grubu bulunamadı")
+
+    # Faz 23: alt kayıtlar ÖNCE temizleniyor. ORM ilişkileri zincirin yalnızca bir kısmını
+    # kapsıyordu (ör. müşteri → uygulama → grup → düğüm kapsanıyor ama `servers` kapsanmıyor,
+    # grup silmede `group_health_snapshots` kapsanmıyor); kapsanmayan bir tablo foreign key
+    # ihlaline ve 500'e yol açıyordu. `clear_dependents` listeyi model metadata'sından
+    # türetiyor, yani yeni bir tablo eklendiğinde burayı güncellemek gerekmiyor.
+    await clear_dependents(db, "database_groups", group_id)
     await db.delete(group)
-    await db.commit()
+    await commit_or_conflict(db, "database_groups", group_id, "Veritabanı grubu")
 
 
 @router.get("/{group_id}/nodes", response_model=list[NodeOut])
