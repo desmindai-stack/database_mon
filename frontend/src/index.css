@@ -20,6 +20,31 @@
   box-sizing: border-box;
 }
 
+/* ==========================================================================================
+   Boşluk ölçeği — Faz 22 İŞ 2
+   Öncesinde gap/padding/margin için 26 farklı rem değeri vardı (0.05'ten 3'e, aralarında
+   0.35, 0.45, 0.55, 0.65, 0.85, 1.1, 1.3 gibi göz kararı adımlar). Aynı işlevdeki iki öğe
+   1-2px farkla hizasız duruyordu. Değerler 4px'lik bir ölçeğe oturtuldu; yeni kod bu
+   değişkenleri kullanmalı.
+   ========================================================================================== */
+:root {
+  --space-1: 0.25rem;  /* 4px  */
+  --space-2: 0.5rem;   /* 8px  */
+  --space-3: 0.75rem;  /* 12px */
+  --space-4: 1rem;     /* 16px */
+  --space-5: 1.25rem;  /* 20px */
+  --space-6: 1.5rem;   /* 24px */
+  --space-8: 2rem;     /* 32px */
+  --space-12: 3rem;    /* 48px */
+}
+
+html {
+  /* Sayfa geçişlerinde YATAY KAYMAYI önler: kısa bir sayfadan uzun bir sayfaya geçerken
+     dikey kaydırma çubuğu belirip içeriği ~15px sola itiyordu, geri dönerken geri itiyordu.
+     `stable` yeri her zaman ayırır, çubuk görünsün görünmesin. */
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
@@ -61,8 +86,8 @@ textarea {
 
 .sidebar-user {
   border-top: 1px solid var(--border);
-  padding-top: 0.85rem;
-  margin-top: 0.85rem;
+  padding-top: 0.75rem;
+  margin-top: 0.75rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -72,7 +97,7 @@ textarea {
 .sidebar-user-info {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.25rem;
   min-width: 0;
   overflow: hidden;
 }
@@ -115,10 +140,10 @@ textarea {
 
 .nav-link {
   display: block;
-  padding: 0.75rem 0.85rem;
+  padding: 0.75rem 0.75rem;
   border-radius: 10px;
   color: var(--muted);
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.25rem;
 }
 
 .nav-link.active,
@@ -128,7 +153,7 @@ textarea {
 }
 
 .nav-group {
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.25rem;
 }
 
 .nav-tree-root {
@@ -163,8 +188,8 @@ textarea {
   border: none;
   background: transparent;
   cursor: pointer;
-  padding: 0.2rem 0.35rem;
-  margin: -0.2rem -0.35rem -0.2rem 0.35rem;
+  padding: 0.25rem 0.25rem;
+  margin: -0.25rem -0.25rem -0.25rem 0.25rem;
   border-radius: 6px;
 }
 
@@ -173,9 +198,9 @@ textarea {
 }
 
 .nav-tree {
-  padding: 0.35rem 0 0.35rem 0.75rem;
+  padding: 0.25rem 0 0.25rem 0.75rem;
   border-left: 2px solid var(--border);
-  margin-left: 0.85rem;
+  margin-left: 0.75rem;
 }
 
 .nav-tree-label {
@@ -183,23 +208,23 @@ textarea {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--muted);
-  padding: 0.35rem 0.5rem;
+  padding: 0.25rem 0.5rem;
   margin-bottom: 0.25rem;
 }
 
 .nav-tree-section {
-  margin-bottom: 0.2rem;
+  margin-bottom: 0.25rem;
 }
 
 .nav-tree-customer {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
   width: 100%;
   border: none;
   background: transparent;
   color: var(--text);
-  padding: 0.45rem 0.5rem;
+  padding: 0.5rem 0.5rem;
   border-radius: 8px;
   font-size: 0.85rem;
   text-align: left;
@@ -224,7 +249,7 @@ textarea {
   padding-left: 1rem;
   display: flex;
   flex-direction: column;
-  gap: 0.1rem;
+  gap: 0.25rem;
 }
 
 .nav-tree-app-section {
@@ -241,7 +266,7 @@ textarea {
 .nav-tree-app {
   flex: 1;
   display: block;
-  padding: 0.35rem 0.5rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 8px;
   color: var(--muted);
   font-size: 0.8rem;
@@ -261,7 +286,7 @@ textarea {
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 0.35rem 0.45rem;
+  padding: 0.25rem 0.5rem;
   font-size: 0.6rem;
   cursor: pointer;
   transition: transform 0.15s ease;
@@ -300,7 +325,7 @@ textarea {
   padding-left: 0.75rem;
   display: flex;
   flex-direction: column;
-  gap: 0.05rem;
+  gap: 0.25rem;
 }
 
 .nav-tree-instance {
@@ -327,7 +352,7 @@ textarea {
   font-size: 0.65rem;
   color: var(--accent-2);
   background: rgba(59, 130, 246, 0.12);
-  padding: 0.05rem 0.3rem;
+  padding: 0.25rem 0.25rem;
   border-radius: 999px;
   margin-left: 0.5rem;
   flex-shrink: 0;
@@ -343,8 +368,11 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 1rem;
-  margin-bottom: 1.5rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-6);
+  /* Sabit bir alt sınır: başlığın altında açıklama olan ve olmayan sayfalar arasında
+     geçerken içerik dikey olarak sıçramıyordu — şimdi hiç sıçramıyor. */
+  min-height: 3.5rem;
 }
 
 .page-header h2 {
@@ -353,13 +381,22 @@ textarea {
 }
 
 .page-header p {
-  margin: 0.35rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--muted);
 }
 
 .grid {
   display: grid;
-  gap: 1rem;
+  gap: var(--space-4);
+  /* Yan yana kartlar aynı hizada başlasın ve BİTSİN (Faz 22 İŞ 2). Varsayılan `stretch`
+     zaten budur, ama içerideki kartın kendi yüksekliğini alması için kartın da yüzde-yüz
+     olması gerekiyor — aşağıdaki kural onu sağlıyor. Öncesinde içeriği kısa olan kart
+     yukarıda bitiyor, satır kırık görünüyordu. */
+  align-items: stretch;
+}
+
+.grid > .card {
+  height: 100%;
 }
 
 .grid-4 {
@@ -374,7 +411,7 @@ textarea {
   background: rgba(18, 26, 43, 0.92);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1rem 1.1rem;
+  padding: 1rem 1rem;
 }
 
 .auth-shell {
@@ -397,7 +434,7 @@ textarea {
 }
 
 .card h3 {
-  margin: 0 0 0.35rem;
+  margin: 0 0 0.25rem;
   font-size: 0.85rem;
   color: var(--muted);
   font-weight: 500;
@@ -413,7 +450,7 @@ textarea {
   background: var(--surface-2);
   color: var(--text);
   border-radius: 10px;
-  padding: 0.55rem 0.9rem;
+  padding: 0.5rem 1rem;
   cursor: pointer;
 }
 
@@ -435,8 +472,8 @@ textarea {
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.25rem 0.55rem;
+  gap: 0.5rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   font-size: 0.75rem;
   text-transform: capitalize;
@@ -471,7 +508,7 @@ table {
 th,
 td {
   text-align: left;
-  padding: 0.75rem 0.9rem;
+  padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
 }
 
@@ -491,12 +528,12 @@ td code,
 
 .form-grid {
   display: grid;
-  gap: 0.85rem;
+  gap: 0.75rem;
 }
 
 .form-grid label {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.25rem;
   color: var(--muted);
   font-size: 0.85rem;
 }
@@ -508,7 +545,7 @@ td code,
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .form-grid textarea {
@@ -531,8 +568,8 @@ td code,
 
 .conn-form {
   display: grid;
-  gap: 0.6rem;
-  margin-top: 0.4rem;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
   padding: 0.75rem;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -541,14 +578,14 @@ td code,
 
 .conn-form label {
   display: grid;
-  gap: 0.3rem;
+  gap: 0.25rem;
   color: var(--muted);
   font-size: 0.82rem;
 }
 
 .required-mark {
   color: var(--danger);
-  margin-left: 0.15rem;
+  margin-left: 0.25rem;
 }
 
 .field-error {
@@ -573,7 +610,7 @@ td code,
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0.45rem 0.85rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -610,7 +647,7 @@ td code,
 .wizard-topology-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 0.85rem;
+  gap: 0.75rem;
   margin-bottom: 1rem;
 }
 
@@ -643,7 +680,7 @@ td code,
 }
 
 .wizard-topology-card h4 {
-  margin: 0 0 0.35rem;
+  margin: 0 0 0.25rem;
   font-size: 0.95rem;
 }
 
@@ -709,7 +746,7 @@ td code,
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  padding: 0.6rem 0.85rem;
+  padding: 0.5rem 0.75rem;
   background: none;
   border: none;
   color: var(--text);
@@ -719,7 +756,7 @@ td code,
 }
 
 .wizard-section-body {
-  padding: 0 0.85rem 0.85rem;
+  padding: 0 0.75rem 0.75rem;
 }
 
 .wizard-steps.sticky {
@@ -727,7 +764,7 @@ td code,
   top: 0;
   z-index: 4;
   background: var(--bg);
-  padding: 0.4rem 0;
+  padding: 0.5rem 0;
 }
 
 .wizard-scroll-body {
@@ -748,7 +785,7 @@ td code,
 .wizard-summary-block {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 0.85rem 1rem;
+  padding: 0.75rem 1rem;
   margin-bottom: 0.75rem;
 }
 
@@ -765,7 +802,7 @@ td code,
   justify-content: space-between;
   gap: 1rem;
   font-size: 0.85rem;
-  padding: 0.2rem 0;
+  padding: 0.25rem 0;
   border-bottom: 1px dashed var(--border);
 }
 
@@ -779,11 +816,11 @@ td code,
   border: 1px solid var(--border);
   border-radius: 8px;
   color: var(--text);
-  padding: 0.5rem 0.65rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .btn-xs {
-  padding: 0.2rem 0.55rem;
+  padding: 0.25rem 0.5rem;
   font-size: 0.78rem;
   border-radius: 8px;
 }
@@ -798,7 +835,7 @@ td code,
 .availability-note {
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 1.1rem 1.3rem;
+  padding: 1rem 1.25rem;
   text-align: left;
   max-width: 720px;
   margin: 0 auto;
@@ -807,7 +844,7 @@ td code,
 .availability-note strong {
   color: var(--text);
   display: block;
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.25rem;
 }
 
 .availability-note p {
@@ -825,8 +862,8 @@ td code,
 }
 
 .dependency-list {
-  margin: 0.5rem 0 0.8rem;
-  padding-left: 1.2rem;
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.25rem;
   color: var(--muted);
 }
 
@@ -837,7 +874,7 @@ td code,
 .detail-meta-link {
   color: var(--accent);
   font-size: 0.8rem;
-  margin-left: 0.6rem;
+  margin-left: 0.5rem;
 }
 
 /* Faz 16-B İŞ 3: grafik aralık seçimi / yakınlaştırma çubuğu ve özel aralık formu. */
@@ -850,8 +887,8 @@ td code,
   background: rgba(59, 130, 246, 0.08);
   border: 1px solid rgba(59, 130, 246, 0.3);
   border-radius: 8px;
-  padding: 0.5rem 0.8rem;
-  margin-bottom: 0.9rem;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
   font-size: 0.82rem;
   color: var(--muted);
 }
@@ -865,7 +902,7 @@ td code,
   align-items: flex-end;
   gap: 0.75rem;
   flex-wrap: wrap;
-  margin-bottom: 0.9rem;
+  margin-bottom: 1rem;
 }
 
 .custom-range-bar label {
@@ -877,18 +914,18 @@ td code,
 
 /* Faz 16-B İŞ 4: sorgu satırında "olası nedenler" kutusu. */
 .query-causes {
-  margin: 0.6rem 0;
+  margin: 0.5rem 0;
 }
 
 .query-causes h4 {
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.25rem;
   color: var(--text);
   font-size: 0.85rem;
 }
 
 .query-causes ul {
   margin: 0;
-  padding-left: 1.1rem;
+  padding-left: 1rem;
   color: var(--muted);
   font-size: 0.82rem;
 }
@@ -907,14 +944,14 @@ td code,
   font-size: 0.82rem;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.25rem;
 }
 
 .playbook-steps {
   margin: 0.5rem 0 0;
-  padding-left: 1.3rem;
+  padding-left: 1.25rem;
   display: grid;
-  gap: 0.9rem;
+  gap: 1rem;
 }
 
 .playbook-steps > li strong {
@@ -923,18 +960,13 @@ td code,
 }
 
 .playbook-steps > li p {
-  margin: 0.2rem 0 0.4rem;
+  margin: 0.25rem 0 0.5rem;
   color: var(--muted);
   font-size: 0.8rem;
 }
 
 /* ---- Faz 17 İŞ 5: Sağlık Raporu sayfası ---- */
-.report-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
+
 
 .report-toolbar {
   display: flex;
@@ -974,7 +1006,7 @@ td code,
   margin: 0;
   padding: 0;
   display: grid;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .report-history-item {
@@ -983,7 +1015,7 @@ td code,
   background: none;
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.5rem 0.6rem;
+  padding: 0.5rem 0.5rem;
   cursor: pointer;
   color: var(--text);
   display: grid;
@@ -999,7 +1031,7 @@ td code,
 
 .report-history-meta {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.5rem;
   align-items: center;
   flex-wrap: wrap;
   font-size: 0.75rem;
@@ -1016,7 +1048,7 @@ td code,
   flex-wrap: wrap;
 }
 
-.report-counts { display: grid; gap: 0.2rem; justify-items: end; }
+.report-counts { display: grid; gap: 0.25rem; justify-items: end; }
 
 .progress-track {
   height: 8px;
@@ -1037,7 +1069,7 @@ td code,
   border: 1px solid var(--border);
   border-left-width: 3px;
   border-radius: 8px;
-  padding: 0.55rem 0.7rem;
+  padding: 0.5rem 0.75rem;
   margin-top: 0.5rem;
 }
 
@@ -1051,47 +1083,47 @@ td code,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
 }
 
 .finding-title { color: var(--text); font-size: 0.88rem; }
 
-.finding-tags { display: flex; gap: 0.3rem; flex-wrap: wrap; }
+.finding-tags { display: flex; gap: 0.25rem; flex-wrap: wrap; }
 .finding-tags .tag { font-size: 0.7rem; }
 .tag.change-regressed { background: rgba(239, 68, 68, 0.2); }
 .tag.change-resolved { background: rgba(34, 197, 94, 0.2); }
 .tag.acknowledged-tag { background: rgba(148, 163, 184, 0.25); }
 
-.finding-body { padding: 0.5rem 0 0.2rem 1.3rem; }
-.finding-body p { margin: 0 0 0.4rem; font-size: 0.84rem; }
+.finding-body { padding: 0.5rem 0 0.25rem 1.25rem; }
+.finding-body p { margin: 0 0 0.5rem; font-size: 0.84rem; }
 .finding-evidence { color: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 0.76rem; }
 
 .finding-recommendation {
   background: rgba(59, 130, 246, 0.08);
   border-left: 3px solid var(--accent);
   border-radius: 0 6px 6px 0;
-  padding: 0.4rem 0.6rem;
+  padding: 0.5rem 0.5rem;
   margin-bottom: 0.5rem;
   font-size: 0.84rem;
 }
 
-.finding-actions { display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.4rem; }
+.finding-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
 
 .ack-form {
-  margin-top: 0.6rem;
-  padding: 0.6rem;
+  margin-top: 0.5rem;
+  padding: 0.5rem;
   border: 1px dashed var(--border);
   border-radius: 8px;
   display: grid;
   gap: 0.5rem;
 }
 
-.ack-form label { display: grid; gap: 0.2rem; font-size: 0.78rem; color: var(--muted); }
+.ack-form label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
 
 /* Dışa aktarma paneli */
-.export-panel { margin-top: 1rem; display: grid; gap: 0.7rem; }
-.export-sections { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.export-panel { margin-top: 1rem; display: grid; gap: 0.75rem; }
+.export-sections { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 
 /* Yönetici raporu */
 .executive-report { display: grid; gap: 1rem; }
@@ -1109,27 +1141,27 @@ td code,
 .exec-cover.warning { border-left-color: #f59e0b; }
 .exec-cover.critical { border-left-color: var(--danger); }
 
-.exec-grade { display: grid; justify-items: end; gap: 0.2rem; }
+.exec-grade { display: grid; justify-items: end; gap: 0.25rem; }
 .exec-grade-value { font-size: 1.5rem; font-weight: 600; color: var(--text); }
 .exec-grade-reason { font-size: 0.8rem; color: var(--muted); max-width: 380px; text-align: right; }
 
-.risk-list { display: grid; gap: 0.6rem; }
+.risk-list { display: grid; gap: 0.5rem; }
 
 .risk-item {
   border: 1px solid var(--border);
   border-left-width: 3px;
   border-radius: 8px;
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
 }
 
 .risk-item.critical { border-left-color: var(--danger); }
 .risk-item.warning { border-left-color: #f59e0b; }
 .risk-item.info { border-left-color: var(--accent); }
-.risk-item p { margin: 0.3rem 0 0; font-size: 0.85rem; }
+.risk-item p { margin: 0.25rem 0 0; font-size: 0.85rem; }
 .risk-head { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 
-.trend-bars { display: grid; gap: 0.5rem; margin: 0.6rem 0; }
-.trend-row { display: grid; grid-template-columns: 150px 1fr 80px; gap: 0.6rem; align-items: center; font-size: 0.8rem; }
+.trend-bars { display: grid; gap: 0.5rem; margin: 0.5rem 0; }
+.trend-row { display: grid; grid-template-columns: 150px 1fr 80px; gap: 0.5rem; align-items: center; font-size: 0.8rem; }
 .trend-label { color: var(--muted); }
 .trend-bar-wrap { display: grid; gap: 3px; }
 .trend-bar { height: 8px; border-radius: 4px; display: block; min-width: 2px; }
@@ -1154,8 +1186,8 @@ td code,
 .report-teaser.warning { border-left-color: #f59e0b; }
 .report-teaser.ok { border-left-color: var(--success); }
 .report-teaser strong { color: var(--text); }
-.report-teaser p { margin: 0.15rem 0 0; }
-.report-teaser-counts { display: flex; align-items: baseline; gap: 0.4rem; }
+.report-teaser p { margin: 0.25rem 0 0; }
+.report-teaser-counts { display: flex; align-items: baseline; gap: 0.5rem; }
 .report-teaser-critical { font-size: 1.6rem; font-weight: 600; color: var(--danger); }
 .report-teaser-cta { color: var(--accent); font-size: 0.85rem; }
 
@@ -1163,10 +1195,10 @@ td code,
 .finding-card.decided { opacity: 0.78; }
 .finding-card.verification-failed { border-left-color: var(--danger); background: rgba(239, 68, 68, 0.05); }
 
-.finding-select { margin-top: 0.15rem; }
+.finding-select { margin-top: 0.25rem; }
 
 .finding-decision-note {
-  margin: 0.35rem 0 0 1.3rem;
+  margin: 0.25rem 0 0 1.25rem;
   font-size: 0.78rem;
   color: var(--muted);
 }
@@ -1179,8 +1211,8 @@ td code,
 .tag.status-resolved_pending_verification { background: rgba(168, 85, 247, 0.22); }
 
 .status-form {
-  margin-top: 0.6rem;
-  padding: 0.65rem;
+  margin-top: 0.5rem;
+  padding: 0.75rem;
   border: 1px dashed var(--border);
   border-radius: 8px;
   display: grid;
@@ -1189,25 +1221,25 @@ td code,
 
 .status-form-row {
   display: flex;
-  gap: 0.7rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
 }
 
 .status-form label,
 .status-form-row label {
   display: grid;
-  gap: 0.2rem;
+  gap: 0.25rem;
   font-size: 0.78rem;
   color: var(--muted);
 }
 
 .status-history {
-  margin-top: 0.6rem;
+  margin-top: 0.5rem;
   border-top: 1px dashed var(--border);
   padding-top: 0.5rem;
 }
 
-.status-history ul { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.45rem; }
+.status-history ul { margin: 0; padding-left: 1rem; display: grid; gap: 0.5rem; }
 .status-history li { font-size: 0.79rem; color: var(--muted); }
 .status-history strong { color: var(--text); }
 
@@ -1224,16 +1256,16 @@ td code,
 .bulk-bar {
   display: flex;
   align-items: flex-end;
-  gap: 0.7rem;
+  gap: 0.75rem;
   flex-wrap: wrap;
   border-color: var(--accent);
 }
 
-.bulk-bar label { display: grid; gap: 0.2rem; font-size: 0.78rem; color: var(--muted); }
+.bulk-bar label { display: grid; gap: 0.25rem; font-size: 0.78rem; color: var(--muted); }
 
 .resolved-list {
-  margin: 0.3rem 0 0;
-  padding-left: 1.2rem;
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
   color: var(--muted);
   font-size: 0.84rem;
 }
@@ -1243,7 +1275,7 @@ td code,
   border: 1px solid rgba(59, 130, 246, 0.3);
   background: rgba(59, 130, 246, 0.06);
   border-radius: 8px;
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   margin: 0.5rem 0;
 }
 
@@ -1259,7 +1291,7 @@ td code,
 }
 
 .advice-why {
-  margin: 0.25rem 0 0.4rem;
+  margin: 0.25rem 0 0.5rem;
   color: var(--muted);
   font-size: 0.83rem;
 }
@@ -1273,16 +1305,16 @@ td code,
   font-size: 0.8rem;
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.25rem;
 }
 
 .advice-body { margin-top: 0.5rem; }
 
 .advice-steps {
-  margin: 0 0 0.7rem;
-  padding-left: 1.3rem;
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
   display: grid;
-  gap: 0.65rem;
+  gap: 0.75rem;
 }
 
 .advice-step-action {
@@ -1301,7 +1333,7 @@ td code,
 
 .advice-cautions h5,
 .advice-verification h5 {
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.25rem;
   font-size: 0.78rem;
   color: var(--text);
   text-transform: uppercase;
@@ -1310,7 +1342,7 @@ td code,
 
 .advice-cautions ul {
   margin: 0;
-  padding-left: 1.1rem;
+  padding-left: 1rem;
   color: var(--muted);
   font-size: 0.8rem;
   display: grid;
@@ -1328,9 +1360,9 @@ td code,
 .query-filter-bar {
   display: flex;
   align-items: center;
-  gap: 0.9rem;
+  gap: 1rem;
   flex-wrap: wrap;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.5rem;
   font-size: 0.8rem;
   color: var(--muted);
 }
@@ -1338,7 +1370,7 @@ td code,
 .query-filter-bar label {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.25rem;
   cursor: pointer;
 }
 
@@ -1346,7 +1378,7 @@ td code,
 .noise-settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-  gap: 0.9rem;
+  gap: 1rem;
 }
 
 .noise-settings-grid label {
@@ -1358,8 +1390,8 @@ td code,
 
 /* ---- Faz 18 İŞ 3: bulgunun kısa sınırlılık notu ---- */
 .finding-note {
-  margin: 0.3rem 0;
-  padding-left: 0.6rem;
+  margin: 0.25rem 0;
+  padding-left: 0.5rem;
   border-left: 2px solid var(--border);
   color: var(--muted);
   font-size: 0.78rem;
@@ -1368,19 +1400,19 @@ td code,
 
 /* ---- Faz 18 İŞ 4: yapılandırılmış bulgu metni ---- */
 .finding-detail {
-  margin: 0.35rem 0;
+  margin: 0.25rem 0;
 }
 
 .finding-facts {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1.1rem;
+  gap: 0.5rem 1rem;
   margin: 0.5rem 0;
 }
 
 .finding-fact {
   display: grid;
-  gap: 0.05rem;
+  gap: 0.25rem;
 }
 
 .finding-fact dt {
@@ -1402,7 +1434,7 @@ td code,
 .finding-fact.good dd { color: #86efac; }
 
 .finding-query {
-  margin: 0.4rem 0;
+  margin: 0.5rem 0;
   font-size: 0.78rem;
 }
 
@@ -1412,7 +1444,7 @@ td code,
 }
 
 .finding-query pre {
-  margin: 0.35rem 0 0;
+  margin: 0.25rem 0 0;
   padding: 0.5rem;
   background: rgba(15, 23, 42, 0.5);
   border: 1px solid var(--border);
@@ -1425,7 +1457,7 @@ td code,
 
 /* Kanıt satırı: bilgi kalsın ama bulgunun önüne geçmesin. */
 .finding-evidence {
-  margin: 0.3rem 0 0;
+  margin: 0.25rem 0 0;
   font-size: 0.72rem;
   color: var(--muted);
   opacity: 0.75;
@@ -1455,8 +1487,17 @@ td code,
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 1rem;
-  margin-bottom: 1rem;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+  /* Kutucuklar farklı satır sayısı taşıyabiliyor (alt açıklama var/yok); aynı yükseklikte
+     dursunlar ki ızgara kırık görünmesin. */
+  align-items: stretch;
+}
+
+.stats-grid > .stat-card,
+.stats-grid > .stat-tile,
+.stats-grid > .stat-card-btn {
+  height: 100%;
 }
 
 .stats-grid.compact {
@@ -1509,13 +1550,13 @@ td code,
   font-size: 0.7rem;
   color: var(--muted);
   background: var(--surface-2);
-  padding: 0.15rem 0.4rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
 }
 
 .stat-tile {
   border-left: 4px solid var(--accent);
-  padding: 0.9rem 1rem;
+  padding: 1rem 1rem;
 }
 
 .stat-tile-label {
@@ -1536,9 +1577,17 @@ td code,
 }
 
 /* Header actions */
-.header-actions {
+/* Birincil eylem kabı — her sayfada aynı yer, aynı hiza, aynı boşluk (Faz 22 İŞ 2).
+   `.report-actions` de aynı kurala bağlandı; öncesinde ayrı tanımlıydı ve dikey hizası
+   diğer sayfalardan farklı düşüyordu. */
+.header-actions,
+.report-actions {
   display: flex;
-  gap: 0.5rem;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  /* Başlık uzun olduğunda eylemler daralmasın, alta sarsın. */
+  flex-shrink: 0;
 }
 
 /* Filters */
@@ -1572,7 +1621,7 @@ td code,
   background: var(--surface-2);
   color: var(--muted);
   border-radius: 999px;
-  padding: 0.35rem 0.75rem;
+  padding: 0.25rem 0.75rem;
   font-size: 0.82rem;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -1595,7 +1644,7 @@ td code,
   border: 1px solid var(--border);
   border-radius: 10px;
   color: var(--text);
-  padding: 0.45rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   font-size: 0.85rem;
   min-width: 180px;
   cursor: pointer;
@@ -1617,7 +1666,7 @@ td code,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.85rem 1rem;
+  padding: 0.75rem 1rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
@@ -1632,7 +1681,7 @@ td code,
   font-size: 0.75rem;
   color: var(--muted);
   background: var(--surface);
-  padding: 0.2rem 0.55rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
 }
 
@@ -1653,7 +1702,7 @@ td code,
 .detail-link {
   font-size: 0.75rem;
   color: var(--accent);
-  padding: 0.2rem 0.45rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 6px;
   border: 1px solid var(--border);
 }
@@ -1666,7 +1715,7 @@ td code,
 .instance-meta {
   color: var(--muted);
   font-size: 0.78rem;
-  margin-top: 0.15rem;
+  margin-top: 0.25rem;
 }
 
 .env-badge,
@@ -1675,7 +1724,7 @@ td code,
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 0.2rem 0.5rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--muted);
@@ -1722,13 +1771,13 @@ td code,
 .role-tag {
   font-size: 0.72rem;
   color: var(--muted);
-  margin-top: 0.2rem;
+  margin-top: 0.25rem;
 }
 
 .util-cell {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.25rem;
 }
 
 .util-bar {
@@ -1782,7 +1831,7 @@ td code,
   display: flex;
   align-items: center;
   gap: 1rem;
-  margin: 0.35rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--muted);
 }
 
@@ -1804,7 +1853,7 @@ td code,
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 0.45rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   border-radius: 8px;
   font-size: 0.82rem;
   cursor: pointer;
@@ -1828,7 +1877,7 @@ td code,
   border: none;
   background: transparent;
   color: var(--muted);
-  padding: 0.65rem 1rem;
+  padding: 0.75rem 1rem;
   border-radius: 10px 10px 0 0;
   font-size: 0.88rem;
   cursor: pointer;
@@ -1856,13 +1905,13 @@ td code,
 
 .unsupported-metrics-note {
   margin-bottom: 1rem;
-  padding: 0.85rem 1rem;
+  padding: 0.75rem 1rem;
   border-left: 3px solid var(--warning);
 }
 
 .unsupported-metrics-note ul {
-  margin: 0.4rem 0 0;
-  padding-left: 1.2rem;
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
   font-size: 0.82rem;
   color: var(--muted);
 }
@@ -1878,9 +1927,9 @@ td code,
 .tag {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.25rem;
   font-size: 0.78rem;
-  padding: 0.35rem 0.7rem;
+  padding: 0.25rem 0.75rem;
   border-radius: 999px;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -1932,7 +1981,7 @@ td code,
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.65rem 0;
+  padding: 0.75rem 0;
   border-bottom: 1px solid var(--border);
   font-size: 0.88rem;
 }
@@ -1968,7 +2017,7 @@ td code,
 .sort-bar {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
+  gap: 0.5rem;
   font-size: 0.82rem;
   color: var(--muted);
 }
@@ -1999,7 +2048,7 @@ td code,
 
 .query-expanded td {
   background: var(--surface-2);
-  padding: 0.75rem 0.9rem;
+  padding: 0.75rem 1rem;
 }
 
 .query-expanded pre {
@@ -2042,8 +2091,8 @@ td code,
 .query-stats-grid div {
   display: flex;
   flex-direction: column;
-  gap: 0.15rem;
-  padding: 0.4rem 0.5rem;
+  gap: 0.25rem;
+  padding: 0.5rem 0.5rem;
   background: var(--surface-2);
   border-radius: 8px;
 }
@@ -2097,7 +2146,7 @@ td code,
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 0.85rem;
+  padding: 0.75rem;
 }
 
 .advice-header {
@@ -2116,7 +2165,7 @@ td code,
 
 .advice-pill {
   font-size: 0.78rem;
-  padding: 0.2rem 0.55rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   background: rgba(34, 197, 94, 0.12);
   color: var(--success);
@@ -2130,7 +2179,7 @@ td code,
 
 .advice-ddl {
   display: block;
-  padding: 0.6rem 0.75rem;
+  padding: 0.5rem 0.75rem;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -2163,7 +2212,7 @@ td code,
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0.85rem 1rem;
+  padding: 0.75rem 1rem;
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
 }
@@ -2215,7 +2264,7 @@ td code,
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  margin-top: 0.35rem;
+  margin-top: 0.25rem;
   flex-shrink: 0;
 }
 
@@ -2252,7 +2301,7 @@ td code,
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 0.15rem 0.4rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   color: var(--text);
 }
@@ -2267,7 +2316,7 @@ td code,
 .problem-card-list {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
 .problem-card {
@@ -2280,8 +2329,8 @@ td code,
 .problem-card-head {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.75rem 0.9rem;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
 }
 
 .problem-card-toggle {
@@ -2312,21 +2361,21 @@ td code,
 
 .problem-card-source {
   font-size: 0.8rem;
-  padding-left: 1.9rem;
+  padding-left: 2rem;
 }
 
 .problem-card-source .env-badge {
-  margin-left: 0.4rem;
+  margin-left: 0.5rem;
 }
 
 .problem-card-body {
-  padding: 0 0.9rem 0.9rem 2.9rem;
+  padding: 0 1rem 1rem 3rem;
   border-top: 1px dashed var(--border);
-  padding-top: 0.6rem;
+  padding-top: 0.5rem;
 }
 
 .problem-card-body h4 {
-  margin: 0 0 0.4rem;
+  margin: 0 0 0.5rem;
   font-size: 0.78rem;
   color: var(--muted);
   text-transform: uppercase;
@@ -2335,16 +2384,16 @@ td code,
 
 .problem-card-body ol {
   margin: 0 0 0.5rem;
-  padding-left: 1.2rem;
+  padding-left: 1.25rem;
   font-size: 0.85rem;
 }
 
 .problem-card-body li {
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.25rem;
 }
 
 .insight-recommendation {
-  margin-top: 0.4rem;
+  margin-top: 0.5rem;
   font-size: 0.8rem;
   color: var(--accent-2);
 }
@@ -2355,7 +2404,7 @@ td code,
   font-weight: 600;
   font-size: 0.85rem;
   color: var(--accent-2);
-  margin: 0 0 0.3rem;
+  margin: 0 0 0.25rem;
 }
 
 .recommendation-reason {
@@ -2370,7 +2419,7 @@ td code,
 
 .rec-action-box {
   position: relative;
-  margin-top: 0.35rem;
+  margin-top: 0.25rem;
   max-width: 100%;
 }
 
@@ -2383,7 +2432,7 @@ td code,
   border: 1px solid var(--border);
   border-radius: 6px;
   /* Right padding reserves room for the copy icon so it never overlaps the last characters. */
-  padding: 0.35rem 2rem 0.35rem 0.5rem;
+  padding: 0.25rem 2rem 0.25rem 0.5rem;
   overflow-x: auto;
   white-space: pre;
   color: var(--text);
@@ -2430,10 +2479,10 @@ td code,
 }
 
 .tab-badge {
-  margin-left: 0.35rem;
+  margin-left: 0.25rem;
   min-width: 1.1rem;
   height: 1.1rem;
-  padding: 0 0.3rem;
+  padding: 0 0.25rem;
   border-radius: 999px;
   background: var(--warning);
   color: #111;
@@ -2445,10 +2494,10 @@ td code,
 }
 
 .tuning-mini-score {
-  margin-left: 0.6rem;
+  margin-left: 0.5rem;
   font-size: 0.75rem;
   font-weight: 600;
-  padding: 0.15rem 0.45rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   background: rgba(34, 211, 238, 0.15);
   color: #67e8f9;
@@ -2462,7 +2511,7 @@ td code,
 .tuning-hero {
   display: grid;
   gap: 1rem;
-  padding: 1.1rem 1.25rem;
+  padding: 1rem 1.25rem;
 }
 
 .tuning-score {
@@ -2496,7 +2545,7 @@ td code,
 
 .tuning-score-meta {
   display: grid;
-  gap: 0.35rem;
+  gap: 0.25rem;
 }
 
 .tuning-score-meta p {
@@ -2508,7 +2557,7 @@ td code,
 .tuning-status {
   display: inline-flex;
   width: fit-content;
-  padding: 0.15rem 0.5rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -2522,15 +2571,15 @@ td code,
 .tuning-summary-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
 .tuning-summary-chip {
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 0.65rem 0.75rem;
+  padding: 0.75rem 0.75rem;
   display: grid;
-  gap: 0.15rem;
+  gap: 0.25rem;
   background: var(--bg);
 }
 
@@ -2551,7 +2600,7 @@ td code,
 .tuning-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
+  gap: 0.5rem;
 }
 
 .tuning-hero-note {
@@ -2562,19 +2611,19 @@ td code,
 
 .tuning-checklist-card,
 .tuning-category-card {
-  padding: 1rem 1.1rem;
+  padding: 1rem 1rem;
 }
 
 .tuning-checklist {
   display: grid;
-  gap: 0.55rem;
+  gap: 0.5rem;
 }
 
 .checklist-row {
   display: flex;
   gap: 0.75rem;
   align-items: flex-start;
-  padding: 0.65rem 0.75rem;
+  padding: 0.75rem 0.75rem;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: var(--bg);
@@ -2587,13 +2636,13 @@ td code,
 }
 
 .ignored-section {
-  margin-top: 1.2rem;
-  padding-top: 0.9rem;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
   border-top: 1px dashed var(--border);
 }
 
 .ignored-section h4 {
-  margin: 0 0 0.2rem;
+  margin: 0 0 0.25rem;
   color: var(--text);
   font-size: 0.9rem;
 }
@@ -2604,7 +2653,7 @@ td code,
 }
 
 .checklist-row p {
-  margin: 0.2rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -2613,7 +2662,7 @@ td code,
   font-size: 0.65rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding: 0.2rem 0.4rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--muted);
@@ -2630,7 +2679,7 @@ td code,
 }
 
 .btn.linkish {
-  margin-top: 0.45rem;
+  margin-top: 0.5rem;
   background: transparent;
   border: none;
   color: var(--accent-2);
@@ -2647,11 +2696,11 @@ td code,
 
 .detail-actions {
   display: flex;
-  gap: 0.4rem;
+  gap: 0.5rem;
 }
 
 .detail-actions .detail-link {
-  padding: 0.25rem 0.55rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 8px;
   border: 1px solid var(--border);
   font-size: 0.78rem;
@@ -2704,16 +2753,16 @@ td code,
   justify-content: space-between;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.25rem;
 }
 
 .cluster-service-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.5rem;
   font-size: 0.72rem;
   color: var(--muted);
-  margin-top: 0.35rem;
+  margin-top: 0.25rem;
 }
 
 .state-pill.up { color: var(--success); background: rgba(34, 197, 94, 0.12); }
@@ -2756,20 +2805,20 @@ td code,
 .severity-filter {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   flex-wrap: wrap;
   font-size: 0.82rem;
   color: var(--muted);
-  margin-bottom: 0.9rem;
+  margin-bottom: 1rem;
 }
 
 .severity-chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.25rem;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 0.2rem 0.7rem;
+  padding: 0.25rem 0.75rem;
   cursor: pointer;
   user-select: none;
 }
@@ -2793,7 +2842,7 @@ td code,
 .history-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.85rem;
+  gap: 0.75rem;
   margin-top: 0.75rem;
 }
 
@@ -2845,7 +2894,7 @@ td code,
 }
 
 .muted-note {
-  margin: 0.2rem 0 0;
+  margin: 0.25rem 0 0;
   color: var(--muted);
   font-size: 0.8rem;
 }
@@ -2868,7 +2917,7 @@ td code,
 .state-pill {
   display: inline-flex;
   align-items: center;
-  padding: 0.1rem 0.4rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   font-size: 0.7rem;
   background: var(--surface-2);
@@ -2894,7 +2943,7 @@ td code,
   gap: 0.75rem;
   font-size: 0.8rem;
   color: var(--muted);
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.75rem;
 }
 
 .explain-mode {
@@ -2906,8 +2955,8 @@ td code,
 .explain-insights {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.4rem;
-  margin-bottom: 0.65rem;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .explain-insight-chip {
@@ -2921,14 +2970,14 @@ td code,
 
 .plan-node {
   border-left: 1px solid var(--border);
-  padding: 0.35rem 0 0.35rem 0.65rem;
+  padding: 0.25rem 0 0.25rem 0.75rem;
   margin-top: 0.25rem;
 }
 
 .plan-node-header {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.45rem;
+  gap: 0.5rem;
   align-items: center;
   font-size: 0.85rem;
 }
@@ -2944,7 +2993,7 @@ td code,
   font-size: 0.72rem;
   color: var(--muted);
   background: var(--surface-2);
-  padding: 0.1rem 0.35rem;
+  padding: 0.25rem 0.25rem;
   border-radius: 6px;
 }
 
@@ -2989,7 +3038,7 @@ td code,
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.6rem;
+  gap: 0.5rem;
   text-align: center;
   padding: 3rem 1.5rem;
   margin: 1rem auto;
@@ -3020,7 +3069,7 @@ td code,
 .page-state-detail code {
   background: var(--surface-2);
   border-radius: 6px;
-  padding: 0.1rem 0.35rem;
+  padding: 0.25rem 0.25rem;
 }
 
 .page-state-hint {
@@ -3035,7 +3084,7 @@ td code,
   flex-wrap: wrap;
   gap: 0.5rem;
   justify-content: center;
-  margin-top: 0.4rem;
+  margin-top: 0.5rem;
 }
 
 .page-state-error {
@@ -3092,19 +3141,19 @@ td code,
   display: block;
   color: var(--text);
   font-weight: 600;
-  margin-bottom: 0.3rem;
+  margin-bottom: 0.25rem;
 }
 
 .table-state-detail {
   display: block;
   font-size: 0.85rem;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.5rem;
 }
 
 .table-state-error {
   display: block;
   color: #fecaca;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.5rem;
 }
 
 .table-state .page-state-spinner {
@@ -3112,7 +3161,7 @@ td code,
   vertical-align: -0.2em;
   width: 1rem;
   height: 1rem;
-  margin-right: 0.4rem;
+  margin-right: 0.5rem;
 }
 
 /* Sayfalama çubuğu — Faz 19 İŞ 3. */
@@ -3122,7 +3171,7 @@ td code,
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.6rem 0.2rem 0;
+  padding: 0.5rem 0.25rem 0;
   font-size: 0.85rem;
   color: var(--muted);
 }
@@ -3142,11 +3191,11 @@ td code,
 .pagination-size {
   display: flex;
   align-items: center;
-  gap: 0.35rem;
+  gap: 0.25rem;
 }
 
 .pagination-size select {
-  padding: 0.2rem 0.4rem;
+  padding: 0.25rem 0.5rem;
   font-size: 0.8rem;
 }
 
@@ -3230,13 +3279,13 @@ td code,
   /* Uzun tablolar zaten `.table-wrap` içinde yatay kayıyor; yazıyı biraz küçültüp
      satır sayısını ekranda tutuyoruz. */
   table { font-size: 0.82rem; }
-  th, td { padding: 0.55rem 0.6rem; }
+  th, td { padding: 0.5rem 0.5rem; }
 }
 
 /* Tahmin güvenilirlik rozeti — Faz 20 İŞ 2. */
 .reliability-badge {
   display: inline-block;
-  padding: 0.15rem 0.5rem;
+  padding: 0.25rem 0.5rem;
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
@@ -3270,7 +3319,7 @@ td code,
 
 /* Tahmin yöntemi notu — Faz 20 İŞ 3. */
 .method-note {
-  margin-top: 0.4rem;
+  margin-top: 0.5rem;
   font-size: 0.75rem;
 }
 
@@ -3299,8 +3348,8 @@ td code,
 .method-note-body {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 0.15rem 0.6rem;
-  margin: 0.4rem 0 0;
+  gap: 0.25rem 0.5rem;
+  margin: 0.5rem 0 0;
   padding: 0.5rem;
   background: var(--surface-2);
   border-radius: 8px;
@@ -3313,4 +3362,55 @@ td code,
 
 .method-note-body dd {
   margin: 0;
+}
+
+/* ==========================================================================================
+   İskelet yükleme — Faz 22 İŞ 2
+   Yükleniyor durumu içeriğin YERİNİ KORUMALI. Öncesinde ortalanmış küçük bir kutu vardı;
+   veri gelince sayfa boyu birden değişiyor ve içerik sıçrıyordu.
+   ========================================================================================== */
+.skeleton {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
+}
+
+.skeleton-line {
+  height: 1.25rem;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--surface) 25%, var(--surface-2) 50%, var(--surface) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-header {
+  height: 2rem;
+  width: 40%;
+  margin-bottom: var(--space-1);
+}
+
+.skeleton-row td {
+  padding: var(--space-3) var(--space-3);
+}
+
+@keyframes skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line { animation: none; }
+}
+
+/* Ekran okuyucu için görünür olsun, düzeni etkilemesin. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

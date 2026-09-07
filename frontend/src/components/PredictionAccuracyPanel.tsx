@@ -33,7 +33,7 @@ export default function PredictionAccuracyPanel({
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h3 className="chart-title">Tahmin doğruluğu (son {windowDays} gün)</h3>
-      <p className="muted-note" style={{ margin: "0.2rem 0 0.8rem" }}>
+      <p className="muted-note" style={{ margin: "0.25rem 0 0.75rem" }}>
         Her tahmin üretildiğinde ne tahmin ettiği kaydediliyor; hedef tarih geldiğinde
         gerçekleşen değerle karşılaştırılıyor. Buradaki oranlar <strong>ölçülmüş</strong>{" "}
         sonuçlardır — tahminlerin yanındaki “güven” yüzdesi ise modelin geçmiş veriye oturma

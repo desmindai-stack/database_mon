@@ -144,7 +144,7 @@ export default function CustomersPage() {
                           </select>
                         </td>
                         <td>
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button className="btn btn-primary" onClick={() => saveEdit(c.id)}>Kaydet</button>
                             <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
                           </div>
@@ -160,7 +160,7 @@ export default function CustomersPage() {
                         </td>
                         <td>
                           {!isPrivate && canWrite && (
-                            <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <div style={{ display: "flex", gap: "0.25rem" }}>
                               <button className="btn" onClick={() => startEdit(c)}>Düzenle</button>
                               <button className="btn btn-danger" onClick={() => onDelete(c.id)}>Sil</button>
                             </div>

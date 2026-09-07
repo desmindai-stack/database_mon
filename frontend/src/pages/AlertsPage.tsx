@@ -258,7 +258,7 @@ export default function AlertsPage() {
                     <tr key={rule.id}>
                       <td>
                         {rule.name}
-                        <span className={`tag ${rule.is_default ? "public" : "private"}`} style={{ marginLeft: "0.4rem" }}>
+                        <span className={`tag ${rule.is_default ? "public" : "private"}`} style={{ marginLeft: "0.5rem" }}>
                           {rule.is_default ? "Varsayılan" : "Özel"}
                         </span>
                       </td>
@@ -289,12 +289,12 @@ export default function AlertsPage() {
                       </td>
                       <td>
                         {!canWrite ? null : editingId === rule.id ? (
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button className="btn btn-primary" onClick={() => saveEdit(rule)}>Kaydet</button>
                             <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
                           </div>
                         ) : (
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button className="btn" onClick={() => startEdit(rule)}>Düzenle</button>
                             {!rule.is_default && (
                               <button className="btn btn-danger" onClick={() => api.deleteAlertRule(rule.id).then(load)}>

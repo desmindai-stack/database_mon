@@ -19,6 +19,50 @@ export function PageLoading({ label = "Yükleniyor…" }: { label?: string }) {
 }
 
 /**
+ * İskelet yükleme — içeriğin YERİNİ KORUR (Faz 22 İŞ 2).
+ *
+ * `PageLoading` ortalanmış küçük bir kutu; veri gelince sayfa boyu birden değişiyor ve
+ * içerik sıçrıyordu. İskelet, gelecek içeriğin kabaca yüksekliğini şimdiden ayırıyor:
+ * başlık satırı + belirtilen sayıda satır.
+ *
+ * `rows` gelecek listenin uzunluğuna yakın seçilmeli — abartmak da sıçrama yaratır.
+ */
+export function PageSkeleton({
+  rows = 5,
+  withHeader = true,
+  label = "Yükleniyor…",
+}: {
+  rows?: number;
+  withHeader?: boolean;
+  label?: string;
+}) {
+  return (
+    <div className="skeleton" role="status" aria-live="polite" aria-label={label}>
+      {withHeader && <div className="skeleton-line skeleton-header" />}
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} className="skeleton-line" />
+      ))}
+      <span className="sr-only">{label}</span>
+    </div>
+  );
+}
+
+/** Tablo gövdesinde iskelet satırlar — `TableState`'in yükleniyor hâlinin yerini tutar. */
+export function TableSkeleton({ colSpan, rows = 5 }: { colSpan: number; rows?: number }) {
+  return (
+    <>
+      {Array.from({ length: rows }, (_, i) => (
+        <tr key={i} className="skeleton-row">
+          <td colSpan={colSpan}>
+            <div className="skeleton-line" />
+          </td>
+        </tr>
+      ))}
+    </>
+  );
+}
+
+/**
  * Bir API çağrısı başarısız olduğunda gösterilir. `onRetry` verilirse "Tekrar dene" düğmesi
  * çıkar — kullanıcının sayfayı komple yenilemeye mecbur kalmaması için.
  */
@@ -156,13 +200,9 @@ export function TableState({
     );
   }
   if (loading) {
-    return (
-      <tr>
-        <td colSpan={colSpan} className="table-state">
-          <span className="page-state-spinner" aria-hidden="true" /> Yükleniyor…
-        </td>
-      </tr>
-    );
+    // Tek satırlık bir spinner yerine iskelet satırlar: tablo yüksekliği veri gelince
+    // birden değişmiyor, sayfa sıçramıyor (Faz 22 İŞ 2).
+    return <TableSkeleton colSpan={colSpan} />;
   }
   return (
     <tr>

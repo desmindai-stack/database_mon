@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Customer, DbServer, NodeSite, ServerOS } from "../api";
-import { NotFoundState, PageError, PageLoading, TableState } from "../components/PageState";
+import { NotFoundState, PageError, PageSkeleton, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 const OS_LABELS: Record<ServerOS, string> = { linux: "Linux", windows: "Windows" };
@@ -126,7 +126,7 @@ export default function ServersPage() {
   }
 
   if (!customer) {
-    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageSkeleton rows={4} />;
   }
 
   return (
@@ -211,7 +211,7 @@ export default function ServersPage() {
                         </div>
                       </td>
                       <td>
-                        <div style={{ display: "flex", gap: "0.3rem" }}>
+                        <div style={{ display: "flex", gap: "0.25rem" }}>
                           <button className="btn btn-primary" onClick={() => saveEdit(s.id)}>Kaydet</button>
                           <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
                         </div>
@@ -230,7 +230,7 @@ export default function ServersPage() {
                       </td>
                       <td className="muted-note">{s.agent_url || "—"}</td>
                       <td>
-                        <div style={{ display: "flex", gap: "0.3rem" }}>
+                        <div style={{ display: "flex", gap: "0.25rem" }}>
                           <button
                             className="btn btn-xs"
                             disabled={!s.agent_url}

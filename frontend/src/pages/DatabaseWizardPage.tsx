@@ -18,7 +18,7 @@ import {
   WizardCreateGroupRequest,
   WizardNodeInput,
 } from "../api";
-import { NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { NotFoundState, PageError, PageSkeleton } from "../components/PageState";
 import { useAuth } from "../auth";
 import { showField, topologyOf, type FieldContext } from "../formFields";
 
@@ -569,11 +569,11 @@ export default function DatabaseWizardPage() {
   }
 
   if (mode === "add-node" && !existingGroup) {
-    return <PageLoading />;
+    return <PageSkeleton rows={6} />;
   }
 
   if (mode === "create-group" && !application) {
-    return <PageLoading />;
+    return <PageSkeleton rows={6} />;
   }
 
   return (
@@ -1107,7 +1107,7 @@ export default function DatabaseWizardPage() {
                         </WizardSection>
                       )}
 
-                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.6rem", flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem", flexWrap: "wrap" }}>
                         <button type="button" className="btn btn-xs" disabled={node.testing} onClick={() => testNodeConnection(node.key)}>
                           {node.testing ? "Test ediliyor…" : "Bağlantıyı test et"}
                         </button>

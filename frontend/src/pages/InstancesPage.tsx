@@ -413,9 +413,9 @@ export default function InstancesPage() {
         {showField("services", fieldCtx) && (
         <label>
           Sunucu servisleri
-          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.35rem" }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.25rem" }}>
             {PG_SERVICES.map((svc) => (
-              <label key={svc} style={{ display: "flex", alignItems: "center", gap: "0.3rem", fontWeight: 400 }}>
+              <label key={svc} style={{ display: "flex", alignItems: "center", gap: "0.25rem", fontWeight: 400 }}>
                 <input
                   type="checkbox"
                   checked={(form.services ?? []).includes(svc)}
@@ -631,7 +631,14 @@ export default function InstancesPage() {
           <h2>Instances</h2>
           <p>PostgreSQL, SQL Server ve MongoDB sunucularını kaydedin</p>
         </div>
-        {canWrite && <Link to="/customers" className="btn btn-primary">+ Veritabanı Ekle</Link>}
+        {/* Birincil eylem her sayfada aynı kapta: sağ üstte, .header-actions içinde
+            (Faz 22 İŞ 2). Burada doğrudan header'ın çocuğuydu, hizası diğer
+            sayfalardan farklıydı. */}
+        {canWrite && (
+          <div className="header-actions">
+            <Link to="/customers" className="btn btn-primary">+ Veritabanı Ekle</Link>
+          </div>
+        )}
       </header>
 
       {error && <div className="error">{error}</div>}
@@ -677,7 +684,7 @@ export default function InstancesPage() {
                     <td>{inst.engine}</td>
                     <td>
                       {canWrite && (
-                        <div style={{ display: "flex", gap: "0.4rem" }}>
+                        <div style={{ display: "flex", gap: "0.5rem" }}>
                           <button className="btn" onClick={() => startEdit(inst)}>Düzenle</button>
                           <button className="btn btn-danger" onClick={() => askDelete(inst)}>Sil</button>
                         </div>

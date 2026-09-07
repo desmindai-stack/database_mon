@@ -60,7 +60,7 @@ export default function PrerequisitesPanel({
           </p>
         )}
         {check.fix && !check.ignored && (
-          <div style={{ marginTop: "0.4rem" }}>
+          <div style={{ marginTop: "0.5rem" }}>
             <CopyableAction command={check.fix} />
           </div>
         )}
@@ -86,7 +86,7 @@ export default function PrerequisitesPanel({
       <div className="insights-header">
         <div>
           <h3 className="chart-title">Ön koşullar</h3>
-          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.2rem 0 0" }}>
+          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.25rem 0 0" }}>
             Yavaş sorgu / EXPLAIN / index önerisi özelliklerinin çalışması için gereken uzantı, ayar ve
             yetkiler — biri eksikse ilgili özellik neden boş göründüğünü burada görürsünüz.
           </p>
@@ -102,7 +102,7 @@ export default function PrerequisitesPanel({
 
       {data && (
         <>
-          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 0.6rem" }}>
+          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 0.5rem" }}>
             {data.ok_count}/{active.length} kontrol tamam (%{data.completion_pct})
             {data.ignored_count > 0 && ` · ${data.ignored_count} yoksayıldı`} · Son kontrol:{" "}
             {formatTime(data.checked_at)}

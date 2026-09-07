@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Application, Customer, errorMessage } from "../api";
-import { NotFoundState, PageError, PageLoading, TableState } from "../components/PageState";
+import { NotFoundState, PageError, PageSkeleton, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 export default function ApplicationsPage() {
@@ -111,7 +111,7 @@ export default function ApplicationsPage() {
   }
 
   if (!customer) {
-    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageSkeleton rows={4} />;
   }
 
   return (
@@ -169,7 +169,7 @@ export default function ApplicationsPage() {
                           <input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} />
                         </td>
                         <td>
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button className="btn btn-primary" onClick={() => saveEdit(a.id)}>Kaydet</button>
                             <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
                           </div>
@@ -183,7 +183,7 @@ export default function ApplicationsPage() {
                         <td>{a.description || "—"}</td>
                         <td>
                           {canWrite && (
-                            <div style={{ display: "flex", gap: "0.3rem" }}>
+                            <div style={{ display: "flex", gap: "0.25rem" }}>
                               <button className="btn" onClick={() => startEdit(a)}>Düzenle</button>
                               <button className="btn btn-danger" onClick={() => onDelete(a.id)}>Sil</button>
                             </div>

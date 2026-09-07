@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { QueryDiagnosticsReport, QueryResourceType } from "../api";
+import { PageSkeleton } from "./PageState";
 
 const TOP_N_OPTIONS = [5, 10, 20, 50] as const;
 
@@ -43,12 +44,12 @@ export default function QueryDiagnosticsPanel({ data, error, loading, topN, onTo
       <div className="insights-header">
         <div>
           <h3 className="chart-title">Performans tuning — kaynak bazlı analiz</h3>
-          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.2rem 0 0" }}>
+          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.25rem 0 0" }}>
             En son toplanan yavaş sorgu anlık görüntüsünden — her sorgu için darboğazın I/O, CPU,
             bellek ya da kilit/bekleme olduğu, hangi metriğin bunu gösterdiğiyle birlikte.
           </p>
         </div>
-        <label style={{ display: "flex", alignItems: "center", gap: "0.4rem", fontSize: "0.8rem" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
           Top
           <select value={topN} onChange={(e) => onTopNChange(Number(e.target.value))}>
             {TOP_N_OPTIONS.map((n) => (
@@ -59,13 +60,14 @@ export default function QueryDiagnosticsPanel({ data, error, loading, topN, onTo
       </div>
 
       {error && <div className="error">{error}</div>}
-      {loading && <p className="muted-note">Yükleniyor…</p>}
+      {/* İskelet: tanı listesi gelince panel yüksekliği sıçramasın (Faz 22 İŞ 2). */}
+      {loading && <PageSkeleton rows={3} withHeader={false} />}
 
       {data && (
         <>
-          <p className="muted-note" style={{ margin: "0.4rem 0 0.8rem" }}>{data.server_resource_note}</p>
+          <p className="muted-note" style={{ margin: "0.5rem 0 0.75rem" }}>{data.server_resource_note}</p>
 
-          <div className="detail-tabs" style={{ marginBottom: "0.8rem" }}>
+          <div className="detail-tabs" style={{ marginBottom: "0.75rem" }}>
             {RESOURCE_TABS.map((t) => {
               const count = t.key === "all" ? data.diagnoses.length : data.by_resource[t.key] || 0;
               return (
@@ -88,7 +90,7 @@ export default function QueryDiagnosticsPanel({ data, error, loading, topN, onTo
                 <div key={`${d.queryid}-${i}`} className={`checklist-row ${d.confidence === "inferred" ? "warn" : "ok"}`}>
                   <span className="checklist-status">{RESOURCE_LABELS_TR[d.resource]}</span>
                   <div style={{ flex: 1 }}>
-                    <code style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.2rem" }}>
+                    <code style={{ display: "block", fontSize: "0.78rem", marginBottom: "0.25rem" }}>
                       {d.query.length > 160 ? `${d.query.slice(0, 160)}…` : d.query}
                     </code>
                     <p>{d.reason}</p>

@@ -121,7 +121,7 @@ export default function PredictionsPage() {
                         gizlemiyoruz: modelin zayıf olması riskin gerçek olmadığı anlamına
                         gelmez — ama kullanıcı neye dayandığını bilmeli. */}
                     {p.reliability && p.reliability.level !== "high" && (
-                      <div style={{ marginTop: "0.35rem" }}>
+                      <div style={{ marginTop: "0.25rem" }}>
                         <span
                           className={`reliability-badge ${p.reliability.level}`}
                           title={p.reliability.note}

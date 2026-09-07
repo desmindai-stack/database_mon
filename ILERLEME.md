@@ -4625,6 +4625,78 @@ Sınır (testin başında yazılı): bu statik bir denetim. Tablonun içeriğini
 ve formların ona bağlı olduğunu doğruluyor, tarayıcıda gerçekten render
 edilmediğini doğrulamıyor — frontend'in test koşucusu yok.
 
+## Faz 22 — İŞ 2: Görsel tutarlılık ve hizalama
+
+### Boşluk ölçeği — 26 değerden 8'e
+
+gap/padding/margin için **26 farklı rem değeri** vardı: 0.05, 0.1, 0.15,
+0.2, 0.3, 0.35, 0.4, 0.45, 0.55, 0.6, 0.65, 0.7, 0.8, 0.85, 0.9, 1.1,
+1.2, 1.3, 1.9, 2.9... Aynı işlevdeki iki öğe 1-2px farkla hizasız
+duruyordu ve yeni kod hangi değeri seçeceğini bilmiyordu.
+
+`:root`'a 4px'lik bir ölçek kondu (`--space-1` … `--space-12`) ve mevcut
+değerler en yakın adıma oturtuldu: **CSS'te 253, satır içi stillerde 44
+değer**. En büyük kayma 3.2px (0.05rem → 0.25rem), çoğu 1px'in altında.
+Sonuç: 8 farklı değer, hepsi ölçek üzerinde.
+
+Dokunulmayanlar: `font-size`, `border-radius`, `width`, `top` gibi
+özellikler — orada 1-2px kayma anlam değiştirebilir.
+
+### Sayfa geçişlerinde kayma
+
+**Yatay kayma.** Kısa bir sayfadan uzun bir sayfaya geçerken dikey
+kaydırma çubuğu belirip içeriği ~15px sola itiyor, geri dönerken geri
+itiyordu. `html { scrollbar-gutter: stable }` yeri her zaman ayırıyor.
+
+**Dikey sıçrama.** Başlığın altında açıklama satırı olan sayfalarla
+olmayanlar arasında geçerken içerik yukarı/aşağı zıplıyordu.
+`.page-header`'a sabit bir alt sınır (`min-height: 3.5rem`) kondu.
+
+### Yükleniyor durumları içeriğin yerini koruyor
+
+`PageLoading` ortalanmış küçük bir kutuydu: veri gelince sayfa boyu birden
+değişiyor ve içerik sıçrıyordu. `PageSkeleton` ve `TableSkeleton` eklendi —
+gelecek içeriğin kabaca yüksekliğini şimdiden ayırıyorlar.
+
+Değiştirilen yerler:
+
+| Sayfa/bileşen | Öncesi | Sonrası |
+|---|---|---|
+| ApplicationsPage, DatabaseGroupsPage, ServersPage | ortalanmış kutu | 4 satırlık iskelet |
+| GroupDetailPage, InstanceDetailPage, DatabaseWizardPage | ortalanmış kutu | 6 satırlık iskelet |
+| `TableState` (tüm liste sayfaları) | tek satır spinner | iskelet satırlar |
+| DashboardPage "Sorunlar ve öneriler" | tek satır "Yükleniyor…" | 3 satırlık iskelet |
+| QueryDiagnosticsPanel | tek satır "Yükleniyor…" | 3 satırlık iskelet |
+
+İskelet `prefers-reduced-motion` altında parıldamıyor.
+
+### Birincil eylem konumu
+
+Üç farklı kalıp vardı: çoğu sayfada `.header-actions`, `InstancesPage`'de
+doğrudan `<header>` çocuğu (dikey hizası farklı düşüyordu),
+`ReportsPage`'de ayrı tanımlı `.report-actions`. İkisi tek kurala bağlandı
+(`align-items: center`, ölçekten boşluk, `flex-shrink: 0`) ve
+`InstancesPage`'in düğmesi ortak kaba alındı.
+
+### Kart yükseklikleri
+
+Yan yana duran kartlar içeriği kısa olanda yukarıda bitiyor, satır kırık
+görünüyordu. `.grid` için `align-items: stretch` + `.grid > .card { height: 100% }`;
+aynısı `.stats-grid` kutucukları için.
+
+**Testler:** `tests/test_visual_consistency.py` (61 test) — ölçeğin
+tanımlı olduğu, CSS'teki ve HER sayfa/bileşendeki satır içi boşlukların
+ölçek üzerinde olduğu, `scrollbar-gutter` ve başlık alt sınırının
+yerinde durduğu, iskelet bileşenlerinin var olduğu ve kayıt yükleyen
+sayfaların onları kullandığı (`PageLoading` geri dönerse test kırılır),
+birincil eylemlerin ortak kapta olduğu, ızgara kartlarının eşit
+yükseklikte olduğu.
+
+Sınır (testin başında yazılı): denetim statik. "Kural yerinde mi"
+sorusunu cevaplıyor, "piksel doğru mu" sorusunu değil — frontend'in test
+koşucusu ve tarayıcı otomasyonu yok. Gerçek görsel doğrulama için
+`npm run dev` ile bakılmalı.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

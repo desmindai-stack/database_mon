@@ -8,7 +8,7 @@ export default function PredictionReadinessPanel({ items }: { items: PredictionR
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h3 className="chart-title">Tahmin veri yeterliliği</h3>
-      <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.2rem 0 0.6rem" }}>
+      <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.25rem 0 0.5rem" }}>
         Doğrusal regresyon + mevsimsellik yeterli veri olmadan çalıştırılmaz — her tür için ne
         kadar veri biriktiği ve ne zaman güvenilir bir tahmin verilebileceği burada.
       </p>

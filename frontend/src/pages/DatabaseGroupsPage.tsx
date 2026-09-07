@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError, Application, DatabaseGroup, errorMessage, GroupEnvironment } from "../api";
-import { NotFoundState, PageError, PageLoading, TableState } from "../components/PageState";
+import { NotFoundState, PageError, PageSkeleton, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 const ENV_LABELS: Record<GroupEnvironment, string> = {
@@ -113,7 +113,7 @@ export default function DatabaseGroupsPage() {
   }
 
   if (!application) {
-    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageSkeleton rows={4} />;
   }
 
   return (
@@ -168,7 +168,7 @@ export default function DatabaseGroupsPage() {
                     return (
                       <tr key={g.id}>
                         <td>
-                          <input value={editName} onChange={(e) => setEditName(e.target.value)} style={{ marginBottom: "0.3rem" }} />
+                          <input value={editName} onChange={(e) => setEditName(e.target.value)} style={{ marginBottom: "0.25rem" }} />
                           {isCluster && (
                             <input
                               value={editAccessName}
@@ -191,7 +191,7 @@ export default function DatabaseGroupsPage() {
                           </select>
                         </td>
                         <td>
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button className="btn btn-primary" onClick={() => saveEdit(g.id)}>Kaydet</button>
                             <button className="btn" onClick={() => setEditingId(null)}>Vazgeç</button>
                           </div>
@@ -211,7 +211,7 @@ export default function DatabaseGroupsPage() {
                       <td>{g.topology}</td>
                       <td>
                         {status ? (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "0.15rem" }}>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
                             <span className={`tuning-status ${status.overall}`}>{status.overall}</span>
                             {isCluster && (
                               <span className="muted-note">
@@ -230,7 +230,7 @@ export default function DatabaseGroupsPage() {
                       </td>
                       <td>
                         {canWrite && (
-                          <div style={{ display: "flex", gap: "0.3rem" }}>
+                          <div style={{ display: "flex", gap: "0.25rem" }}>
                             <button className="btn" onClick={() => startEdit(g)}>Düzenle</button>
                             <button className="btn btn-danger" onClick={() => onDelete(g.id)}>Sil</button>
                           </div>

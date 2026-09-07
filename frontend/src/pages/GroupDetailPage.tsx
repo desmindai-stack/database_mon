@@ -17,7 +17,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
-import { EmptyState, NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../components/PageState";
 import RecommendationHeader from "../components/RecommendationHeader";
 import { showField, topologyOf, type FieldContext } from "../formFields";
 import { useUrlTab } from "../hooks/useUrlState";
@@ -328,7 +328,7 @@ export default function GroupDetailPage() {
   }
 
   if (!group) {
-    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageSkeleton rows={6} />;
   }
 
   return (
@@ -445,7 +445,7 @@ export default function GroupDetailPage() {
             <h3 className="chart-title" style={{ margin: 0 }}>
               Düğüm sağlığı
               {health && (
-                <span className={`tuning-status ${health.overall}`} style={{ marginLeft: "0.6rem" }}>
+                <span className={`tuning-status ${health.overall}`} style={{ marginLeft: "0.5rem" }}>
                   {health.overall}
                 </span>
               )}
@@ -585,7 +585,7 @@ export default function GroupDetailPage() {
                   <div key={node.id} className={`cluster-service-card${node.site === "disaster" ? " status-unknown" : ""}`}>
                     <div className="cluster-service-head">
                       <strong>{node.name}</strong>
-                      <div style={{ display: "flex", gap: "0.3rem" }}>
+                      <div style={{ display: "flex", gap: "0.25rem" }}>
                         <span className={`tag ${node.site === "disaster" ? "private" : "public"}`}>
                           {node.site === "disaster" ? "DR" : "primary site"}
                         </span>
@@ -703,7 +703,7 @@ export default function GroupDetailPage() {
                       </p>
                     )}
                     {nodeHealth ? (
-                      <div className="cluster-service-meta" style={{ flexDirection: "column", alignItems: "flex-start", gap: "0.3rem" }}>
+                      <div className="cluster-service-meta" style={{ flexDirection: "column", alignItems: "flex-start", gap: "0.25rem" }}>
                         {nodeHealth.services.map((svc) => (
                           <span key={svc.service} className={`state-pill ${svc.status}`}>
                             {svc.service}: {STATUS_TR[svc.status] || svc.status}
@@ -714,7 +714,7 @@ export default function GroupDetailPage() {
                       <p className="muted-note">Sağlık verisi için üstteki butonu kullanın.</p>
                     )}
                     {canWrite && (
-                      <div style={{ display: "flex", gap: "0.3rem", marginTop: "0.5rem" }}>
+                      <div style={{ display: "flex", gap: "0.25rem", marginTop: "0.5rem" }}>
                         <button className="btn" onClick={() => startEditNode(node)}>Düzenle</button>
                         <button className="btn btn-danger" onClick={() => onDeleteNode(node)}>Sil</button>
                       </div>
@@ -817,7 +817,7 @@ export default function GroupDetailPage() {
                   >
                     <div className="cluster-service-head">
                       <strong>{r.node_name || r.replica_server_name}</strong>
-                      <div style={{ display: "flex", gap: "0.3rem" }}>
+                      <div style={{ display: "flex", gap: "0.25rem" }}>
                         {r.site && (
                           <span className={`tag ${r.site === "disaster" ? "private" : "public"}`}>
                             {r.site === "disaster" ? "DR" : "primary site"}

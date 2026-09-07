@@ -11,7 +11,7 @@ import {
   HealthResponse,
 } from "../api";
 import { useAuth } from "../auth";
-import { PageError } from "../components/PageState";
+import { PageError, PageSkeleton } from "../components/PageState";
 import { useUrlFilter } from "../hooks/useUrlState";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
@@ -358,8 +358,10 @@ export default function DashboardPage() {
 
           <div className="card" style={{ marginBottom: "1.5rem" }}>
             <h3 className="chart-title">Sorunlar ve öneriler</h3>
+            {/* Tek satırlık "Yükleniyor…" yerine iskelet: kart yüksekliği veri gelince
+                birden değişip altındaki içeriği aşağı itmiyor (Faz 22 İŞ 2). */}
             {groupSummaryLoading ? (
-              <p className="muted-note">Yükleniyor…</p>
+              <PageSkeleton rows={3} withHeader={false} />
             ) : problemCards.length === 0 ? (
               <p className="muted-note">Şu anda açık bir sorun veya öneri yok.</p>
             ) : (

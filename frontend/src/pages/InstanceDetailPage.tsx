@@ -43,7 +43,7 @@ import {
   SlowQueryList,
   TuningReport,
 } from "../api";
-import { EmptyState, NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../components/PageState";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import AdviceCard from "../components/AdviceCard";
@@ -764,7 +764,7 @@ export default function InstanceDetailPage() {
   }
 
   if (!instance) {
-    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageSkeleton rows={6} />;
   }
 
   return (
@@ -1073,7 +1073,7 @@ export default function InstanceDetailPage() {
 
       {tab === "metrics" && (
         <>
-        <p className="muted-note" style={{ marginBottom: "0.6rem" }}>
+        <p className="muted-note" style={{ marginBottom: "0.5rem" }}>
           Grafiklerde <strong>sürükleyerek bir aralık seçin</strong> — tüm grafikler o aralığa
           yakınlaştırılır. Üstteki "Özel" butonuyla kesin başlangıç/bitiş girebilirsiniz.
         </p>
@@ -1319,7 +1319,7 @@ export default function InstanceDetailPage() {
                 </ResponsiveContainer>
               </div>
 
-              <p className="muted-note" style={{ marginTop: "0.8rem" }}>
+              <p className="muted-note" style={{ marginTop: "0.75rem" }}>
                 Seçim aşağıdaki <strong>En sorunlu sorgular</strong> listesine uygulanır — liste o
                 aralıktaki değişime göre yeniden sıralanır.
               </p>
@@ -1729,7 +1729,7 @@ export default function InstanceDetailPage() {
                         <td>{p.threshold.toFixed(2)}</td>
                         <td><span className={`status ${p.severity}`}>{p.severity}</span></td>
                         <td style={{ minWidth: "340px" }}>
-                          <p style={{ margin: "0 0 0.4rem" }}>{p.message}</p>
+                          <p style={{ margin: "0 0 0.5rem" }}>{p.message}</p>
                           {p.recommendation && <RecommendationHeader title={p.recommendation} />}
                           {p.action && <CopyableAction command={p.action} />}
                           {/* Faz 16-B İŞ 7: adım adım çözüm, katlanabilir. */}

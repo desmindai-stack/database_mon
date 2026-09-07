@@ -57,7 +57,7 @@ export default function ClusterHealthPanel({ instanceId, data, error, loading, o
         <div>
           <h3 className="chart-title" style={{ margin: 0 }}>
             Cluster health
-            <span className={`tuning-status ${data.overall}`} style={{ marginLeft: "0.6rem" }}>
+            <span className={`tuning-status ${data.overall}`} style={{ marginLeft: "0.5rem" }}>
               {data.overall}
             </span>
           </h3>

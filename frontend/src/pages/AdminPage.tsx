@@ -321,7 +321,7 @@ export default function AdminPage() {
                       </td>
                       <td className="muted-note">{u.last_login_at ? formatTime(u.last_login_at) : "—"}</td>
                       <td>
-                        <div style={{ display: "flex", gap: "0.3rem", flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
                           <button className="btn btn-xs" onClick={() => onResetPassword(u)}>Şifre sıfırla</button>
                           <button
                             className="btn btn-xs"
@@ -415,7 +415,7 @@ export default function AdminPage() {
           <p className="muted-note">
             Zamanlanmış rapor üretimi. Rapor arka planda çalışır; toplama döngüsünü etkilemez.
           </p>
-          <label style={{ display: "block", marginBottom: "0.6rem" }}>
+          <label style={{ display: "block", marginBottom: "0.5rem" }}>
             <input
               type="checkbox"
               checked={reportSchedule?.enabled ?? false}
@@ -424,7 +424,7 @@ export default function AdminPage() {
             />{" "}
             Zamanlanmış üretim açık
           </label>
-          <label style={{ maxWidth: 220, display: "block", marginBottom: "0.6rem" }}>
+          <label style={{ maxWidth: 220, display: "block", marginBottom: "0.5rem" }}>
             Saat
             <select
               value={reportSchedule?.hour ?? 6}
@@ -507,7 +507,7 @@ export default function AdminPage() {
             </label>
           </div>
 
-          <label style={{ display: "block", marginTop: "0.8rem" }}>
+          <label style={{ display: "block", marginTop: "0.75rem" }}>
             <input
               type="checkbox"
               checked={noise?.show_system_queries ?? false}
