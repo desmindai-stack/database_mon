@@ -190,6 +190,14 @@ async def migrate_schema() -> None:
         )
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "playbook", "playbook JSON")
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "advice", "advice JSON")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "method", "method VARCHAR(128)")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "sample_count", "sample_count INTEGER")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "span_days", "span_days FLOAT")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "outliers_removed", "outliers_removed INTEGER")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "fit_kind", "fit_kind VARCHAR(16)")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "fit_note", "fit_note TEXT")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "eta_days_min", "eta_days_min FLOAT")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "eta_days_max", "eta_days_max FLOAT")
         # Faz 17 Ek İŞ A — bulgu durum makinesi.
         await _sqlite_add_column_if_missing(conn, "finding_acknowledgements", "finding_type", "finding_type VARCHAR(96)")
         await _sqlite_add_column_if_missing(

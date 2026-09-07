@@ -4017,6 +4017,131 @@ seçildiği, şema nesnesinde yanlış nesnenin okunmadığı, metriklerin doğr
 hesaplandığı, az ölçümde "bilinmiyor" dendiği, `expired` satırların oranı
 düşürmediği ve API'nin rozeti doğruluk ucuyla TUTARLI döndürdüğü.
 
+## Faz 20 — İŞ 3: Tahmin kalitesi
+
+Altı maddenin ikisi (güven aralığı, veri yeterliliği ilanı) Faz 16'da
+kısmen vardı; denetim sırasında ikisinin de **uygulanmadığı** ortaya çıktı.
+Aşağıda önce bulunan iki gerçek hata, sonra eklenen dört yetenek.
+
+### Bulunan hata A — saat bazlı mevsimsellik trendi yutuyordu
+
+Bir günden kısa bir seride her saat kovası bir kez görülür. Yani "o saatin
+ortalamadan sapması" ile "o ana kadarki artış" **aynı şeydir**: mevsimsel
+bileşen çıkarıldığında geriye düz bir seri kalır, eğim sıfıra iner ve
+tahmin noktası şu anki değerin ALTINA düşer.
+
+Somut sonuç: %55'ten %82'ye tırmanan bir bağlantı serisi için bir saat
+sonrası **%67.8** tahmin ediliyordu — yükselen bir metrik için düşüş
+öngörülüyordu. Eşik ihlali de doğal olarak hiç tetiklenmiyordu.
+
+Eski koruma (`len(points) < 8` ve "en az 2 farklı kova") bunu yakalamıyor:
+16 saatte 17 farklı kova ve 50 nokta var, ikisi de sağlanıyor.
+
+Doğru ölçüt desenin **tekrar etmesi**: her mevsim kovası en az iki AYRI
+döngüde görülmeli (saat deseni için iki farklı gün, haftaiçi/haftasonu
+deseni için iki farklı hafta). Sağlanmazsa düz regresyona düşülüyor —
+uydurma bir desen uygulamaktansa desensiz kalmak doğru.
+
+### Bulunan hata B — ilan edilen veri gereksinimi uygulanmıyordu
+
+`PREDICTION_REQUIREMENTS["connection_trend"]` 40 örnek / 0.5 gün diyor ve
+"Tahmin veri yeterliliği" paneli bunu kullanıcıya gösteriyordu. Ama
+`_short_horizon_predictions` içinde çıplak bir `len(points) < 5` vardı:
+panel "0.2/0.5 gün — bekleniyor" derken tahmin çoktan üretilmiş oluyordu.
+Ayrıca 5 örnek (75 saniye) üzerinden 1 saat ilerisini kestirmek 48 katlık
+bir ekstrapolasyon.
+
+Bu, İŞ 1'deki hatayla aynı sınıftan: bir kural ilan edilmiş, gösterilmiş,
+ama uygulanmamış. Artık üretim ve panel aynı yerden besleniyor.
+
+**Bilerek değişen davranış:** yeni eklenen bir instance artık ilk 12 saat
+kısa vadeli tahmin üretmiyor. Öncesinde 75 saniyelik veriyle üretiyordu —
+o tahminler zaten güvenilmezdi. Mevcut iki test (`test_prediction.py`)
+gerçekçi pencereyle güncellendi.
+
+### Aykırı değerler
+
+Tek seferlik sıçramalar (gece yedeği, toplu içe aktarma) eğimi olduğundan
+dik gösterip yanlış aciliyet üretiyordu. `detect_outliers` artık MAD
+(medyan mutlak sapma) tabanlı bir eşikle bunları ayıklıyor.
+
+İki tasarım detayı:
+
+- **Aykırılık ortalamaya değil TRENDE göre ölçülüyor.** Büyüyen bir seride
+  değerler zaten geniş bir aralığa yayılır; ortalamadan uzaklık orada
+  anlamsızdır. Önce bir doğru geçiriliyor, aykırılık kalıntılar üzerinden
+  ölçülüyor. Standart sapma yerine MAD kullanılıyor çünkü standart sapmayı
+  aykırı değerin kendisi şişirir ve kendini gizler.
+- **Noktaların en fazla %20'si atılabilir.** Üstü atılıyorsa sorun tek bir
+  sıçrama değil, modelin yanlış olmasıdır; orada veriyi kırpmak "veriyi
+  tahmine uydurmak" olur.
+
+### Doğrusal olmayan büyüme
+
+`assess_fit` verinin şeklini adlandırıyor: `linear` | `exponential` |
+`curved` | `noisy` | `flat`.
+
+- **Üstel**: log dönüşümlü regresyon belirgin şekilde daha iyi uyuyorsa.
+  Bulgu metnine "doğrusal tahmin bu durumda gerçekleşenden DAHA İYİMSER
+  çıkar — tarih büyük ihtimalle olduğundan geç" notu ekleniyor.
+- **Eğri**: kalıntılar ortada bir yöne, uçlarda diğer yöne sapıyorsa
+  (hızlanan ya da doyuma ulaşan büyüme). Eşik ölçülerek seçildi: belirgin
+  eğri bir seri 1.02, düzgün doğrusal bir seri 0.1'in altında veriyor —
+  0.8 ikisini rahatça ayırıyor.
+- **Gürültülü / sabit**: bu ikisinde **tahmin hiç üretilmiyor**. Gürültüden
+  trend uydurmak, olmayan bir sinyali varmış gibi sunmaktır.
+
+Üstel ve eğri seriler atılmıyor: orada gerçek bir büyüme VAR, yalnızca
+doğrusal tahmin iyimser kalıyor. Gizlemek yerine uyarısıyla veriliyor.
+
+**Aykırı temizliği ile doğrusallık testi iki geçişli**, çünkü birbirlerine
+bağlılar: tek bir uç değer log uyumunu yapay olarak iyileştirip düz bir
+seriyi "üstel" gösterebiliyordu (ilk denemede tam da bu oldu). Sıra: önce
+MAD tabanlı temizlik (sıçramadan etkilenmez), sonra kalan noktaların HAM
+değerleriyle uyum ölçümü, ve uyum "eğri/üstel" çıktıysa temizlik geri
+alınıyor — doğrusal bir modele göre bir eğrinin UÇLARI en büyük kalıntıya
+sahiptir, orada "aykırı" görünen şey gerçek veridir.
+
+### Tek nokta yerine aralık
+
+`eta_days_range` eşiğe ulaşma süresini **aralık** olarak veriyor
+("45-60 gün arası"). Kaynağı eğimin kendi %90 güven aralığı
+(`se(slope) = sqrt(kalıntı varyansı / Sxx)`) — nokta tahmininin
+aralığından farklı bir şey: "büyüme hızı ne kadar belirsiz" sorusunu
+cevaplıyor.
+
+Eğimin alt sınırı sıfırın altındaysa üst uç `None` dönüyor ve arayüz
+"en erken N gün (üst sınır belirsiz — büyüme durabilir)" yazıyor. Uydurma
+bir üst sınır yazmaktansa belirsizliği söylemek doğru.
+
+Tablo/index tahminleri de artık nokta yerine aralık gösteriyor
+("30 gün sonra 12.4 GB–18.1 GB arasında").
+
+### Yöntem şeffaflığı
+
+Öncesinde tahminin yanında yalnızca "güven: %85" vardı ve bu regresyonun
+R²'siydi — modelin geçmişe oturma iyiliğini söyler, verinin doğrusal
+modele UYUP uymadığını değil. Üstel büyüyen ya da tek sıçramayla bozulmuş
+bir seri de yüksek "güven" gösterebiliyordu.
+
+Her tahmin artık taşıyor: kullanılan model (`doğrusal regresyon +
+haftaiçi/haftasonu düzeltmesi + 1 aykırı ölçüm çıkarıldı`), örnek sayısı,
+dönem uzunluğu, atılan aykırı sayısı, verinin şekli ve açıklaması.
+Arayüzde katlanabilir bir "Yöntem" bölümünde; veri doğrusal değilse başlık
+satırında uyarı görünüyor. R² de orada, ama artık ne OLMADIĞI da yazılı:
+"tahminin tuttuğunu göstermez; onun ölçüsü üstteki doğruluk tablosudur".
+
+### Migration
+
+`supabase/migrations/20260908110000_prediction_method_transparency.sql` —
+`prediction_insights`: method, sample_count, span_days, outliers_removed,
+fit_kind, fit_note, eta_days_min, eta_days_max. DEPLOY.md sıra 32.
+
+**Testler:** `tests/test_prediction_quality.py` (21 test) — altı kuralın
+her biri, ve bulunan iki hata için ayrı regresyon testleri (yükselen seri
+için düşüş öngörülmemesi; ilan edilen gereksinimin gerçekten uygulanması).
+Toplam 670 test yeşil, `npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

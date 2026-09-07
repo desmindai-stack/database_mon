@@ -756,6 +756,16 @@ class PredictionOut(BaseModel):
     # Faz 20 İŞ 2: bu TÜRÜN ölçülmüş doğruluğu. Tahminin kendisine değil ailesine ait — "bu tür
     # tahminler son 30 günde ne kadar tuttu" sorusunun cevabı. Router dolduruyor.
     reliability: PredictionReliabilityOut | None = None
+    # Faz 20 İŞ 3 — yöntem şeffaflığı. `confidence` (R²) tek başına yanıltıcıydı: modelin
+    # geçmişe oturma iyiliğini söyler, verinin doğrusal modele UYUP uymadığını değil.
+    method: str | None = None
+    sample_count: int | None = None
+    span_days: float | None = None
+    outliers_removed: int | None = None
+    fit_kind: str | None = None
+    fit_note: str | None = None
+    eta_days_min: float | None = None
+    eta_days_max: float | None = None
 
     @field_validator("playbook", mode="before")
     @classmethod

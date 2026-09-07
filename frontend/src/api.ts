@@ -678,6 +678,20 @@ export interface Prediction {
    * iyiliğidir (R²); bu, tahminlerin gerçekleşene ne kadar yaklaştığıdır.
    */
   reliability: PredictionReliability | null;
+  /**
+   * Faz 20 İŞ 3 — yöntem şeffaflığı. `confidence` (R²) tek başına yanıltıcıydı: modelin
+   * geçmişe oturma iyiliğini söyler, verinin doğrusal modele UYUP uymadığını değil.
+   */
+  method: string | null;
+  sample_count: number | null;
+  span_days: number | null;
+  outliers_removed: number | null;
+  /** "linear" | "exponential" | "curved" | "noisy" | "flat" */
+  fit_kind: string | null;
+  fit_note: string | null;
+  /** Eşiğe ulaşmanın gün cinsinden aralığı — tek nokta yerine "45-60 gün arası". */
+  eta_days_min: number | null;
+  eta_days_max: number | null;
 }
 
 export interface PredictionReliability {

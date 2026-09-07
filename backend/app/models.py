@@ -352,6 +352,18 @@ class PredictionInsight(Base):
     # tahmin için `advice: null` dönüyor, arayüz tek cümlelik `recommendation`'a düşüyordu.
     # `playbook` ham adım listesi olarak duruyor (geriye dönük uyumluluk); bu onun standart hali.
     advice: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Faz 20 İŞ 3 — yöntem şeffaflığı: hangi model, kaç ölçüm, hangi dönem, kaç aykırı değer
+    # atıldı ve veri doğrusal modele uyuyor mu. Kullanıcı tahminin neye dayandığını görebilsin
+    # (kara kutu olmasın); `fit_kind` "linear" değilse arayüz uyarı gösteriyor.
+    method: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    sample_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    span_days: Mapped[float | None] = mapped_column(Float, nullable=True)
+    outliers_removed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    fit_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    fit_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Eşiğe/hedefe ulaşma tarihinin ARALIĞI — tek nokta yerine "45-60 gün arası".
+    eta_days_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    eta_days_max: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="predictions")
 

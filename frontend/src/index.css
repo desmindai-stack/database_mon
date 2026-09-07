@@ -3267,3 +3267,50 @@ td code,
   background: var(--surface-2);
   border-color: var(--border);
 }
+
+/* Tahmin yöntemi notu — Faz 20 İŞ 3. */
+.method-note {
+  margin-top: 0.4rem;
+  font-size: 0.75rem;
+}
+
+.method-note > summary {
+  cursor: pointer;
+  color: var(--muted);
+  list-style: none;
+}
+
+.method-note > summary::-webkit-details-marker {
+  display: none;
+}
+
+.method-note > summary::before {
+  content: "▸ ";
+}
+
+.method-note[open] > summary::before {
+  content: "▾ ";
+}
+
+.method-warning {
+  color: var(--warning);
+}
+
+.method-note-body {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.4rem 0 0;
+  padding: 0.5rem;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+
+.method-note-body dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.method-note-body dd {
+  margin: 0;
+}

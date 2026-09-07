@@ -85,6 +85,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 29 | `20260907110000_report_finding_facts.sql` | **YENİ** — report_findings.facts (bulgunun sayısal özeti) |
 | 30 | `20260908090000_prediction_advice.sql` | **YENİ** — prediction_insights.advice (tahminler için beş parçalı standart öneri) |
 | 31 | `20260908100000_prediction_outcomes.sql` | **YENİ** — prediction_outcomes tablosu (tahmin doğruluğu geri besleme döngüsü) |
+| 32 | `20260908110000_prediction_method_transparency.sql` | **YENİ** — prediction_insights: method, sample_count, span_days, outliers_removed, fit_kind, fit_note, eta_days_min/max (tahmin yöntemi şeffaflığı) |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun

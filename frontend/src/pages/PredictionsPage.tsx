@@ -6,6 +6,7 @@ import { useAuth } from "../auth";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import PredictionAccuracyPanel from "../components/PredictionAccuracyPanel";
+import PredictionMethodNote from "../components/PredictionMethodNote";
 import PredictionPlaybook from "../components/PredictionPlaybook";
 import RecommendationHeader from "../components/RecommendationHeader";
 
@@ -79,13 +80,38 @@ export default function PredictionsPage() {
                   </td>
                   <td><code>{p.metric_key}</code></td>
                   <td>
-                    {p.current_value.toFixed(1)} → {p.predicted_value.toFixed(1)}
-                    <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
-                      eşik: {p.threshold} · güven: {(p.confidence * 100).toFixed(0)}%
-                      {p.lower_bound !== null && p.upper_bound !== null && (
-                        <> · %90 aralık: [{p.lower_bound.toFixed(1)} – {p.upper_bound.toFixed(1)}]</>
-                      )}
-                    </div>
+                    {/* Faz 20 İŞ 3: tek nokta yerine ARALIK. Nokta tahmini sahip olmadığımız
+                        bir kesinlik iddia ediyordu; aralık regresyonun kendi belirsizliğinden
+                        geliyor. */}
+                    {p.lower_bound !== null && p.upper_bound !== null ? (
+                      <>
+                        {p.current_value.toFixed(1)} →{" "}
+                        <strong>
+                          {p.lower_bound.toFixed(1)} – {p.upper_bound.toFixed(1)}
+                        </strong>
+                        <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                          %90 aralık · nokta tahmini {p.predicted_value.toFixed(1)} · eşik {p.threshold}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        {p.current_value.toFixed(1)} → {p.predicted_value.toFixed(1)}
+                        <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                          eşik: {p.threshold}
+                        </div>
+                      </>
+                    )}
+                    {(p.eta_days_min != null || p.eta_days_max != null) && (
+                      <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
+                        eşiğe:{" "}
+                        {p.eta_days_min != null && p.eta_days_max != null
+                          ? `${p.eta_days_min.toFixed(0)}-${p.eta_days_max.toFixed(0)} gün arası`
+                          : p.eta_days_min != null
+                            ? `en erken ${p.eta_days_min.toFixed(0)} gün`
+                            : `en geç ${p.eta_days_max!.toFixed(0)} gün`}
+                      </div>
+                    )}
+                    <PredictionMethodNote p={p} />
                   </td>
                   <td>
                     <span className={`status ${p.severity === "critical" ? "alerting" : "warning"}`}>

@@ -1966,3 +1966,68 @@ Kullanıcının kontrol etmesi iyi olur: bir tablette (dikey ve yatay) menü,
 sekme şeritleri ve geniş tablolar. Özellikle kenar çubuğunun dikey modda
 yatay bağlantı şeridine dönüşmesi — bu bir tasarım kararı, tercih
 edilmezse alternatif açılır bir menü olurdu.
+
+## Faz 20 — İŞ 2: Doğruluk, manşet ufkun kendisinde değil kontrol noktasında ölçülüyor
+
+Uzun vadeli tahminlerin manşet ufku aylar sürüyor (disk için 180 gün,
+wraparound için 365). O tarihi beklemek altı ay boyunca hiçbir geri
+besleme almamak demekti, dolayısıyla aynı modelden 7 gün sonrası için
+ikinci bir tahmin alınıp o ölçülüyor.
+
+Bu geçerli bir vekil çünkü ölçülen şey MODELİN kendisi — ama birebir aynı
+şey değil: 7 günde iyi çalışan bir doğrusal eğim 180 günde bozulabilir
+(büyüme hızlanabilir, arşivleme yapılabilir, iş yükü değişebilir). Yani
+"güven aralığı %80 tuttu" ifadesi "180 günlük tarihin %80 doğru" demek
+DEĞİL, "modelin bir haftalık öngörüsü %80 tuttu" demek.
+
+Daha doğrusu, manşet ufkun kendisini de ölçmek olurdu (tahmin 180 gün
+saklanır, tarihi gelince değerlendirilir). Bunu eklemedim çünkü ilk anlamlı
+sonuç için altı ay gerekirdi ve o süre boyunca panel boş kalırdı. İkisini
+birlikte tutmak (hem kısa kontrol noktası hem uzun manşet ölçümü) doğru
+uzun vadeli çözüm; `prediction_outcomes` tablosu buna hazır (checkpoint_days
+kolonu zaten ufku taşıyor), yalnızca ikinci bir kayıt eklemek gerekir.
+
+## Faz 20 — İŞ 2: Güvenilirlik instance bazında değil tür bazında
+
+Rozet "bu tür tahminler ne kadar tutuyor" diyor, "bu instance'ta ne kadar
+tutuyor" demiyor. Sebep pratik: tek bir instance'ta beş tamamlanmış ölçüme
+ulaşmak haftalar sürer ve rozet o zamana kadar hep "bilinmiyor" kalırdı.
+
+Sonucu şu: çok farklı davranan iki instance (biri düzenli büyüyen bir OLTP
+veritabanı, diğeri dalgalı bir rapor veritabanı) aynı rozeti görür.
+İkincisinin tahminleri sürekli ıskalıyorsa birincisinin rozeti de düşer.
+
+Instance bazına inmek için ölçüm hacminin artması gerekiyor. Doğru yol
+muhtemelen kademeli olmak: yeterli ölçümü olan instance için kendi oranını,
+olmayan için tür ortalamasını göstermek. Bu turda yapmadım.
+
+## Faz 20 — İŞ 3: Doğrusallık testi eşikleri ölçülerek seçildi, teorik türetilmedi
+
+`EXPONENTIAL_R2_GAIN = 0.15`, `NOISY_R2 = 0.3`, `CURVATURE_SIGMA = 0.8` ve
+`OUTLIER_MAD_MULTIPLIER = 3.5` — bunlardan yalnızca sonuncusu literatürde
+standart bir değer (MAD tabanlı aykırı tespitinde yaygın kullanılır).
+
+Diğer üçü bilinen şekillerdeki sentetik serilerle (doğrusal, üstel, eğri,
+gürültülü, sabit) denenerek ayarlandı ve testlerde o serilerle
+kilitlendi. Gerçek veritabanı serileri üzerinde kalibre edilmediler, çünkü
+bu ortamda gerçek bir üretim serisi yok.
+
+Pratik riski: sınırda bir seri yanlış sınıflanabilir — hafifçe eğri bir
+büyüme "doğrusal" sayılabilir ya da tersine. Yanlış tarafa düşerse sonuç
+bir uyarı notunun eksik/fazla olması, tahminin tamamen yanlış olması
+değil. Yine de gerçek veri biriktikçe (özellikle İŞ 2'nin doğruluk
+ölçümleri) bu eşikler gözden geçirilmeli.
+
+## Faz 20 — İŞ 3: Kısa vadeli tahminler artık ilk 12 saat üretilmiyor
+
+`PREDICTION_REQUIREMENTS` gereksinimi (40 örnek / 0.5 gün) artık gerçekten
+uygulanıyor. Bu, yeni eklenen bir instance'ın ilk yarım gün kısa vadeli
+tahmin üretmemesi demek.
+
+Öncesinde 5 örnekle (75 saniye) üretiyordu; o tahminler 48 katlık bir
+ekstrapolasyondu ve güvenilir değildi. Yani kayıp gerçek bir kayıp değil —
+ama davranış değişikliği olduğu için burada da not ediyorum: bir kullanıcı
+"eskiden hemen tahmin çıkıyordu" derse cevap bu.
+
+Hazırlık paneli zaten "kaç gün daha veri gerekli" diyor, dolayısıyla
+bekleme süresi kullanıcıya görünür durumda.

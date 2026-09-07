@@ -23,7 +23,15 @@ from app.services.prediction_advice import (
     table_growth_advice,
     wraparound_advice,
 )
-from app.services.forecasting import DataSufficiency, SeasonalPoint, check_sufficiency, forecast_with_seasonality
+from app.services.forecasting import (
+    PREDICTION_REQUIREMENTS,
+    DataSufficiency,
+    ForecastResult,
+    SeasonalPoint,
+    check_sufficiency,
+    eta_days_range,
+    forecast_with_seasonality,
+)
 
 # PostgreSQL'in kendi sabit eşikleri (uydurma değil — belgelenmiş varsayılanlar/limitler):
 # autovacuum_freeze_max_age varsayılanı 200M; XID'ler 32-bit olduğundan ~2.1B'de "wraparound"
@@ -50,6 +58,42 @@ _SHORT_HORIZON_KIND = {
 def _method_label(forecast) -> str:
     """Kullanılan modelin kısa adı — arayüzde gösteriliyor, kara kutu olmasın."""
     return f"linear_regression+{forecast.seasonality}"
+
+
+def _quality_fields(forecast: ForecastResult) -> dict:
+    """Tahminin neye dayandığı — her tahmine aynı biçimde yazılıyor (Faz 20 İŞ 3)."""
+    return {
+        "method": forecast.method,
+        "sample_count": forecast.sample_count,
+        "span_days": round(forecast.span_days, 2),
+        "outliers_removed": forecast.outliers_removed,
+        "fit_kind": forecast.fit.kind if forecast.fit else None,
+        "fit_note": forecast.fit.note if forecast.fit else None,
+    }
+
+
+def _fit_is_usable(forecast: ForecastResult) -> bool:
+    """Veri doğrusal modele uymuyorsa TAHMİN ÜRETİLMEZ (Faz 20 İŞ 3).
+
+    Gürültülü ("trend yok") ve düz ("değişmiyor") serilerden tarih tahmini çıkarmak, olmayan
+    bir sinyali varmış gibi sunmaktır. Üstel ve eğri seriler ise ATILMIYOR: orada gerçek bir
+    büyüme VAR, yalnızca doğrusal tahmin iyimser kalıyor — bunu gizlemek yerine tahmini
+    `fit_note` uyarısıyla birlikte veriyoruz.
+    """
+    return forecast.fit is None or forecast.fit.kind not in ("noisy", "flat")
+
+
+def _eta_text(days_min: float | None, days_max: float | None, fallback_days: float) -> str:
+    """Tarihi tek nokta yerine ARALIK olarak anlatır (Faz 20 İŞ 3)."""
+    if days_min is None and days_max is None:
+        return f"~{fallback_days:.0f} gün"
+    if days_max is None:
+        return f"en erken {days_min:.0f} gün (üst sınır belirsiz — büyüme durabilir)"
+    if days_min is None:
+        return f"en geç {days_max:.0f} gün"
+    if abs(days_max - days_min) < 1:
+        return f"~{days_min:.0f} gün"
+    return f"{days_min:.0f}-{days_max:.0f} gün arası"
 
 
 def _format_bytes(n: float) -> str:
@@ -156,11 +200,20 @@ async def _short_horizon_predictions(
         current = float(current_metrics[metric_key])
         now = datetime.now(UTC)
         points.append(SeasonalPoint(now, current))
-        if len(points) < 5:
-            continue  # "insufficient_samples" — bu kısa-vadeli tahminler ham örnek sayısına bakar
+
+        # Faz 20 İŞ 3: veri yeterliliği artık İLAN EDİLEN gereksinimle aynı yerden geliyor.
+        # Öncesinde burada çıplak bir `len(points) < 5` vardı: hazırlık paneli
+        # "0.2/0.5 gün — bekleniyor" derken tahmin çoktan üretilmiş oluyordu. Ayrıca 5 örnek
+        # (75 saniye) üzerinden 1 saat ilerisini kestirmek 48 katlık bir ekstrapolasyondur.
+        req = PREDICTION_REQUIREMENTS["connection_trend"]
+        span = (points[-1].timestamp - points[0].timestamp).total_seconds() / 86400.0
+        if len(points) < req.min_samples or span < req.min_days:
+            continue
 
         target = now + timedelta(minutes=horizon_minutes)
         forecast = forecast_with_seasonality(points, target, seasonality="hour")
+        if not _fit_is_usable(forecast):
+            continue  # gürültüden trend uydurmuyoruz
 
         threshold, severity, message = _default_risk(metric_key, current, forecast.point, forecast.slope_per_day)
         if threshold is None:
@@ -191,10 +244,18 @@ async def _short_horizon_predictions(
                 {"title": step.action, "detail": "", "command": step.command} for step in advice.steps
             ]
 
+        # Eşiğe ne zaman ulaşılacağının ARALIĞI — tek nokta yerine (Faz 20 İŞ 3).
+        eta_min, eta_max = eta_days_range(threshold - current, forecast)
+        if forecast.fit and forecast.fit.kind != "linear":
+            message = f"{message} — {forecast.fit.note}"
+
         insight = PredictionInsight(
             instance_id=instance_id,
             metric_key=metric_key,
             horizon_minutes=horizon_minutes,
+            eta_days_min=eta_min,
+            eta_days_max=eta_max,
+            **_quality_fields(forecast),
             current_value=current,
             predicted_value=round(forecast.point, 2),
             lower_bound=round(forecast.lower, 2),
@@ -353,6 +414,8 @@ async def _database_size_prediction(session: AsyncSession, instance_id: int) -> 
         return []
     target = points[-1].timestamp + timedelta(days=180)
     forecast = forecast_with_seasonality(points, target, seasonality="weekday")
+    if not _fit_is_usable(forecast):
+        return []  # gürültülü/sabit seriden dolma tarihi çıkarılmaz
     if forecast.slope_per_day <= 0:
         return []  # büyümüyor/küçülüyor — dolma tarihi tahmini anlamsız
 
@@ -363,13 +426,18 @@ async def _database_size_prediction(session: AsyncSession, instance_id: int) -> 
     doubling_date = (points[-1].timestamp + timedelta(days=days_to_double)).date().isoformat()
     severity = "critical" if days_to_double < 14 else "warning" if days_to_double < 45 else "info"
     bytes_per_day = forecast.slope_per_day
+    # Tek nokta yerine aralık: eğimin kendi güven aralığından türetiliyor (Faz 20 İŞ 3).
+    eta_min, eta_max = eta_days_range(current, forecast)
     message = (
         f"Veritabanı boyutu büyüyor (şimdi {_format_bytes(current)}, günlük ~{_format_bytes(bytes_per_day)}) "
-        f"— bu hızla ~{doubling_date} civarında iki katına çıkabilir. 180 gün sonraki tahmin: "
+        f"— bu hızla {_eta_text(eta_min, eta_max, days_to_double)} içinde iki katına çıkabilir "
+        f"(~{doubling_date}). 180 gün sonraki tahmin: "
         f"{_format_bytes(forecast.point)} (%90 aralık: {_format_bytes(max(0, forecast.lower))}–{_format_bytes(forecast.upper)}). "
         f"Gerçek disk kapasitesi dbace'de izlenmiyor, bu sadece veri büyüme trendi; {sufficiency.have_days:.0f} "
         f"günlük veriye dayanıyor."
     )
+    if forecast.fit and forecast.fit.kind != "linear":
+        message = f"{message} {forecast.fit.note}"
     recommendation = (
         "En hızlı büyüyen tabloları belirleyip arşivleme/partitioning değerlendirin, eski/soğuk "
         "veriyi temizleyin, VACUUM ile boşluğu geri kazanın, gerekirse disk kapasitesini büyütün."
@@ -378,6 +446,9 @@ async def _database_size_prediction(session: AsyncSession, instance_id: int) -> 
         instance_id=instance_id,
         metric_key=metric_key,
         horizon_minutes=int(days_to_double * 1440),
+        eta_days_min=eta_min,
+        eta_days_max=eta_max,
+        **_quality_fields(forecast),
         current_value=current,
         predicted_value=round(forecast.point, 2),
         lower_bound=round(forecast.lower, 2),
@@ -431,6 +502,8 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
     current = points[-1].value
     target = points[-1].timestamp + timedelta(days=365)
     forecast = forecast_with_seasonality(points, target, seasonality="weekday")
+    if not _fit_is_usable(forecast):
+        return []
     if forecast.slope_per_day <= 0:
         return []
 
@@ -440,9 +513,11 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
 
     eta_date = (points[-1].timestamp + timedelta(days=days_to_freeze_max)).date().isoformat()
     severity = "critical" if days_to_freeze_max < 14 else "warning" if days_to_freeze_max < 60 else "info"
+    eta_min, eta_max = eta_days_range(AUTOVACUUM_FREEZE_MAX_AGE - current, forecast)
     message = (
         f"Transaction ID yaşı artıyor (şimdi {current:.0f}, günlük ~{forecast.slope_per_day:.0f}) — "
-        f"bu hızla ~{eta_date} civarında autovacuum_freeze_max_age ({AUTOVACUUM_FREEZE_MAX_AGE:,}) "
+        f"{_eta_text(eta_min, eta_max, days_to_freeze_max)} içinde (~{eta_date}) "
+        f"autovacuum_freeze_max_age ({AUTOVACUUM_FREEZE_MAX_AGE:,}) "
         f"eşiğine ulaşabilir. autovacuum bu noktada zorunlu bir freeze VACUUM'u tetikler (yoğun I/O); "
         f"gerçek wraparound acil durumu ({WRAPAROUND_DANGER_AGE:,}) çok daha ilerideki bir eşiktir."
     )
@@ -454,6 +529,9 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
         instance_id=instance_id,
         metric_key=metric_key,
         horizon_minutes=int(days_to_freeze_max * 1440),
+        eta_days_min=eta_min,
+        eta_days_max=eta_max,
+        **_quality_fields(forecast),
         current_value=current,
         predicted_value=round(forecast.point, 2),
         lower_bound=round(forecast.lower, 2),
@@ -520,14 +598,20 @@ async def _object_growth_predictions(
         current = points[-1].value
         target = points[-1].timestamp + timedelta(days=30)
         forecast = forecast_with_seasonality(points, target, seasonality="weekday")
+        if not _fit_is_usable(forecast):
+            continue
         if forecast.slope_per_day <= 0:
             continue
         severity = "warning" if forecast.slope_per_day * 30 > current * 0.5 else "info"
         message = (
             f"{schema_name}.{object_name} ({object_kind}) büyüyor (şimdi {_format_bytes(current)}, "
-            f"günlük ~{_format_bytes(forecast.slope_per_day)}) — 30 gün sonra ~{_format_bytes(forecast.point)} "
-            f"olabilir ({sufficiency.have_days:.0f} günlük veriye dayanıyor)."
+            f"günlük ~{_format_bytes(forecast.slope_per_day)}) — 30 gün sonra "
+            f"{_format_bytes(max(0, forecast.lower))}–{_format_bytes(forecast.upper)} arasında "
+            f"olabilir (nokta tahmini ~{_format_bytes(forecast.point)}; "
+            f"{sufficiency.have_days:.0f} günlük veriye dayanıyor)."
         )
+        if forecast.fit and forecast.fit.kind != "linear":
+            message = f"{message} {forecast.fit.note}"
         recommendation = (
             "VACUUM (FULL değil, rutin) ve index yeniden oluşturmayı (REINDEX CONCURRENTLY) "
             "değerlendirin; gerçekten kullanılmıyorsa kaldırmayı düşünün."
@@ -538,6 +622,7 @@ async def _object_growth_predictions(
             instance_id=instance_id,
             metric_key=metric_key,
             horizon_minutes=30 * 1440,
+            **_quality_fields(forecast),
             current_value=current,
             predicted_value=round(forecast.point, 2),
             lower_bound=round(forecast.lower, 2),

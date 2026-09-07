@@ -33,6 +33,16 @@ async def _make_instance(session, *, name: str, engine: str = "postgresql") -> I
     return instance
 
 
+def _rising_series(start: float, end: float, count: int = 50) -> list[float]:
+    """Faz 20 İŞ 3 sonrası: kısa vadeli tahminler artık İLAN EDİLEN veri gereksinimini
+    (40 örnek / 0.5 gün) uyguluyor — öncesinde çıplak bir `len(points) < 5` vardı ve hazırlık
+    paneli "bekleniyor" derken tahmin çoktan üretiliyordu. Testler de gerçekçi bir pencere
+    kullanmak zorunda: 5 örnek (75 saniye) üzerinden 1 saat ilerisini kestirmek 48 katlık bir
+    ekstrapolasyondu."""
+    step = (end - start) / (count - 1)
+    return [start + step * i for i in range(count)]
+
+
 async def _add_samples(session, instance_id: int, key: str, values: list[float], *, interval_seconds: int = 15) -> None:
     base = datetime.now(UTC) - timedelta(seconds=interval_seconds * len(values))
     for i, value in enumerate(values):
@@ -51,8 +61,10 @@ async def test_connection_growth_prediction_has_engine_specific_recommendation()
     async with SessionLocal() as session:
         instance = await _make_instance(session, name="pred-pg-conn", engine="postgresql")
         # Steadily climbing utilization — will breach the 85% default threshold.
-        values = [60.0, 65.0, 70.0, 75.0, 80.0]
-        await _add_samples(session, instance.id, "connection_utilization_pct", values)
+        await _add_samples(
+            session, instance.id, "connection_utilization_pct",
+            _rising_series(55.0, 80.0), interval_seconds=1200,
+        )
 
         created = await run_predictions(
             session, instance.id, {"connection_utilization_pct": 82.0}, engine="postgresql", sample_interval_seconds=15
@@ -71,8 +83,10 @@ async def test_connection_growth_recommendation_differs_for_sqlserver():
     await init_db()
     async with SessionLocal() as session:
         instance = await _make_instance(session, name="pred-mssql-conn", engine="sqlserver")
-        values = [60.0, 65.0, 70.0, 75.0, 80.0]
-        await _add_samples(session, instance.id, "connection_utilization_pct", values)
+        await _add_samples(
+            session, instance.id, "connection_utilization_pct",
+            _rising_series(55.0, 80.0), interval_seconds=1200,
+        )
 
         created = await run_predictions(
             session, instance.id, {"connection_utilization_pct": 82.0}, engine="sqlserver", sample_interval_seconds=15
