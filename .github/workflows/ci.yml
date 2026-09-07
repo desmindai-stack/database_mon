@@ -84,3 +84,45 @@ jobs:
 
       - name: Derleme
         run: npm run build
+
+  types:
+    name: Tip sürüklenmesi (backend -> TypeScript)
+    runs-on: ubuntu-latest
+    # Bu iş hem python hem node ister: tipler backend'in OpenAPI şemasından üretiliyor.
+    # Amaç, "backend değişti ama tipler güncellenmedi" durumunu push anında yakalamak —
+    # elle yazılmış tiplerin API'den sessizce ayrışması canlı çökmelere yol açmıştı.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Bağımlılıkları kur
+        run: |
+          pip install -r backend/requirements.txt
+          npm --prefix frontend ci
+
+      - name: Tipleri yeniden üret
+        run: npm --prefix frontend run gen:types
+        env:
+          # Depoda .venv yok; betik varsayılan olarak onu arıyor.
+          PYTHON: python
+
+      - name: Commit'lenmiş hâlle karşılaştır
+        run: |
+          if ! git diff --exit-code -- frontend/openapi.json frontend/src/api-types.ts; then
+            echo "::error::Üretilen tipler commit'lenmiş hâlinden farklı."
+            echo "Backend şeması değişmiş ama tipler güncellenmemiş."
+            echo "Düzeltmek için: cd frontend && npm run gen:types  (sonra sonucu commit'leyin)"
+            exit 1
+          fi

@@ -20,6 +20,18 @@ kabul etti ve hata ancak canlıda, kullanıcı bulguya tıklayınca ortaya çık
 Not: Yalnızca adı `<Arayüz>Out` kalıbına uyan şema/arayüz çiftleri eşleştirilir. Eşleşmeyenler
 için test sessizdir — kasıtlı: isim eşleşmesi olmayan yerlerde yanlış pozitif üretmek testi
 işe yaramaz hale getirirdi.
+
+**Faz 21 İŞ 2 sonrası:** en çok çökme yaşanan tipler artık ELLE YAZILMIYOR; `api-types.ts`
+(OpenAPI'den üretilen) üzerinden türetiliyor. Onlar için hizalama yapısal olarak garanti —
+alan adı değişirse derleme kırılır. Bu testin iki görevi kaldı:
+
+* türetilmiş olması gereken tiplerin gerçekten türetilmiş kaldığını doğrulamak (birisi elle
+  yazılmış hâline geri döndürürse yakalanır),
+* HÂLÂ elle yazılmış olan arayüzleri eskisi gibi denetlemek.
+
+İki katman farklı şeyleri koruyor: derleyici "alan var mı / tipi ne", bu test ise "şema null
+gönderebiliyor mu" sorusunu — ikincisi OpenAPI'den okunamaz, Pydantic validator'ına bakmak
+gerekir.
 """
 
 from __future__ import annotations
@@ -82,10 +94,27 @@ def _before_validators(body: str) -> set[str]:
     return names
 
 
-# Denetlenecek çiftler: TS arayüzü <-> aynı adlı Out şeması.
+def _derived_types() -> dict[str, str]:
+    r"""`export type X = Gen["YOut"]...` — üretilen şemadan TÜRETİLEN tipler.
+
+    `Omit<` uzun alan listelerinde satır sonuna sarıyor, bu yüzden araya boşluk/yeni satır
+    girebiliyor (`\s*`). Tek satır varsayan bir desen `ReportFinding`'i kaçırıyordu.
+    """
+    pattern = r'^export type (\w+) = (?:Omit<\s*)?Gen\["(\w+)"\]'
+    return {m.group(1): m.group(2) for m in re.finditer(pattern, API_TS, re.M)}
+
+
+DERIVED = _derived_types()
+
+# Elle yazılmış arayüzler <-> aynı adlı Out şeması.
 PAIRS = sorted((iface, f"{iface}Out") for iface in TSI if f"{iface}Out" in PYD)
 
-# Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar.
+# Bu tipler canlı çökmelere yol açtı; elle yazılmış hâline geri dönmemeleri gerekiyor.
+MUST_BE_DERIVED = ["ReportFinding", "FindingFact", "Advice", "Prediction", "DashboardSummary"]
+
+# Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler
+# burada görünmez — onların hizası derleyici tarafından zaten garanti; bu liste HÂLÂ elle
+# yazılmış olanları kapsıyor.)
 ORM_PAIRS = [
     (iface, schema)
     for iface, schema in PAIRS
@@ -96,11 +125,19 @@ ORM_PAIRS = [
 def test_the_audit_actually_matches_some_pairs():
     """Regex bozulursa test sessizce "her şey yolunda" demesin."""
     assert len(PAIRS) >= 10, f"yalnızca {len(PAIRS)} çift eşleşti — eşleştirme bozulmuş olabilir"
-    assert ("ReportFinding", "ReportFindingOut") in PAIRS
+    assert DERIVED, "üretilen şemadan türetilen hiçbir tip bulunamadı — regex bozulmuş olabilir"
 
 
-def test_the_orm_pair_audit_covers_the_actual_regression():
-    assert ("ReportFinding", "ReportFindingOut") in ORM_PAIRS, "asıl vaka denetim dışı kalmış"
+@pytest.mark.parametrize("type_name", MUST_BE_DERIVED)
+def test_the_highest_risk_types_stay_generated(type_name: str):
+    """Bu tipler elle yazılmışken API'den sessizce ayrıştı ve canlıyı çökertti. Üretilen
+    şemadan türetilmiş kalmaları, alan adı/varlığı hizasını DERLEME zamanına taşıyor."""
+    assert type_name in DERIVED, (
+        f"{type_name} artık `api-types.ts`'ten türetilmiyor — elle yazılmış hâline dönmüş "
+        "olabilir. O hâlde backend'deki bir alan değişikliği sessizce kaçar."
+    )
+    schema_name = DERIVED[type_name]
+    assert schema_name in PYD, f"{type_name} var olmayan bir şemadan türetiliyor: {schema_name}"
 
 
 @pytest.mark.parametrize("iface,schema_name", PAIRS)

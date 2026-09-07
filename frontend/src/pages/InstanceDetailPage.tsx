@@ -1719,7 +1719,7 @@ export default function InstanceDetailPage() {
                         <td>{p.current_value.toFixed(2)}</td>
                         <td>
                           {p.predicted_value.toFixed(2)}
-                          {p.lower_bound !== null && p.upper_bound !== null && (
+                          {p.lower_bound != null && p.upper_bound != null && (
                             <div style={{ color: "var(--muted)", fontSize: "0.75rem" }}>
                               [{p.lower_bound.toFixed(2)} – {p.upper_bound.toFixed(2)}]
                               {p.seasonality && p.seasonality !== "none" && ` · ${p.seasonality} mevsimsellik`}

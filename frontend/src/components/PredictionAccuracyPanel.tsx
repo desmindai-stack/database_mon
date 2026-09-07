@@ -15,8 +15,9 @@ const LEVEL_LABEL: Record<string, string> = {
   unknown: "Henüz ölçülmedi",
 };
 
-function formatError(value: number | null): string {
-  if (value === null) return "—";
+function formatError(value: number | null | undefined): string {
+  // Üretilen tipte alan hem opsiyonel hem nullable: `== null` ikisini birden kapsar.
+  if (value == null) return "—";
   if (Math.abs(value) >= 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   if (Math.abs(value) >= 1000) return value.toLocaleString("tr-TR", { maximumFractionDigits: 0 });
   return value.toFixed(2);
@@ -62,13 +63,13 @@ export default function PredictionAccuracyPanel({
                 <tr key={row.kind}>
                   <td>{row.label}</td>
                   <td>
-                    {row.interval_hit_rate === null
+                    {row.interval_hit_rate == null
                       ? "—"
                       : `%${(row.interval_hit_rate * 100).toFixed(0)}`}
                   </td>
                   <td>{formatError(row.mean_absolute_error)}</td>
                   <td>
-                    {row.mean_percent_error === null
+                    {row.mean_percent_error == null
                       ? "—"
                       : `%${row.mean_percent_error.toFixed(1)}`}
                   </td>

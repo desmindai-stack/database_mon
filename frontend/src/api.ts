@@ -1,3 +1,22 @@
+/**
+ * Backend'den ÜRETİLEN tipler (Faz 21 İŞ 2).
+ *
+ * `api-types.ts` FastAPI'nin OpenAPI şemasından otomatik üretiliyor (`npm run gen:types`).
+ * Aşağıdaki arayüzler artık elle yazılmak yerine ondan TÜRETİLİYOR: backend'de bir alan
+ * eklenir/kaldırılır/yeniden adlandırılırsa burada derleme hatası olur.
+ *
+ * Bu değişikliğin sebebi somut: elle yazılmış tipler API'den sessizce ayrışıp canlı çökmelere
+ * yol açtı (`ReportFinding.facts` tipte "her zaman var" diyordu, API onu hiç döndürmüyordu).
+ *
+ * `Omit<...> & {...}` kalıbı iki şey için kullanılıyor ve her biri yerinde gerekçelendirildi:
+ *   1. OpenAPI'nin ifade edemediği daraltmalar (serbest `string` yerine literal birleşim),
+ *   2. DAĞITIM KAYMASI — şema artık boş dizi garanti ediyor ama eski bir backend sürümü
+ *      hâlâ `null` döndürebilir; tipin bunu kabul etmesi çağrı yerlerini korumaya zorluyor.
+ */
+import type { components } from "./api-types";
+
+type Gen = components["schemas"];
+
 export type DbEngine = "postgresql" | "sqlserver" | "mongodb";
 
 export interface ClusterServiceOptions {
@@ -353,27 +372,20 @@ export interface InstanceDependencies {
 export type ReportScopeType = "global" | "customer" | "application" | "group" | "instance";
 
 /** Faz 17 Ek İŞ B: standart öneri yapısı — rapor, dashboard, DPA ve tahminlerde AYNI şekil. */
-export interface AdviceStep {
-  action: string;
-  command: string | null;
-}
+/** Üretilen şemadan. */
+export type AdviceStep = Gen["AdviceStepOut"];
 
-export interface Advice {
-  title: string;
-  why: string;
+
+export type Advice = Omit<Gen["AdviceOut"], "steps" | "cautions"> & {
   /**
-   * `advice` serbest biçimli bir JSON kolonunda saklanıyor; eski kayıtlarda bu anahtarlar
-   * eksik/null olabilir. Backend null'ı boşa çeviriyor, tip yine de nullable — "her zaman
-   * var" diyen bir tip, derleyicinin bu sınıftan hataları yakalamasını engelliyor.
+   * DAĞITIM KAYMASI: `advice` serbest biçimli bir JSON kolonunda saklanıyor. Şema artık
+   * null'ı boşa çeviriyor ama bu alanlar eklenmeden önce yazılmış kayıtlarda anahtar
+   * eksik/null olabilir. Tipin bunu kabul etmesi, çağrı yerlerinde korumayı zorunlu kılıyor.
    */
   steps: AdviceStep[] | null;
   cautions: string[] | null;
-  estimated_duration: string | null;
-  rollback: string | null;
-  verification: string | null;
-  /** Öneri üretilemiyorsa nedeni — bu alan doluyken adımlar boştur. */
-  unavailable_reason: string | null;
-}
+};
+
 
 export type FindingStatus =
   | "open"
@@ -424,51 +436,29 @@ export interface FindingStatusUpdate {
   reference?: string | null;
 }
 
-export interface FindingFact {
-  label: string;
-  value: string;
-  /** Bilinmeyen bir ton backend tarafında "neutral"a indirgeniyor. */
+export type FindingFact = Omit<Gen["FindingFactOut"], "tone"> & {
+  /** OpenAPI'de serbest `string`; backend geçersiz değeri "neutral"a indirgiyor. */
   tone: "neutral" | "good" | "bad";
-}
+};
 
-export interface ReportFinding {
-  id: number;
-  section: string;
+
+export type ReportFinding = Omit<
+  Gen["ReportFindingOut"],
+  "severity" | "status" | "change_state" | "facts" | "commands" | "evidence"
+> & {
+  /** OpenAPI'de serbest `string` — arayüz bu değerlere göre dallanıyor. */
   severity: "critical" | "warning" | "info" | "ok";
-  title: string;
-  detail: string;
-  /**
-   * Bu üç alan `report_findings` tablosunda NULLABLE JSON kolonları. Backend şeması artık
-   * null'ı boşa çeviriyor, ama tip yine de `null` kabul ediyor: alan sonradan eklendiği için
-   * eski kayıtlarda ve eski bir backend sürümünde null/eksik gelebilir. Tipin "her zaman var"
-   * demesi, tam da bu gerilemede derleyicinin hatayı yakalamasını engellemişti — `facts`
-   * zorunlu dizi yazılmıştı, gerçekte hiç dönmüyordu.
-   */
-  evidence: Record<string, unknown> | null;
-  recommendation: string | null;
-  commands: string[] | null;
-  related_object_type: string | null;
-  related_object_id: number | null;
-  /** Bulgunun kesin hedefi (Faz 18 İŞ 1). Boşsa bölüm→sekme eşlemesine düşülür. */
-  link_hint: string | null;
-  /** Kısa sınırlılık notu (Faz 18 İŞ 3) — bulgunun önüne geçmeyecek şekilde gösterilir. */
-  note: string | null;
-  /** Sayısal özet (Faz 18 İŞ 4): "ne kadar / neye göre" etiketli, vurgulu satırlar. */
-  facts: FindingFact[] | null;
-  fingerprint: string;
-  priority: number;
-  open_since_days: number;
-  change_state: "new" | "ongoing" | "regressed" | "resolved";
-  acknowledged: boolean;
-  finding_type: string;
   status: FindingStatus;
-  /** "Çözüldü" denmişti ama bulgu hâlâ tespit ediliyor — yanlış kapatma işareti. */
-  verification_failed: boolean;
-  decision_note: string | null;
-  decision_reference: string | null;
-  decision_until: string | null;
-  advice: Advice | null;
-}
+  change_state: "new" | "ongoing" | "regressed" | "resolved";
+  /**
+   * DAĞITIM KAYMASI: üçü de nullable JSON kolonundan geliyor. Şema null'ı boşa çeviriyor,
+   * ama eski bir backend sürümü hâlâ null/eksik döndürebilir — canlı çökme tam buradaydı.
+   */
+  facts: FindingFact[] | null;
+  commands: string[] | null;
+  evidence: Record<string, unknown> | null;
+};
+
 
 export interface HealthReportSummary {
   id: number;
@@ -663,80 +653,27 @@ export interface AlertEvent {
 }
 
 /** Faz 16-B İŞ 7: tahmin için tek bir çözüm adımı. */
-export interface PredictionStep {
-  title: string;
-  detail: string;
-  command: string | null;
-}
+export type PredictionStep = Gen["PredictionStepOut"];
 
-export interface Prediction {
-  id: number;
-  instance_id: number;
-  metric_key: string;
-  created_at: string;
-  horizon_minutes: number;
-  current_value: number;
-  predicted_value: number;
-  threshold: number;
-  confidence: number;
-  severity: string;
-  message: string;
-  recommendation: string | null;
-  action: string | null;
-  acknowledged_at: string | null;
-  lower_bound: number | null;
-  upper_bound: number | null;
-  seasonality: string | null;
-  /**
-   * Adım adım çözüm planı. Nullable bir JSON kolonundan geliyor: plan üretilmeyen tahmin
-   * türlerinde ve bu alan eklenmeden önce kaydedilmiş satırlarda null olabilir.
-   */
+
+export type Prediction = Omit<Gen["PredictionOut"], "playbook" | "reliability"> & {
+  /** DAĞITIM KAYMASI: nullable JSON kolonu; planı olmayan tahmin türlerinde null. */
   playbook: PredictionStep[] | null;
-  /** Playbook'un standart öneri yapısına çevrilmiş hali (Faz 17 Ek İŞ B). */
-  advice: Advice | null;
-  /**
-   * Bu tahmin TÜRÜNÜN ölçülmüş güvenilirliği (Faz 20 İŞ 2) — tahminin kendisine değil
-   * ailesine ait. `confidence` ile karıştırmayın: o, regresyonun geçmiş veriye oturma
-   * iyiliğidir (R²); bu, tahminlerin gerçekleşene ne kadar yaklaştığıdır.
-   */
   reliability: PredictionReliability | null;
-  /**
-   * Faz 20 İŞ 3 — yöntem şeffaflığı. `confidence` (R²) tek başına yanıltıcıydı: modelin
-   * geçmişe oturma iyiliğini söyler, verinin doğrusal modele UYUP uymadığını değil.
-   */
-  method: string | null;
-  sample_count: number | null;
-  span_days: number | null;
-  outliers_removed: number | null;
-  /** "linear" | "exponential" | "curved" | "noisy" | "flat" */
-  fit_kind: string | null;
-  fit_note: string | null;
-  /** Eşiğe ulaşmanın gün cinsinden aralığı — tek nokta yerine "45-60 gün arası". */
-  eta_days_min: number | null;
-  eta_days_max: number | null;
-}
+};
 
-export interface PredictionReliability {
+
+export type PredictionReliability = Omit<Gen["PredictionReliabilityOut"], "level"> & {
+  /** OpenAPI'de serbest `string`; arayüz rozeti bu dört değere göre seçiyor. */
   level: "unknown" | "low" | "medium" | "high";
-  interval_hit_rate: number | null;
-  evaluated_count: number;
-  note: string;
-}
+};
+
 
 /** Bir tahmin türünün ölçülmüş doğruluğu (Faz 20 İŞ 2). */
-export interface PredictionAccuracy {
-  kind: string;
-  label: string;
-  evaluated_count: number;
-  pending_count: number;
-  expired_count: number;
-  mean_absolute_error: number | null;
-  mean_percent_error: number | null;
-  interval_hit_rate: number | null;
+export type PredictionAccuracy = Omit<Gen["PredictionAccuracyOut"], "reliability"> & {
   reliability: "unknown" | "low" | "medium" | "high";
-  window_days: number;
-  note: string;
-}
+};
+
 
 export interface PredictionReadiness {
   kind: string;
@@ -1166,14 +1103,8 @@ export interface GroupStatusRow {
   link_hint: string;
 }
 
-export interface DashboardSummary {
-  totals: DashboardTotals;
-  health: DashboardHealth;
-  top_issues: DashboardIssue[];
-  recommendations: DashboardRecommendation[];
-  groups: GroupStatusRow[];
-  last_checked: string | null;
-}
+export type DashboardSummary = Gen["DashboardSummaryOut"];
+
 
 export interface RefreshInterval {
   seconds: number;

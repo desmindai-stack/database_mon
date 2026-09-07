@@ -4365,6 +4365,96 @@ Yerelde de tek başına çalıştırılabilir (`python scripts/check_model_integ
 Yerel `backend/.venv` hâlâ 3.14; risk artık *canlıya* değil *CI'a* düşen
 bir sürpriz. SORULAR.md'deki not bu ayrımla güncellendi.
 
+## Faz 21 — İŞ 2: Backend'den TypeScript tipi üretimi
+
+Elle yazılmış frontend tipleri API'den sessizce ayrışıyordu ve bugünkü
+çökmelerin kökü buydu — en somutu `ReportFinding.facts`: tip "her zaman
+var" diyordu, şemada alan hiç tanımlı olmadığı için API onu HİÇ
+döndürmüyordu, arayüz `.length` okuyunca patlıyordu. Derleyici
+yakalayamadı çünkü tip yalan söylüyordu.
+
+### Üretim zinciri
+
+`backend/scripts/dump_openapi.py` → `frontend/openapi.json` →
+`openapi-typescript` → `frontend/src/api-types.ts`.
+
+Şema **sunucu çalıştırılmadan** üretiliyor (`app.openapi()`). İki sebep:
+CI'da sunucu/port/sağlık beklemesi gerekmiyor, ve çıktı deterministik
+(ağ ve zamanlama devrede değil). Anahtarlar sıralı yazılıyor — aksi
+hâlde sürüklenme kontrolü kod değişmeden de kırmızı olurdu.
+
+```bash
+cd frontend
+npm run gen:types        # backend'i çalıştırmadan (python gerekir)
+npm run gen:types:live   # çalışan backend'in /openapi.json ucundan
+```
+
+Üretilen dosyanın başına projeye özgü bir açıklama ekleniyor: neden var,
+elle düzenlenmemeli, değişiklik backend'deki Pydantic şemasından yapılmalı.
+
+### Elle yazılmış tiplerin bağlanması
+
+En çok çökme yaşanan tipler artık üretilenden **türetiliyor**:
+`ReportFinding`, `FindingFact`, `Advice`, `AdviceStep`, `Prediction`,
+`PredictionStep`, `PredictionReliability`, `PredictionAccuracy`,
+`DashboardSummary`.
+
+`Omit<Gen[...], ...> & {...}` kalıbı yalnızca iki gerekçeyle kullanıldı ve
+her biri yerinde açıklandı:
+
+1. **OpenAPI'nin ifade edemediği daraltmalar** — `severity`, `status`,
+   `change_state`, `tone`, `level` şemada serbest `string`; arayüz bu
+   değerlere göre dallanıyor, literal birleşim olarak daraltıldı.
+2. **Dağıtım kayması** — `facts`, `commands`, `evidence`, `playbook`,
+   `steps`, `cautions` nullable JSON kolonlarından geliyor. Şema artık
+   null'ı boşa çeviriyor ama ESKİ bir backend sürümü hâlâ null
+   döndürebilir; tipin bunu kabul etmesi çağrı yerlerinde korumayı
+   zorunlu kılıyor.
+
+Kalan 82 arayüz elle yazılmış olarak duruyor — hepsini bir turda
+çevirmek gerekmiyordu, en çok çökme yaşanan yerlerden başlandı.
+
+### Bağlama anında çıkan gerçek uyumsuzluklar
+
+Üretilen tipler daha katı: Pydantic varsayılanı olan bir alan OpenAPI'de
+hem opsiyonel hem nullable (`?: T | null`) oluyor, oysa elle yazılan tip
+`T | null` diyordu. Derleyici sekiz çağrı yerini işaretledi — hepsinde
+`!== null` kontrolü yalnız yarısını kapsıyordu (`undefined` açıkta
+kalıyordu). `!= null` / `?? null` ile düzeltildi:
+`PredictionAccuracyPanel` (3), `DashboardPage` (4), `PredictionsPage` (1),
+`InstanceDetailPage` (1).
+
+Bunlar bugünkü backend'de pratikte tetiklenmezdi (FastAPI varsayılanı olan
+alanları da serileştiriyor), ama sözleşme onlara izin veriyordu ve tip
+artık sözleşmeyi dürüstçe anlatıyor.
+
+### CI sürüklenme kontrolü
+
+Üçüncü bir iş (`types`) hem python hem node kurup tipleri yeniden üretiyor
+ve `git diff --exit-code` ile commit'lenmiş hâlle karşılaştırıyor. Farklıysa
+iş kırmızı ve hata mesajı ne yapılacağını söylüyor: "backend şeması değişmiş
+ama tipler güncellenmemiş".
+
+### `test_api_contract_alignment.py` korundu, görevi değişti
+
+Görev gereği kaldırılmadı — iki katman farklı şeyleri koruyor. Derleyici
+"alan var mı, tipi ne" sorusunu; test ise "şema null gönderebiliyor mu"
+sorusunu cevaplıyor ve bu OpenAPI'den okunamaz (Pydantic validator'ına
+bakmak gerekir).
+
+Test yeni gerçekliğe uyarlandı: türetilmiş tipler için alan alan denetim
+yerine "türetilmiş KALDIĞINI" doğruluyor (birisi elle yazılmış hâline
+döndürürse yakalanır), hâlâ elle yazılmış arayüzler için eski denetim
+sürüyor.
+
+### Yan bulgu: kendi betiklerimde Windows kodlama hatası
+
+`dump_openapi.py` ve `check_model_integrity.py` Türkçe çıktı yazarken
+Windows'un cp1252 konsolunda `UnicodeEncodeError` verip düşüyordu (dosya
+yazılmış olsa bile). CI Linux/UTF-8 olduğu için orada görünmezdi — yani
+"yerelde patlar, CI'da geçer" durumu. İkisinde de stdout/stderr UTF-8'e
+sabitlendi.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -71,6 +71,27 @@ npm run dev
 
 Dashboard: http://localhost:5173
 
+### API tipleri (TypeScript)
+
+`frontend/src/api-types.ts` **otomatik üretilir, elle düzenlenmez.** Kaynağı backend'in
+OpenAPI şemasıdır. Elle yazılmış tipler API'den sessizce ayrıştığı için canlı çökmeler
+yaşandı (`ReportFinding.facts` tipte "her zaman var" diyordu, API onu hiç döndürmüyordu);
+bu üretim o sınıfı derleme zamanına taşıyor.
+
+Backend'de bir şema değiştirdiyseniz tipleri yeniden üretin ve sonucu commit'leyin:
+
+```bash
+cd frontend
+npm run gen:types          # backend'i çalıştırmadan üretir (python gerekir)
+npm run gen:types:live     # çalışan bir backend'in /openapi.json ucundan üretir
+```
+
+`gen:types:live` varsayılan olarak `http://localhost:8000` adresine bakar;
+`DBACE_API_URL` ile değiştirilebilir.
+
+CI, tipleri yeniden üretip commit'lenmiş hâliyle karşılaştırır — farklıysa iş kırmızı olur
+("backend değişmiş ama tipler güncellenmemiş" demektir).
+
 ### 4. Add an instance
 
 In the UI go to **Instances → Add instance**, or POST to `/api/instances`:

@@ -27,12 +27,23 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+def _utf8_stdout() -> None:
+    """Windows'ta konsol varsayılanı cp1252; Türkçe karakter yazınca UnicodeEncodeError verip
+    betiği düşürüyor (dosya çoktan yazılmış olsa bile). CI Linux/UTF-8 olduğu için orada
+    görünmez — yani tam olarak "yerelde patlar, CI'da geçer" durumu."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def _fail(message: str) -> None:
     print(f"BAŞARISIZ: {message}", file=sys.stderr)
     sys.exit(1)
 
 
 def main() -> None:
+    _utf8_stdout()
     # --- 1. Uygulama import edilebiliyor mu ------------------------------------------------
     # Canlıdaki çöküş tam olarak burada oluyordu: `from app.main import app` NameError veriyor,
     # container ayağa kalkmıyordu.

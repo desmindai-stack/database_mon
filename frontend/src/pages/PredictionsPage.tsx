@@ -83,7 +83,7 @@ export default function PredictionsPage() {
                     {/* Faz 20 İŞ 3: tek nokta yerine ARALIK. Nokta tahmini sahip olmadığımız
                         bir kesinlik iddia ediyordu; aralık regresyonun kendi belirsizliğinden
                         geliyor. */}
-                    {p.lower_bound !== null && p.upper_bound !== null ? (
+                    {p.lower_bound != null && p.upper_bound != null ? (
                       <>
                         {p.current_value.toFixed(1)} →{" "}
                         <strong>
