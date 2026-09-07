@@ -7,6 +7,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -195,6 +196,12 @@ class Instance(Base):
 
 class MetricSample(Base):
     __tablename__ = "metric_samples"
+    # "Bu instance'ın EN SON örneği" bu tablonun en sık sorusu (insights, dashboard, DPA,
+    # tahminler). Ayrı ayrı `instance_id` ve `collected_at` indeksleri bu soruyu ucuza
+    # cevaplayamıyordu: ya instance'ın tüm satırları çekilip sıralanıyor, ya da `collected_at`
+    # indeksi sondan taranıp instance_id ile eleniyordu. İkincisi, veri göndermeyi durdurmuş
+    # bir instance için tablonun tamamını taramaya dönüşüyor — canlıda 502'nin sebebi buydu.
+    __table_args__ = (Index("ix_metric_samples_instance_collected", "instance_id", "collected_at"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)
@@ -231,6 +238,12 @@ class MetricSample(Base):
 
 class SlowQuerySample(Base):
     __tablename__ = "slow_query_samples"
+    # Aynı erişim kalıbı, daha da kritik: bu tabloya toplama döngüsü başına 20 satır yazılıyor
+    # (15 sn aralıkla instance başına ~3.5 milyon satır/ay), yani sıralama maliyeti
+    # metric_samples'takinin 20 katı.
+    __table_args__ = (
+        Index("ix_slow_query_samples_instance_collected", "instance_id", "collected_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True)

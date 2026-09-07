@@ -124,7 +124,26 @@ async def test_custom_alert_rules_connect_disables_statement_cache(monkeypatch):
 
 def test_sqlalchemy_engine_disables_statement_cache_for_asyncpg_urls():
     kwargs = _engine_kwargs_for("postgresql+asyncpg://user:pass@pooler.supabase.com:6543/postgres")
-    assert kwargs["connect_args"] == {"statement_cache_size": 0}
+    # Tam eşitlik yerine anahtar kontrolü: `connect_args` sonradan başka ayarlar da taşıyor
+    # (bkz. aşağıdaki iki test). Bu testin derdi yalnızca prepared statement önbelleği.
+    assert kwargs["connect_args"]["statement_cache_size"] == 0
+
+
+def test_sqlalchemy_engine_pings_pooled_connections_before_use():
+    """Supabase pooler boştaki bağlantıları düşürüyor; ping olmadan havuzdan alınan ilk
+    bağlantı "connection was closed" ile patlıyor."""
+    kwargs = _engine_kwargs_for("postgresql+asyncpg://user:pass@pooler.supabase.com:6543/postgres")
+    assert kwargs["pool_pre_ping"] is True
+
+
+def test_sqlalchemy_engine_bounds_runaway_queries():
+    """Zaman aşımı olmadan kaçak bir sorgu isteği süresiz asılı bırakıyor; istemci yanıt
+    alamıyor ve gateway 502 döndürüyor (CORS başlığı da eklenmediği için tarayıcıda CORS
+    hatası gibi görünüyor). Sınır GENİŞ tutuldu: rapor üretimi API süreciyle aynı event
+    loop'ta çalışıyor, amaç yavaş sorguyu kesmek değil asılı kalmayı önlemek."""
+    kwargs = _engine_kwargs_for("postgresql+asyncpg://user:pass@pooler.supabase.com:6543/postgres")
+    timeout_ms = int(kwargs["connect_args"]["server_settings"]["statement_timeout"])
+    assert timeout_ms >= 60_000, "sınır rapor üretimini kesecek kadar dar olmamalı"
 
 
 def test_sqlalchemy_engine_leaves_sqlite_untouched():

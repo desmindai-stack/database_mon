@@ -11,6 +11,11 @@ class Settings(BaseSettings):
     app_name: str = "dbace"
     database_url: str = f"sqlite+aiosqlite:///{Path(__file__).resolve().parents[2] / 'data' / 'dbace.db'}"
     collect_interval_seconds: int = 15
+    # dbace'in KENDİ veritabanı bağlantıları için sorgu zaman aşımı (saniye, PostgreSQL).
+    # 0 = sınırsız. Kaçak bir sorgunun isteği süresiz asılı bırakmasını (ve gateway'in 502
+    # döndürmesini) engelleyen son savunma hattı; izlenen hedef veritabanlarını ETKİLEMEZ
+    # (onların kendi sınırı collectors/postgresql.py içinde).
+    db_statement_timeout_seconds: int = 120
     dashboard_refresh_interval_seconds: int = 60
     api_host: str = "0.0.0.0"
     api_port: int = 8000

@@ -86,6 +86,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 30 | `20260908090000_prediction_advice.sql` | **YENİ** — prediction_insights.advice (tahminler için beş parçalı standart öneri) |
 | 31 | `20260908100000_prediction_outcomes.sql` | **YENİ** — prediction_outcomes tablosu (tahmin doğruluğu geri besleme döngüsü) |
 | 32 | `20260908110000_prediction_method_transparency.sql` | **YENİ** — prediction_insights: method, sample_count, span_days, outliers_removed, fit_kind, fit_note, eta_days_min/max (tahmin yöntemi şeffaflığı) |
+| 33 | `20260909090000_hot_table_composite_indexes.sql` | **YENİ** — metric_samples + slow_query_samples (instance_id, collected_at) bileşik indeksleri. **CANLI 502 DÜZELTMESİ.** CONCURRENTLY satırlarını SQL Editor'de TEK TEK çalıştırın (transaction içinde çalışmaz) |
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun

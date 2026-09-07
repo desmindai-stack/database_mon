@@ -25,12 +25,25 @@ def _async_url(url: str) -> str:
 def _engine_kwargs_for(url: str) -> dict:
     kwargs: dict = {"echo": False}
     if url.startswith("postgresql+asyncpg://"):
+        # Havuzdaki bağlantı sunucu tarafında kapanmış olabilir (Supabase pooler boştaki
+        # bağlantıları düşürür). Ping olmadan ilk sorgu "connection was closed" ile patlıyor.
+        kwargs["pool_pre_ping"] = True
         # dbace's own metadata DB (Customers/Instances/Users/...) can itself be a
         # Supabase/PgBouncer database in production — same prepared-statement incompatibility
         # as the collector connections against monitored targets (see
         # collectors/base.py::resolve_uses_pooler). SQLAlchemy's asyncpg dialect forwards
         # connect_args straight through to asyncpg.connect().
-        kwargs["connect_args"] = {"statement_cache_size": 0}
+        connect_args: dict = {"statement_cache_size": 0}
+        # Kaçak bir sorgu için son savunma hattı: zaman aşımı olmadan sorgu dakikalarca asılı
+        # kalıyor, istemci hiçbir yanıt alamıyor ve Railway'in kenarı 502 döndürüyor — bu
+        # durumda CORS başlığı da eklenmiyor, hata tarayıcıda CORS sorunu gibi görünüyor.
+        # Sınır bilerek GENİŞ (varsayılan 120 sn): rapor üretimi API süreciyle aynı event
+        # loop'ta çalışıyor (health_report.py `asyncio.create_task`) ve ağır toplama sorguları
+        # yapıyor. Amaç yavaş sorguyu kesmek değil, ASILI KALMAYI önlemek.
+        timeout_ms = max(0, settings.db_statement_timeout_seconds) * 1000
+        if timeout_ms:
+            connect_args["server_settings"] = {"statement_timeout": str(timeout_ms)}
+        kwargs["connect_args"] = connect_args
     return kwargs
 
 
@@ -226,6 +239,20 @@ async def migrate_schema() -> None:
         )
 
 
+# Sonradan eklenen bileşik indeksler. `create_all` yalnızca eksik TABLOLARI oluşturur; var olan
+# bir tabloya sonradan tanımlanmış indeksi EKLEMEZ. Bu yüzden SQLite tarafında elle yaratılıyor
+# (Postgres tarafı supabase/migrations altındaki migration ile).
+_COMPOSITE_INDEXES = (
+    ("ix_metric_samples_instance_collected", "metric_samples", "instance_id, collected_at"),
+    ("ix_slow_query_samples_instance_collected", "slow_query_samples", "instance_id, collected_at"),
+)
+
+
+async def _ensure_indexes(conn) -> None:
+    for name, table, columns in _COMPOSITE_INDEXES:
+        await conn.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})"))
+
+
 async def init_db() -> None:
     from pathlib import Path
 
@@ -237,4 +264,6 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if settings.database_url.startswith("sqlite"):
+            await _ensure_indexes(conn)
     await migrate_schema()

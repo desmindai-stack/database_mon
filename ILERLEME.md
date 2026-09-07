@@ -4229,6 +4229,89 @@ kendi grubunun dışındaki anlık görüntüleri temizliyor (o tablo grup baş�
 
 Toplam 747 test yeşil, `npm run build` yeşil.
 
+## CANLI 502 — `/api/instances/{id}/insights` (Railway)
+
+**Belirti:** uç 502 Bad Gateway dönüyor; tarayıcıda ayrıca CORS hatası görünüyor. CORS hatası
+yan etki: 502 uygulamadan değil Railway'in kenarından geliyor, dolayısıyla yanıtta CORS başlığı
+yok.
+
+### Teşhis
+
+Uç **canlı veritabanına hiç bağlanmıyor** — erişilemeyen bir hedef yüzünden asılı kalma
+ihtimali baştan elendi. Yaptığı her şey dbace'in kendi veritabanına giden dört sorgu, ve
+hepsinin kalıbı aynı:
+
+```sql
+SELECT ... FROM <tablo> WHERE instance_id = ? ORDER BY collected_at DESC LIMIT 1
+```
+
+`metric_samples` ve `slow_query_samples` tablolarında yalnızca **ayrı ayrı** `instance_id` ve
+`collected_at` indeksleri vardı. Bu erişim kalıbı için ikisi de kötü:
+
+- `instance_id` indeksiyle: o instance'ın TÜM satırları çekilip sıralanır.
+- `collected_at` indeksiyle: indeks sondan taranır, `instance_id` ile elenir. **Veri göndermeyi
+  durdurmuş bir instance için bu, tablonun tamamını taramaya dönüşür** — planlayıcı "en yeniden
+  başla, ilk eşleşmede dur" diye ucuz sanır, oysa eşleşme milyonlarca satır geride.
+
+Hacim bunu ölümcül yapıyor. Toplama aralığı 15 saniye ve `collect_slow_queries` döngü başına
+**20 satır** yazıyor:
+
+| Tablo | Instance başına satır/ay (30 gün saklama) |
+|---|---|
+| `metric_samples` | ~172.800 |
+| `slow_query_samples` | ~3.456.000 |
+
+Sorgu dakikalarca asılı kalıyor → Railway'in kenarı bekleyip 502 döndürüyor.
+
+**Neden diğer uçlar da etkilendi:** bu uç instance detay sayfasında **15 saniyede bir**
+yenileniyor. Yavaş istekler üst üste binince SQLAlchemy havuzu (varsayılan 5 + 10) tükeniyor ve
+sıradaki her istek bekliyor — tek bir yavaş sorgu tüm API'yi cevapsız bırakıyor.
+
+Aynı kalıp beş dosyada daha var (`metrics.py`, `queries.py`, `dashboard_snapshot.py`,
+`prediction.py`), hepsi aynı indeksten yararlanıyor.
+
+### Düzeltme
+
+**1. Bileşik indeksler (asıl düzeltme).**
+`(instance_id, collected_at)` — eşitlik filtresi önce, sıralama kolonu sonra. Sorgu tek bir
+indeks aramasına iniyor. Geliştirme veritabanında plan doğrulandı:
+
+```
+ÖNCE : SEARCH ... USING INDEX ix_slow_query_samples_instance_id
+       USE TEMP B-TREE FOR ORDER BY          ← sıralama adımı
+SONRA: SEARCH ... USING COVERING INDEX ix_slow_query_samples_instance_collected
+```
+
+**2. Migration kilitlemeden uygulanıyor.**
+`supabase/migrations/20260909090000_hot_table_composite_indexes.sql`. Tablolar milyonlarca
+satır olduğu için normal `CREATE INDEX` tamamlanana kadar tabloya YAZMAYI kilitler ve toplama
+döngüsü durur — migration `CREATE INDEX CONCURRENTLY` kullanıyor. CONCURRENTLY bir transaction
+bloğunun içinde çalışamaz, bu yüzden dosyada ve DEPLOY.md'de "iki satırı SQL Editor'de tek tek
+çalıştırın" notu var. Kilitleyen alternatif yorum olarak duruyor.
+
+**3. Motor sağlamlaştırma (savunma katmanı).**
+- `pool_pre_ping=True` — Supabase pooler boştaki bağlantıları düşürüyor; ping olmadan havuzdan
+  alınan ilk bağlantı "connection was closed" ile patlıyor.
+- `statement_timeout` (varsayılan 120 sn, `DB_STATEMENT_TIMEOUT_SECONDS` ile ayarlanabilir,
+  0 = sınırsız). Kaçak bir sorgu artık **asılı kalmak yerine hata veriyor**: istemci 502 yerine
+  anlaşılır bir hata alıyor ve CORS başlığı da ekleniyor. Sınır bilerek geniş: rapor üretimi
+  API süreciyle aynı event loop'ta çalışıyor (`health_report.py` `asyncio.create_task`), amaç
+  yavaş sorguyu kesmek değil ASILI KALMAYI önlemek. Yalnızca dbace'in kendi veritabanını
+  etkiler; izlenen hedeflerin sınırı `collectors/postgresql.py` içinde.
+
+### Bilerek değişen test
+
+`test_sqlalchemy_engine_disables_statement_cache_for_asyncpg_urls` `connect_args` sözlüğünün
+TAM eşitliğini kontrol ediyordu; artık iki ayar daha taşıyor. Test niyetine (prepared statement
+önbelleği kapalı olmalı) sadık kalacak şekilde anahtar kontrolüne çevrildi, yeni iki ayar için
+ayrı testler eklendi.
+
+**Testler:** `tests/test_hot_query_indexes.py` (9 test) — indeksin modelde tanımlı olduğunu VE
+kolon sırasının doğru olduğunu (eşitlik önce, sıralama sonra), canlı şemada gerçekten
+bulunduğunu (`create_all` var olan tabloya sonradan indeks EKLEMEZ), sorgu planının onu
+kullandığını ve geçici sıralama yapmadığını, migration'ın iki indeksi de kilitlemeden
+oluşturduğunu ve DEPLOY.md'ye işlendiğini doğruluyor. Toplam 758 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
