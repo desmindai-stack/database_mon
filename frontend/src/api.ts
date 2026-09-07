@@ -353,18 +353,13 @@ export interface SlowQueryAvailability {
 }
 
 /** Faz 16-B İŞ 2: instance silinirken birlikte silinecek kayıtlar. */
-export interface InstanceDependencies {
-  instance_id: number;
-  metric_samples: number;
-  slow_query_samples: number;
-  alert_rules: number;
-  alert_events: number;
-  predictions: number;
-  metric_rollups: number;
-  schema_object_samples: number;
-  total_records: number;
-  linked_nodes: { id: number; name: string; group_id: number; port: number }[];
-}
+/**
+ * Silme öncesi bağımlılık dökümü. Faz 24: elle yazılmış alan listesi yerine ÜRETİLEN tipten
+ * türetiliyor — backend yeni bir bağımlı tablo saymaya başladığında burası kendiliğinden
+ * güncel kalıyor. Önceki elle yazılmış hâli Faz 23'te eklenen iki alanı içermiyordu.
+ */
+export type InstanceDependencies = Gen["InstanceDependenciesOut"];
+
 
 
 /* --- Sağlık Raporu (Faz 17) --- */

@@ -280,15 +280,27 @@ export default function InstancesPage() {
     }
   };
 
-  const DEPENDENCY_LABELS: [keyof InstanceDependencies, string][] = [
-    ["metric_samples", "Metrik örneği"],
-    ["slow_query_samples", "Yavaş sorgu örneği"],
-    ["alert_rules", "Alarm kuralı"],
-    ["alert_events", "Alarm olayı"],
-    ["predictions", "Tahmin"],
-    ["metric_rollups", "Günlük metrik özeti"],
-    ["schema_object_samples", "Şema nesnesi örneği"],
-  ];
+  // Tablo adı -> kullanıcıya görünen ad. Liste artık DÖKÜMÜ BELİRLEMİYOR: hangi tabloların
+  // gösterileceğini backend'in `breakdown` alanı söylüyor (o da model metadata'sından
+  // türetiliyor). Buradaki eşleme yalnızca okunur bir ad veriyor; eşlemesi olmayan tablo ham
+  // adıyla gösteriliyor.
+  //
+  // Faz 24: önceki hâli sabit bir alan listesiydi ve Faz 23'te eklenen `prediction_outcomes`
+  // ile `daily_state_snapshots` içinde yoktu — backend onları saymaya başladıktan sonra bile
+  // kullanıcı dökümde göremiyordu. Aynı "elle tutulan liste ayrıştı" hatasının frontend'deki
+  // kopyasıydı.
+  const DEPENDENCY_LABELS: Record<string, string> = {
+    metric_samples: "Metrik örneği",
+    slow_query_samples: "Yavaş sorgu örneği",
+    alert_rules: "Alarm kuralı",
+    alert_events: "Alarm olayı",
+    prediction_insights: "Tahmin",
+    prediction_outcomes: "Tahmin doğruluk kaydı",
+    metric_rollup_daily: "Günlük metrik özeti",
+    schema_object_daily_samples: "Şema nesnesi örneği",
+    daily_state_snapshots: "Günlük durum fotoğrafı",
+    nodes: "Düğüm bağlantısı",
+  };
 
   const deletePanel = deleteTarget && (
     <div className="card delete-confirm">
@@ -303,11 +315,14 @@ export default function InstancesPage() {
             <>
               <p>Bu instance'a bağlı kayıtlar var. Silerseniz bunlar da silinir:</p>
               <ul className="dependency-list">
-                {DEPENDENCY_LABELS.filter(([key]) => (deleteDeps[key] as number) > 0).map(([key, label]) => (
-                  <li key={key}>
-                    {label}: <strong>{(deleteDeps[key] as number).toLocaleString()}</strong>
-                  </li>
-                ))}
+                {Object.entries(deleteDeps.breakdown ?? {})
+                  .filter(([table, count]) => count > 0 && table !== "nodes")
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([table, count]) => (
+                    <li key={table}>
+                      {DEPENDENCY_LABELS[table] ?? table}: <strong>{count.toLocaleString()}</strong>
+                    </li>
+                  ))}
               </ul>
               {deleteDeps.linked_nodes.length > 0 && (
                 <p className="muted-note">

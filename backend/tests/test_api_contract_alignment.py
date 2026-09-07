@@ -110,7 +110,16 @@ DERIVED = _derived_types()
 PAIRS = sorted((iface, f"{iface}Out") for iface in TSI if f"{iface}Out" in PYD)
 
 # Bu tipler canlı çökmelere yol açtı; elle yazılmış hâline geri dönmemeleri gerekiyor.
-MUST_BE_DERIVED = ["ReportFinding", "FindingFact", "Advice", "Prediction", "DashboardSummary"]
+MUST_BE_DERIVED = [
+    "ReportFinding",
+    "FindingFact",
+    "Advice",
+    "Prediction",
+    "DashboardSummary",
+    # Faz 24: elle yazılmış hâli Faz 23'te eklenen iki bağımlılık alanını içermiyordu,
+    # kullanıcı dökümde göremiyordu.
+    "InstanceDependencies",
+]
 
 # Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler
 # burada görünmez — onların hizası derleyici tarafından zaten garanti; bu liste HÂLÂ elle
