@@ -3,6 +3,7 @@ import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, Application, Customer, DatabaseGroup, DbNode, errorMessage } from "./api";
 import { AuthProvider, useAuth } from "./auth";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { topologyOf } from "./formFields";
 import AdminPage from "./pages/AdminPage";
 import AlertsPage from "./pages/AlertsPage";
 import CustomAlertRuleFormPage from "./pages/CustomAlertRuleFormPage";
@@ -50,7 +51,8 @@ function nodeLeaf(n: DbNode): NavTreeNode {
 }
 
 function groupNode(g: DatabaseGroup): NavTreeNode {
-  const isCluster = g.topology !== "standalone";
+  // Aynı kural formFields.ts'teki `add_node` ile: standalone bir grup ikinci düğüm almaz.
+  const isCluster = topologyOf(g.topology) === "cluster";
   return {
     id: `group-${g.id}`,
     name: isCluster && g.access_name ? g.access_name : g.name,

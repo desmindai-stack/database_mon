@@ -11,6 +11,7 @@ import {
   InstanceDependencies,
 } from "../api";
 import { useAuth } from "../auth";
+import { showField, topologyOf, type FieldContext, type FormTopology } from "../formFields";
 import { TableState } from "../components/PageState";
 import { Pagination, usePagination } from "../components/Pagination";
 
@@ -117,6 +118,7 @@ export default function InstancesPage() {
     const target = instances.find((i) => i.id === editId);
     if (!target) return;
     setForm(instanceToForm(target));
+    setTopologyState(topologyOf(target.cluster_name));
     setEditingId(target.id);
     setIsFormOpen(true);
     searchParams.delete("edit");
@@ -124,8 +126,31 @@ export default function InstancesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instances, searchParams]);
 
+  // Topoloji formun kendi durumu: `Instance` modelinde ayrı bir kolon yok, cluster üyeliği
+  // `cluster_name` ile işaretleniyor. Düzenlemeye açılan bir kayıt için ondan türetiliyor.
+  const [topology, setTopologyState] = useState<FormTopology>("standalone");
+  const fieldCtx: FieldContext = { engine: form.engine, topology };
+
+  const setTopology = (next: FormTopology) => {
+    setTopologyState(next);
+    if (next === "standalone") {
+      // Alanlar DOM'dan çıkıyor; taşıdıkları değerler de temizlenmeli, yoksa görünmeyen
+      // bir cluster adı kaydedilip instance yanlış gruplanır.
+      setForm((prev) => ({
+        ...prev,
+        cluster_name: "",
+        role: "",
+        services: [],
+        options: { ...(prev.options || {}), keepalived_vip: "" },
+      }));
+    }
+  };
+
   const setEngine = (engine: DbEngine) => {
     setForm((prev) => ({ ...prev, engine, port: ENGINE_DEFAULTS[engine].port, database: ENGINE_DEFAULTS[engine].database }));
+    // MongoDB'de cluster topolojisi modellenmiyor (bkz. formFields.ts) — seçim standalone'a
+    // düşürülüyor ki ilgisiz alanlar açık kalmasın.
+    if (engine === "mongodb") setTopology("standalone");
   };
 
   const update = (key: keyof InstanceCreate, value: string | number | string[] | ClusterServiceOptions) => {
@@ -154,6 +179,8 @@ export default function InstancesPage() {
 
   const startEdit = (inst: Instance) => {
     setForm(instanceToForm(inst));
+    // `Instance` modelinde topoloji kolonu yok; cluster üyeliği `cluster_name` ile işaretli.
+    setTopologyState(topologyOf(inst.cluster_name));
     setEditingId(inst.id);
     setTestResult(null);
     setFieldErrors({});
@@ -163,6 +190,7 @@ export default function InstancesPage() {
   const cancelForm = () => {
     setIsFormOpen(false);
     setEditingId(null);
+    setTopologyState("standalone");
     setTestResult(null);
     setFieldErrors({});
   };
@@ -348,14 +376,29 @@ export default function InstancesPage() {
           Uygulama
           <input value={form.application} onChange={(e) => update("application", e.target.value)} />
         </label>
+        {/* Topoloji AÇIK bir seçim (Faz 22 İŞ 1). Öncesinde form bunu `cluster_name` dolu mu
+            diye örtük olarak çıkarıyordu, dolayısıyla cluster alanları standalone bir
+            instance'ta da duruyordu. Seçim `standalone`'a alındığında cluster alanları DOM'dan
+            çıkıyor ve taşıdıkları değerler temizleniyor — kaydedilirken ilgisiz veri gitmesin. */}
         <label>
-          Cluster
-          <input value={form.cluster_name} onChange={(e) => update("cluster_name", e.target.value)} />
+          Topoloji
+          <select value={topology} onChange={(e) => setTopology(e.target.value as typeof topology)}>
+            <option value="standalone">Standalone (tek düğüm)</option>
+            <option value="cluster">Cluster üyesi</option>
+          </select>
         </label>
-        <label>
-          Rol
-          <input value={form.role} onChange={(e) => update("role", e.target.value)} placeholder="primary, replica, haproxy..." />
-        </label>
+        {showField("cluster_name", fieldCtx) && (
+          <label>
+            Cluster
+            <input value={form.cluster_name} onChange={(e) => update("cluster_name", e.target.value)} />
+          </label>
+        )}
+        {showField("role", fieldCtx) && (
+          <label>
+            Rol
+            <input value={form.role} onChange={(e) => update("role", e.target.value)} placeholder="primary, replica, haproxy..." />
+          </label>
+        )}
         <label>
           Toplama aralığı (saniye, opsiyonel)
           <input
@@ -367,6 +410,7 @@ export default function InstancesPage() {
             placeholder="Boş = uygulama genel varsayılanı"
           />
         </label>
+        {showField("services", fieldCtx) && (
         <label>
           Sunucu servisleri
           <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem", marginTop: "0.35rem" }}>
@@ -382,64 +426,77 @@ export default function InstancesPage() {
             ))}
           </div>
         </label>
-        {form.engine === "postgresql" && (
-          <>
-            <label>
-              Patroni port
-              <input
-                type="number"
-                value={form.options?.patroni_port ?? 8008}
-                onChange={(e) => updateOption("patroni_port", Number(e.target.value))}
-              />
-            </label>
-            <label>
-              etcd port
-              <input
-                type="number"
-                value={form.options?.etcd_port ?? 2379}
-                onChange={(e) => updateOption("etcd_port", Number(e.target.value))}
-              />
-            </label>
-            <label>
-              HAProxy stats port
-              <input
-                type="number"
-                value={form.options?.haproxy_stats_port ?? 8404}
-                onChange={(e) => updateOption("haproxy_stats_port", Number(e.target.value))}
-              />
-            </label>
-            <label>
-              HAProxy stats path
-              <input
-                value={form.options?.haproxy_stats_path ?? "/stats;csv"}
-                onChange={(e) => updateOption("haproxy_stats_path", e.target.value)}
-              />
-            </label>
-            <label>
-              Keepalived VIP
-              <input
-                value={form.options?.keepalived_vip ?? ""}
-                onChange={(e) => updateOption("keepalived_vip", e.target.value)}
-                placeholder="10.0.0.50"
-              />
-            </label>
-            <label>
-              Host agent URL
-              <input
-                value={form.options?.agent_url ?? ""}
-                onChange={(e) => updateOption("agent_url", e.target.value)}
-                placeholder="http://db-host:9105"
-              />
-            </label>
-            <label>
-              Host agent token
-              <input
-                type="password"
-                value={form.options?.agent_token ?? ""}
-                onChange={(e) => updateOption("agent_token", e.target.value)}
-                placeholder="shared secret"
-              />
-            </label>
+        )}
+        {/* Her alan KENDİ kuralıyla kontrol ediliyor. Dördü bugün aynı kuralı paylaşıyor ama
+            tek bir koşula bağlamak, biri değiştiğinde sessizce yanlış olurdu. */}
+        {showField("patroni_port", fieldCtx) && (
+          <label>
+            Patroni port
+            <input
+              type="number"
+              value={form.options?.patroni_port ?? 8008}
+              onChange={(e) => updateOption("patroni_port", Number(e.target.value))}
+            />
+          </label>
+        )}
+        {showField("etcd_port", fieldCtx) && (
+          <label>
+            etcd port
+            <input
+              type="number"
+              value={form.options?.etcd_port ?? 2379}
+              onChange={(e) => updateOption("etcd_port", Number(e.target.value))}
+            />
+          </label>
+        )}
+        {showField("haproxy_stats_port", fieldCtx) && (
+          <label>
+            HAProxy stats port
+            <input
+              type="number"
+              value={form.options?.haproxy_stats_port ?? 8404}
+              onChange={(e) => updateOption("haproxy_stats_port", Number(e.target.value))}
+            />
+          </label>
+        )}
+        {showField("haproxy_stats_path", fieldCtx) && (
+          <label>
+            HAProxy stats path
+            <input
+              value={form.options?.haproxy_stats_path ?? "/stats;csv"}
+              onChange={(e) => updateOption("haproxy_stats_path", e.target.value)}
+            />
+          </label>
+        )}
+        {showField("keepalived_vip", fieldCtx) && (
+          <label>
+            Keepalived VIP
+            <input
+              value={form.options?.keepalived_vip ?? ""}
+              onChange={(e) => updateOption("keepalived_vip", e.target.value)}
+              placeholder="10.0.0.50"
+            />
+          </label>
+        )}
+        {/* Host agent servis durumu ve log okuma için; topolojiden bağımsız kullanılabilir. */}
+        <label>
+          Host agent URL
+          <input
+            value={form.options?.agent_url ?? ""}
+            onChange={(e) => updateOption("agent_url", e.target.value)}
+            placeholder="http://db-host:9105"
+          />
+        </label>
+        <label>
+          Host agent token
+          <input
+            type="password"
+            value={form.options?.agent_token ?? ""}
+            onChange={(e) => updateOption("agent_token", e.target.value)}
+            placeholder="shared secret"
+          />
+        </label>
+        {showField("ssl_mode", fieldCtx) && (
             <label>
               SSL modu
               <select
@@ -450,6 +507,8 @@ export default function InstancesPage() {
                 <option value="require">Gerekli (require)</option>
               </select>
             </label>
+        )}
+        {showField("uses_pooler", fieldCtx) && (
             <label>
               Pooler kullanılıyor (PgBouncer / Supabase pooler)
               <select
@@ -466,9 +525,8 @@ export default function InstancesPage() {
                 <option value="false">Hayır</option>
               </select>
             </label>
-          </>
         )}
-        {form.engine === "sqlserver" && (
+        {showField("auth_type", fieldCtx) && (
           <label>
             Kimlik doğrulama tipi
             <select
@@ -480,7 +538,7 @@ export default function InstancesPage() {
             </select>
           </label>
         )}
-        {form.engine === "mongodb" && (
+        {showField("replica_set", fieldCtx) && (
           <>
             <label>
               Replica set adı

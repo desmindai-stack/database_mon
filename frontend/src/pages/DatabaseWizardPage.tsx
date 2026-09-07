@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import { useAuth } from "../auth";
+import { showField, topologyOf, type FieldContext } from "../formFields";
 
 type TopologyPreset = "standalone" | "cluster-2" | "cluster-3" | "cluster-custom";
 type WizardMode = "create-group" | "add-node";
@@ -243,6 +244,8 @@ export default function DatabaseWizardPage() {
   const topology: GroupTopology =
     mode === "add-node" && existingGroup ? (existingGroup.topology as GroupTopology) : topologyFor(preset, engine);
   const isCluster = topology !== "standalone";
+  // Alan gösterimi tek kaynaktan (formFields.ts) — her formda ayrı yazılmasın (Faz 22 İŞ 1).
+  const fieldCtx: FieldContext = { engine, topology: topologyOf(topology) };
   const minNodesInStep = mode === "add-node" ? 1 : 2;
   const maxNewNodes = mode === "add-node" ? Math.max(1, 8 - existingNodeCount) : 8;
 
@@ -680,16 +683,18 @@ export default function DatabaseWizardPage() {
                 />
                 {fieldErrors.group_name && <span className="field-error">{fieldErrors.group_name}</span>}
               </label>
-              <label>
-                Cluster adı {REQUIRED}
-                <input
-                  value={clusterName}
-                  onChange={(e) => setClusterName(e.target.value)}
-                  className={fieldErrors.cluster_name ? "field-invalid" : ""}
-                  placeholder="boa-ag"
-                />
-                {fieldErrors.cluster_name && <span className="field-error">{fieldErrors.cluster_name}</span>}
-              </label>
+              {showField("cluster_name", fieldCtx) && (
+                <label>
+                  Cluster adı {REQUIRED}
+                  <input
+                    value={clusterName}
+                    onChange={(e) => setClusterName(e.target.value)}
+                    className={fieldErrors.cluster_name ? "field-invalid" : ""}
+                    placeholder="boa-ag"
+                  />
+                  {fieldErrors.cluster_name && <span className="field-error">{fieldErrors.cluster_name}</span>}
+                </label>
+              )}
               <label>
                 {engine === "sqlserver" ? "Listener adı" : "VIP / HAProxy adresi"} {REQUIRED}
                 <input
@@ -700,19 +705,23 @@ export default function DatabaseWizardPage() {
                 />
                 {fieldErrors.access_name && <span className="field-error">{fieldErrors.access_name}</span>}
               </label>
-              <label>
-                {engine === "sqlserver" ? "Listener IP" : "VIP adresi"}
-                <input value={vipAddress} onChange={(e) => setVipAddress(e.target.value)} placeholder="10.0.0.50" />
-              </label>
-              <label>
-                {engine === "sqlserver" ? "Listener port" : "VIP / HAProxy portu"}
-                <input
-                  type="number"
-                  value={listenerPort}
-                  onChange={(e) => setListenerPort(e.target.value === "" ? "" : Number(e.target.value))}
-                  placeholder={engine === "sqlserver" ? "1433" : "5000"}
-                />
-              </label>
+              {showField("vip_address", fieldCtx) && (
+                <label>
+                  {engine === "sqlserver" ? "Listener IP" : "VIP adresi"}
+                  <input value={vipAddress} onChange={(e) => setVipAddress(e.target.value)} placeholder="10.0.0.50" />
+                </label>
+              )}
+              {showField("listener_port", fieldCtx) && (
+                <label>
+                  {engine === "sqlserver" ? "Listener port" : "VIP / HAProxy portu"}
+                  <input
+                    type="number"
+                    value={listenerPort}
+                    onChange={(e) => setListenerPort(e.target.value === "" ? "" : Number(e.target.value))}
+                    placeholder={engine === "sqlserver" ? "1433" : "5000"}
+                  />
+                </label>
+              )}
               <label>
                 Ortam
                 <select value={environment} onChange={(e) => setEnvironment(e.target.value as GroupEnvironment)}>
@@ -722,37 +731,42 @@ export default function DatabaseWizardPage() {
                   <option value="dev">Dev</option>
                 </select>
               </label>
-              {topology === "patroni" && (
-                <>
-                  <label>
-                    Patroni REST portu
-                    <input
-                      type="number"
-                      value={patroniPort}
-                      onChange={(e) => setPatroniPort(e.target.value === "" ? "" : Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    etcd portu
-                    <input
-                      type="number"
-                      value={etcdPort}
-                      onChange={(e) => setEtcdPort(e.target.value === "" ? "" : Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    HAProxy stats portu
-                    <input
-                      type="number"
-                      value={haproxyStatsPort}
-                      onChange={(e) => setHaproxyStatsPort(e.target.value === "" ? "" : Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    keepalived VIP
-                    <input value={keepalivedVip} onChange={(e) => setKeepalivedVip(e.target.value)} placeholder="10.0.0.50" />
-                  </label>
-                </>
+              {/* Her alan KENDİ kuralıyla — bkz. InstancesPage'deki aynı not. */}
+              {showField("patroni_port", fieldCtx) && (
+                <label>
+                  Patroni REST portu
+                  <input
+                    type="number"
+                    value={patroniPort}
+                    onChange={(e) => setPatroniPort(e.target.value === "" ? "" : Number(e.target.value))}
+                  />
+                </label>
+              )}
+              {showField("etcd_port", fieldCtx) && (
+                <label>
+                  etcd portu
+                  <input
+                    type="number"
+                    value={etcdPort}
+                    onChange={(e) => setEtcdPort(e.target.value === "" ? "" : Number(e.target.value))}
+                  />
+                </label>
+              )}
+              {showField("haproxy_stats_port", fieldCtx) && (
+                <label>
+                  HAProxy stats portu
+                  <input
+                    type="number"
+                    value={haproxyStatsPort}
+                    onChange={(e) => setHaproxyStatsPort(e.target.value === "" ? "" : Number(e.target.value))}
+                  />
+                </label>
+              )}
+              {showField("keepalived_vip", fieldCtx) && (
+                <label>
+                  keepalived VIP
+                  <input value={keepalivedVip} onChange={(e) => setKeepalivedVip(e.target.value)} placeholder="10.0.0.50" />
+                </label>
               )}
               <label>
                 Notlar
@@ -947,7 +961,7 @@ export default function DatabaseWizardPage() {
                         onToggle={(s) => toggleNodeSection(node.key, s)}
                       >
                         <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
-                          {engine === "sqlserver" && (
+                          {showField("instance_name", fieldCtx) && (
                             <label>
                               SQL Server instance adı
                               <input
@@ -969,7 +983,7 @@ export default function DatabaseWizardPage() {
                               <span className="field-error">{fieldErrors[`node-${idx}-port`]}</span>
                             )}
                           </label>
-                          {engine === "sqlserver" && (
+                          {showField("auth_type", fieldCtx) && (
                             <label>
                               Kimlik doğrulama tipi
                               <select
@@ -991,7 +1005,7 @@ export default function DatabaseWizardPage() {
                               />
                             </label>
                           )}
-                          {engine === "postgresql" && (
+                          {showField("ssl_mode", fieldCtx) && (
                             <label>
                               SSL modu
                               <select value={node.sslMode} onChange={(e) => updateNode(node.key, "sslMode", e.target.value as PostgresSslMode)}>
@@ -1000,7 +1014,7 @@ export default function DatabaseWizardPage() {
                               </select>
                             </label>
                           )}
-                          {engine === "postgresql" && (
+                          {showField("uses_pooler", fieldCtx) && (
                             <label>
                               Pooler kullanılıyor (PgBouncer / Supabase pooler)
                               <select
@@ -1019,7 +1033,7 @@ export default function DatabaseWizardPage() {
                               </select>
                             </label>
                           )}
-                          {engine === "mongodb" && (
+                          {showField("replica_set", fieldCtx) && (
                             <>
                               <label>
                                 Replica set adı

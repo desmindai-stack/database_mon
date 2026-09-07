@@ -19,6 +19,7 @@ import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
 import { EmptyState, NotFoundState, PageError, PageLoading } from "../components/PageState";
 import RecommendationHeader from "../components/RecommendationHeader";
+import { showField, topologyOf, type FieldContext } from "../formFields";
 import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "nodes" | "parameters" | "alwayson";
@@ -301,6 +302,12 @@ export default function GroupDetailPage() {
     }
   };
 
+  // Alan gösterimi tek kaynaktan (formFields.ts) — sihirbaz ve instance formuyla aynı kural.
+  const fieldCtx: FieldContext = {
+    engine: group?.engine ?? "postgresql",
+    topology: topologyOf(group?.topology),
+  };
+
   const healthByNodeId = new Map((health?.nodes ?? []).map((n) => [n.node_id, n]));
 
   // Eskiden bu üç durum için hiçbir koruma yoktu: silinmiş bir gruba gidildiğinde başlık
@@ -347,7 +354,7 @@ export default function GroupDetailPage() {
             {group?.vip_address && <span className="detail-meta"> · VIP: {group.vip_address}</span>}
           </p>
         </div>
-        {tab === "nodes" && canWrite && group && group.topology !== "standalone" && (
+        {tab === "nodes" && canWrite && group && showField("add_node", fieldCtx) && (
           <div className="header-actions">
             <Link to={`/groups/${id}/wizard`} className="btn btn-primary">+ Düğüm Ekle</Link>
           </div>
@@ -548,7 +555,7 @@ export default function GroupDetailPage() {
                             ))}
                           </select>
                         </label>
-                        {group?.engine === "sqlserver" && (
+                        {showField("instance_name", fieldCtx) && (
                           <label>
                             Instance adı
                             <input value={editInstanceName} onChange={(e) => setEditInstanceName(e.target.value)} />

@@ -4555,6 +4555,76 @@ CONCURRENTLY kullanan HER migration'ın DEPLOY.md'de işaretli olduğu,
 çözümün komut örneğiyle yazıldığı ve aynı uyarının on-prem dokümanında da
 bulunduğu. Toplam 766 test yeşil.
 
+## Faz 22 — İŞ 1: Engine ve topolojiye göre alan gösterimi
+
+Kural daha önce istenmişti ama her formda AYRI AYRI yazıldığı için
+ayrışmıştı. Denetimde bulunanlar:
+
+- **InstancesPage**: "Sunucu servisleri" listesi (etcd/patroni/postgresql/
+  keepalived/haproxy) HER engine'de görünüyordu — SQL Server ve MongoDB
+  kayıtlarında da. Patroni REST portu, etcd portu, HAProxy stats portu ve
+  keepalived VIP ise her PostgreSQL kaydında görünüyordu, standalone
+  olanlarda dahi. `Cluster` ve `Rol` alanları her zaman açıktı.
+- **DatabaseWizardPage**: cluster adımı zaten topolojiye bağlıydı, ama
+  içindeki alanlar tek tek değil blok hâlinde koşulluydu.
+- **GroupDetailPage** ve **App.tsx**: aynı "standalone mı" kararı üç ayrı
+  yerde `topology !== "standalone"` diye elle yazılmıştı.
+
+### Tek kaynak: `frontend/src/formFields.ts`
+
+18 alan için `{engines?, topologies?, why}` tablosu. `showField(key, ctx)`
+tek karar noktası; `ctx` formun engine'i ve topolojisi.
+
+İlke: kural sağlanmıyorsa alan **DOM'da hiç bulunmuyor** — gizlenmiyor,
+devre dışı bırakılmıyor. Gizli bir alan hâlâ form durumunda yer tutar,
+sekme sırasında görünür ve kaydedilirken ilgisiz değer gönderir.
+
+Her kuralda zorunlu bir `why` var (test bunu doğruluyor): kuralı sonradan
+değiştiren kişi gerekçesini görsün, örneğin "etcd, Patroni'nin dağıtık
+yapılandırma deposu; standalone'da ve diğer engine'lerde yok".
+
+### InstancesPage'e açık topoloji seçimi eklendi
+
+`Instance` modelinde topoloji kolonu yok; form bunu `cluster_name` dolu mu
+diye ÖRTÜK çıkarıyordu, dolayısıyla kural uygulanamıyordu. Artık açık bir
+"Topoloji" seçimi var (Standalone / Cluster üyesi). Düzenlemeye açılan bir
+kayıt için `cluster_name`'den türetiliyor.
+
+`standalone`'a geçildiğinde cluster alanlarının **değerleri de
+temizleniyor** (`cluster_name`, `role`, `services`, `keepalived_vip`) —
+görünmeyen bir cluster adının kaydedilip instance'ı yanlış gruplaması
+mümkün olmasın. MongoDB seçilince topoloji standalone'a düşüyor (dbace
+MongoDB için cluster topolojisi modellemiyor).
+
+### Her alan kendi kuralıyla
+
+Patroni/etcd/HAProxy/keepalived bugün aynı kuralı paylaşıyor, ama tek bir
+koşula bağlamak biri değiştiğinde sessizce yanlış olurdu. Dördü de ayrı
+`showField` çağrısıyla kontrol ediliyor. Aynı şekilde `ssl_mode` ile
+`uses_pooler` ayrıldı.
+
+### Varsayılan portlar
+
+`ENGINE_DEFAULTS` (5432/1433/27017) zaten `api.ts`'te tekti ve hem
+sihirbaz hem InstancesPage engine değişiminde portu ve veritabanı adını
+oradan dolduruyor — doğrulandı, değişiklik gerekmedi.
+
+**Testler:** `tests/test_form_field_visibility.py` (61 test). İki katman:
+
+1. **Tablonun içeriği** — her engine × topoloji kombinasyonu için hangi
+   alanların göründüğü. Standalone'da 12 cluster alanının üçü engine için
+   de yokluğu, PostgreSQL cluster servislerinin başka engine'de hiç
+   çıkmaması, SQL Server / MongoDB alanlarının izolasyonu, MongoDB'nin
+   her iki topolojide de cluster alanı görmemesi.
+2. **Formların tabloyu kullandığı** — bir form ilgili alanı render
+   ediyorsa `showField` ile sarmalamış olmalı; kendi `engine === "..."`
+   koşulunu yazarsa test kırılır. Ayrıca standalone'a geçişte değerlerin
+   temizlendiği.
+
+Sınır (testin başında yazılı): bu statik bir denetim. Tablonun içeriğini
+ve formların ona bağlı olduğunu doğruluyor, tarayıcıda gerçekten render
+edilmediğini doğrulamıyor — frontend'in test koşucusu yok.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
