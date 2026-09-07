@@ -25,3 +25,6 @@ data/
 .idea/
 .vscode/
 *.swp
+
+# E2E test veritabanı — her çalıştırmada sıfırdan oluşturulur.
+backend/data/dbace_e2e.db*

@@ -14,6 +14,11 @@ name: CI
 on:
   push:
   pull_request:
+  # Gecelik: e2e paketinin TAMAMI burada koşuyor (push'ta yalnızca @critical).
+  schedule:
+    - cron: "0 2 * * *"
+  # Elle tetikleme — tam paketi beklemeden çalıştırmak için.
+  workflow_dispatch:
 
 # Aynı dal için üst üste gelen çalıştırmalarda öncekini iptal et — hem hızlı hem ucuz.
 concurrency:
@@ -126,3 +131,63 @@ jobs:
             echo "Düzeltmek için: cd frontend && npm run gen:types  (sonra sonucu commit'leyin)"
             exit 1
           fi
+
+  e2e:
+    name: Tarayıcı testleri (Playwright)
+    runs-on: ubuntu-latest
+    # Gerçek tarayıcıda gerçek tıklama — backend testlerinin göremediği katman. Bu projede
+    # yaşanan çökmelerin çoğu (rapor bulgu detayı, silinmiş kayda gitme, boş instance formu)
+    # yalnızca burada yakalanabilirdi.
+    #
+    # Her push'ta YALNIZCA @critical akışlar koşuyor ki CI süresi makul kalsın; tamamı gecelik
+    # zamanlamada (aşağıdaki `schedule`) ve elle tetiklemede çalışıyor.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Bağımlılıkları kur
+        run: |
+          pip install -r backend/requirements.txt
+          npm --prefix frontend ci
+
+      - name: Tarayıcıyı kur
+        # Yalnızca chromium: üç tarayıcı indirmek CI süresini üç katına çıkarır ve bu testlerin
+        # amacı tarayıcı uyumluluğu değil, uygulama akışlarının çalışması.
+        run: npx --prefix frontend playwright install --with-deps chromium
+
+      - name: E2E (kritik akışlar)
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        run: npm --prefix frontend run test:e2e:critical
+        env:
+          PYTHON: python
+
+      - name: E2E (tamamı)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: npm --prefix frontend run test:e2e
+        env:
+          PYTHON: python
+
+      - name: Hata kanıtlarını yükle
+        # Başarısız testin ekran görüntüsü, videosu ve izi (trace). İz `npx playwright
+        # show-trace <dosya>` ile adım adım incelenebiliyor — CI'da neyin kırıldığını
+        # tahmin etmek yerine görmek için.
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-hata-kanitlari
+          path: |
+            frontend/test-results/
+            frontend/playwright-report/
+          retention-days: 7

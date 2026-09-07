@@ -92,6 +92,37 @@ npm run gen:types:live     # çalışan bir backend'in /openapi.json ucundan ür
 CI, tipleri yeniden üretip commit'lenmiş hâliyle karşılaştırır — farklıysa iş kırmızı olur
 ("backend değişmiş ama tipler güncellenmemiş" demektir).
 
+### Tarayıcı testleri (Playwright)
+
+Backend testleri API katmanında durur; arayüz çökmelerini (rapor bulgu detayı, silinmiş kayda
+gitme, boş form) yalnızca gerçek tarayıcı yakalar. Bu paket o katmanı kapatır.
+
+```bash
+cd frontend
+npx playwright install chromium   # ilk seferde bir kez
+npm run test:e2e                  # tamamı
+npm run test:e2e:critical         # yalnızca @critical akışlar (CI her push'ta bunu koşar)
+npm run test:e2e:ui               # etkileşimli mod — adım adım izlemek için
+```
+
+Backend ve frontend sunucularını Playwright **kendisi başlatır**; elle `npm run dev`
+çalıştırmanız gerekmez (çalışıyorsa da sorun olmaz, ayrı portlar kullanılır: API 8001,
+web 5174).
+
+**Veri izolasyonu:** e2e kendi SQLite dosyasını (`backend/data/dbace_e2e.db`) kullanır ve her
+çalıştırmadan önce siler. Geliştirme (`dbace.db`) ve pytest (`dbace_pytest.db`) veritabanlarına
+dokunmaz. Toplayıcı kapalıdır (`RUN_MODE=api`), yani testler sırasında hiçbir hedef veritabanına
+bağlanılmaz.
+
+Bir test kırıldığında ekran görüntüsü, video ve iz `frontend/test-results/` altına yazılır:
+
+```bash
+npx playwright show-trace test-results/<klasör>/trace.zip
+```
+
+CI her push'ta `@critical` akışları, gecelik zamanlamada tam paketi koşar; başarısız testin
+kanıtları artifact olarak yüklenir.
+
 ### 4. Add an instance
 
 In the UI go to **Instances → Add instance**, or POST to `/api/instances`:

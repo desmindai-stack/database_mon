@@ -2048,3 +2048,30 @@ ama davranış değişikliği olduğu için burada da not ediyorum: bir kullanı
 
 Hazırlık paneli zaten "kaç gün daha veri gerekli" diyor, dolayısıyla
 bekleme süresi kullanıcıya görünür durumda.
+
+## Faz 24: Tarayıcı testleri yalnızca chromium, görsel karşılaştırma yok
+
+Playwright kurulumu tek tarayıcıyla (chromium) koşuyor. Gerekçe: üç
+tarayıcı indirmek CI süresini üç katına çıkarıyor ve bu testlerin amacı
+tarayıcı uyumluluğu değil, uygulama akışlarının çalıştığını doğrulamak.
+**Sonuç olarak Firefox ve Safari'ye özgü kırılmalar (CSS düzen farkları,
+Date/Intl davranışı) bu testlerle yakalanmıyor.** İhtiyaç doğarsa
+`playwright.config.ts` içindeki `projects` listesine eklemek yeterli.
+
+**Görsel piksel karşılaştırması (visual regression) bilerek kapsam
+dışı.** Testler "doğru öğe DOM'da mı, tıklanınca ne oluyor" seviyesinde;
+"hizalama bozuldu mu, boşluk kaydı mı" seviyesinde değil. Faz 22 İŞ 2'de
+düzeltilen görsel tutarlılık işleri bu yüzden hâlâ statik testlerle
+(`test_ui_consistency.py`) ve gözle korunuyor. Piksel karşılaştırması
+eklenirse, farklı işletim sistemlerinde font render farkı yüzünden
+referans görüntülerin CI'ın koştuğu ortamda üretilmesi gerekir.
+
+## Faz 24: E2E veritabanı SQLite, canlı Postgres
+
+Tarayıcı testleri izole bir SQLite dosyasıyla koşuyor (`dbace_e2e.db`).
+Bu, testleri hızlı ve bağımsız yapıyor ama **Postgres'e özgü davranış
+farklarını (tip zorlamaları, kısıt mesajları, eşzamanlılık) kapsamıyor.**
+Faz 23'teki silme hatası tam olarak böyle bir farktan doğmuştu (SQLite'ta
+foreign key denetimi varsayılan kapalı). O sınıf hata için koruma
+tarayıcı testinde değil, `conftest.py`'de FK denetimini açan ön koşulda
+ve `test_delete_dependencies.py`'de.

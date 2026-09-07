@@ -4787,6 +4787,120 @@ düğüm/instance bağlarının koparıldığı (silinmediği) ve müşteri/grup
 zincirlerinin eksiksiz temizlendiği. **Düzeltme geri alındığında 5 test
 düşüyor** — hatayı yakaladıkları doğrulandı. Toplam 906 test yeşil.
 
+## Faz 24 — Playwright tarayıcı testi altyapısı
+
+**Gerekçe:** 900+ backend testi hepsi API katmanında; bu turda tekrar
+görüldüğü gibi "kod doğru ama arayüz kırık" durumlarını (rapor bulgu
+detayının çökmesi, 404'ler, kırpılan DROP INDEX komutu, boş instance
+formu) hiçbiri yakalayamıyor. Bu tur yeni özellik yok — eksik olan test
+katmanı kuruldu.
+
+### İŞ 1 — Kurulum
+
+- `frontend/playwright.config.ts`: iki `webServer` (backend 8001,
+  frontend 5174) otomatik başlıyor. Portlar geliştirme portlarından
+  (8000/5173) BİLEREK ayrı — testler açık bir dev sunucusuna bağlanıp
+  geliştirme verisine dokunmasın diye.
+- `frontend/e2e/start-backend.mjs`: backend'i izole ortamla açıyor.
+  `DATABASE_URL` ayrı bir SQLite dosyası (`data/dbace_e2e.db`) ve dosya
+  her koşudan ÖNCE siliniyor → her koşu temiz şemayla başlıyor.
+  `RUN_MODE=api` ile zamanlayıcı kapalı: testler hiçbir hedef
+  veritabanına bağlanmaya çalışmıyor.
+- Her test kendi verisini API üzerinden kuruyor (`ApiHelper`) ve
+  siliyor; benzersiz ad üretimi (`ApiHelper.unique`) testlerin
+  birbirini ezmesini engelliyor.
+- `npm run test:e2e`, `test:e2e:ui`, `test:e2e:critical` script'leri.
+  Çalıştırma talimatı README'de ("Tarayıcı testleri (Playwright)").
+- `frontend/e2e/global.setup.ts`: zorunlu ilk şifre değişimini API'den
+  tamamlıyor, sonra GERÇEK arayüzden giriş yapıp `storageState`
+  kaydediyor — token'lar uygulamanın kendi kodu tarafından yazılsın diye
+  (elle token enjekte etmek gerçek oturum akışını atlar).
+
+### İŞ 2 — Kritik akış testleri
+
+32 test, 6 dosya; 15'i `@critical` etiketli:
+
+| Dosya | Kapsam |
+|---|---|
+| `auth.spec.ts` | giriş, çıkış, oturumsuz yönlendirme, hatalı şifre |
+| `routing.spec.ts` | deep-link'ler, derin adreste yenileme (SPA rewrite), silinmiş kayda deep-link, geri düğmesi |
+| `wizard.spec.ts` | dört topolojide grup ekleme; her adımda doğru alanların göründüğü ve yanlış alanların DOM'da HİÇ olmadığı |
+| `instances.spec.ts` | düzenleme, bağlı kaydı olan/olmayan silme, engine/topoloji alan görünürlüğü |
+| `reports.spec.ts` | rapor üretme, bulgu detayı açma, durum değiştirme, dışa aktarma, yönetici görünümü |
+| `dpa-dashboard.spec.ts` | DPA sekmeleri, grafik aralık seçimi, dashboard sayaç kartıyla filtreleme |
+
+### İŞ 3 — Konsol hatası denetimi
+
+`e2e/support/fixtures.ts` içindeki `consoleWatcher` fixture'ı her testte
+`console.error` ve yakalanmamış sayfa hatalarını topluyor; test bitiminde
+liste boş değilse test KIRILIYOR. Vite HMR ve React DevTools tavsiyesi
+gibi gürültü desenleri filtreleniyor. Bu sayede "ekran doğru görünüyor
+ama arkada hata var" durumu sessizce geçemiyor.
+
+### İŞ 4 — CI entegrasyonu
+
+`.github/workflows/ci.yml`'ye dördüncü iş (`e2e`) eklendi:
+
+- Her push/PR'da yalnızca `@critical` akışlar (`test:e2e:critical`) →
+  CI süresi makul kalıyor.
+- Tamamı gecelik (`schedule: 0 2 * * *`) ve elle tetiklemede
+  (`workflow_dispatch`).
+- Yalnızca chromium kuruluyor; amaç tarayıcı uyumluluğu değil, akışların
+  çalışması.
+- Başarısız testte ekran görüntüsü, video ve iz (trace)
+  `actions/upload-artifact@v4` ile yükleniyor (7 gün). İz
+  `npx playwright show-trace <dosya>` ile adım adım incelenebiliyor.
+
+### Tarayıcı testlerinin BULDUĞU gerçek hatalar
+
+Altyapı kurulur kurulmaz iki gerçek hata çıktı — ikisi de backend
+testlerinin göremeyeceği yerdeydi:
+
+1. **Sekme değişimi geri düğmesini bozuyordu.**
+   `InstanceDetailPage` sekmeyi URL'e `replace: true` ile yazıyordu.
+   Sonuç: kullanıcı bir sekmeye geçip GERİ bastığında beklediği sekmeye
+   değil, uygulamadan TAMAMEN DIŞARI çıkıyordu (`about:blank`). Faz
+   19'da diğer sayfalar `useUrlTab` ile düzeltilmişti ama burası elle
+   yazılmış olduğu için atlanmıştı. Düzeltme: `setSearchParams(params)`.
+2. **Dashboard sayaç kartıyla filtreleme geri alınamıyordu.**
+   `useUrlFilter` her zaman `replace` kullanıyordu. Arama kutusu için
+   doğru (her tuş vuruşu geçmişe yazılmamalı), ama TIKLAMAYLA seçilen
+   filtre bilinçli bir gezinme adımı. `useUrlFilter` artık
+   `options.history` alıyor; varsayılan `replace`, dashboard durum
+   filtresi `push`.
+
+Ayrıca `InstancesPage`'deki bağımlılık dökümü elle yazılmış alan
+listesinden, sunucudan gelen `breakdown` haritasına çevrildi (Faz 23'te
+eklenen iki tabloyu göstermiyordu) ve `InstanceDependencies` tipi elle
+yazılmak yerine üretilen şemadan türetildi.
+
+### Statik testlerin güçlendirilmesi
+
+Tarayıcı testinin yakaladığı hatanın bir daha girmemesi için statik
+denetim de sıkılaştırıldı:
+
+- `test_api_contract_alignment.py`: `MUST_BE_DERIVED` listesine
+  `InstanceDependencies` eklendi.
+- `test_navigation_integrity.py`: yeni
+  `test_tab_changes_are_pushed_to_history_not_replaced`. Mevcut kontrol
+  "sekme URL'de mi" diye bakıyordu ve `replace` ile yazmayı yeterli
+  sayıyordu; yeni test hem `useUrlTab` hook'unun push yaptığını hem de
+  sekmeyi elle yazan sayfaların `replace` kullanmadığını doğruluyor.
+  **Testin ilk hâli hatayı yakalayamıyordu** (bir yorum satırında geçen
+  "useUrlTab" kelimesi sayfayı denetim dışı bırakıyordu); düzeltme geri
+  alınıp koşularak yakaladığı doğrulandı. Setter bulunamazsa test
+  sessizce atlamak yerine kırılıyor — hiçbir şeyi korumadığı hâlde yeşil
+  görünmesin diye.
+
+### Kapsam dışı (bilerek)
+
+- **Görsel piksel karşılaştırması (visual regression)** bu turda yok;
+  önce işlevsel akışlar.
+- Yalnızca chromium; Firefox/WebKit çalıştırılmıyor.
+
+**Durum:** 32 e2e testi ~29 saniyede yeşil, backend 907 test yeşil
+(1 skip), `npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

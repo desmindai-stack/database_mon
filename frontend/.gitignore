@@ -1,0 +1,5 @@
+# Playwright (Faz 24) — üretilen çıktılar depoya girmez.
+/test-results/
+/playwright-report/
+/blob-report/
+/e2e/.auth/
