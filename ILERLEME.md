@@ -3843,6 +3843,85 @@ verdiğini, tablet kırılma noktalarının ve `.main` taşma davranışının
 yerinde olduğunu doğruluyor. Toplam: 600 test yeşil (1 atlandı),
 `npm run build` yeşil.
 
+## Faz 20 — İŞ 1: Tahminlerde aksiyon komutları
+
+### Kök neden: alan şemada vardı, modelde yoktu
+
+Şikâyet "öneriler var ama çalıştırılacak komutlar yok" idi. Sebep tek bir
+sessiz kopukluktu: `PredictionOut.advice` Faz 17 Ek İŞ B'de şemaya
+eklenmiş, ama `PredictionInsight` MODELİNDE karşılığı hiç yazılmamıştı.
+Pydantic eksik alanı hata vermeden `None` bırakıyor, dolayısıyla API her
+tahmin için `advice: null` dönüyordu. Arayüz de bunu görüp standart öneri
+kartı yerine tek cümlelik `recommendation` metnine düşüyordu:
+
+```tsx
+{p.advice ? <AdviceCard … />        // hiç çalışmıyordu
+ : p.recommendation ? <RecommendationHeader … />   // hep buraya düşüyordu
+```
+
+Yani `AdviceCard` bileşeni, `advice.py`'deki standart yapı ve
+`prediction_playbooks.py`'deki adım adım planlar zaten vardı — sadece
+birbirine bağlı değildi. Tahminler, ürünün geri kalanının (rapor,
+dashboard, DPA) kullandığı beş parçalı standardın dışında kalmıştı.
+
+### Yapılan
+
+`services/prediction_advice.py` — her tahmin türünü tam standarda çeviren
+yeni modül. `advice` artık `prediction_insights` tablosunda bir kolon ve
+tahmin ÜRETİLDİĞİ anda dolduruluyor (playbook'ta olduğu gibi), böylece
+tahmin geçmişi kendi önerisini taşıyor.
+
+Beş türün her biri için beş parça:
+
+| Tür | Başlık (eylem) | Komutlu adım |
+|---|---|---|
+| database_size | Büyümeyi yavaşlatın, disk kapasitesini planlayın | 6 |
+| connection_trend | Havuzu sınırlayın, limiti büyütmeden sızıntıyı kesin | 3-5 (engine'e göre) |
+| table_growth | Tablonun büyümesini kontrol altına alın | 5 |
+| wraparound | Transaction ID yaşını düşürün (VACUUM FREEZE) | 5 |
+| index_bloat | Index'i yeniden oluşturun veya kaldırın | 5 |
+
+Her birinde: **neden** iş etkisiyle ("PostgreSQL disk dolduğunda yazma
+işlemlerini tamamen durdurur", "bir failover'da kaybedilecek veri artar"),
+**numaralı adımlar**, **adım başına kopyalanabilir komut**, **dikkat
+notları** (kilitleme, ek disk ihtiyacı, yeniden başlatma, geri
+alınamazlık), **tahmini süre**, **geri alma** ve **doğrulama sorgusu**.
+
+### Kapsam dışında kalan üç metrik de standarda alındı
+
+Beş türün dışında kısa vadeli üç tahmin daha üretiliyordu ve bunların
+HİÇ adımı/komutu yoktu — yalnızca tek cümlelik bir öneri:
+
+- **cache_hit_ratio**: artık dört adım (diskten okunan tablolar, yeni
+  seq scan var mı, çalışma kümesi belleğe sığıyor mu, pg_prewarm).
+- **replication_lag_bytes**: üç adım (gecikme gönderimde mi uygulamada
+  mı, replikada blokla­yan sorgu, slot birikimi ve WAL disk baskısı).
+- **transactions_per_sec / ops_per_sec**: üç ölçüm adımı — burada
+  bilinçli olarak "şunu değiştir" demiyoruz, çünkü artan yükün doğru
+  cevabı ortama özgü; uydurma bir komut yerine hangi ölçümlere
+  bakılacağı yazılıyor.
+
+PostgreSQL dışı engine'lerde bu üçü için `unavailable_reason` dolduruluyor
+("bu instance sqlserver ve karşılığı olan DMV/komut seti doğrulanmadı") —
+boş bırakmak yerine NEDEN üretilemediği yazılıyor.
+
+### Migration
+
+`supabase/migrations/20260908090000_prediction_advice.sql` —
+`prediction_insights.advice` (JSONB). DEPLOY.md tablosuna 30. sıra olarak
+işlendi. SQLite tarafında `database.py` içindeki kolon eklemesiyle
+otomatik oluşuyor.
+
+**Testler:** `tests/test_prediction_advice.py` (30 test) — beş türün
+hepsinde beş parçanın da dolu olduğunu, en az iki adımda çalıştırılabilir
+komut geldiğini (yalnız yer tutucu değil), "neden" bölümünün ölçümü
+tekrarlamak yerine SONUCU anlattığını, yıkıcı/kilitleyen her komutun
+dikkat notunda karşılığı olduğunu, ve öneri üretilemeyen durumların
+nedeniyle birlikte döndüğünü doğruluyor. Ayrıca uçtan uca: üretilen
+tahminin öneriyi kaydettiğini ve API'nin gerçekten döndürdüğünü — bu
+sonuncusu, hatanın kendisini (şemada alan var, modelde yok) kalıcı olarak
+kapatıyor.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

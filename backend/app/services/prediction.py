@@ -14,6 +14,14 @@ from app.services.prediction_playbooks import (
     wraparound_playbook,
 )
 from app.models import MetricRollupDaily, MetricSample, PredictionInsight, SchemaObjectDailySample
+from app.services.advice import advice_to_dict
+from app.services.prediction_advice import (
+    database_size_advice,
+    index_bloat_advice,
+    short_horizon_advice,
+    table_growth_advice,
+    wraparound_advice,
+)
 from app.services.forecasting import DataSufficiency, SeasonalPoint, check_sufficiency, forecast_with_seasonality
 
 # PostgreSQL'in kendi sabit eşikleri (uydurma değil — belgelenmiş varsayılanlar/limitler):
@@ -151,6 +159,20 @@ async def _short_horizon_predictions(
             if metric_key in ("connection_utilization_pct", "active_connections")
             else None
         )
+        # Faz 20 İŞ 1: her kısa vadeli metrik artık tam standarda uyan bir öneri taşıyor.
+        # Cache hit, replikasyon gecikmesi ve yük artışı için de adım/komut yazıldı; karşılığı
+        # doğrulanmamış engine'lerde `unavailable_reason` ile NEDEN üretilemediği yazılıyor.
+        advice = short_horizon_advice(
+            metric_key=metric_key, engine=engine, current=current,
+            predicted=forecast.point, horizon_minutes=horizon_minutes,
+        )
+        if playbook is None and advice.steps:
+            # Standart öneri adım üretebildiyse ham playbook da onunla aynı adımları taşısın —
+            # ikisinin ayrışması "aynı veriyi gösteren yerler tek kaynaktan beslensin" kuralını
+            # bozardı (arayüz eski istemcilerde hâlâ playbook'u okuyor).
+            playbook = [
+                {"title": step.action, "detail": "", "command": step.command} for step in advice.steps
+            ]
 
         insight = PredictionInsight(
             instance_id=instance_id,
@@ -168,6 +190,7 @@ async def _short_horizon_predictions(
             recommendation=recommendation,
             action=action,
             playbook=playbook,
+            advice=advice_to_dict(advice),
         )
         session.add(insight)
         created.append(insight)
@@ -287,6 +310,14 @@ async def _database_size_prediction(session: AsyncSession, instance_id: int) -> 
             per_day_human=_format_bytes(bytes_per_day),
             doubling_date=doubling_date,
         ),
+        advice=advice_to_dict(
+            database_size_advice(
+                current_human=_format_bytes(current),
+                per_day_human=_format_bytes(bytes_per_day),
+                doubling_date=doubling_date,
+                horizon_label=f"{days_to_double:.0f} gün içinde",
+            )
+        ),
     )
     session.add(insight)
     return [insight]
@@ -347,6 +378,11 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
         action="SELECT datname, age(datfrozenxid) FROM pg_database ORDER BY 2 DESC;",
         playbook=wraparound_playbook(
             current_age=current, freeze_max_age=AUTOVACUUM_FREEZE_MAX_AGE, eta_date=eta_date
+        ),
+        advice=advice_to_dict(
+            wraparound_advice(
+                current_age=current, freeze_max_age=AUTOVACUUM_FREEZE_MAX_AGE, eta_date=eta_date
+            )
         ),
     )
     session.add(insight)
@@ -423,6 +459,19 @@ async def _object_growth_predictions(
                 index_bloat_playbook(schema_name, object_name, _format_bytes(forecast.slope_per_day))
                 if object_kind == "index"
                 else table_growth_playbook(schema_name, object_name, _format_bytes(forecast.slope_per_day))
+            ),
+            advice=advice_to_dict(
+                index_bloat_advice(
+                    schema_name=schema_name, index_name=object_name,
+                    per_day_human=_format_bytes(forecast.slope_per_day),
+                    horizon_label="30 gün sonra", predicted_human=_format_bytes(forecast.point),
+                )
+                if object_kind == "index"
+                else table_growth_advice(
+                    schema_name=schema_name, table_name=object_name,
+                    per_day_human=_format_bytes(forecast.slope_per_day),
+                    horizon_label="30 gün sonra", predicted_human=_format_bytes(forecast.point),
+                )
             ),
         )
         session.add(insight)

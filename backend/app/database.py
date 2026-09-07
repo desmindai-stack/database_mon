@@ -189,6 +189,7 @@ async def migrate_schema() -> None:
             conn, "instances", "ignored_prerequisites", "ignored_prerequisites JSON"
         )
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "playbook", "playbook JSON")
+        await _sqlite_add_column_if_missing(conn, "prediction_insights", "advice", "advice JSON")
         # Faz 17 Ek İŞ A — bulgu durum makinesi.
         await _sqlite_add_column_if_missing(conn, "finding_acknowledgements", "finding_type", "finding_type VARCHAR(96)")
         await _sqlite_add_column_if_missing(

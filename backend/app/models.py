@@ -347,6 +347,11 @@ class PredictionInsight(Base):
     # cümlelik özet olarak kalıyor; bu, o özetin "önce şunu çalıştır, çıktısına göre şunu yap"
     # açılımı. Kaydedildiği anda üretiliyor ki tahmin geçmişi kendi planını taşısın.
     playbook: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # Faz 20 İŞ 1: beş parçalı standart öneri (neden / adımlar / komutlar / dikkat / doğrulama).
+    # `PredictionOut.advice` Faz 17'de şemaya eklenmişti ama modelde karşılığı YOKTU — API her
+    # tahmin için `advice: null` dönüyor, arayüz tek cümlelik `recommendation`'a düşüyordu.
+    # `playbook` ham adım listesi olarak duruyor (geriye dönük uyumluluk); bu onun standart hali.
+    advice: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="predictions")
 
