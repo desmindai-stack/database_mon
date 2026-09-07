@@ -11,6 +11,13 @@ class Settings(BaseSettings):
     app_name: str = "dbace"
     database_url: str = f"sqlite+aiosqlite:///{Path(__file__).resolve().parents[2] / 'data' / 'dbace.db'}"
     collect_interval_seconds: int = 15
+    # Yavaş sorgular METRİKLERDEN daha seyrek toplanır (Faz 21 İŞ 3). Sebep hacim: her toplama
+    # döngüsü 20 satır yazıyor, 15 saniyelik aralıkta bu instance başına AYDA ~3,5 milyon satır
+    # demek. pg_stat_statements kümülatif olduğu için 15 saniyelik çözünürlük yavaş sorgu
+    # analizine hiçbir şey katmıyor — pencere farkları 5 dakikalık örneklerle de aynı sonucu
+    # veriyor. 300 sn ile aylık satır sayısı ~173 bine, yani metric_samples ile aynı mertebeye
+    # iniyor. Metrik toplama (bağlantı zirvesi gibi ani olaylar için) 15 saniyede kalıyor.
+    slow_query_interval_seconds: int = 300
     # dbace'in KENDİ veritabanı bağlantıları için sorgu zaman aşımı (saniye, PostgreSQL).
     # 0 = sınırsız. Kaçak bir sorgunun isteği süresiz asılı bırakmasını (ve gateway'in 502
     # döndürmesini) engelleyen son savunma hattı; izlenen hedef veritabanlarını ETKİLEMEZ

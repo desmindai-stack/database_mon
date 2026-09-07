@@ -13,11 +13,20 @@
 -- 15 saniyelik toplama aralığında slow_query_samples'a döngü başına 20 satır yazılıyor:
 -- instance başına ayda ~3.5 milyon satır. Sorgu dakikalarca asılı kalıyor, gateway 502 veriyor.
 --
--- ÖNEMLİ — nasıl çalıştırmalı:
--- Tablolar büyük olduğu için indeks oluşturma birkaç dakika sürebilir ve NORMAL `CREATE INDEX`
--- bu süre boyunca tabloya YAZMAYI KİLİTLER (toplama döngüsü durur). Aşağıdaki CONCURRENTLY
--- sürümü kilitlemez ama bir transaction bloğunun İÇİNDE çalışamaz — Supabase SQL Editor'de
--- iki satırı TEK TEK, ayrı ayrı çalıştırın.
+-- ⚠️ ÖNEMLİ — BU DOSYA SQL EDITOR'DEN ÇALIŞTIRILAMAZ.
+--
+-- `CREATE INDEX CONCURRENTLY` bir transaction bloğunun İÇİNDE çalışmaz. Supabase SQL Editor
+-- her gönderimi transaction'a sardığı için oradan denemek şu hatayı verir:
+--     ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+-- Satırları tek tek göndermek bunu ÇÖZMEZ (sorun satır sayısı değil, editörün sarmalaması);
+-- `supabase db push` de aynı sebeple çalışmaz.
+--
+-- Doğru yol psql ile, her komut AYRI bir `-c` çağrısı olarak — tam komutlar ve doğrulama için
+-- DEPLOY.md'deki "CONCURRENTLY kullanan migration'lar" bölümüne bakın:
+--     psql "$DBACE_DB" -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ... ;"
+--
+-- CONCURRENTLY tercih edilme sebebi: tablolar milyonlarca satır ve normal `CREATE INDEX`
+-- tamamlanana kadar tabloya YAZMAYI KİLİTLER, yani toplama döngüsü durur.
 
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_metric_samples_instance_collected
     ON metric_samples (instance_id, collected_at);
@@ -25,8 +34,7 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_metric_samples_instance_collected
 CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_slow_query_samples_instance_collected
     ON slow_query_samples (instance_id, collected_at);
 
--- CONCURRENTLY çalıştırılamıyorsa (ör. migration aracı her şeyi tek transaction'da koşuyorsa)
--- alternatif, kilitleyen sürüm — yalnızca bakım penceresinde:
+-- Alternatif, KİLİTLEYEN sürüm — yalnızca tablo küçükse ya da planlı bakım penceresinde:
 --   CREATE INDEX IF NOT EXISTS ix_metric_samples_instance_collected
 --       ON metric_samples (instance_id, collected_at);
 --   CREATE INDEX IF NOT EXISTS ix_slow_query_samples_instance_collected

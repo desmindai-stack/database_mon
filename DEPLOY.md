@@ -52,6 +52,10 @@ Ek A.2). Hepsi `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` kullanıyor, yani
 daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güvenli
 (idempotent) — ama sıra önemli, özellikle 8 ve 9. maddeler birbirine bağımlı.
 
+⚠️ **İSTİSNA:** tabloda **"psql gerekir"** diye işaretli migration'lar SQL Editor'den ya da
+`supabase db push` ile ÇALIŞTIRILAMAZ (`CREATE INDEX CONCURRENTLY` transaction içinde
+çalışmaz). Onlar için aşağıdaki "CONCURRENTLY kullanan migration'lar" bölümüne bakın.
+
 | # | Dosya | Ne yapıyor |
 |---|---|---|
 | 1 | `20250717120000_dbace_core.sql` | Çekirdek tablolar: instances, metric_samples, slow_query_samples, alert_rules, alert_events, prediction_insights |
@@ -86,7 +90,81 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 30 | `20260908090000_prediction_advice.sql` | **YENİ** — prediction_insights.advice (tahminler için beş parçalı standart öneri) |
 | 31 | `20260908100000_prediction_outcomes.sql` | **YENİ** — prediction_outcomes tablosu (tahmin doğruluğu geri besleme döngüsü) |
 | 32 | `20260908110000_prediction_method_transparency.sql` | **YENİ** — prediction_insights: method, sample_count, span_days, outliers_removed, fit_kind, fit_note, eta_days_min/max (tahmin yöntemi şeffaflığı) |
-| 33 | `20260909090000_hot_table_composite_indexes.sql` | **YENİ** — metric_samples + slow_query_samples (instance_id, collected_at) bileşik indeksleri. **CANLI 502 DÜZELTMESİ.** CONCURRENTLY satırlarını SQL Editor'de TEK TEK çalıştırın (transaction içinde çalışmaz) |
+| 33 | `20260909090000_hot_table_composite_indexes.sql` | **YENİ** — metric_samples + slow_query_samples (instance_id, collected_at) bileşik indeksleri. **CANLI 502 DÜZELTMESİ.** ⚠️ **psql gerekir** — CONCURRENTLY kullanıyor, SQL Editor'den çalıştırılamaz (bkz. aşağıdaki bölüm) |
+
+## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
+
+Bazı migration'lar `CREATE INDEX CONCURRENTLY` kullanır. PostgreSQL bu komutu bir transaction
+bloğunun İÇİNDE çalıştırmaz; Supabase SQL Editor her gönderimi bir transaction'a sardığı için
+oradan denemek şu hatayı verir:
+
+```
+ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+```
+
+**Satırları tek tek çalıştırmak da bu hatayı ÇÖZMEZ** — sorun kaç satır gönderdiğiniz değil,
+editörün her gönderimi sarmalaması. `supabase db push` de aynı sebeple çalışmaz.
+
+### Doğru yol: psql
+
+Supabase panelinden bağlantı dizesini alın (**Project Settings → Database → Connection string
+→ URI**) ve komutları `psql` ile TEK TEK çalıştırın:
+
+```bash
+# Bağlantı dizesini bir kez tanımlayın (şifre panelde görünür)
+export DBACE_DB='postgresql://postgres.<proje-ref>:<sifre>@aws-0-<bolge>.pooler.supabase.com:5432/postgres'
+
+# Her komut AYRI bir psql çağrısı olmalı: -c ile gönderilen tek komut transaction'a sarılmaz.
+psql "$DBACE_DB" -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_metric_samples_instance_collected ON metric_samples (instance_id, collected_at);"
+
+psql "$DBACE_DB" -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_slow_query_samples_instance_collected ON slow_query_samples (instance_id, collected_at);"
+```
+
+> **Pooler portuna dikkat.** Transaction-mode pooler (port **6543**) uzun süren DDL için uygun
+> değildir. Yukarıdaki örnek **5432** (session mode) kullanıyor; CONCURRENTLY için bunu tercih
+> edin.
+
+Büyük tablolarda her komut dakikalar sürebilir — bu normaldir ve bu süre boyunca tabloya
+yazma DEVAM EDER (CONCURRENTLY'nin varlık sebebi budur).
+
+### Doğrulama
+
+```bash
+psql "$DBACE_DB" -c "\di+ ix_metric_samples_instance_collected"
+psql "$DBACE_DB" -c "\di+ ix_slow_query_samples_instance_collected"
+```
+
+Bir indeks `INVALID` görünüyorsa (CONCURRENTLY yarıda kalmışsa olur) önce düşürüp tekrar
+oluşturun:
+
+```bash
+psql "$DBACE_DB" -c "DROP INDEX CONCURRENTLY IF EXISTS ix_metric_samples_instance_collected;"
+```
+
+Planın indeksi gerçekten kullandığını görmek için:
+
+```sql
+EXPLAIN ANALYZE SELECT collected_at FROM slow_query_samples
+WHERE instance_id = <id> ORDER BY collected_at DESC LIMIT 1;
+```
+
+Planda `Index Only Scan using ix_slow_query_samples_instance_collected` görünmeli; `Sort` ya da
+`Seq Scan` görünüyorsa indeks oluşmamıştır.
+
+### KURAL — yeni migration yazarken
+
+`CONCURRENTLY` kullanan her yeni migration dosyasının **adı `_concurrently` ile bitmeli**;
+ayrıca dosyanın baş yorumunda ve yukarıdaki tabloda **"psql gerekir"** ibaresi bulunmalı.
+Böyle bir dosya SQL Editor'e ya da `supabase db push`'a verilmez, psql yolundan geçer.
+
+(33 numaralı dosya bu kuraldan önce yazıldı; adı değişmedi ama içinde ve tabloda işaretli.
+Uygulanmış bir migration'ı yeniden adlandırmak, onu çalıştırmış ortamlarda karışıklık
+yaratacağı için tercih edilmedi.)
+
+Alternatifi (kilitleyen normal `CREATE INDEX`) yalnızca tablo küçükse ya da planlı bir bakım
+penceresi varsa tercih edilmelidir: normal `CREATE INDEX` tamamlanana kadar tabloya yazmayı
+kilitler, yani toplama döngüsü durur.
+
 
 `14` numaralı dosya `9` numaralıdan (nodes.instance_id) SONRA çalışıyor olsa
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun

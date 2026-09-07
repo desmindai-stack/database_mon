@@ -149,19 +149,39 @@ async def start_scheduler() -> None:
         id="evaluate_custom_rules",
         replace_existing=True,
     )
+    # GÜNLÜK İŞLER CRON İLE — "interval" DEĞİL (Faz 21 İŞ 3).
+    #
+    # `interval(days=1)` ilk çalışmasını scheduler BAŞLADIKTAN 24 saat sonra planlar
+    # (APScheduler'ın IntervalTrigger'ı `start_date` verilmezse `now + interval` alır).
+    # Worker günde bir kereden sık yeniden başlıyorsa — Railway'de yeniden dağıtım, çökme,
+    # platform bakımı — sayaç her seferinde sıfırlanır ve iş HİÇ ÇALIŞMAZ.
+    #
+    # İki somut sonucu vardı: saklama temizliği çalışmadığı için slow_query_samples sınırsız
+    # büyüyordu, ve günlük rollup üretilmediği için uzun vadeli kapasite tahminleri (disk
+    # dolma, wraparound, tablo büyümesi) hiç çıkmıyordu — ikisi de sessizce.
+    #
+    # Cron sabit saate bağlıdır, sürecin ne zaman başladığından bağımsızdır.
+    # `misfire_grace_time`: worker o saatte kısa süreli kapalıysa iş yine de yakalanır.
+    # `coalesce`: uzun bir kesintiden sonra birikmiş tetiklemeler tek çalışmaya indirilir.
     scheduler.add_job(
         retention_cleanup_tick,
-        "interval",
-        days=1,
+        "cron",
+        hour=3,
+        minute=0,
         id=RETENTION_JOB_ID,
         replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
     )
     scheduler.add_job(
         daily_rollup_tick,
-        "interval",
-        days=1,
+        "cron",
+        hour=3,
+        minute=30,
         id=DAILY_ROLLUP_JOB_ID,
         replace_existing=True,
+        misfire_grace_time=3600,
+        coalesce=True,
     )
     scheduler.add_job(
         prediction_accuracy_tick,
@@ -169,6 +189,10 @@ async def start_scheduler() -> None:
         hours=1,
         id=PREDICTION_ACCURACY_JOB_ID,
         replace_existing=True,
+        # Saatlik iş de ilk çalışmasını bir saat sonraya planlıyordu; sık yeniden başlatmada
+        # aynı sorun küçük ölçekte geçerli.
+        next_run_time=datetime.now(),
+        coalesce=True,
     )
     scheduler.add_job(
         daily_health_report_tick,

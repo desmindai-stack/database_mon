@@ -61,6 +61,28 @@ def _apply_metrics_to_sample(sample: MetricSample, metrics: dict) -> None:
     sample.temp_bytes = float(metrics.get("temp_bytes") or 0)
 
 
+# Instance başına son yavaş sorgu toplaması. Süreç içinde tutuluyor (`_previous_state` ile
+# aynı kalıp): worker yeniden başlarsa ilk döngüde bir kez toplanır, bu zararsız.
+_last_slow_query_at: dict[int, datetime] = {}
+
+
+def _should_collect_slow_queries(instance_id: int, now: datetime) -> bool:
+    """Yavaş sorgular metriklerden daha SEYREK toplanır (Faz 21 İŞ 3).
+
+    Her toplama döngüsü 20 satır yazıyor; 15 saniyelik aralıkta bu instance başına ayda
+    ~3,5 milyon satır demek — `metric_samples`'ın 20 katı. pg_stat_statements kümülatif
+    olduğu için bu çözünürlük analize hiçbir şey KATMIYOR: rapor ve DPA pencere farkı
+    alıyor, 5 dakikalık örneklerle aynı sonucu veriyor.
+
+    Metrik toplama 15 saniyede kalıyor — bağlantı zirvesi gibi ani olaylar için gerekli.
+    """
+    interval = max(0, settings.slow_query_interval_seconds)
+    if interval <= 0:
+        return True  # 0 = her döngüde topla (eski davranış)
+    last = _last_slow_query_at.get(instance_id)
+    return last is None or (now - last).total_seconds() >= interval
+
+
 async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     engine = DatabaseEngine(instance.engine)
     collector = get_collector(engine, _target_for(instance))
@@ -80,12 +102,17 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     # opening its own — halves the connections-per-cycle for engines that support it
     # (PostgreSQL, SQL Server; returns None for engines that don't, e.g. MongoDB, which then
     # fall back to managing their own connection per call exactly as before).
+    collect_slow = _should_collect_slow_queries(instance.id, now)
     conn = await collector.open_connection()
     try:
         metrics = await collector.collect_metrics(previous=prev, conn=conn)
-        slow_query_rows = await collector.collect_slow_queries(conn=conn)
+        # Yavaş sorgu sorgusu (pg_stat_statements taraması) hem hedefte hem bizde en pahalı
+        # kısım; atlandığında hedef veritabanına da yük binmiyor.
+        slow_query_rows = await collector.collect_slow_queries(conn=conn) if collect_slow else []
     finally:
         await collector.close_connection(conn)
+    if collect_slow:
+        _last_slow_query_at[instance.id] = now
 
     state = metrics.pop("_state", {})
     state["collected_at"] = now

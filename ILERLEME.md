@@ -4455,6 +4455,106 @@ yazılmış olsa bile). CI Linux/UTF-8 olduğu için orada görünmezdi — yani
 "yerelde patlar, CI'da geçer" durumu. İkisinde de stdout/stderr UTF-8'e
 sabitlendi.
 
+## Faz 21 — İŞ 3: Veri saklama denetimi ve deploy notu
+
+### Bulunan kusur A — günlük işler yeniden başlatmada HİÇ çalışmıyordu
+
+Saklama temizliğinin mantığı doğruydu (`retention.py`), ama zamanlaması
+değildi. `interval(days=1)` ilk çalışmasını scheduler BAŞLADIKTAN 24 saat
+sonra planlar — APScheduler'ın `IntervalTrigger`'ı `start_date`
+verilmezse `now + interval` alıyor. Davranış empirik olarak doğrulandı
+(kurulu sürümle: fark tam 24.0 saat).
+
+Worker günde bir kereden sık yeniden başlıyorsa — Railway'de yeniden
+dağıtım, çökme, platform bakımı — sayaç her seferinde sıfırlanır ve iş
+**hiç çalışmaz**. İki sessiz sonucu vardı:
+
+1. Saklama temizliği yapılmadığı için `slow_query_samples` sınırsız
+   büyüyordu.
+2. **Günlük rollup da aynı tuzaktaydı** — `MetricRollupDaily` boş kalıyor,
+   dolayısıyla uzun vadeli kapasite tahminleri (disk dolma, wraparound,
+   tablo büyümesi) hiç üretilmiyordu. Bu, denetim sırasında ortaya çıkan,
+   bildirilmemiş ikinci bir arıza.
+
+`refresh_dashboard_snapshots` işinde `next_run_time=datetime.now()` vardı,
+diğerlerinde yoktu — yani sorun biliniyordu ama tek bir işte çözülmüştü.
+
+**Düzeltme:** günlük işler artık `cron` (saklama 03:00, rollup 03:30).
+Cron sabit saate bağlıdır, sürecin ne zaman başladığından bağımsızdır.
+`misfire_grace_time=3600` kısa kesintide işi kurtarıyor, `coalesce=True`
+uzun kesinti sonrası birikmiş tetiklemeleri tek çalışmaya indiriyor.
+Saatlik doğruluk işi de `next_run_time` ile hemen başlıyor.
+
+### Bulunan kusur B — toplama oranı hacimle orantısız
+
+Canlıda bildirilen **337 bin satır** (tek instance) hesaplandı:
+
+| | Döngü/gün | Satır/gün | 30 günde |
+|---|---|---|---|
+| Eski (her döngü, 15 sn) | 5.760 | 115.200 | **3.456.000** |
+| Yeni (5 dk) | 288 | 5.760 | **172.800** |
+
+337.000 ÷ 115.200 ≈ **2,9 gün**. Yani bildirilen sayı ~3 günlük toplamaya
+denk; 30 günlük saklamayla **tutarlı** (henüz silinecek bir şey yoktu) ve
+tek başına saklamanın bozuk olduğunu KANITLAMIYOR. Kanıt kusur A'dan
+geliyor: temizlik zaten hiç çalışmayacaktı. Asıl mesele oran — bu hızda
+30 günde 3,5 milyon satıra çıkardı.
+
+**Düzeltme:** yavaş sorgular artık metriklerden ayrı bir aralıkta
+toplanıyor (`slow_query_interval_seconds`, varsayılan 300 sn). Gerekçe:
+`pg_stat_statements` kümülatif, rapor ve DPA pencere FARKI alıyor —
+15 saniyelik çözünürlük analize hiçbir şey katmıyor, 5 dakikalık örnekler
+aynı sonucu veriyor. Metrik toplama 15 saniyede kalıyor; bağlantı zirvesi
+gibi ani olaylar için gerekli.
+
+Sonuç: instance başına aylık satır sayısı **20 kat** azalıyor ve
+`metric_samples` ile aynı mertebeye iniyor. Saklama süresi kısaltılmadı
+(1 ay), yani veri kaybı yok. Ayar `0` yapılırsa eski davranışa dönülüyor.
+
+Toplama atlandığında hedef veritabanına da yük binmiyor: `pg_stat_statements`
+taraması döngünün en pahalı kısmıydı.
+
+### Admin ekranı — doğrulandı, değişiklik gerekmedi
+
+Saklama görevinin son çalışma zamanı ve silinen kayıt sayısı zaten
+gösteriliyor (`AdminPage`, `retention.last_run_at` / `last_deleted_count`;
+`AppSetting`'te tutuluyor, ayrı bir denetim tablosu yok). Hiç çalışmamışsa
+"henüz çalışmadı" yazıyor — kusur A canlıda muhtemelen bu şekilde
+görünüyordu.
+
+### Deploy notu — önceki talimatım YANLIŞTI
+
+`hot_table_composite_indexes` migration'ı için "Supabase SQL Editor'de
+satırları tek tek çalıştırın" yazmıştım. Bu çalışmıyor: SQL Editor her
+gönderimi bir transaction'a sarıyor ve `CREATE INDEX CONCURRENTLY`
+transaction bloğunda çalışmıyor — `cannot run inside a transaction block`
+hatası veriyor. Satır sayısı sorunu çözmüyor, çünkü sorun satır sayısı
+değil sarmalama. `supabase db push` de aynı sebeple çalışmıyor.
+
+Doğru yol psql ile, **her komut ayrı bir `-c` çağrısı**. DEPLOY.md'ye
+bağlantı dizesinin nereden alınacağı, pooler port uyarısı (transaction-mode
+6543 yerine session-mode 5432), doğrulama (`\di+`) ve `INVALID` indeks
+kurtarması komut örnekleriyle yazıldı. Aynı uyarı on-prem kurulum
+dokümanına da (docker compose exec karşılığıyla) eklendi.
+
+### Kural — gelecekteki CONCURRENTLY migration'ları
+
+`CONCURRENTLY` kullanan yeni migration dosyalarının adı `_concurrently`
+ile bitecek; ayrıca dosyanın baş yorumunda ve DEPLOY.md tablosunda
+**"psql gerekir"** ibaresi bulunacak. 33 numaralı dosya bu kuraldan önce
+yazıldığı için adı değişmedi (uygulanmış bir migration'ı yeniden
+adlandırmak, onu çalıştırmış ortamlarda karışıklık yaratırdı) — içinde ve
+tabloda işaretli.
+
+**Testler:** `tests/test_retention_and_volume.py` (11) — APScheduler'ın
+24 saatlik ilk çalışma davranışını belgeliyor, günlük işlerin cron
+kullandığını ve kesintiye dayanıklı olduğunu, hacim hesabını, aralık
+mantığının instance başına ayrı saydığını ve ayarın kapatılabildiğini
+doğruluyor. `tests/test_hot_query_indexes.py`'a dört test eklendi:
+CONCURRENTLY kullanan HER migration'ın DEPLOY.md'de işaretli olduğu,
+çözümün komut örneğiyle yazıldığı ve aynı uyarının on-prem dokümanında da
+bulunduğu. Toplam 766 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

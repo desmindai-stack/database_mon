@@ -122,3 +122,45 @@ def test_the_migration_is_registered_in_deploy_md():
     """Migration yazılıp DEPLOY.md'ye işlenmezse canlıda uygulanmayı bekler ve 502 sürer."""
     deploy = (ROOT / "DEPLOY.md").read_text(encoding="utf-8")
     assert MIGRATION.name in deploy, "migration DEPLOY.md tablosunda yok"
+
+
+def test_every_concurrently_migration_is_flagged_as_needing_psql():
+    """KURAL (DEPLOY.md): `CREATE INDEX CONCURRENTLY` bir transaction bloğunda çalışmaz, yani
+    Supabase SQL Editor'den ve `supabase db push` ile UYGULANAMAZ — "cannot run inside a
+    transaction block" hatası verir. Böyle bir migration tabloda işaretlenmezse, onu uygulamaya
+    çalışan kişi hatayı alır ve indeks sessizce oluşmadan kalır (bu tam olarak yaşandı).
+
+    Kural dosya adına DEĞİL içeriğe bakıyor: adlandırma kuralı sonradan konuldu ve uygulanmış
+    bir migration'ı yeniden adlandırmak, onu çalıştırmış ortamlarda karışıklık yaratırdı.
+    """
+    migrations = ROOT / "supabase" / "migrations"
+    deploy = (ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+
+    unflagged = []
+    for path in sorted(migrations.glob("*.sql")):
+        sql = path.read_text(encoding="utf-8")
+        active = [ln for ln in sql.splitlines() if ln.strip() and not ln.strip().startswith("--")]
+        if not any("CONCURRENTLY" in ln.upper() for ln in active):
+            continue
+        row = next((ln for ln in deploy.splitlines() if path.name in ln), None)
+        if row is None or "psql gerekir" not in row:
+            unflagged.append(path.name)
+
+    assert not unflagged, (
+        f"CONCURRENTLY kullanan ama DEPLOY.md'de 'psql gerekir' diye işaretlenmemiş "
+        f"migration'lar: {unflagged}"
+    )
+
+
+def test_deploy_md_explains_the_concurrently_workaround():
+    """İşaret yetmez; ne yapılacağı da yazılı olmalı — komut örneğiyle."""
+    deploy = (ROOT / "DEPLOY.md").read_text(encoding="utf-8")
+    assert "cannot run inside a transaction block" in deploy, "gerçek hata mesajı yazılmamış"
+    assert "psql" in deploy and "-c " in deploy, "çalıştırılabilir komut örneği yok"
+
+
+def test_the_onprem_guide_carries_the_same_warning():
+    """On-prem kurulumu yapan kişi DEPLOY.md'yi okumayabilir; uyarı orada da olmalı."""
+    guide = (ROOT / "deploy" / "onprem" / "KURULUM.md").read_text(encoding="utf-8")
+    assert "CONCURRENTLY" in guide
+    assert "cannot run inside a transaction block" in guide

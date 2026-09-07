@@ -117,6 +117,47 @@ chmod +x scripts/*.sh
 
 İlk seferde birkaç dakika sürebilir (derleme).
 
+#### Şema güncellemeleri (yükseltme yaparken)
+
+Yeni kurulumda gerekmez: uygulama açılışta eksik tabloları ve kolonları kendisi oluşturur.
+**Var olan bir kurulumu yükseltiyorsanız** `supabase/migrations/` altındaki dosyaları
+`DEPLOY.md`'deki sırayla uygulayın.
+
+⚠️ **`CREATE INDEX CONCURRENTLY` kullanan migration'lar bir istisnadır.** PostgreSQL bu komutu
+bir transaction bloğunun içinde çalıştırmaz; tek bir dosya olarak (`psql -f`) ya da bir
+transaction'a saran herhangi bir araçla verildiğinde şu hatayı alırsınız:
+
+```
+ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
+```
+
+Bu komutları **tek tek, ayrı `-c` çağrılarıyla** gönderin:
+
+```bash
+# On-prem'de veritabanı compose içindeki postgres servisidir:
+docker compose exec -T postgres \
+  psql -U dbace -d dbace \
+  -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_metric_samples_instance_collected ON metric_samples (instance_id, collected_at);"
+
+docker compose exec -T postgres \
+  psql -U dbace -d dbace \
+  -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_slow_query_samples_instance_collected ON slow_query_samples (instance_id, collected_at);"
+```
+
+Büyük tablolarda her komut dakikalar sürebilir; bu süre boyunca tabloya **yazma devam eder**
+(CONCURRENTLY'nin varlık sebebi budur). Kilitleyen normal `CREATE INDEX` toplama döngüsünü
+durdurur — yalnızca planlı bakım penceresinde tercih edin.
+
+Doğrulama:
+
+```bash
+docker compose exec -T postgres psql -U dbace -d dbace -c "\di+ ix_slow_query_samples_instance_collected"
+```
+
+Bir indeks `INVALID` görünüyorsa (CONCURRENTLY yarıda kalmışsa olur) `DROP INDEX CONCURRENTLY`
+ile düşürüp tekrar oluşturun. Ayrıntılar ve Supabase/bulut karşılığı için `DEPLOY.md`'deki
+"CONCURRENTLY kullanan migration'lar" bölümüne bakın.
+
 ### Adım 5.5 — Tarayıcıdan açın
 
 ```text
