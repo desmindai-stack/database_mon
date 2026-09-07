@@ -11,6 +11,8 @@ import {
   HealthResponse,
 } from "../api";
 import { useAuth } from "../auth";
+import { PageError } from "../components/PageState";
+import { useUrlFilter } from "../hooks/useUrlState";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
@@ -109,17 +111,27 @@ export default function DashboardPage() {
   // The interval value itself is now only changeable from the admin screen (Faz 15 İŞ 2) —
   // still read here so the auto-refresh timer below uses whatever's currently configured.
   const [refreshSeconds, setRefreshSeconds] = useState<number | null>(null);
-  const [statusFilter, setStatusFilter] = useState<GroupOverallStatus | null>(null);
+  // Durum filtresi adreste tutuluyor: eskiden yalniz bilesen state'indeydi, bu yuzden
+  // filtrelenmis gorunum paylasilamiyor ve geri dugmesi filtreyi kaldirmak yerine
+  // kullaniciyi sayfadan atiyordu (Faz 19 IS 2).
+  const [statusFilterParam, setStatusFilterParam] = useUrlFilter("status");
+  const statusFilter = (statusFilterParam || null) as GroupOverallStatus | null;
+  const setStatusFilter = (next: GroupOverallStatus | null) => setStatusFilterParam(next ?? "");
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    api.getHealth().then(setConfig).catch((err) => setError(String(err.message || err)));
-    api.getConfig().then(setAppConfig).catch(() => undefined);
+  const loadSummary = () => {
     setGroupSummaryLoading(true);
+    setGroupSummaryError(null);
     api.getDashboardSummary()
       .then(setGroupSummary)
       .catch((err) => setGroupSummaryError(String(err.message || err)))
       .finally(() => setGroupSummaryLoading(false));
+  };
+
+  useEffect(() => {
+    api.getHealth().then(setConfig).catch((err) => setError(String(err.message || err)));
+    api.getConfig().then(setAppConfig).catch(() => undefined);
+    loadSummary();
     api.getRefreshInterval().then((r) => setRefreshSeconds(r.seconds)).catch(() => undefined);
     api.getLatestReport("global").then(setLatestReport).catch(() => undefined);
   }, []);
@@ -186,7 +198,7 @@ export default function DashboardPage() {
       <button
         type="button"
         className="stat-card-btn"
-        onClick={() => setStatusFilter((prev) => (prev === status ? null : status))}
+        onClick={() => setStatusFilter(statusFilter === status ? null : status)}
       >
         {content}
       </button>
@@ -210,8 +222,8 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {error && <div className="error">{error}</div>}
-      {groupSummaryError && <div className="error">{groupSummaryError}</div>}
+      {error && <PageError error={error} onRetry={() => { setError(null); api.getHealth().then(setConfig).catch((err) => setError(String(err.message || err))); }} />}
+      {groupSummaryError && <PageError error={groupSummaryError} onRetry={loadSummary} />}
 
       {/* Faz 17 İŞ 5: bugünün sağlık raporu kartı — tıklayınca doğrudan o rapora gider. */}
       {latestReport && (

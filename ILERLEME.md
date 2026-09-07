@@ -3669,6 +3669,100 @@ durumunu ele aldığını kontrol ediyor. `tests/test_endpoint_status_codes.py`
 (7 test) — yukarıdaki üç denetim sorusunu kalıcı olarak kapatıyor. Toplam:
 528 test yeşil, `npm run build` yeşil.
 
+## Faz 19 — İŞ 2: Uçtan uca gezinme denetimi
+
+Tarayıcı otomasyonu yoktu; denetim kaynak kod üzerinden ve **kanıtla**
+yapıldı: rota tablosu `App.tsx`'ten okunup her bağlantı hedefiyle
+eşleştirildi, her sayfanın yükleme/hata/boş yolları tek tek izlendi.
+Sonuçlar kalıcı testlere çevrildi, böylece denetim bir kereye mahsus
+kalmıyor.
+
+### Bağlantı hedefleri — temiz
+
+17 sayfa, 16 rota. Frontend'deki 49 benzersiz bağlantı hedefi (`to=`,
+`navigate()` ve `deepLink` gibi yol kuran literaller) ile backend'in
+ürettiği tüm derin bağlantılar (`report_sections.py`, `dashboard.py`,
+`dashboard_snapshot.py`) tanımlı rotalara uyuyor. **Var olmayan bir
+rotaya giden bağlantı bulunamadı** — yani İŞ 1'de görülen 404'ler kırık
+linklerden değil, catch-all/bulunamadı/koruma eksikliğindendi.
+
+Bu artık `tests/test_navigation_integrity.py` (82 test) ile kilitli.
+
+### Bulunan ve düzeltilen hatalar
+
+**A. "Veri yok" ile "yüklenemedi" aynı görünüyordu — 9 sayfa.**
+Liste sayfalarının hepsi boş tabloya `<td className="empty">Kayıt yok</td>`
+basıyordu ve bunu YÜKLEME BAŞARISIZ OLDUĞUNDA DA basıyordu. Yani API
+düştüğünde kullanıcı "Kayıtlı instance yok" / "Açık tahmin yok" / "Aktif
+alarm yok" okuyup gerçekten kayıt olmadığına inanıyordu. Bir izleme
+aracında bu sessiz yanlış bilgilendirmedir: DBA "alarm yok" görüp rahatlar.
+Ortak `TableState` bileşeni üç durumu ayırıyor (yükleniyor / hata + tekrar
+dene / gerçekten boş). Düzeltilen sayfalar: Customers, Applications,
+DatabaseGroups, Servers, Instances, Alerts (üç tablo), Admin, Predictions.
+
+**B. Yazma işlemleri sessizce başarısız oluyordu — 6 akış.**
+Silme ve kabul çağrılarında `catch` yoktu: işlem reddedilirse (başka
+sekmede zaten silinmiş, yetki, sunucu hatası, ağ kopması) kullanıcıya
+HİÇBİR ŞEY söylenmiyor, satır yerinde kalıyordu; hata yalnızca tarayıcı
+konsoluna yakalanmamış bir promise reddi olarak düşüyordu. Kullanıcı
+açısından düğme "çalışmıyor" gibi görünüyordu. Düzeltilenler:
+
+- Müşteri silme (`CustomersPage`)
+- Uygulama silme (`ApplicationsPage`)
+- Grup silme (`DatabaseGroupsPage`)
+- Düğüm silme (`GroupDetailPage`)
+- Tahmin kabul etme (`PredictionsPage`)
+- **Bulgu durumu değiştirme (`ReportsPage.applyStatus`)** — bunu denetim
+  testi buldu, gözle taramada kaçmıştı. Durum değişikliği reddedildiğinde
+  panel açık kalıyor ama hiçbir mesaj çıkmıyordu. Artık mesaj gösterilip
+  hata yeniden fırlatılıyor, böylece panel açık kalıyor ve kullanıcı
+  düzeltip tekrar deneyebiliyor.
+
+**C. Geri dönüş bağlantısı koşullu olduğu için kaybolabiliyordu — 2 sayfa.**
+`GroupDetailPage` ve `DatabaseWizardPage`'de "← Uygulama" bağlantısı
+yalnızca üst kayıt yüklenebildiğinde render ediliyordu. O çağrı sessizce
+başarısız olursa (İŞ 1'de düzeltilen sessiz `catch`'ler) sayfadan çıkış
+yolu kalmıyordu. Artık koşulsuz: üst kayıt bilinmiyorsa bir üst seviyeye
+(`/customers`) dönülüyor.
+
+**D. Dashboard durum filtresi adreste tutulmuyordu.**
+Bir durum kartına tıklayıp ("kritik gruplar") sonra geri basmak filtreyi
+kaldırmak yerine kullanıcıyı sayfadan atıyordu; filtrelenmiş görünüm
+paylaşılamıyordu da. Artık `?status=` ile adreste.
+
+**E. Dashboard hata kutularında tekrar deneme yoktu.** Sağlık özeti
+yüklenemediğinde ham hata metni beliriyor, kullanıcının tek çaresi sayfayı
+yenilemekti. Artık "Tekrar dene" düğmesi var.
+
+### Sayfa sayfa denetim sonucu
+
+| Sayfa | Açılıyor | Veri yok | Hata | Geri dönüş |
+|---|---|---|---|---|
+| Dashboard | ✓ | bilgilendirici boş kart | PageError + tekrar dene (E) | kenar çubuğu |
+| Instances | ✓ | TableState (A) | TableState + tekrar dene | kenar çubuğu |
+| Instance detay | ✓ | sekme bazlı | bulunamadı/hata ekranı (İŞ 1) | ✓ gruba/dashboard'a |
+| Reports | ✓ | "rapor yok" ayrımı (İŞ 1) | PageError + tekrar dene | kenar çubuğu |
+| Predictions | ✓ | TableState (A) | TableState + tekrar dene | kenar çubuğu |
+| Alerts | ✓ | 3 tablo, TableState (A) | TableState + tekrar dene | kenar çubuğu |
+| Alarm kuralı formu | ✓ | — | hata kutusu | ✓ |
+| Admin | ✓ | TableState (A) | hata kutusu | kenar çubuğu |
+| Customers | ✓ | TableState (A) | TableState + tekrar dene | kenar çubuğu |
+| Applications | ✓ | TableState (A) | bulunamadı/hata (İŞ 1) | ✓ |
+| Servers | ✓ | TableState (A) | bulunamadı/hata (İŞ 1) | ✓ |
+| Database groups | ✓ | TableState (A) | bulunamadı/hata (İŞ 1) | ✓ (C) |
+| Group detay | ✓ | düğüm listesi | bulunamadı/hata (İŞ 1) | ✓ (C) |
+| Sihirbaz | ✓ | — | bulunamadı/hata (İŞ 1) | ✓ (C) |
+| Login / şifre değiştirme | ✓ | — | hata kutusu | oturum akışı |
+| Bulunamadı | ✓ | — | — | ✓ (İŞ 1) |
+
+**Testler:** `tests/test_frontend_state_handling.py` (55 test) — her sayfa
+için "elle yazılmış boş tablo satırı yok" ve her sayfa/bileşen için "yazma
+çağrısı varsa hatası yakalanıyor" denetimi. Bu ikinci test yukarıdaki
+`applyStatus` hatasını gözle taramanın kaçırdığı yerde yakaladı.
+`tests/test_navigation_integrity.py` dashboard bağlantı kaynaklarını da
+kapsayacak şekilde genişletildi (82 test). Toplam: 589 test yeşil,
+`npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

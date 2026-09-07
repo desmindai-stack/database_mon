@@ -115,3 +115,62 @@ export function EmptyState({
     </div>
   );
 }
+
+/**
+ * Tablo gövdesindeki tek satırlık durum (Faz 19 İŞ 2/İŞ 3).
+ *
+ * Liste sayfalarının hepsi boş tabloya `<td className="empty">Kayıt yok</td>` basıyordu — ve
+ * bunu YÜKLEME BAŞARISIZ OLDUĞUNDA DA basıyordu. Yani API düştüğünde kullanıcı "kayıt yok"
+ * okuyup gerçekten kayıt olmadığına inanıyordu. Üç durum artık ayrı: yükleniyor, hata
+ * (tekrar dene), gerçekten boş.
+ */
+export function TableState({
+  colSpan,
+  loading = false,
+  error = null,
+  onRetry,
+  title,
+  detail,
+  action,
+}: {
+  colSpan: number;
+  loading?: boolean;
+  error?: unknown;
+  onRetry?: () => void;
+  title: string;
+  detail?: string;
+  action?: ReactNode;
+}) {
+  if (error) {
+    return (
+      <tr>
+        <td colSpan={colSpan} className="table-state">
+          <span className="table-state-error">⚠️ Liste yüklenemedi — {errorMessage(error)}</span>
+          {onRetry && (
+            <button type="button" className="btn btn-xs" onClick={onRetry}>
+              Tekrar dene
+            </button>
+          )}
+        </td>
+      </tr>
+    );
+  }
+  if (loading) {
+    return (
+      <tr>
+        <td colSpan={colSpan} className="table-state">
+          <span className="page-state-spinner" aria-hidden="true" /> Yükleniyor…
+        </td>
+      </tr>
+    );
+  }
+  return (
+    <tr>
+      <td colSpan={colSpan} className="table-state">
+        <strong>{title}</strong>
+        {detail && <span className="table-state-detail">{detail}</span>}
+        {action}
+      </td>
+    </tr>
+  );
+}

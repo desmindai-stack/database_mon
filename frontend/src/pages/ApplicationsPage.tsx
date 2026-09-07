@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, Application, Customer } from "../api";
-import { NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { api, Application, Customer, errorMessage } from "../api";
+import { NotFoundState, PageError, PageLoading, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 export default function ApplicationsPage() {
@@ -18,13 +18,23 @@ export default function ApplicationsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
 
-  const load = () => api.getApplications(id).then(setApplications).catch((e) => setError(String(e.message || e)));
+  const load = () =>
+    api
+      .getApplications(id)
+      .then((rows) => {
+        setApplications(rows);
+        setListError(null);
+      })
+      .catch(setListError)
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     if (!idIsValid) return;
@@ -59,8 +69,14 @@ export default function ApplicationsPage() {
 
   const onDelete = async (appId: number) => {
     if (!confirm("Uygulama ve altındaki tüm grup/düğüm kayıtları silinsin mi?")) return;
-    await api.deleteApplication(appId);
-    await load();
+    // Sessiz basarisizlik duzeltildi (Faz 19 IS 2) — bkz. CustomersPage'deki ayni not.
+    setError(null);
+    try {
+      await api.deleteApplication(appId);
+      await load();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   };
 
   const startEdit = (a: Application) => {
@@ -129,9 +145,18 @@ export default function ApplicationsPage() {
             </thead>
             <tbody>
               {applications.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="empty">Kayıtlı uygulama yok</td>
-                </tr>
+                <TableState
+                  colSpan={3}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={load}
+                  title="Kayıtlı uygulama yok"
+                  detail={
+                    canWrite
+                      ? "Uygulama, veritabanı gruplarını bir arada tutar (örn. \u201cboa\u201d → SQL Server Always On). Aşağıdaki formdan ilkini ekleyin."
+                      : "Uygulama, veritabanı gruplarını bir arada tutar. Uygulama eklemek admin yetkisi gerektirir."
+                  }
+                />
               ) : (
                 applications.map((a) => (
                   <tr key={a.id}>

@@ -9,6 +9,7 @@ import {
   DatabaseGroup,
   DbNode,
   DbServer,
+  errorMessage,
   GroupHealth,
   Instance,
   NodeRoleHint,
@@ -111,7 +112,15 @@ export default function GroupDetailPage() {
 
   const onDeleteNode = async (node: DbNode) => {
     if (!confirm("Düğüm silinsin mi?")) return;
-    await api.deleteNode(node.id);
+    // Eskiden `catch` yoktu: silme reddedilirse dugme hicbir sey yapmiyormus gibi
+    // gorunuyordu (Faz 19 IS 2).
+    setError(null);
+    try {
+      await api.deleteNode(node.id);
+    } catch (err) {
+      setError(errorMessage(err));
+      return;
+    }
     await loadNodes();
     // The server itself isn't auto-deleted with its last node (a Server can host more than one
     // Node — a second named SQL Server instance, see İŞ 3) — ask instead of silently orphaning
@@ -326,7 +335,14 @@ export default function GroupDetailPage() {
             {group && <span className={`env-badge ${group.environment}`}>{group.environment}</span>}
           </div>
           <p className="detail-subtitle">
-            {application && <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>}
+            {/* Geri bağlantısı KOŞULSUZ: eskiden yalnızca `application` yüklendiğinde
+                görünüyordu, uygulama çağrısı sessizce başarısız olduğunda sayfadan çıkış yolu
+                kalmıyordu (Faz 19 İŞ 2). Uygulama bilinmiyorsa bir üst seviyeye dönülür. */}
+            {application ? (
+              <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>
+            ) : (
+              <Link to="/customers">← Müşteriler</Link>
+            )}
             {group?.access_name && <span className="detail-meta"> · Erişim: {group.access_name}</span>}
             {group?.vip_address && <span className="detail-meta"> · VIP: {group.vip_address}</span>}
           </p>

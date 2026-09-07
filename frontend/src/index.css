@@ -3080,3 +3080,37 @@ td code,
 .nav-tree-error:hover {
   text-decoration: underline;
 }
+
+/* Tablo içi durum satırı — Faz 19 İŞ 2/İŞ 3. */
+.table-state {
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.table-state strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+}
+
+.table-state-detail {
+  display: block;
+  font-size: 0.85rem;
+  margin-bottom: 0.6rem;
+}
+
+.table-state-error {
+  display: block;
+  color: #fecaca;
+  margin-bottom: 0.6rem;
+}
+
+.table-state .page-state-spinner {
+  display: inline-block;
+  vertical-align: -0.2em;
+  width: 1rem;
+  height: 1rem;
+  margin-right: 0.4rem;
+}

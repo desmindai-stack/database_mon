@@ -19,7 +19,13 @@ import pytest
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src"
 APP_TSX = FRONTEND / "App.tsx"
-REPORT_SECTIONS = Path(__file__).resolve().parents[1] / "app" / "services" / "report_sections.py"
+SERVICES = Path(__file__).resolve().parents[1] / "app" / "services"
+# Kullaniciya derin baglanti ureten her kaynak: rapor bulgulari VE dashboard kartlari.
+LINK_SOURCES = (
+    SERVICES / "report_sections.py",
+    SERVICES / "dashboard.py",
+    SERVICES / "dashboard_snapshot.py",
+)
 
 
 # --- Rota tablosu -------------------------------------------------------------------------
@@ -119,10 +125,12 @@ def _backend_link_hints() -> list[str]:
 
     `link_hint=` doğrudan yazılanların yanında, bağlantıyı KURAN yardımcıların (slow_query_link,
     _parameter_link) gövdesindeki yol literalleri de taranıyor; bulgunun hedefi orada oluşuyor.
+    Dashboard kartlarının hedefleri de burada: onlar frontend'de `<Link to={g.link_hint}>` ile
+    doğrudan render ediliyor, yani yalnızca backend tarafında doğrulanabilir.
     """
     roots = _route_roots()
     hints: list[str] = []
-    for path in (REPORT_SECTIONS,):
+    for path in LINK_SOURCES:
         source = path.read_text(encoding="utf-8")
         for match in re.findall(r'f?"(/[^"\n]*)"', source):
             root = match.strip("/").split("/", 1)[0].split("?", 1)[0]

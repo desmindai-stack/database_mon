@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, ApiError, Application, DatabaseGroup, GroupEnvironment } from "../api";
-import { NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { api, ApiError, Application, DatabaseGroup, errorMessage, GroupEnvironment } from "../api";
+import { NotFoundState, PageError, PageLoading, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 const ENV_LABELS: Record<GroupEnvironment, string> = {
@@ -22,6 +22,8 @@ export default function DatabaseGroupsPage() {
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
@@ -29,7 +31,15 @@ export default function DatabaseGroupsPage() {
   const [editAccessName, setEditAccessName] = useState("");
   const [editNotes, setEditNotes] = useState("");
 
-  const load = () => api.getGroups(id).then(setGroups).catch((e) => setError(String(e.message || e)));
+  const load = () =>
+    api
+      .getGroups(id)
+      .then((rows) => {
+        setGroups(rows);
+        setListError(null);
+      })
+      .catch(setListError)
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     if (!idIsValid) return;
@@ -49,8 +59,14 @@ export default function DatabaseGroupsPage() {
 
   const onDelete = async (groupId: number) => {
     if (!confirm("Grup ve altındaki tüm düğüm kayıtları silinsin mi?")) return;
-    await api.deleteGroup(groupId);
-    await load();
+    // Sessiz basarisizlik duzeltildi (Faz 19 IS 2).
+    setError(null);
+    try {
+      await api.deleteGroup(groupId);
+      await load();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   };
 
   const startEdit = (g: DatabaseGroup) => {
@@ -132,9 +148,18 @@ export default function DatabaseGroupsPage() {
             </thead>
             <tbody>
               {groups.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="empty">Kayıtlı grup yok</td>
-                </tr>
+                <TableState
+                  colSpan={6}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={load}
+                  title="Bu uygulamada veritabanı grubu yok"
+                  detail={
+                    canWrite
+                      ? "Grup, bir veritabanını (standalone) ya da bir cluster'ın tüm düğümlerini temsil eder. Sağ üstteki sihirbazla ekleyin."
+                      : "Grup, bir veritabanını ya da bir cluster'ın tüm düğümlerini temsil eder. Grup eklemek admin yetkisi gerektirir."
+                  }
+                />
               ) : (
                 groups.map((g) => {
                   const isCluster = g.topology !== "standalone";

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, formatTime, Prediction } from "../api";
+import { api, errorMessage, formatTime, Prediction } from "../api";
+import { TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
@@ -11,9 +12,18 @@ export default function PredictionsPage() {
   const canWrite = useAuth().user?.role === "admin";
   const [items, setItems] = useState<Prediction[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const load = () =>
-    api.getPredictions().then(setItems).catch((e) => setError(String(e.message || e)));
+    api
+      .getPredictions()
+      .then((rows) => {
+        setItems(rows);
+        setListError(null);
+      })
+      .catch(setListError)
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     load();
@@ -46,11 +56,14 @@ export default function PredictionsPage() {
           </thead>
           <tbody>
             {items.length === 0 ? (
-              <tr>
-                <td colSpan={8} className="empty">
-                  Açık tahmin yok. Worker metrik topladıkça trendler burada görünür.
-                </td>
-              </tr>
+              <TableState
+                colSpan={8}
+                loading={!loaded}
+                error={listError}
+                onRetry={load}
+                title="Açık tahmin yok"
+                detail="Tahminler geçmiş metriklerin trendinden üretilir; yeterli örnek biriktikçe burada görünür. Yeni eklenen bir instance için genelde birkaç saat gerekir."
+              />
             ) : (
               items.map((p) => (
                 <tr key={p.id}>
@@ -86,7 +99,15 @@ export default function PredictionsPage() {
                   </td>
                   <td>
                     {canWrite && (
-                      <button className="btn" onClick={() => api.ackPrediction(p.id).then(load)}>
+                      <button
+                        className="btn"
+                        onClick={() => {
+                          // `catch` yoktu: kabul reddedilirse dugme hicbir sey yapmiyormus gibi
+                          // gorunuyordu (Faz 19 IS 2).
+                          setError(null);
+                          api.ackPrediction(p.id).then(load).catch((e) => setError(errorMessage(e)));
+                        }}
+                      >
                         Onayla
                       </button>
                     )}

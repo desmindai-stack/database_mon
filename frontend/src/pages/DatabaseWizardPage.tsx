@@ -579,9 +579,17 @@ export default function DatabaseWizardPage() {
         <div>
           <h2>{mode === "add-node" ? `Düğüm ekle — ${existingGroup?.name ?? ""}` : "Veritabanı ekle — sihirbaz"}</h2>
           <p>
-            {mode === "add-node" && existingGroup && <Link to={`/groups/${existingGroup.id}`}>← {existingGroup.name}</Link>}
-            {mode === "create-group" && application && (
+            {/* Sihirbazdan çıkış yolu her durumda bulunmalı (Faz 19 İŞ 2). */}
+            {mode === "add-node" ? (
+              existingGroup ? (
+                <Link to={`/groups/${existingGroup.id}`}>← {existingGroup.name}</Link>
+              ) : (
+                <Link to="/customers">← Müşteriler</Link>
+              )
+            ) : application ? (
               <Link to={`/applications/${application.id}/groups`}>← {application.name}</Link>
+            ) : (
+              <Link to="/customers">← Müşteriler</Link>
             )}
           </p>
         </div>

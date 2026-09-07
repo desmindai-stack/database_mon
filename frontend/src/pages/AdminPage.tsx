@@ -10,6 +10,7 @@ import {
 } from "../api";
 import { formatTime } from "../api";
 import { useAuth } from "../auth";
+import { TableState } from "../components/PageState";
 import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "retention" | "users" | "settings";
@@ -38,6 +39,8 @@ export default function AdminPage() {
   // almak yerine kullanıcıyı sayfadan atıyordu ve bağlantı paylaşılamıyordu (Faz 19 İŞ 1).
   const [tab, setTab] = useUrlTab<Tab>("tab", TABS, "retention");
   const [error, setError] = useState<string | null>(null);
+  const [usersError, setUsersError] = useState<unknown>(null);
+  const [usersLoaded, setUsersLoaded] = useState(false);
 
   const [retention, setRetention] = useState<RetentionStatus | null>(null);
   const [retentionBusy, setRetentionBusy] = useState(false);
@@ -58,7 +61,15 @@ export default function AdminPage() {
   const [settingsBusy, setSettingsBusy] = useState(false);
 
   const loadRetention = () => api.getRetention().then(setRetention).catch((e) => setError(String(e.message || e)));
-  const loadUsers = () => api.getUsers().then(setUsers).catch((e) => setError(String(e.message || e)));
+  const loadUsers = () =>
+    api
+      .getUsers()
+      .then((rows) => {
+        setUsers(rows);
+        setUsersError(null);
+      })
+      .catch(setUsersError)
+      .finally(() => setUsersLoaded(true));
   const loadSettings = () => {
     api.getReportSchedule().then(setReportSchedule).catch(() => undefined);
     api.getNoiseSettings().then(setNoise).catch(() => undefined);
@@ -267,7 +278,14 @@ export default function AdminPage() {
               </thead>
               <tbody>
                 {users.length === 0 ? (
-                  <tr><td colSpan={5} className="empty">Kayıtlı kullanıcı yok</td></tr>
+                  <TableState
+                    colSpan={5}
+                    loading={!usersLoaded}
+                    error={usersError}
+                    onRetry={loadUsers}
+                    title="Kayıtlı kullanıcı yok"
+                    detail="En az bir admin hesabı ilk açılışta oluşturulur; bu listenin boş kalması beklenmez."
+                  />
                 ) : (
                   users.map((u) => (
                     <tr key={u.id}>

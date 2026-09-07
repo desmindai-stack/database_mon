@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Customer, DbServer, NodeSite, ServerOS } from "../api";
-import { NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { NotFoundState, PageError, PageLoading, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 const OS_LABELS: Record<ServerOS, string> = { linux: "Linux", windows: "Windows" };
@@ -18,6 +18,8 @@ export default function ServersPage() {
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
   const [rowAgentResult, setRowAgentResult] = useState<{ id: number; ok: boolean; message: string } | null>(null);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -31,7 +33,15 @@ export default function ServersPage() {
   const [editAgentUrl, setEditAgentUrl] = useState("");
   const [editAgentToken, setEditAgentToken] = useState("");
 
-  const load = () => api.getServers(id).then(setServers).catch((e) => setError(String(e.message || e)));
+  const load = () =>
+    api
+      .getServers(id)
+      .then((rows) => {
+        setServers(rows);
+        setListError(null);
+      })
+      .catch(setListError)
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     if (!idIsValid) return;
@@ -158,9 +168,14 @@ export default function ServersPage() {
             </thead>
             <tbody>
               {servers.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="empty">Kayıtlı sunucu yok</td>
-                </tr>
+                <TableState
+                  colSpan={7}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={load}
+                  title="Kayıtlı sunucu yok"
+                  detail="Sunucular veritabanı sihirbazında düğüm eklerken oluşturulur; buradan da elle eklenebilir."
+                />
               ) : (
                 servers.map((s) =>
                   editingId === s.id ? (

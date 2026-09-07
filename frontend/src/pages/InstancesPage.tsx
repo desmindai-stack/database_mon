@@ -11,6 +11,7 @@ import {
   InstanceDependencies,
 } from "../api";
 import { useAuth } from "../auth";
+import { TableState } from "../components/PageState";
 
 const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
 
@@ -67,6 +68,8 @@ export default function InstancesPage() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [form, setForm] = useState<InstanceCreate>(emptyForm());
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -83,7 +86,15 @@ export default function InstancesPage() {
   const isPrivate = config?.deployment_mode === "private";
   const defaultCustomer = config?.default_customer_name ?? undefined;
 
-  const load = () => api.getInstances().then(setInstances).catch((e) => setError(String(e.message || e)));
+  const load = () =>
+    api
+      .getInstances()
+      .then((rows) => {
+        setInstances(rows);
+        setListError(null);
+      })
+      .catch(setListError)
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     load();
@@ -579,7 +590,18 @@ export default function InstancesPage() {
             </thead>
             <tbody>
               {instances.length === 0 ? (
-                <tr><td colSpan={isPrivate ? 7 : 8} className="empty">Kayıtlı instance yok</td></tr>
+                <TableState
+                  colSpan={isPrivate ? 7 : 8}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={load}
+                  title="Kayıtlı instance yok"
+                  detail={
+                    canWrite
+                      ? "Bir instance, bağlantı bilgileriyle izlenen tek bir veritabanıdır. Yukarıdaki formdan ilkini ekleyin; metrikler ilk toplama döngüsünden sonra görünür."
+                      : "Bir instance, bağlantı bilgileriyle izlenen tek bir veritabanıdır. Instance eklemek admin yetkisi gerektirir."
+                  }
+                />
               ) : (
                 instances.map((inst) => (
                   <tr key={inst.id}>

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertEvent, AlertRule, api, DatabaseGroup, formatTime, Instance } from "../api";
 import { useAuth } from "../auth";
+import { TableState } from "../components/PageState";
 import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "active" | "rules" | "history";
@@ -20,6 +21,9 @@ export default function AlertsPage() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [groups, setGroups] = useState<DatabaseGroup[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Uc tablonun da tek bir yuklemesi var: hata da bos da olsa ayni kaynaktan gelir.
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const [search, setSearch] = useState("");
   const [severityFilter, setSeverityFilter] = useState("");
@@ -47,8 +51,15 @@ export default function AlertsPage() {
     setGroups(g);
   };
 
+  const reload = () =>
+    load()
+      .then(() => setListError(null))
+      .catch(setListError)
+      .finally(() => setLoaded(true));
+
   useEffect(() => {
-    load().catch((err) => setError(String(err.message || err)));
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startEdit = (rule: AlertRule) => {
@@ -150,7 +161,14 @@ export default function AlertsPage() {
             </thead>
             <tbody>
               {activeEvents.length === 0 ? (
-                <tr><td colSpan={4} className="empty">Aktif alarm yok</td></tr>
+                <TableState
+                  colSpan={4}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={reload}
+                  title="Aktif alarm yok"
+                  detail="Şu anda eşiği aşan bir kural yok. Kurallar sekmesinden hangi eşiklerin izlendiğini görebilirsiniz."
+                />
               ) : (
                 activeEvents.map((event) => (
                   <tr key={event.id}>
@@ -207,7 +225,18 @@ export default function AlertsPage() {
               </thead>
               <tbody>
                 {filteredRules.length === 0 ? (
-                  <tr><td colSpan={6} className="empty">Eşleşen kural yok</td></tr>
+                  <TableState
+                    colSpan={6}
+                    loading={!loaded}
+                    error={listError}
+                    onRetry={reload}
+                    title={rules.length === 0 ? "Tanımlı alarm kuralı yok" : "Filtreye uyan kural yok"}
+                    detail={
+                      rules.length === 0
+                        ? "Varsayılan kurallar ilk toplama döngüsünde oluşturulur; özel bir kuralı sağ üstteki düğmeyle ekleyebilirsiniz."
+                        : "Filtreyi genişletin ya da temizleyin."
+                    }
+                  />
                 ) : (
                   filteredRules.map((rule) => (
                     <tr key={rule.id}>
@@ -281,7 +310,14 @@ export default function AlertsPage() {
             </thead>
             <tbody>
               {historyEvents.length === 0 ? (
-                <tr><td colSpan={4} className="empty">Geçmişte çözülmüş alarm yok</td></tr>
+                <TableState
+                  colSpan={4}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={reload}
+                  title="Geçmişte çözülmüş alarm yok"
+                  detail="Bir alarm çözüldüğünde kaydı buraya taşınır; saklama süresi Yönetim → Saklama ayarından belirlenir."
+                />
               ) : (
                 historyEvents.map((event) => (
                   <tr key={event.id}>

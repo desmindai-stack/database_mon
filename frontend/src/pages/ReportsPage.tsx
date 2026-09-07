@@ -8,6 +8,7 @@ import {
   DatabaseGroup,
   DecisionScope,
   ExecutiveReport,
+  errorMessage,
   ExportSection,
   FINDING_STATUS_LABELS,
   FindingStatus,
@@ -277,7 +278,17 @@ export default function ReportsPage() {
   };
 
   const applyStatus = async (update: FindingStatusUpdate) => {
-    await api.setFindingStatus([update]);
+    // Hata yakalanmıyordu: durum değişikliği reddedildiğinde (yetki, doğrulama, ağ) panel
+    // kapanmıyor ama kullanıcıya HİÇBİR ŞEY söylenmiyordu (Faz 19 İŞ 2). Mesajı gösterip
+    // hatayı yeniden fırlatıyoruz — böylece FindingStatusControl paneli açık bırakıyor ve
+    // kullanıcı düzeltip tekrar deneyebiliyor.
+    setError(null);
+    try {
+      await api.setFindingStatus([update]);
+    } catch (e) {
+      setError(`Durum değiştirilemedi: ${errorMessage(e)}`);
+      throw e;
+    }
     if (selectedId) setReport(await api.getReport(selectedId));
     await loadHistory();
   };

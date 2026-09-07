@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, Customer, CustomerType } from "../api";
+import { api, Customer, CustomerType, errorMessage } from "../api";
+import { TableState } from "../components/PageState";
 import { useAuth } from "../auth";
 
 export default function CustomersPage() {
@@ -11,13 +12,25 @@ export default function CustomersPage() {
   const [name, setName] = useState("");
   const [type, setType] = useState<CustomerType>("private");
   const [error, setError] = useState<string | null>(null);
+  // Yukleme HATASI ile "gercekten bos" ayri seyler: eskiden ikisi de "Kayitli musteri
+  // yok" satirini gosteriyordu, yani API dustugunde kullanici kayit olmadigina inaniyordu.
+  const [listError, setListError] = useState<unknown>(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
   const [editType, setEditType] = useState<CustomerType>("private");
 
-  const load = () => api.getCustomers().then(setCustomers).catch((e) => setError(String(e.message || e)));
+  const load = () =>
+    api
+      .getCustomers()
+      .then((rows) => {
+        setCustomers(rows);
+        setListError(null);
+      })
+      .catch(setListError)
+      .finally(() => setLoaded(true));
 
   useEffect(() => {
     api.getConfig().then((cfg) => {
@@ -49,8 +62,15 @@ export default function CustomersPage() {
 
   const onDelete = async (id: number) => {
     if (!confirm("Müşteri ve altındaki tüm uygulama/grup/düğüm kayıtları silinsin mi?")) return;
-    await api.deleteCustomer(id);
-    await load();
+    // Eskiden `catch` yoktu: silme reddedilirse (baska sekmede zaten silinmis, sunucu hatasi,
+    // ag kopmasi) kullaniciya HICBIR SEY soylenmiyor, satir yerinde kaliyordu (Faz 19 IS 2).
+    setError(null);
+    try {
+      await api.deleteCustomer(id);
+      await load();
+    } catch (err) {
+      setError(errorMessage(err));
+    }
   };
 
   const startEdit = (c: Customer) => {
@@ -97,9 +117,18 @@ export default function CustomersPage() {
             </thead>
             <tbody>
               {customers.length === 0 ? (
-                <tr>
-                  <td colSpan={3} className="empty">Kayıtlı müşteri yok</td>
-                </tr>
+                <TableState
+                  colSpan={3}
+                  loading={!loaded}
+                  error={listError}
+                  onRetry={load}
+                  title="Kayıtlı müşteri yok"
+                  detail={
+                    canWrite
+                      ? "İzlenecek veritabanları müşteri altında gruplanır. Aşağıdaki formdan ilk müşteriyi ekleyin."
+                      : "İzlenecek veritabanları müşteri altında gruplanır. Müşteri eklemek admin yetkisi gerektirir."
+                  }
+                />
               ) : (
                 customers.map((c) => (
                   <tr key={c.id}>
