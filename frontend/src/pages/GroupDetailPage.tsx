@@ -17,7 +17,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
-import { NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { EmptyState, NotFoundState, PageError, PageLoading } from "../components/PageState";
 import RecommendationHeader from "../components/RecommendationHeader";
 import { useUrlTab } from "../hooks/useUrlState";
 
@@ -513,7 +513,23 @@ export default function GroupDetailPage() {
           <div className="card">
             <h3 className="chart-title">Düğümler</h3>
             <div className="cluster-service-grid">
-              {nodes.length === 0 && <p className="muted-note">Henüz düğüm eklenmedi.</p>}
+              {nodes.length === 0 && (
+                <EmptyState
+                  title="Bu grupta düğüm yok"
+                  detail={
+                    group.topology === "standalone"
+                      ? "Standalone bir grup tek düğümlüdür; sihirbaz sırasında oluşturulmuş olması beklenir."
+                      : "Cluster düğümleri sihirbazla eklenir. Servis durumu, rol ve lag bilgisi düğüm eklendikten sonra görünür."
+                  }
+                  action={
+                    canWrite && group.topology !== "standalone" ? (
+                      <Link to={`/groups/${id}/wizard`} className="btn btn-xs">
+                        Düğüm ekle
+                      </Link>
+                    ) : undefined
+                  }
+                />
+              )}
               {nodes.map((node) => {
                 const nodeHealth = healthByNodeId.get(node.id);
                 if (editingNodeId === node.id) {

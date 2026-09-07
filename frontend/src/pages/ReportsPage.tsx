@@ -21,6 +21,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import { NotFoundState, PageError } from "../components/PageState";
+import { ShowMoreButton, useShowMore } from "../components/Pagination";
 import ExecutiveReportView from "../components/ExecutiveReportView";
 import ReportFindingCard from "../components/ReportFindingCard";
 
@@ -767,17 +768,14 @@ export default function ReportsPage() {
                     {item.unknown_reason && (
                       <p className="warn-text">Değerlendirilemedi: {item.unknown_reason}</p>
                     )}
-                    {findings.map((finding) => (
-                      <ReportFindingCard
-                        key={finding.id}
-                        finding={finding}
-                        canWrite={canWrite}
-                        scopeTargets={scopeTargetsFor(finding)}
-                        onApplyStatus={applyStatus}
-                        selected={selected.has(finding.fingerprint)}
-                        onToggleSelect={toggleSelect}
-                      />
-                    ))}
+                    <SectionFindings
+                      findings={findings}
+                      canWrite={canWrite}
+                      scopeTargetsFor={scopeTargetsFor}
+                      applyStatus={applyStatus}
+                      selected={selected}
+                      toggleSelect={toggleSelect}
+                    />
                   </div>
                 );
               })}
@@ -834,6 +832,48 @@ export default function ReportsPage() {
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+/**
+ * Bir rapor bölümünün bulguları (Faz 19 İŞ 3).
+ *
+ * Bulgu kartları ağır: her biri önerinin adımlarını, komutlarını ve durum kontrolünü taşıyor.
+ * Çok instance'lı bir kapsamda tek bölümde onlarca bulgu olabiliyor ve hepsi bir anda render
+ * ediliyordu. Önce ilk 10'u gösteriliyor; okuma sırası bozulmasın diye sayfalama değil
+ * "daha göster" kullanıldı.
+ */
+function SectionFindings({
+  findings,
+  canWrite,
+  scopeTargetsFor,
+  applyStatus,
+  selected,
+  toggleSelect,
+}: {
+  findings: ReportFinding[];
+  canWrite: boolean;
+  scopeTargetsFor: (f: ReportFinding) => { scope: DecisionScope; id: number | null; label: string }[];
+  applyStatus: (update: FindingStatusUpdate) => Promise<void>;
+  selected: Set<string>;
+  toggleSelect: (fingerprint: string) => void;
+}) {
+  const shown = useShowMore(findings);
+  return (
+    <>
+      {shown.items.map((finding) => (
+        <ReportFindingCard
+          key={finding.id}
+          finding={finding}
+          canWrite={canWrite}
+          scopeTargets={scopeTargetsFor(finding)}
+          onApplyStatus={applyStatus}
+          selected={selected.has(finding.fingerprint)}
+          onToggleSelect={toggleSelect}
+        />
+      ))}
+      <ShowMoreButton hidden={shown.hidden} onClick={shown.showAll} />
     </>
   );
 }

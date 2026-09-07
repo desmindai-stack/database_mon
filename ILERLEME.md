@@ -3763,6 +3763,86 @@ için "elle yazılmış boş tablo satırı yok" ve her sayfa/bileşen için "ya
 kapsayacak şekilde genişletildi (82 test). Toplam: 589 test yeşil,
 `npm run build` yeşil.
 
+## Faz 19 — İŞ 3: Arayüz tutarlılığı
+
+### Aynı işlev, aynı görünüm
+
+İŞ 1 ve İŞ 2'de kurulan ortak bileşenler (`PageLoading`, `PageError`,
+`NotFoundState`, `EmptyState`, `TableState`) bu turda kalan yerlere de
+uygulandı. Öncesinde aynı üç durum sayfadan sayfaya farklı görünüyordu:
+kimi yerde `<div className="error">`, kimi yerde `<td className="empty">`,
+kimi yerde hiçbir şey.
+
+**Yetki reddi ekranları.** `AdminPage` ve `CustomAlertRuleFormPage`, viewer
+rolündeki bir kullanıcıya çıplak bir hata kutusu gösteriyordu — geri dönüş
+yolu yoktu, kullanıcı çıkamadığı bir sayfada kalıyordu. Artık üçü de
+(sihirbaz dahil) aynı ekranı kullanıyor: ne olduğu, neden ve nereye
+dönüleceği.
+
+### Bilgilendirici boş durumlar
+
+Boş liste ekranları "neden boş" ve "ne yapılmalı" söylüyor artık. Örnekler:
+
+- "Açık tahmin yok" → *"Tahminler geçmiş metriklerin trendinden üretilir;
+  yeterli örnek biriktikçe burada görünür. Yukarıdaki hazırlık paneli hangi
+  metriğin ne kadar veriye ihtiyacı olduğunu gösterir."*
+- "Kayıtlı uygulama yok" → uygulamanın ne işe yaradığı + ekleme yolu (ve
+  viewer rolündeyse bunun admin gerektirdiği).
+- "Bu grupta düğüm yok" → standalone/cluster durumuna göre farklı metin,
+  cluster ise doğrudan sihirbaz düğmesi.
+- "Bu instance için alarm kuralı yok" → varsayılan kuralların ne zaman
+  oluştuğu + kural ekleme bağlantısı.
+
+### Uzun listeler
+
+Hiçbir listede sayfalama yoktu; her şey tek seferde render ediliyordu.
+`/api/instances` sunucuda sınırsız ve bir bankada birkaç yüz kayıt olması
+normal; her satır kendi düğmeleri ve rozetleriyle geldiği için bu binlerce
+DOM düğümü demek.
+
+- `usePagination` + `Pagination` (25/50/100, "X–Y / Z") → Instances,
+  Alerts (aktif / kurallar / geçmiş, üç tablo da).
+- `useShowMore` + `ShowMoreButton` → rapor bölümlerindeki bulgular. Burada
+  sayfalama yanlış olurdu: bulgular baştan sona okunur, sayfalara bölmek
+  okumayı bozar. Önce 10 bulgu, gerisi "daha göster" ile.
+- Tek sayfaya sığan listelerde sayfalama çubuğu hiç görünmüyor (gereksiz
+  gürültü olmasın).
+
+**Dürüstlük notu — bu istemci tarafı sayfalama.** Sunucu hâlâ tüm satırları
+tek yanıtta gönderiyor. Asıl darboğaz olan render maliyetini çözüyor,
+ağ/bellek maliyetini çözmüyor. Sunucu tarafı sayfalama birçok ucun
+sözleşmesini değiştirir; SORULAR.md'ye yazıldı.
+
+**Sessiz kesme düzeltildi.** `GET /api/alerts/events` yanıtı sunucuda 100
+kayıtta kesiliyor. Frontend bunu "geçmişin tamamı" gibi gösteriyordu; artık
+liste kesilmişse bunu açıkça yazıyor.
+
+### Dar ekran / tablet
+
+Tek kırılma noktası 800px'ti ve altında kenar çubuğu `min-height: 100vh`
+ile TÜM ilk ekranı kaplıyordu: kullanıcı uygulamayı tablette açtığında
+içerik ekranın tamamen altında kalıyordu. Ayrıca `.main { overflow-x:
+hidden }` taşan içeriği kaydırılabilir yapmak yerine KESİYORDU — dar
+ekranda geniş bir araç çubuğunun ya da tablonun sağ tarafına hiç
+ulaşılamıyordu.
+
+- `.main` artık `overflow-x: auto` — taşan içerik kesilmiyor, erişilebilir.
+- Sekme şeritleri (`.detail-tabs`) alt alta kırılmak yerine yatay kayıyor.
+- **1024px (yatay tablet):** kenar çubuğu 200px'e iniyor, iç boşluklar
+  daralıyor, rapor düzeni sıkışıyor.
+- **820px (dikey tablet):** tek sütun; kenar çubuğu `min-height: auto` ve
+  gezinme bağlantıları yatay sarmalı bir şeride dönüşüyor; rapor geçmişi
+  yapışkan olmaktan çıkıyor; sayfa başlıkları sarıyor.
+- **560px (telefon):** iki sütunlu kutucuk ızgarası, küçültülmüş tablo
+  yazısı, ortalanmış sayfalama.
+
+**Testler:** `tests/test_ui_consistency.py` (10 test) — uzun listelerin
+sınırlandığını VE dilimin gerçekten render edildiğini (sayfalama kurup
+listenin tamamını basmak hiçbir işe yaramaz), yetki ekranlarının çıkış yolu
+verdiğini, tablet kırılma noktalarının ve `.main` taşma davranışının
+yerinde olduğunu doğruluyor. Toplam: 600 test yeşil (1 atlandı),
+`npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -10,7 +10,7 @@ import {
 } from "../api";
 import { formatTime } from "../api";
 import { useAuth } from "../auth";
-import { TableState } from "../components/PageState";
+import { NotFoundState, TableState } from "../components/PageState";
 import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "retention" | "users" | "settings";
@@ -201,7 +201,14 @@ export default function AdminPage() {
   };
 
   if (currentUser?.role !== "admin") {
-    return <div className="error">Bu sayfa için admin yetkisi gerekiyor.</div>;
+    return (
+      <NotFoundState
+        title="Bu sayfa için yetkiniz yok"
+        detail="Yönetim ekranı admin yetkisi gerektirir; viewer rolü salt-okunurdur."
+        backTo="/"
+        backLabel="Dashboard'a dön"
+      />
+    );
   }
 
   return (

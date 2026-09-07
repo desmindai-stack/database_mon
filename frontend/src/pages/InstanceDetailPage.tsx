@@ -43,7 +43,7 @@ import {
   SlowQueryList,
   TuningReport,
 } from "../api";
-import { NotFoundState, PageError, PageLoading } from "../components/PageState";
+import { EmptyState, NotFoundState, PageError, PageLoading } from "../components/PageState";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import AdviceCard from "../components/AdviceCard";
@@ -1645,7 +1645,11 @@ export default function InstanceDetailPage() {
           <div className="card">
             <h3 className="chart-title">Alarm kuralları</h3>
             {rules.length === 0 ? (
-              <div className="empty">Alarm kuralı tanımlı değil</div>
+              <EmptyState
+                title="Bu instance için alarm kuralı yok"
+                detail="Varsayılan kurallar ilk toplama döngüsünde oluşturulur. Özel bir eşik izlemek isterseniz Alarmlar sayfasından kural ekleyebilirsiniz."
+                action={<Link to="/alerts/new" className="btn btn-xs">Kural ekle</Link>}
+              />
             ) : (
               <div className="table-wrap">
                 <table>
@@ -1670,7 +1674,10 @@ export default function InstanceDetailPage() {
           <div className="card">
             <h3 className="chart-title">Son alarm olayları</h3>
             {events.length === 0 ? (
-              <div className="empty">Aktif alarm yok</div>
+              <EmptyState
+                title="Alarm olayı yok"
+                detail="Bu instance için henüz hiçbir kural tetiklenmedi — beklenen durum budur."
+              />
             ) : (
               <ul className="event-list">
                 {events.map((e) => (
@@ -1692,7 +1699,10 @@ export default function InstanceDetailPage() {
           <div className="card">
             <h3 className="chart-title">Tahminler</h3>
             {predictions.length === 0 ? (
-              <div className="empty">Açık tahmin yok</div>
+              <EmptyState
+                title="Açık tahmin yok"
+                detail="Tahminler geçmiş metriklerin trendinden üretilir; yeterli örnek biriktikçe burada görünür. Yukarıdaki hazırlık paneli hangi metriğin ne kadar veriye ihtiyacı olduğunu gösterir."
+              />
             ) : (
               <div className="table-wrap">
                 <table>

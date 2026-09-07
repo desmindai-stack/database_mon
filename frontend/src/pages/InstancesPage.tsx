@@ -12,6 +12,7 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import { TableState } from "../components/PageState";
+import { Pagination, usePagination } from "../components/Pagination";
 
 const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
 
@@ -85,6 +86,10 @@ export default function InstancesPage() {
 
   const isPrivate = config?.deployment_mode === "private";
   const defaultCustomer = config?.default_customer_name ?? undefined;
+
+  // `/api/instances` sınırsız döner; bir bankada birkaç yüz kayıt olması normal ve her satır
+  // kendi düğmeleri/rozetleriyle geldiği için hepsini tek seferde render etmek ağır (Faz 19 İŞ 3).
+  const instanceSlice = usePagination(instances);
 
   const load = () =>
     api
@@ -603,7 +608,7 @@ export default function InstancesPage() {
                   }
                 />
               ) : (
-                instances.map((inst) => (
+                instanceSlice.items.map((inst) => (
                   <tr key={inst.id}>
                     <td><Link to={`/instances/${inst.id}`}>{inst.name}</Link></td>
                     {!isPrivate && <td>{inst.customer_name || "—"}</td>}
@@ -626,6 +631,7 @@ export default function InstancesPage() {
             </tbody>
           </table>
         </div>
+        <Pagination slice={instanceSlice} label="instance" />
 
         {deleteTarget ? (
           deletePanel

@@ -3,10 +3,13 @@ import { Link } from "react-router-dom";
 import { AlertEvent, AlertRule, api, DatabaseGroup, formatTime, Instance } from "../api";
 import { useAuth } from "../auth";
 import { TableState } from "../components/PageState";
+import { Pagination, usePagination } from "../components/Pagination";
 import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "active" | "rules" | "history";
 const TABS: readonly Tab[] = ["active", "rules", "history"];
+/** Backend `GET /api/alerts/events` yanitini bu sayida kesiyor. */
+const SERVER_EVENT_LIMIT = 100;
 
 const SEVERITIES = ["critical", "high", "warning", "medium", "low", "info"];
 const ENGINES = ["postgresql", "sqlserver", "mongodb"];
@@ -23,6 +26,7 @@ export default function AlertsPage() {
   const [error, setError] = useState<string | null>(null);
   // Uc tablonun da tek bir yuklemesi var: hata da bos da olsa ayni kaynaktan gelir.
   const [listError, setListError] = useState<unknown>(null);
+  const [historyTruncated, setHistoryTruncated] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -47,6 +51,9 @@ export default function AlertsPage() {
     setRules(r);
     setActiveEvents(active);
     setHistoryEvents(history.filter((e) => e.resolved_at !== null));
+    // Sunucu bu ucu 100 kayitta kesiyor (alerts.py: query.limit(100)). Sessizce kesilmis bir
+    // listeyi "gecmisin tamami" gibi gostermek yanlis bilgilendirme (Faz 19 IS 3).
+    setHistoryTruncated(history.length >= SERVER_EVENT_LIMIT);
     setInstances(i);
     setGroups(g);
   };
@@ -111,6 +118,12 @@ export default function AlertsPage() {
     });
   }, [rules, search, severityFilter, engineFilter]);
 
+  // Sayfalama üç tabloda da aynı: bir bankada yüzlerce alarm kaydı normal ve hepsini tek
+  // seferde render etmek tarayıcıyı kilitler (Faz 19 İŞ 3).
+  const activeSlice = usePagination(activeEvents);
+  const ruleSlice = usePagination(filteredRules);
+  const historySlice = usePagination(historyEvents);
+
   const eventScope = (event: AlertEvent) =>
     event.instance_id ? (
       `Instance #${event.instance_id}`
@@ -149,6 +162,7 @@ export default function AlertsPage() {
       </div>
 
       {tab === "active" && (
+        <>
         <div className="table-wrap" style={{ marginTop: "1rem" }}>
           <table>
             <thead>
@@ -170,7 +184,7 @@ export default function AlertsPage() {
                   detail="Şu anda eşiği aşan bir kural yok. Kurallar sekmesinden hangi eşiklerin izlendiğini görebilirsiniz."
                 />
               ) : (
-                activeEvents.map((event) => (
+                activeSlice.items.map((event) => (
                   <tr key={event.id}>
                     <td>{formatTime(event.triggered_at)}</td>
                     <td>{eventScope(event)}</td>
@@ -188,6 +202,8 @@ export default function AlertsPage() {
             </tbody>
           </table>
         </div>
+        <Pagination slice={activeSlice} label="alarm" />
+        </>
       )}
 
       {tab === "rules" && (
@@ -238,7 +254,7 @@ export default function AlertsPage() {
                     }
                   />
                 ) : (
-                  filteredRules.map((rule) => (
+                  ruleSlice.items.map((rule) => (
                     <tr key={rule.id}>
                       <td>
                         {rule.name}
@@ -294,10 +310,12 @@ export default function AlertsPage() {
               </tbody>
             </table>
           </div>
+          <Pagination slice={ruleSlice} label="kural" />
         </>
       )}
 
       {tab === "history" && (
+        <>
         <div className="table-wrap" style={{ marginTop: "1rem" }}>
           <table>
             <thead>
@@ -319,7 +337,7 @@ export default function AlertsPage() {
                   detail="Bir alarm çözüldüğünde kaydı buraya taşınır; saklama süresi Yönetim → Saklama ayarından belirlenir."
                 />
               ) : (
-                historyEvents.map((event) => (
+                historySlice.items.map((event) => (
                   <tr key={event.id}>
                     <td>{formatTime(event.triggered_at)}</td>
                     <td>{event.resolved_at ? formatTime(event.resolved_at) : "—"}</td>
@@ -331,6 +349,14 @@ export default function AlertsPage() {
             </tbody>
           </table>
         </div>
+        <Pagination slice={historySlice} label="kayıt" />
+        {historyTruncated && (
+          <p className="muted-note">
+            Sunucu en son {SERVER_EVENT_LIMIT} alarm kaydını döndürüyor; daha eskisi bu listede
+            görünmez. Saklama süresi Yönetim → Saklama ayarından belirlenir.
+          </p>
+        )}
+        </>
       )}
     </>
   );

@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { AlertRuleCreate, AlertRuleType, api, ConnectionTestResult, DatabaseGroup, Instance } from "../api";
 import { useAuth } from "../auth";
+import { NotFoundState } from "../components/PageState";
 
 const METRICS = [
   "active_connections",
@@ -109,7 +110,15 @@ export default function CustomAlertRuleFormPage() {
   };
 
   if (!canWrite) {
-    return <div className="error">Bu işlem için admin yetkisi gerekiyor — viewer rolü salt-okunur.</div>;
+    // Ciplak hata kutusu yerine geri donus yolu olan ortak ekran (Faz 19 IS 3).
+    return (
+      <NotFoundState
+        title="Bu sayfa için yetkiniz yok"
+        detail="Alarm kuralı eklemek admin yetkisi gerektirir; viewer rolü salt-okunurdur."
+        backTo="/alerts"
+        backLabel="Alarmlara dön"
+      />
+    );
   }
 
   return (

@@ -1936,3 +1936,33 @@ kullanıcı ekran görüntüsü göndermedikçe göremiyoruz. Bu turda kapsam
 dışıydı (bir hata toplama servisi bağlamak ayrı bir karar ve muhtemelen
 banka tarafında onay gerektirir). Şimdilik ekranda "Sorun sürerse tarayıcı
 konsolundaki ayrıntıyla birlikte bildirin" yazıyor.
+
+## Faz 19 — İŞ 3: Sayfalama istemci tarafında, sunucu hâlâ her şeyi gönderiyor
+
+Uzun listeler artık sayfalanıyor ama bu **istemci tarafı** sayfalama:
+sunucu tüm satırları tek yanıtta gönderiyor, frontend yalnızca bir dilimini
+render ediyor. Asıl darboğaz olan render maliyetini (her satırın kendi
+düğmeleri, rozetleri, bağlantıları) çözer; ağ ve bellek maliyetini çözmez.
+
+Sunucu tarafına taşımadım çünkü `/api/instances`, `/api/instances/summary`,
+`/api/customers`, `/api/servers`, `/api/groups` ve rapor bulguları uçlarının
+hepsinin sözleşmesi değişirdi (`limit`/`offset` + toplam sayı) ve bunların
+bir kısmı frontend'de liste olarak DEĞİL, arama tablosu olarak kullanılıyor
+(ör. `getInstances()` sonucu alarm kuralı formunda instance adı çözmek
+için). Sayfalanmış bir yanıt oraları sessizce bozardı.
+
+**Ne zaman gerekir:** birkaç bin instance'a çıkılırsa. O noktada doğru
+çözüm, liste uçlarını sayfalayıp arama/çözümleme için ayrı bir hafif uç
+(`/api/instances/names` gibi) açmak.
+
+## Faz 19 — İŞ 3: Dar ekran düzeltmeleri gerçek bir cihazda denenmedi
+
+Kırılma noktaları (1024px / 820px / 560px) ve `.main` taşma davranışı
+koddan ve CSS kurallarından çıkarılarak düzeltildi; bu ortamda tarayıcı
+otomasyonu olmadığı için gerçek bir tablette görsel doğrulama yapılmadı.
+Kalıcı testler kuralların varlığını doğruluyor, görünümü değil.
+
+Kullanıcının kontrol etmesi iyi olur: bir tablette (dikey ve yatay) menü,
+sekme şeritleri ve geniş tablolar. Özellikle kenar çubuğunun dikey modda
+yatay bağlantı şeridine dönüşmesi — bu bir tasarım kararı, tercih
+edilmezse alternatif açılır bir menü olurdu.
