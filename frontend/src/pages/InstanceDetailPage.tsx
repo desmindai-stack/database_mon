@@ -23,6 +23,7 @@ import {
   AlertEvent,
   AlertRule,
   api,
+  ApiError,
   ClusterHealth,
   ExplainResult,
   formatBytes,
@@ -42,6 +43,7 @@ import {
   SlowQueryList,
   TuningReport,
 } from "../api";
+import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import AdviceCard from "../components/AdviceCard";
@@ -159,6 +161,10 @@ export default function InstanceDetailPage() {
   const canWrite = useAuth().user?.role === "admin";
   const { id } = useParams();
   const instanceId = Number(id);
+  // `/instances/abc` gibi sayısal olmayan bir adreste Number() NaN verir. Eskiden yükleme
+  // efekti `if (!instanceId) return` ile sessizce çıkıyor, sayfa SONSUZA KADAR "Yükleniyor…"
+  // kalıyordu — kullanıcı bunu "sayfa cevap vermiyor" olarak görüyordu (Faz 19 İŞ 1).
+  const idIsValid = Number.isInteger(instanceId) && instanceId > 0;
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get("tab");
   const initialTab: Tab = TABS.includes(tabParam as Tab) ? (tabParam as Tab) : "overview";
@@ -195,6 +201,9 @@ export default function InstanceDetailPage() {
   const [queryHistory, setQueryHistory] = useState<Record<string, QueryHistorySeries>>({});
   const [historyLoading, setHistoryLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  // "Tekrar dene" düğmesinin yükleme efektini yeniden tetiklemesi için.
+  const [reloadKey, setReloadKey] = useState(0);
   const [tab, setTab] = useState<Tab>(initialTab);
   const [range, setRange] = useState<RangeHours>(6);
   const [querySort, setQuerySort] = useState<"total" | "mean" | "calls">("total");
@@ -410,20 +419,24 @@ export default function InstanceDetailPage() {
       : api.getMetrics(instanceId, range);
 
   useEffect(() => {
-    if (!instanceId) return;
+    if (!idIsValid) return;
     let mounted = true;
     const load = async () => {
       try {
-        const [inst, m, summaries] = await Promise.all([
-          api.getInstance(instanceId),
-          fetchMetrics(),
-          api.getSummaries(),
-        ]);
+        // Instance'ın kendisi ZORUNLU, diğer ikisi değil: eskiden üçü de tek bir Promise.all
+        // içindeydi ve metrik ya da özet uçlarından biri patladığında sayfa hiç açılmıyordu.
+        const inst = await api.getInstance(instanceId);
         if (!mounted) return;
         setInstance(inst);
-        setMetrics(m);
-        setSummary(summaries.find((s) => s.instance.id === instanceId) || null);
+        setNotFound(false);
         setError(null);
+
+        const [mRes, sRes] = await Promise.allSettled([fetchMetrics(), api.getSummaries()]);
+        if (!mounted) return;
+        if (mRes.status === "fulfilled") setMetrics(mRes.value);
+        if (sRes.status === "fulfilled") {
+          setSummary(sRes.value.find((s) => s.instance.id === instanceId) || null);
+        }
 
         const [r, e, p, i] = await Promise.allSettled([
           api.getAlertRules(),
@@ -445,7 +458,10 @@ export default function InstanceDetailPage() {
           setTuning(i.value);
         }
       } catch (e) {
-        if (mounted) setError(String((e as Error).message || e));
+        if (!mounted) return;
+        // 404 "silinmiş kayıt" demek — hata kutusu değil, geri dönüş yolu olan bir ekran.
+        if (e instanceof ApiError && e.isNotFound) setNotFound(true);
+        else setError(String((e as Error).message || e));
       }
     };
     load();
@@ -461,7 +477,7 @@ export default function InstanceDetailPage() {
       clearInterval(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [instanceId, range, customRange]);
+  }, [instanceId, range, customRange, reloadKey]);
 
   useEffect(() => {
     if (!instanceId || tab !== "activity") return;
@@ -732,8 +748,23 @@ export default function InstanceDetailPage() {
     </div>
   );
 
+  if (!idIsValid || notFound) {
+    return (
+      <NotFoundState
+        title="Instance bulunamadı"
+        detail={
+          idIsValid
+            ? `#${instanceId} numaralı instance yok — silinmiş olabilir ya da bağlantı eskimiş olabilir.`
+            : `"${id}" geçerli bir instance numarası değil.`
+        }
+        backTo="/instances"
+        backLabel="Instance listesine dön"
+      />
+    );
+  }
+
   if (!instance) {
-    return error ? <div className="error">{error}</div> : <div className="empty">Yükleniyor…</div>;
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
   }
 
   return (

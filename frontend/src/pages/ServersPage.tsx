@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Customer, DbServer, NodeSite, ServerOS } from "../api";
+import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import { useAuth } from "../auth";
 
 const OS_LABELS: Record<ServerOS, string> = { linux: "Linux", windows: "Windows" };
@@ -9,11 +10,14 @@ const SITE_LABELS: Record<NodeSite, string> = { primary: "Ana DC", disaster: "Di
 export default function ServersPage() {
   const { customerId } = useParams<{ customerId: string }>();
   const id = Number(customerId);
+  const idIsValid = Number.isInteger(id) && id > 0;
   const canWrite = useAuth().user?.role === "admin";
 
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [servers, setServers] = useState<DbServer[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [rowAgentResult, setRowAgentResult] = useState<{ id: number; ok: boolean; message: string } | null>(null);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -30,10 +34,17 @@ export default function ServersPage() {
   const load = () => api.getServers(id).then(setServers).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
-    api.getCustomers().then((all) => setCustomer(all.find((c) => c.id === id) ?? null));
+    if (!idIsValid) return;
+    // Yakalanmamis promise reddi + "listede yok" durumunun ele alinmamasi (Faz 19 IS 1) —
+    // bkz. ApplicationsPage'deki ayni duzeltme.
+    api.getCustomers().then((all) => {
+      const found = all.find((c) => c.id === id) ?? null;
+      setCustomer(found);
+      setNotFound(found === null);
+    }).catch((e) => setError(String((e as Error).message || e)));
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, idIsValid, reloadKey]);
 
   const onTestRowAgent = async (s: DbServer) => {
     try {
@@ -88,6 +99,25 @@ export default function ServersPage() {
       setError(String((err as Error).message));
     }
   };
+
+  if (!idIsValid || notFound) {
+    return (
+      <NotFoundState
+        title="Müşteri bulunamadı"
+        detail={
+          idIsValid
+            ? `#${id} numaralı müşteri yok — silinmiş olabilir ya da bağlantı eskimiş olabilir.`
+            : `"${customerId}" geçerli bir müşteri numarası değil.`
+        }
+        backTo="/customers"
+        backLabel="Müşteri listesine dön"
+      />
+    );
+  }
+
+  if (!customer) {
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+  }
 
   return (
     <>

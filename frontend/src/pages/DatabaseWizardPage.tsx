@@ -2,6 +2,7 @@ import { ReactNode, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   api,
+  ApiError,
   Application,
   ConnectionTestResult,
   DatabaseGroup,
@@ -17,6 +18,7 @@ import {
   WizardCreateGroupRequest,
   WizardNodeInput,
 } from "../api";
+import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import { useAuth } from "../auth";
 
 type TopologyPreset = "standalone" | "cluster-2" | "cluster-3" | "cluster-custom";
@@ -193,6 +195,12 @@ export default function DatabaseWizardPage() {
   const { applicationId, groupId } = useParams<{ applicationId?: string; groupId?: string }>();
   const appId = Number(applicationId);
   const gId = Number(groupId);
+  // Sihirbaza gecersiz ya da silinmis bir ust kayitla gelinebiliyor. Eskiden appId hatasi
+  // sessizce yutuluyordu: kullanici tum formu dolduruyor, ancak kaydederken patliyordu; ustelik
+  // basliktaki geri baglantisi da gorunmedigi icin sayfadan cikis yolu kalmiyordu (Faz 19 IS 1).
+  const parentIdIsValid = groupId
+    ? Number.isInteger(gId) && gId > 0
+    : Number.isInteger(appId) && appId > 0;
   const mode: WizardMode = groupId ? "add-node" : "create-group";
   const navigate = useNavigate();
   const canWrite = useAuth().user?.role === "admin";
@@ -201,6 +209,8 @@ export default function DatabaseWizardPage() {
   const [existingGroup, setExistingGroup] = useState<DatabaseGroup | null>(null);
   const [existingNodeCount, setExistingNodeCount] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [parentNotFound, setParentNotFound] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [servers, setServers] = useState<DbServer[]>([]);
 
   const [step, setStep] = useState(0);
@@ -237,15 +247,19 @@ export default function DatabaseWizardPage() {
   const maxNewNodes = mode === "add-node" ? Math.max(1, 8 - existingNodeCount) : 8;
 
   useEffect(() => {
+    if (!parentIdIsValid) return;
+    const onLoadError = (e: unknown) => {
+      if (e instanceof ApiError && e.isNotFound) setParentNotFound(true);
+      else setLoadError(String((e as Error).message || e));
+    };
     if (mode === "create-group") {
-      if (!appId) return;
       api.getApplication(appId).then((app) => {
         setApplication(app);
+        setLoadError(null);
         api.getServers(app.customer_id).then(setServers).catch(() => undefined);
-      }).catch(() => undefined);
+      }).catch(onLoadError);
       return;
     }
-    if (!gId) return;
     Promise.all([api.getGroup(gId), api.getGroupNodes(gId)])
       .then(([group, groupNodes]) => {
         setExistingGroup(group);
@@ -257,9 +271,9 @@ export default function DatabaseWizardPage() {
           api.getServers(app.customer_id).then(setServers).catch(() => undefined);
         }).catch(() => undefined);
       })
-      .catch((e) => setLoadError(String((e as Error).message || e)));
+      .catch(onLoadError);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, appId, gId]);
+  }, [mode, appId, gId, parentIdIsValid, reloadKey]);
 
   const steps = useMemo(() => {
     if (mode === "add-node") {
@@ -521,11 +535,42 @@ export default function DatabaseWizardPage() {
   const currentKey = steps[step]?.key;
 
   if (!canWrite) {
-    return <div className="error">Bu işlem için admin yetkisi gerekiyor — viewer rolü salt-okunur.</div>;
+    // Eskiden ciplak bir hata kutusuydu: geri donus yolu yoktu.
+    return (
+      <NotFoundState
+        title="Bu sayfa için yetkiniz yok"
+        detail="Veritabanı sihirbazı admin yetkisi gerektirir; viewer rolü salt-okunurdur."
+        backTo="/instances"
+        backLabel="Instance listesine dön"
+      />
+    );
   }
 
-  if (mode === "add-node" && !existingGroup && !loadError) {
-    return <div className="empty">Yükleniyor…</div>;
+  if (!parentIdIsValid || parentNotFound) {
+    return (
+      <NotFoundState
+        title={mode === "add-node" ? "Veritabanı grubu bulunamadı" : "Uygulama bulunamadı"}
+        detail={
+          parentIdIsValid
+            ? "Sihirbazın ekleme yapacağı kayıt yok — silinmiş olabilir ya da bağlantı eskimiş olabilir."
+            : "Adresteki numara geçerli değil."
+        }
+        backTo="/customers"
+        backLabel="Müşteri listesine dön"
+      />
+    );
+  }
+
+  if (loadError) {
+    return <PageError error={loadError} onRetry={() => { setLoadError(null); setReloadKey((k) => k + 1); }} />;
+  }
+
+  if (mode === "add-node" && !existingGroup) {
+    return <PageLoading />;
+  }
+
+  if (mode === "create-group" && !application) {
+    return <PageLoading />;
   }
 
   return (
@@ -542,7 +587,6 @@ export default function DatabaseWizardPage() {
         </div>
       </header>
 
-      {loadError && <div className="error">{loadError}</div>}
 
       <div className="wizard-steps sticky">
         {steps.map((s, idx) => (

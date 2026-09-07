@@ -1203,19 +1203,102 @@ async function tryRefresh(): Promise<boolean> {
 
 const _PUBLIC_PATHS = new Set(["/api/auth/login", "/api/auth/refresh", "/api/health"]);
 
+/**
+ * Bir API çağrısının başarısız sonucu (Faz 19 İŞ 1).
+ *
+ * Eskiden `request` düz bir `Error` fırlatıyor ve mesaj olarak yanıt gövdesini OLDUĞU GIBİ
+ * veriyordu. İki sonucu vardı: (1) sayfalar "silinmiş kayıt" (404) ile "sunucu hatası" (500)
+ * arasında ayırım yapamıyordu, bu yüzden silinmiş bir instance için "bulunamadı" ekranı
+ * gösterilemiyordu; (2) kullanıcı ekranda ham JSON görüyordu (`{"detail":"Instance not found"}`).
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly path: string;
+
+  constructor(status: number, path: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.path = path;
+  }
+
+  /** Kayıt yok — çağrı doğruydu ama hedef silinmiş/hiç var olmamış. */
+  get isNotFound(): boolean {
+    return this.status === 404;
+  }
+
+  /** Yetki reddi — kayıt olabilir, kullanıcının rolü yetmiyor. 404'ten ayrı ele alınır. */
+  get isForbidden(): boolean {
+    return this.status === 403;
+  }
+
+  /** İstek geçersiz (FastAPI doğrulama hatası dahil) — "yok" değil, "yanlış sorulmuş". */
+  get isBadRequest(): boolean {
+    return this.status === 400 || this.status === 422;
+  }
+}
+
+/** `err` bir 404 mu? Sayfaların "bulunamadı" ekranına geçmesi için. */
+export function isNotFoundError(err: unknown): boolean {
+  return err instanceof ApiError && err.isNotFound;
+}
+
+/** Herhangi bir hatadan kullanıcıya gösterilebilir bir metin çıkarır. */
+export function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
+/**
+ * Yanıt gövdesini okunabilir bir mesaja çevirir: FastAPI `{"detail": "..."}` döner,
+ * doğrulama hatalarında ise `detail` bir liste olur. Hiçbiri tutmazsa gövdenin kendisi.
+ */
+async function readErrorMessage(res: Response): Promise<string> {
+  let body = "";
+  try {
+    body = await res.text();
+  } catch {
+    body = "";
+  }
+  if (body) {
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      const detail = parsed?.detail;
+      if (typeof detail === "string" && detail.trim()) return detail;
+      if (Array.isArray(detail) && detail.length > 0) {
+        const parts = detail
+          .map((d) => (typeof d === "object" && d !== null && "msg" in d ? String((d as { msg: unknown }).msg) : String(d)))
+          .filter(Boolean);
+        if (parts.length > 0) return parts.join("; ");
+      }
+    } catch {
+      // JSON değil — gövdeyi olduğu gibi kullan.
+    }
+    return body;
+  }
+  return res.statusText || `HTTP ${res.status}`;
+}
+
 async function request<T>(path: string, init?: RequestInit, _retried = false): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(init?.headers as Record<string, string> | undefined) };
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
-  const res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { ...init, headers });
+  } catch {
+    // Ağ seviyesinde düştü (sunucu kapalı, DNS, CORS, çevrimdışı). Status 0 ile işaretliyoruz ki
+    // çağıran taraf bunu 404 sanıp "bulunamadı" ekranı göstermesin.
+    throw new ApiError(0, path, "Sunucuya ulaşılamıyor — bağlantınızı kontrol edip tekrar deneyin.");
+  }
 
   if (res.status === 401 && !_retried && !_PUBLIC_PATHS.has(path)) {
     if (await tryRefresh()) return request<T>(path, init, true);
     onUnauthorized?.();
-    throw new Error("Oturum süresi doldu — tekrar giriş yapın.");
+    throw new ApiError(401, path, "Oturum süresi doldu — tekrar giriş yapın.");
   }
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(body || res.statusText);
+    throw new ApiError(res.status, path, await readErrorMessage(res));
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -1262,8 +1345,10 @@ export const api = {
     request<MetricSample[]>(
       `/api/metrics/${id}?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
     ),
+  // `null` = instance duruyor ama henüz hiç ölçüm toplanmamış (Faz 19 İŞ 1'de 404'ten
+  // döndürüldü — boş bir alt koleksiyon "kayıt yok" demek değil).
   getLatestMetrics: (id: number) =>
-    request<MetricSample>(`/api/metrics/${id}/latest`),
+    request<MetricSample | null>(`/api/metrics/${id}/latest`),
   /** En sorunlu N sorgu. Faz 18 İŞ 1: rapor ile AYNI seçim servisinden; aralık verilmezse
    *  son 24 saat. Yanıt zarflanmış — hangi pencereye bakıldığı ve kaç sorgunun filtrelendiği
    *  arayüzde gösterilebilsin diye. */

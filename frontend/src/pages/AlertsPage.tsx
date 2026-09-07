@@ -2,15 +2,18 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertEvent, AlertRule, api, DatabaseGroup, formatTime, Instance } from "../api";
 import { useAuth } from "../auth";
+import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "active" | "rules" | "history";
+const TABS: readonly Tab[] = ["active", "rules", "history"];
 
 const SEVERITIES = ["critical", "high", "warning", "medium", "low", "info"];
 const ENGINES = ["postgresql", "sqlserver", "mongodb"];
 
 export default function AlertsPage() {
   const canWrite = useAuth().user?.role === "admin";
-  const [tab, setTab] = useState<Tab>("active");
+  // Sekme URL'de (?tab=) — bkz. AdminPage'deki aynı düzeltme (Faz 19 İŞ 1).
+  const [tab, setTab] = useUrlTab<Tab>("tab", TABS, "active");
   const [rules, setRules] = useState<AlertRule[]>([]);
   const [activeEvents, setActiveEvents] = useState<AlertEvent[]>([]);
   const [historyEvents, setHistoryEvents] = useState<AlertEvent[]>([]);

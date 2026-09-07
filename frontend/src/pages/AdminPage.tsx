@@ -10,8 +10,10 @@ import {
 } from "../api";
 import { formatTime } from "../api";
 import { useAuth } from "../auth";
+import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "retention" | "users" | "settings";
+const TABS: readonly Tab[] = ["retention", "users", "settings"];
 
 const RETENTION_LABELS: Record<number, string> = {
   7: "7 gün",
@@ -32,7 +34,9 @@ const INTERVAL_LABELS: Record<number, string> = {
 
 export default function AdminPage() {
   const { user: currentUser } = useAuth();
-  const [tab, setTab] = useState<Tab>("retention");
+  // Sekme URL'de (?tab=): eskiden yalnız bileşen state'indeydi, geri düğmesi sekmeyi geri
+  // almak yerine kullanıcıyı sayfadan atıyordu ve bağlantı paylaşılamıyordu (Faz 19 İŞ 1).
+  const [tab, setTab] = useUrlTab<Tab>("tab", TABS, "retention");
   const [error, setError] = useState<string | null>(null);
 
   const [retention, setRetention] = useState<RetentionStatus | null>(null);

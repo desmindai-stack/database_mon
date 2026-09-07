@@ -1,11 +1,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, Application, Customer } from "../api";
+import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import { useAuth } from "../auth";
 
 export default function ApplicationsPage() {
   const { customerId } = useParams<{ customerId: string }>();
   const id = Number(customerId);
+  const idIsValid = Number.isInteger(id) && id > 0;
   const canWrite = useAuth().user?.role === "admin";
 
   const [customer, setCustomer] = useState<Customer | null>(null);
@@ -14,6 +16,8 @@ export default function ApplicationsPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
   const [busy, setBusy] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -23,11 +27,19 @@ export default function ApplicationsPage() {
   const load = () => api.getApplications(id).then(setApplications).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
+    if (!idIsValid) return;
     api.getConfig().then((cfg) => setIsPrivate(cfg.deployment_mode === "private")).catch(() => undefined);
-    api.getCustomers().then((all) => setCustomer(all.find((c) => c.id === id) ?? null));
+    // Bu cagrinin hic `catch`'i yoktu — API dustugunde konsola yakalanmamis bir promise reddi
+    // dusuyor, sayfa sessizce musteri adi olmadan aciliyordu. Ayrica listede olmayan bir
+    // musteri numarasi "bulunamadi" olarak ele alinmiyordu (Faz 19 IS 1).
+    api.getCustomers().then((all) => {
+      const found = all.find((c) => c.id === id) ?? null;
+      setCustomer(found);
+      setNotFound(found === null);
+    }).catch((e) => setError(String((e as Error).message || e)));
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, idIsValid, reloadKey]);
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -66,6 +78,25 @@ export default function ApplicationsPage() {
       setError(String((err as Error).message));
     }
   };
+
+  if (!idIsValid || notFound) {
+    return (
+      <NotFoundState
+        title="Müşteri bulunamadı"
+        detail={
+          idIsValid
+            ? `#${id} numaralı müşteri yok — silinmiş olabilir ya da bağlantı eskimiş olabilir.`
+            : `"${customerId}" geçerli bir müşteri numarası değil.`
+        }
+        backTo="/customers"
+        backLabel="Müşteri listesine dön"
+      />
+    );
+  }
+
+  if (!customer) {
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+  }
 
   return (
     <>

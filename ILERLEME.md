@@ -3513,6 +3513,162 @@ olmadığını (kapalı instance bulgu üretmiyor, gerçek temp kullanımı hâl
 yakalanıyor, tekrarlayan down hâlâ bulgu) doğruluyor. Toplam: 445 test
 yeşil.
 
+## Faz 19 — İŞ 1: 404'ler ve sayfa patlamaları
+
+Bildirilen belirti tekti — "ayrıntılara girerken sayfalar patlıyor, geri
+dönerken sık sık 404 çıkıyor" — ama altından birbirinden bağımsız yedi
+kırık akış çıktı. Her biri kod üzerinden kanıtlandı, tahmine dayanan
+düzeltme yapılmadı.
+
+### Kırık akışlar — "şu yoldan şuraya giderken patlıyordu"
+
+**1. Tanımsız herhangi bir adrese giderken bomboş ekran çıkıyordu.**
+`App.tsx` içindeki `<Routes>` bloğunda catch-all (`path="*"`) yoktu. Bir
+rota eşleşmediğinde React Router HİÇBİR ŞEY render etmiyor; kullanıcı
+kenar çubuğunun yanında bomboş bir içerik alanı görüyordu. Eski bir yer
+imi, silinmiş bir kaydın paylaşılmış bağlantısı ya da elle yazılan bir
+adres bu hâle düşüyordu — "404 çıkıyor" şikâyetinin görünen yüzü buydu.
+Artık `NotFoundPage` çıkıyor: hangi adresin bulunamadığı, neden ve iki
+geri dönüş bağlantısı.
+
+**2. Rapordaki bir bulgudan instance detayına giderken, instance
+silinmişse sayfa sonsuza kadar "Yükleniyor…" kalıyordu.**
+`InstanceDetailPage` yükleme hatasını yalnızca `<div className="error">`
+ile gösteriyordu ve `/instances/abc` gibi sayısal olmayan bir adreste
+`Number(id)` NaN verdiği için efekt `if (!instanceId) return` ile sessizce
+çıkıyor, hiçbir zaman yüklenmiyordu. Artık geçersiz numara da silinmiş
+kayıt da (HTTP 404) "Instance bulunamadı" ekranına düşüyor ve "Instance
+listesine dön" bağlantısı veriyor.
+
+**3. Instance detayı, ilgisiz bir uç patladığında hiç açılmıyordu.**
+Instance, metrikler ve özetler tek bir `Promise.all` içindeydi: metrik ya
+da özet ucu 500 dönerse instance başarıyla gelmiş olmasına rağmen sayfa
+hiç render edilmiyordu. Artık instance ZORUNLU, diğer ikisi
+`Promise.allSettled` ile isteğe bağlı — biri düşse de sayfa açılıyor.
+
+**4. Grup detayından bir düğüme ya da geri giderken, grup silinmişse
+"Database Group" başlıklı boş bir iskelet çıkıyordu.**
+`GroupDetailPage`'de hiçbir yükleme/bulunamadı koruması yoktu: `group`
+null iken tüm sayfa `group?.` ile render ediliyor, tepede ham hata metni
+duruyordu. Geri bağlantısı da `application` yüklenemediği için hiç
+görünmüyordu — sayfadan çıkış yolu kalmıyordu. Artık üç ayrı durum var:
+bulunamadı, hata (tekrar dene), yükleniyor.
+
+**5. Uygulama grupları sayfasında uygulama silinmişse geri dönüş
+bağlantısı kayboluyordu.**
+`DatabaseGroupsPage`, `api.getApplication(id)` hatasını `.catch(() =>
+undefined)` ile SESSİZCE yutuyordu. Sonuç: sayfa açılıyor ama başlıkta
+uygulama adı ve "← Uygulamalar" bağlantısı yok; kullanıcı çıkamadığı boş
+bir sayfada kalıyordu. Aynı sessiz yutma `DatabaseWizardPage`'in
+create-group modunda daha kötüydü: kullanıcı sihirbazın TAMAMINI
+dolduruyor, ancak kaydederken patlıyordu.
+
+**6. Kenar çubuğu ağacında bir dalı açarken API düşerse dal sonsuza kadar
+"Yükleniyor…" kalıyordu.** `NavTreeBranch.toggle` ve `MainNavTree.loadRoots`
+içinde `catch` yoktu — konsola yakalanmamış bir promise reddi düşüyor,
+kullanıcıya hiçbir şey söylenmiyordu. Artık "Yüklenemedi — tekrar dene"
+çıkıyor ve tıklanınca gerçekten yeniden deniyor.
+
+**7. Dashboard'dan bir rapora giderken, rapor silinmişse sayfanın tepesinde
+ham JSON hata metni beliriyordu.** `/reports?report=<id>` ile gelinen
+silinmiş/saklama süresi dolmuş bir rapor 404 dönüyordu ve ekranda
+`{"detail":"Rapor bulunamadı"}` görünüyordu. Ayrıca deep-link parametresi
+okunduktan hemen sonra URL'den SİLİNİYORDU: seçili rapor adreste
+kalmadığı için sayfa yenilendiğinde kayboluyor, bağlantı paylaşılamıyor,
+geri düğmesi raporlar arasında gezinmiyordu.
+
+### Hata sınırı (error boundary)
+
+Kod tabanında hiç hata sınırı yoktu (`componentDidCatch` /
+`getDerivedStateFromError` araması boş dönüyordu). Render sırasında
+fırlayan bir hata React'in TÜM ağacı sökmesine yol açıyordu — beyaz ekran,
+kenar çubuğu dahil. İki sınır eklendi:
+
+- `main.tsx` — en dışta: oturum sağlayıcı, kenar çubuğu, gezinme ağacı.
+- `App.tsx` — `<Routes>` çevresinde, `resetKey={location.pathname}` ile:
+  bir sayfa patladıktan sonra kenar çubuğundan başka bir sayfaya
+  geçildiğinde eski hata ekranda kalmıyor.
+
+Her ikisi de hata mesajını, "Tekrar dene" ve "Sayfayı yenile"
+düğmelerini gösteriyor; bileşen yığını konsola bırakılıyor.
+
+Not: Hata sınırı yalnızca RENDER sırasındaki hataları yakalar. `await`
+sonrası fırlayan hatalar için sayfalar `catch` + `PageError` kullanıyor —
+o da aynı "Tekrar dene" düğmesini veriyor.
+
+### `ApiError`: sayfalar artık 404'ü 500'den ayırabiliyor
+
+Asıl yapısal eksik buydu. `api.ts`'teki `request()` düz bir `Error`
+fırlatıyor ve mesaj olarak yanıt gövdesini OLDUĞU GİBİ veriyordu. İki
+sonucu vardı: (a) hiçbir sayfa "silinmiş kayıt" ile "sunucu hatası"
+arasında ayrım yapamıyordu, dolayısıyla "bulunamadı" ekranı yazılamazdı;
+(b) kullanıcı ekranda ham JSON görüyordu. Artık:
+
+- `ApiError` sınıfı `status` ve `path` taşıyor; `isNotFound` /
+  `isForbidden` / `isBadRequest` yardımcıları var.
+- FastAPI'nin `{"detail": …}` gövdesi (doğrulama hatalarındaki liste hâli
+  dahil) okunabilir bir mesaja çevriliyor.
+- Ağ seviyesinde düşen istek `status: 0` ile işaretleniyor — çağıran
+  taraf bunu 404 sanıp "bulunamadı" göstermesin; "Sunucuya ulaşılamadı"
+  diyor.
+
+### Sekme ve seçim durumu URL'de
+
+Geri/ileri düğmesi üç sayfada sekmeyi geri almıyordu: `AdminPage` ve
+`AlertsPage` sekmeyi hiç URL'e yazmıyordu; `GroupDetailPage` ve
+`InstanceDetailPage` yazıyordu ama `replace: true` ile — yani geçmişe bir
+adım eklenmediği için geri basınca kullanıcı sekmeye değil bir önceki
+SAYFAYA fırlıyordu. Ortak `useUrlTab` hook'u eklendi (sekme değişimi
+`push`, filtre değişimi `replace` — her tuş vuruşunu geçmişe yazmak geri
+düğmesini kullanılamaz hâle getirir). `ReportsPage`'de seçili rapor
+(`?report=`) ve görünüm (`?view=`) de aynı şekilde adreste tutuluyor.
+
+### Backend: 404 dönen uçların denetimi
+
+71 `HTTPException(404)` çağrısının hepsi gözden geçirildi. Üç soru:
+yetkisizlik 404 ile maskeleniyor mu, parametre hatası 404'e mi düşüyor,
+404 gerçekten "kayıt yok" mu?
+
+- **Yetki temiz.** `get_current_user` 401, `require_admin` ve
+  `require_write_access` 403 dönüyor; hiçbir uç yetkisizliği 404 ile
+  gizlemiyor.
+- **Parametre hatası temiz.** `/api/instances/abc` FastAPI'nin yol
+  doğrulamasıyla 422 dönüyor, 404 değil.
+- **İki uç yanlıştı** — aşağıda.
+
+### Bilerek kırılan API davranışı (proje kuralı gereği yazılıyor)
+
+İki uç, kaydın KENDİSİ dururken yalnızca alt koleksiyon boş olduğu için
+404 dönüyordu. İstemci bunu silinmiş bir kayıttan ayıramadığı için yeni
+eklenmiş, henüz veri toplanmamış bir instance "bulunamadı" gibi
+görünüyordu:
+
+- `GET /api/metrics/{id}/latest` — eskiden 404 `"No metrics collected
+  yet"`. Artık **200 + `null`**. (`api.ts`'te dönüş tipi
+  `MetricSample | null` oldu; bu uç frontend'de henüz kullanılmıyor.)
+- `GET /api/queries/{id}/history/{queryid}` — eskiden 404 `"No history
+  for this queryid"`. Artık **200 + boş seri** (`points: []`). Sorgunun o
+  pencerede örneği olmaması bir hata değil.
+
+Her ikisinde de instance gerçekten yoksa 404 dönmeye devam ediyor;
+mesajlar Türkçeleştirildi (`"Instance bulunamadı"`).
+
+### Ortak durum bileşenleri
+
+`components/PageState.tsx`: `PageLoading`, `PageError` (hata tipine göre
+başlık + "Tekrar dene"), `NotFoundState` (ne aranıyordu, neden bulunamamış
+olabilir, nereye dönülür), `EmptyState`. Öncesinde bu üç durum her sayfada
+farklı görünüyordu; bazılarında hiç yoktu.
+
+**Testler:** `tests/test_navigation_integrity.py` (76 test) — rota
+tablosunu `App.tsx`'ten okuyup her frontend bağlantı hedefini ve her
+backend `link_hint`'ini ona karşı doğruluyor; ayrıca catch-all'un
+varlığını, `<Routes>`'un hata sınırıyla sarıldığını, sekmeli her sayfanın
+sekmeyi URL'de tuttuğunu ve kayıt yükleyen her sayfanın "bulunamadı"
+durumunu ele aldığını kontrol ediyor. `tests/test_endpoint_status_codes.py`
+(7 test) — yukarıdaki üç denetim sorusunu kalıcı olarak kapatıyor. Toplam:
+528 test yeşil, `npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

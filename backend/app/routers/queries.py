@@ -52,7 +52,7 @@ async def get_query_history(
 ) -> QueryHistoryListOut:
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     since = datetime.now(UTC) - timedelta(hours=hours)
     result = await db.execute(
@@ -89,7 +89,7 @@ async def get_query_history_detail(
 ) -> QueryHistorySeriesOut:
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     since = datetime.now(UTC) - timedelta(hours=hours)
     result = await db.execute(
@@ -103,7 +103,11 @@ async def get_query_history_detail(
     )
     rows = list(result.scalars().all())
     if not rows:
-        raise HTTPException(status_code=404, detail="No history for this queryid")
+        # Faz 19 IS 1 — API DEGISIKLIGI: eskiden 404 donuyordu. Instance de sorgu da var
+        # olabilir; yalnizca SECILEN PENCEREDE ornek yoktur (yeni eklenmis instance, uzun
+        # aralikli toplama, ya da o pencerede calismamis bir sorgu). "Yok" degil "bos" —
+        # istemcinin bunu silinmis bir kayittan ayirabilmesi icin bos seri donuyoruz.
+        return QueryHistorySeriesOut.model_validate(summarize_history(queryid, "", []))
     series = build_query_series(rows)
     return QueryHistorySeriesOut.model_validate(summarize_history(queryid, rows[-1].query, series))
 
@@ -118,7 +122,7 @@ async def get_slow_query_availability_endpoint(
     """
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
     report = await get_slow_query_availability(db, instance)
     return SlowQueryAvailabilityOut(**vars(report))
 
@@ -148,7 +152,7 @@ async def get_slow_queries(
     """
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     window_end = end or datetime.now(UTC)
     window_start = start or (window_end - timedelta(hours=DEFAULT_WINDOW_HOURS))
@@ -221,7 +225,7 @@ async def get_query_diagnostics(
     kilit/bekleme) — en son toplanan snapshot'tan, ek bir canlı sorgu çalıştırmadan."""
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     subq = (
         select(SlowQuerySample.collected_at)
@@ -294,7 +298,7 @@ async def explain_query(
 ) -> ExplainOut:
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
     if instance.engine != "postgresql":
         raise HTTPException(status_code=400, detail="EXPLAIN is only available for PostgreSQL")
 
@@ -391,7 +395,7 @@ async def advise_indexes(
 ) -> IndexAdviceReportOut:
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
     if instance.engine != "postgresql":
         raise HTTPException(status_code=400, detail="Index advice is only available for PostgreSQL")
 

@@ -1903,3 +1903,36 @@ hatasız geçti, backend+frontend dev sunucularını gerçekten ayağa kaldırı
 test ettim. Sayfaları gerçek bir tarayıcıda tıklayarak görsel/etkileşim
 doğrulaması yapılmadı — kullanıcı fırsat bulduğunda `npm run dev` ile
 kontrol etmeli.
+
+## Faz 19 — İŞ 1: Derin bağlantıda sayfa yenilemenin 404 dönüp dönmediği koddan doğrulanamıyor
+
+Kullanıcının bildirdiği "sayfa cevap vermediğinde sık sık 404" belirtisinin
+bir kısmı uygulama içi gezinmeydi ve düzeltildi. Ama bir olasılık daha var
+ve bunu koddan kanıtlayamıyorum: derin bir adreste (`/instances/12`)
+tarayıcıyı YENİLEMEK sunucudan o yolu ister; statik barındırma bu isteğe
+`index.html` ile cevap vermezse gerçek bir HTTP 404 döner ve uygulama hiç
+yüklenmez. Bu, uygulama içi hiçbir düzeltmenin çözemeyeceği bir katman.
+
+`frontend/vercel.json` içinde açık bir SPA yönlendirmesi (`rewrites`) yok;
+yalnızca `"framework": "vite"` var. Vercel'in Vite ön ayarının SPA geri
+dönüşünü kendiliğinden eklediği belgeleniyor, dolayısıyla büyük ihtimalle
+sorun değil — ama bunu koddan doğrulayamam ve `vercel.json` proje
+kurallarına göre dokunmamam gereken bir deploy dosyası.
+
+**Kullanıcının yapması gereken tek kontrol:** canlıda `/instances/<bir id>`
+adresine gidip tarayıcıyı yenileyin. Sayfa açılıyorsa bu madde kapanır.
+404 geliyorsa `vercel.json`'a şu eklenmeli (deploy dosyası olduğu için ben
+eklemedim):
+
+```json
+"rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+```
+
+## Faz 19 — İŞ 1: Uygulama içi hata izleme yok
+
+Hata sınırı yakaladığı hatayı `console.error` ile konsola bırakıyor; hiçbir
+yere raporlanmıyor. Yani bir kullanıcının karşılaştığı render hatasını,
+kullanıcı ekran görüntüsü göndermedikçe göremiyoruz. Bu turda kapsam
+dışıydı (bir hata toplama servisi bağlamak ayrı bir karar ve muhtemelen
+banka tarafında onay gerektirir). Şimdilik ekranda "Sorun sürerse tarayıcı
+konsolundaki ayrıntıyla birlikte bildirin" yazıyor.

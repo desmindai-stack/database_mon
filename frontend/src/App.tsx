@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Route, Routes, useLocation } from "react-router-dom";
-import { api, Application, Customer, DatabaseGroup, DbNode } from "./api";
+import { api, Application, Customer, DatabaseGroup, DbNode, errorMessage } from "./api";
 import { AuthProvider, useAuth } from "./auth";
+import ErrorBoundary from "./components/ErrorBoundary";
 import AdminPage from "./pages/AdminPage";
 import AlertsPage from "./pages/AlertsPage";
 import CustomAlertRuleFormPage from "./pages/CustomAlertRuleFormPage";
@@ -15,6 +16,7 @@ import GroupDetailPage from "./pages/GroupDetailPage";
 import InstanceDetailPage from "./pages/InstanceDetailPage";
 import InstancesPage from "./pages/InstancesPage";
 import LoginPage from "./pages/LoginPage";
+import NotFoundPage from "./pages/NotFoundPage";
 import PredictionsPage from "./pages/PredictionsPage";
 import ReportsPage from "./pages/ReportsPage";
 import ServersPage from "./pages/ServersPage";
@@ -100,6 +102,7 @@ function NavTreeBranch({ node, activePath, canWrite }: { node: NavTreeNode; acti
   const [open, setOpen] = useState(false);
   const [children, setChildren] = useState<NavTreeNode[] | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const isActive = node.href != null && activePath === node.href;
 
   // Pure leaf — nothing beneath it (a node, or a group/app/customer that never gets children).
@@ -119,16 +122,28 @@ function NavTreeBranch({ node, activePath, canWrite }: { node: NavTreeNode; acti
     );
   }
 
-  const toggle = async () => {
-    if (!open && children === null) {
-      setLoading(true);
-      try {
-        setChildren(await node.loadChildren!());
-      } finally {
-        setLoading(false);
-      }
+  const loadChildrenOnce = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      setChildren(await node.loadChildren!());
+    } catch (err) {
+      // Eskiden burada catch yoktu: API düştüğünde dal sonsuza kadar "Yükleniyor…" kalıyor,
+      // konsola yakalanmamış bir promise reddi düşüyordu. Artık hata görünür ve tekrarlanabilir.
+      setLoadError(errorMessage(err));
+    } finally {
+      setLoading(false);
     }
+  };
+
+  const toggle = async () => {
+    if (!open && children === null) await loadChildrenOnce();
     setOpen((v) => !v);
+  };
+
+  const retryChildren = async () => {
+    setChildren(null);
+    await loadChildrenOnce();
   };
 
   // Branch — expandable, and optionally also a link (e.g. a group links to Group Detail
@@ -157,7 +172,12 @@ function NavTreeBranch({ node, activePath, canWrite }: { node: NavTreeNode; acti
       {open && (
         <div className="nav-tree-apps">
           {loading && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
-          {!loading && children?.length === 0 && (
+          {!loading && loadError && (
+            <button type="button" className="nav-tree-error" title={loadError} onClick={retryChildren}>
+              Yüklenemedi — tekrar dene
+            </button>
+          )}
+          {!loading && !loadError && children?.length === 0 && (
             canWrite && node.emptyHref ? (
               <Link to={node.emptyHref} className="nav-tree-instance">{node.emptyLabel ?? "Ekle"}</Link>
             ) : (
@@ -185,6 +205,7 @@ function MainNavTree({
   const [isOpen, setIsOpen] = useState(false);
   const [roots, setRoots] = useState<NavTreeNode[] | null>(null);
   const [loadingRoots, setLoadingRoots] = useState(false);
+  const [rootsError, setRootsError] = useState<string | null>(null);
   const location = useLocation();
   const activePath = location.pathname;
 
@@ -206,6 +227,7 @@ function MainNavTree({
   const loadRoots = async () => {
     if (!isOpen && roots === null) {
       setLoadingRoots(true);
+      setRootsError(null);
       try {
         if (isPrivate) {
           if (privateCustomerId == null) {
@@ -218,6 +240,8 @@ function MainNavTree({
           const customers = await api.getCustomers();
           setRoots(customers.map(customerNode));
         }
+      } catch (err) {
+        setRootsError(errorMessage(err));
       } finally {
         setLoadingRoots(false);
       }
@@ -240,7 +264,21 @@ function MainNavTree({
       {isOpen && (
         <div className="nav-tree">
           {loadingRoots && <span className="muted-note" style={{ paddingLeft: "0.5rem" }}>Yükleniyor…</span>}
-          {!loadingRoots && roots?.length === 0 && canWrite && (
+          {!loadingRoots && rootsError && (
+            <button
+              type="button"
+              className="nav-tree-error"
+              title={rootsError}
+              onClick={() => {
+                setRoots(null);
+                setIsOpen(false);
+                void loadRoots();
+              }}
+            >
+              Yüklenemedi — tekrar dene
+            </button>
+          )}
+          {!loadingRoots && !rootsError && roots?.length === 0 && canWrite && (
             <Link
               to={isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers"}
               className="nav-tree-instance"
@@ -352,6 +390,9 @@ function AppShell() {
         </div>
       </aside>
       <main className="main">
+        {/* Hata sınırı rota BAŞINA sıfırlanıyor (resetKey): bir sayfa patladıktan sonra
+            kenar çubuğundan başka bir sayfaya geçildiğinde eski hata ekranda kalmasın. */}
+        <ErrorBoundary resetKey={location.pathname}>
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/instances" element={<InstancesPage />} />
@@ -368,7 +409,10 @@ function AppShell() {
           <Route path="/applications/:applicationId/groups/wizard" element={<DatabaseWizardPage />} />
           <Route path="/groups/:groupId" element={<GroupDetailPage />} />
           <Route path="/groups/:groupId/wizard" element={<DatabaseWizardPage />} />
+          {/* Catch-all: eşleşmeyen adres eskiden BOŞ bir içerik alanı render ediyordu. */}
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
+        </ErrorBoundary>
       </main>
     </div>
   );

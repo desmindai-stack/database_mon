@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   api,
+  ApiError,
   Application,
   Customer,
   DatabaseGroup,
@@ -18,6 +19,7 @@ import {
   ReportScopeType,
 } from "../api";
 import { useAuth } from "../auth";
+import { NotFoundState, PageError } from "../components/PageState";
 import ExecutiveReportView from "../components/ExecutiveReportView";
 import ReportFindingCard from "../components/ReportFindingCard";
 
@@ -51,7 +53,11 @@ export default function ReportsPage() {
   const [customRange, setCustomRange] = useState<{ start: string; end: string } | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [customDraft, setCustomDraft] = useState({ start: "", end: "" });
-  const [view, setView] = useState<ViewMode>("technical");
+  // Gorunum ve secili rapor URL'de tutuluyor (Faz 19 IS 1): eskiden ikisi de yalniz
+  // bilesen state'indeydi, bu yuzden sayfa yenilendiginde ya da geri/ileri basildiginda
+  // kullanici en yeni rapora ve teknik gorunume geri firliyordu; rapor baglantisi
+  // paylasilabilir de degildi.
+  const [view, setViewParam] = useState<ViewMode>("technical");
 
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -60,6 +66,7 @@ export default function ReportsPage() {
 
   const [history, setHistory] = useState<HealthReportSummary[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [reportNotFound, setReportNotFound] = useState(false);
   const [compareId, setCompareId] = useState<number | null>(null);
   const [report, setReport] = useState<HealthReport | null>(null);
   const [compareReport, setCompareReport] = useState<HealthReport | null>(null);
@@ -109,6 +116,13 @@ export default function ReportsPage() {
       .then((rows) => {
         setHistory(rows);
         // İlk yüklemede en yeni raporu aç; kullanıcı bir rapor seçtiyse ona dokunma.
+        // URL'de bir rapor isteniyorsa ona dokunma — listede olmasa bile (silinmis olabilir,
+        // bu durumu "bulunamadi" paneli anlatir). Aksi halde en yeni raporu ac.
+        const requested = Number(searchParams.get("report"));
+        if (Number.isInteger(requested) && requested > 0) {
+          setSelectedId(requested);
+          return;
+        }
         setSelectedId((current) => (current && rows.some((r) => r.id === current) ? current : rows[0]?.id ?? null));
       })
       .catch((e) => setError(String(e.message || e)));
@@ -118,16 +132,39 @@ export default function ReportsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scopeType, scopeId]);
 
-  // Derin bağlantı: dashboard kartı /reports?report=<id> ile geliyor.
+  // Derin baglanti: dashboard karti /reports?report=<id> ile geliyor. Eskiden parametre
+  // okunduktan hemen SONRA URL'den siliniyordu — yani secili rapor adreste kalmiyor, sayfa
+  // yenilendiginde kaybediliyor ve baglanti paylasilamiyordu (Faz 19 IS 1).
   useEffect(() => {
     const requested = Number(searchParams.get("report"));
-    if (requested) {
+    if (Number.isInteger(requested) && requested > 0 && requested !== selectedId) {
       setSelectedId(requested);
-      searchParams.delete("report");
-      setSearchParams(searchParams, { replace: true });
+    }
+    const requestedView = searchParams.get("view");
+    if (requestedView === "executive" || requestedView === "technical") {
+      if (requestedView !== view) setViewParam(requestedView);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  // Secimi adrese yaz. Rapor secmek bir gezinme adimi (push), gorunum degistirmek de oyle —
+  // ikisi de geri dugmesiyle geri alinabilmeli.
+  const selectReport = (id: number | null) => {
+    setSelectedId(id);
+    setReportNotFound(false);
+    const params = new URLSearchParams(searchParams);
+    if (id == null) params.delete("report");
+    else params.set("report", String(id));
+    setSearchParams(params);
+  };
+
+  const setView = (mode: ViewMode) => {
+    setViewParam(mode);
+    const params = new URLSearchParams(searchParams);
+    if (mode === "technical") params.delete("view");
+    else params.set("view", mode);
+    setSearchParams(params);
+  };
 
   useEffect(() => {
     if (!selectedId) {
@@ -135,7 +172,20 @@ export default function ReportsPage() {
       setExecutive(null);
       return;
     }
-    api.getReport(selectedId).then(setReport).catch((e) => setError(String(e.message || e)));
+    setReportNotFound(false);
+    api.getReport(selectedId).then((r) => {
+      setReport(r);
+      setError(null);
+    }).catch((e) => {
+      // Silinmis ya da saklama suresi dolmus bir rapora ait eski bir baglanti: 404 geliyordu
+      // ve sayfanin tepesinde ham hata metni olarak gorunuyordu (Faz 19 IS 1).
+      if (e instanceof ApiError && e.isNotFound) {
+        setReportNotFound(true);
+        setReport(null);
+      } else {
+        setError(String(e.message || e));
+      }
+    });
   }, [selectedId]);
 
   useEffect(() => {
@@ -180,7 +230,7 @@ export default function ReportsPage() {
       }
       const created = await api.runReport(body);
       await loadHistory();
-      setSelectedId(created.id);
+      selectReport(created.id);
     } catch (e) {
       setError(String((e as Error).message));
     } finally {
@@ -444,7 +494,7 @@ export default function ReportsPage() {
         )}
       </div>
 
-      {error && <div className="error">{error}</div>}
+      {error && <PageError error={error} onRetry={() => { setError(null); loadHistory(); }} />}
       {!canWrite && (
         <p className="muted-note">
           Viewer rolündesiniz: raporları görüntüleyip dışa aktarabilirsiniz; rapor çalıştırma ve
@@ -463,7 +513,7 @@ export default function ReportsPage() {
                 <li key={row.id}>
                   <button
                     className={`report-history-item${selectedId === row.id ? " active" : ""}`}
-                    onClick={() => setSelectedId(row.id)}
+                    onClick={() => selectReport(row.id)}
                   >
                     <span className="report-history-date">{fmt(row.generated_at)}</span>
                     <span className="report-history-meta">
@@ -495,7 +545,22 @@ export default function ReportsPage() {
         </aside>
 
         <section className="report-main">
-          {!report && <div className="card empty">Bir rapor seçin.</div>}
+          {reportNotFound && (
+            <NotFoundState
+              title="Rapor bulunamadı"
+              detail={`#${selectedId} numaralı rapor yok — silinmiş ya da saklama süresi dolmuş olabilir. Soldaki listeden başka bir rapor seçebilirsiniz.`}
+              backTo="/reports"
+              backLabel="Rapor listesine dön"
+            />
+          )}
+
+          {!report && !reportNotFound && (
+            <div className="card empty">
+              {history.length === 0
+                ? "Bu kapsam için henüz rapor yok — yukarıdan \u201cRapor çalıştır\u201d ile ilkini üretebilirsiniz."
+                : "Soldaki listeden bir rapor seçin."}
+            </div>
+          )}
 
           {report && report.status !== "done" && (
             <div className="card">

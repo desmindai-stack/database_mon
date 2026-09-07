@@ -1,8 +1,9 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   AlwaysOnHealth,
   api,
+  ApiError,
   Application,
   ClusterConversionRequest,
   DatabaseGroup,
@@ -15,16 +16,21 @@ import {
 } from "../api";
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
+import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import RecommendationHeader from "../components/RecommendationHeader";
+import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "nodes" | "parameters" | "alwayson";
-const TABS: Tab[] = ["nodes", "parameters", "alwayson"];
+const TABS: readonly Tab[] = ["nodes", "parameters", "alwayson"];
 
 const STATUS_TR: Record<string, string> = { up: "UP", down: "DOWN", unknown: "UNKNOWN", skipped: "SKIP" };
 
 export default function GroupDetailPage() {
   const { groupId } = useParams<{ groupId: string }>();
   const id = Number(groupId);
+  // `/groups/abc` → NaN → `/api/groups/NaN` → 422. Eskiden bu ham doğrulama hatası sayfanın
+  // tepesinde bir hata kutusu olarak görünüyordu; artık "bulunamadı" ekranına düşüyor.
+  const idIsValid = Number.isInteger(id) && id > 0;
   const canWrite = useAuth().user?.role === "admin";
 
   const [group, setGroup] = useState<DatabaseGroup | null>(null);
@@ -33,16 +39,12 @@ export default function GroupDetailPage() {
   const [existingInstances, setExistingInstances] = useState<Instance[]>([]);
   const [servers, setServers] = useState<DbServer[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [searchParams] = useSearchParams();
-  const tabParam = searchParams.get("tab");
-  const [tab, setTab] = useState<Tab>(TABS.includes(tabParam as Tab) ? (tabParam as Tab) : "nodes");
-
-  useEffect(() => {
-    if (TABS.includes(tabParam as Tab) && tabParam !== tab) {
-      setTab(tabParam as Tab);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tabParam]);
+  const [notFound, setNotFound] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  // Sekme tek kaynaktan, URL'den okunuyor. Eskiden URL'den yalnızca İLK değer alınıyor,
+  // sonrasında ayrı bir state ve bir senkronizasyon efekti tutuluyordu; sekme değişimi geçmişe
+  // yazılmadığı için geri düğmesi sekmeyi geri almıyordu (Faz 19 İŞ 1).
+  const [tab, setTab] = useUrlTab<Tab>("tab", TABS, "nodes");
 
   const [health, setHealth] = useState<GroupHealth | null>(null);
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -88,18 +90,24 @@ export default function GroupDetailPage() {
   const loadNodes = () => api.getGroupNodes(id).then(setNodes).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
+    if (!idIsValid) return;
     api.getGroup(id).then((g) => {
       setGroup(g);
+      setNotFound(false);
+      setError(null);
       setConvertForm((prev) => ({ ...prev, topology: g.engine === "sqlserver" ? "alwayson" : "patroni" }));
       api.getApplication(g.application_id).then((app) => {
         setApplication(app);
         api.getServers(app.customer_id).then(setServers).catch(() => undefined);
       }).catch(() => undefined);
-    }).catch((e) => setError(String(e.message || e)));
+    }).catch((e) => {
+      if (e instanceof ApiError && e.isNotFound) setNotFound(true);
+      else setError(String(e.message || e));
+    });
     loadNodes();
     api.getInstances().then(setExistingInstances).catch(() => undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, idIsValid, reloadKey]);
 
   const onDeleteNode = async (node: DbNode) => {
     if (!confirm("Düğüm silinsin mi?")) return;
@@ -285,6 +293,27 @@ export default function GroupDetailPage() {
   };
 
   const healthByNodeId = new Map((health?.nodes ?? []).map((n) => [n.node_id, n]));
+
+  // Eskiden bu üç durum için hiçbir koruma yoktu: silinmiş bir gruba gidildiğinde başlık
+  // "Database Group" yazılı boş bir iskelet ve tepede ham hata metni çıkıyordu (Faz 19 İŞ 1).
+  if (!idIsValid || notFound) {
+    return (
+      <NotFoundState
+        title="Veritabanı grubu bulunamadı"
+        detail={
+          idIsValid
+            ? `#${id} numaralı grup yok — silinmiş olabilir ya da bağlantı eskimiş olabilir.`
+            : `"${groupId}" geçerli bir grup numarası değil.`
+        }
+        backTo="/customers"
+        backLabel="Müşteri listesine dön"
+      />
+    );
+  }
+
+  if (!group) {
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+  }
 
   return (
     <>

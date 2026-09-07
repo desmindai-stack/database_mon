@@ -27,7 +27,7 @@ async def get_metrics(
     """
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     conditions = [MetricSample.instance_id == instance_id]
     if start or end:
@@ -50,11 +50,18 @@ def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo else value.replace(tzinfo=UTC)
 
 
-@router.get("/{instance_id}/latest", response_model=MetricSampleOut)
-async def get_latest_metrics(instance_id: int, db: AsyncSession = Depends(get_db)) -> MetricSample:
+@router.get("/{instance_id}/latest", response_model=MetricSampleOut | None)
+async def get_latest_metrics(instance_id: int, db: AsyncSession = Depends(get_db)) -> MetricSample | None:
+    """Son metrik ornegi; henuz hic toplanmamissa `null`.
+
+    Faz 19 IS 1 — API DEGISIKLIGI: eskiden ornek yoksa 404 "No metrics collected yet"
+    doniyordu. Instance'in KENDISI duruyorken 404 donmek yanlis: istemci bunu "instance
+    silinmis" durumundan ayirt edemiyor, sonucta yeni eklenmis (henuz veri gelmemis) bir
+    instance icin "bulunamadi" ekrani cikiyordu. Bos alt koleksiyon bir hata degil.
+    """
     instance = await db.get(Instance, instance_id)
     if not instance:
-        raise HTTPException(status_code=404, detail="Instance not found")
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     result = await db.execute(
         select(MetricSample)
@@ -64,5 +71,5 @@ async def get_latest_metrics(instance_id: int, db: AsyncSession = Depends(get_db
     )
     sample = result.scalar_one_or_none()
     if not sample:
-        raise HTTPException(status_code=404, detail="No metrics collected yet")
+        return None
     return MetricSampleOut.from_orm_sample(sample)

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, Application, DatabaseGroup, GroupEnvironment } from "../api";
+import { api, ApiError, Application, DatabaseGroup, GroupEnvironment } from "../api";
+import { NotFoundState, PageError, PageLoading } from "../components/PageState";
 import { useAuth } from "../auth";
 
 const ENV_LABELS: Record<GroupEnvironment, string> = {
@@ -13,11 +14,14 @@ const ENV_LABELS: Record<GroupEnvironment, string> = {
 export default function DatabaseGroupsPage() {
   const { applicationId } = useParams<{ applicationId: string }>();
   const id = Number(applicationId);
+  const idIsValid = Number.isInteger(id) && id > 0;
   const canWrite = useAuth().user?.role === "admin";
 
   const [application, setApplication] = useState<Application | null>(null);
   const [groups, setGroups] = useState<DatabaseGroup[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notFound, setNotFound] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editName, setEditName] = useState("");
@@ -28,10 +32,20 @@ export default function DatabaseGroupsPage() {
   const load = () => api.getGroups(id).then(setGroups).catch((e) => setError(String(e.message || e)));
 
   useEffect(() => {
-    api.getApplication(id).then(setApplication).catch(() => undefined);
+    if (!idIsValid) return;
+    // Eskiden bu cagrinin hatasi SESSIZCE yutuluyordu: silinmis bir uygulamaya gidildiginde
+    // sayfa aciliyor ama basliktaki uygulama adi ve "← Uygulamalar" geri baglantisi hic
+    // gorunmuyordu — kullanici cikamadigi bos bir sayfada kaliyordu (Faz 19 IS 1).
+    api.getApplication(id).then((a) => {
+      setApplication(a);
+      setNotFound(false);
+    }).catch((e) => {
+      if (e instanceof ApiError && e.isNotFound) setNotFound(true);
+      else setError(String(e.message || e));
+    });
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, idIsValid, reloadKey]);
 
   const onDelete = async (groupId: number) => {
     if (!confirm("Grup ve altındaki tüm düğüm kayıtları silinsin mi?")) return;
@@ -66,6 +80,25 @@ export default function DatabaseGroupsPage() {
       setError(String((err as Error).message));
     }
   };
+
+  if (!idIsValid || notFound) {
+    return (
+      <NotFoundState
+        title="Uygulama bulunamadı"
+        detail={
+          idIsValid
+            ? `#${id} numaralı uygulama yok — silinmiş olabilir ya da bağlantı eskimiş olabilir.`
+            : `"${applicationId}" geçerli bir uygulama numarası değil.`
+        }
+        backTo="/customers"
+        backLabel="Müşteri listesine dön"
+      />
+    );
+  }
+
+  if (!application) {
+    return error ? <PageError error={error} onRetry={() => setReloadKey((k) => k + 1)} /> : <PageLoading />;
+  }
 
   return (
     <>
