@@ -120,6 +120,23 @@ Bunun yerine bu bug SINIFINI sürümden bağımsız olarak kapattım
 kaçmaz; ama 3.12 ile 3.14 arasındaki BAŞKA uyumsuzluklar hâlâ yerelde
 görünmez kalabilir. Sürüm hizalaması ayrı bir iş olarak durmalı.
 
+**GÜNCELLEME (Faz 21 İŞ 1) — risk büyük ölçüde kapandı, tamamen değil.**
+GitHub Actions CI eklendi (`.github/workflows/ci.yml`) ve backend işi
+canlıyla AYNI sürümde koşuyor: `python-version: "3.12"`, kaynağı
+`deploy/onprem/Dockerfile.backend`'deki `python:3.12-slim`. Yani 3.12'ye
+özgü her kırılma artık push anında yakalanıyor.
+
+**Yerel `backend/.venv` HÂLÂ 3.14.** Kalan risk şu: yerelde yeşil görünen
+bir şey CI'da kırmızı çıkabilir. Bu artık *canlıya* değil *CI'a* düşen bir
+sürpriz — yani zararsız hale geldi, ama geliştirme sırasında hâlâ vakit
+kaybettirebilir. Yerel venv'i 3.12'ye taşımak tüm derlenmiş bağımlılıkların
+(pydantic-core, asyncpg, aioodbc) yeniden kurulmasını gerektiriyor;
+ayrı bir iş olarak duruyor.
+
+Hızlı yerel kontrol için CI'ın ilk adımı tek başına çalıştırılabilir:
+
+    cd backend && python scripts/check_model_integrity.py
+
 ## Faz 17 sonrası düzeltme: Denetim tırnaklı ileri referansları serbest bırakıyor
 
 AST tarayıcı yalnızca TIRNAKSIZ ileri referansları hata sayıyor;

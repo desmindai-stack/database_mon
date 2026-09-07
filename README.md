@@ -1,5 +1,7 @@
 # dbace
 
+[![CI](https://github.com/desmindai-stack/database_mon/actions/workflows/ci.yml/badge.svg)](https://github.com/desmindai-stack/database_mon/actions/workflows/ci.yml)
+
 Multi-database DBA monitoring (PostgreSQL, SQL Server, MongoDB) with alerts and trend-based predictions.
 
 **Bulut (Faz 1 — geliştirme/test):** [deploy/cloud/BULUT-KURULUM.md](deploy/cloud/BULUT-KURULUM.md)  

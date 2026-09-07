@@ -4312,6 +4312,59 @@ bulunduğunu (`create_all` var olan tabloya sonradan indeks EKLEMEZ), sorgu plan
 kullandığını ve geçici sıralama yapmadığını, migration'ın iki indeksi de kilitlemeden
 oluşturduğunu ve DEPLOY.md'ye işlendiğini doğruluyor. Toplam 758 test yeşil.
 
+## Faz 21 — İŞ 1: GitHub Actions CI
+
+Üç kez "yerelde yeşil, canlıda patlak" yaşandı ve üçü de aynı sınıftandı —
+uygulama ayağa kalkıyor ama sözleşme bozuk:
+
+1. `AdviceOut` ileri referansı — yerel 3.14 (PEP 649) sessizce geçti,
+   canlı 3.12 import anında `NameError` verdi, API tamamen çöktü.
+2. `ReportFindingOut.facts`/`.note` — model yazıyordu, şema kırpıyordu.
+3. `PredictionOut.advice` — şemada alan vardı, modelde karşılığı yoktu.
+
+`.github/workflows/ci.yml` her push ve pull request'te çalışıyor, iki iş
+paralel:
+
+**Backend — canlıyla AYNI sürümde.** `python-version: "3.12"`; kaynağı
+`deploy/onprem/Dockerfile.backend`'deki `python:3.12-slim` (Railway bu
+Dockerfile ile derliyor, bkz. `railway.toml`). Sürüm eşleşmesi bu CI'ın
+varlık sebebi olduğu için workflow dosyasında yorumla işaretli.
+Adımlar: bağımlılık kurulumu → model bütünlüğü → testler.
+
+**Frontend.** `npm ci` → `npx tsc -b` → `npm run build`. Tip kontrolü ayrı
+adım: kırılmanın tip hatası mı derleme hatası mı olduğu çıktıdan doğrudan
+görülsün.
+
+### Model bütünlüğü kontrolü ayrı bir adım
+
+`backend/scripts/check_model_integrity.py` üç şeyi saniyeler içinde
+doğruluyor:
+
+1. `from app.main import app` — canlıdaki çöküş tam olarak buradaydı.
+2. Her Pydantic modeli tam kurulmuş mu (`__pydantic_complete__`). 3.14'te
+   çözülemeyen bir ileri referans sessizce `False` bırakır ve model ilk
+   kullanımda yeniden kurulmaya çalışılır; 3.12'de aynı durum import anında
+   patlar. Kontrol ikisini de sürümden bağımsız yakalıyor.
+3. `app.openapi()` üretilebiliyor mu — bir `response_model` çözülemiyorsa
+   burada patlar. Bu aynı zamanda İŞ 2'deki TypeScript tip üretiminin
+   dayandığı çıktı.
+
+Testlerden ÖNCE ve ayrı adım olarak koşuyor: canlıyı çökerten hata sınıfı
+buysa 758 testin çıktısında kaybolmasın, adım adıyla kırmızı olsun.
+Yerelde de tek başına çalıştırılabilir (`python scripts/check_model_integrity.py`).
+
+### Ayrıntılar
+
+- **Önbellek:** pip için `requirements.txt` + `requirements-dev.txt`, npm
+  için `package-lock.json` anahtarlı.
+- **`concurrency`:** aynı dalda üst üste gelen çalıştırmalarda önceki iptal
+  ediliyor.
+- **`permissions: contents: read`** — workflow'un yazma yetkisi yok.
+- README'ye CI rozeti eklendi.
+
+Yerel `backend/.venv` hâlâ 3.14; risk artık *canlıya* değil *CI'a* düşen
+bir sürpriz. SORULAR.md'deki not bu ayrımla güncellendi.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

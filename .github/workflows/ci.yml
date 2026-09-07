@@ -1,0 +1,86 @@
+# dbace CI — "yerelde yeşil, canlıda patlak" durumunu push anında yakalar (Faz 21 İŞ 1).
+#
+# Bu dosyanın var olma sebebi üç somut olay:
+#   1. `AdviceOut` ileri referansı — yerel Python 3.14 (PEP 649, ertelemeli annotation) sessizce
+#      geçti, canlıdaki 3.12 import anında NameError verdi ve API tamamen çöktü.
+#   2. `ReportFindingOut`'ta eksik alan — model yazıyordu, şema kırpıyordu.
+#   3. `PredictionOut.advice`'ın modelde karşılığı yoktu — API hep null döndü.
+#
+# Bu yüzden backend işi CANLIYLA AYNI Python sürümünde koşar: deploy/onprem/Dockerfile.backend
+# `python:3.12-slim` kullanıyor (Railway bu Dockerfile ile derliyor, bkz. railway.toml).
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Aynı dal için üst üste gelen çalıştırmalarda öncekini iptal et — hem hızlı hem ucuz.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (Python 3.12)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.12 kur
+        uses: actions/setup-python@v5
+        with:
+          # CANLIYLA AYNI SÜRÜM. Değiştirmeden önce deploy/onprem/Dockerfile.backend'e bakın —
+          # ikisi ayrışırsa bu CI'ın yakalamak için var olduğu hata sınıfı geri gelir.
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements-dev.txt
+
+      - name: Model bütünlüğü (import + Pydantic + OpenAPI)
+        # Testlerden ÖNCE ve ayrı bir adım olarak: canlıyı çökerten hata sınıfı buysa,
+        # 750 testin çıktısında kaybolmasın, adım adıyla kırmızı olsun.
+        run: python scripts/check_model_integrity.py
+
+      - name: Testler
+        run: python -m pytest tests/ -q
+
+  frontend:
+    name: Frontend (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Node kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Bağımlılıkları kur
+        # `npm ci` package-lock.json'a birebir uyar; `npm install` sürüm kaydırabilir.
+        run: npm ci
+
+      - name: Tip kontrolü
+        # `npm run build` zaten `tsc -b` çalıştırıyor, ama ayrı adım olarak koşuyoruz ki
+        # kırılma tip hatası mı derleme hatası mı, çıktıdan doğrudan görülsün.
+        run: npx tsc -b
+
+      - name: Derleme
+        run: npm run build
