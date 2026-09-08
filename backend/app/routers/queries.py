@@ -6,8 +6,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
-from app.models import Instance, Node, Server, SlowQuerySample
+from app.models import CapturedPlan, Instance, Node, Server, SlowQuerySample
 from app.schemas import (
+    CapturedPlanListOut,
+    CapturedPlanOut,
     ExplainOut,
     ExplainRequest,
     IndexAdviceOut,
@@ -24,7 +26,8 @@ from app.schemas import (
 )
 from app.services import query_cache
 from app.services.credentials import decrypt_secret
-from app.services.explain_service import PostgreSQLExplainService
+from app.services.auto_explain import MANAGED_SERVICE_GUIDANCE, plan_source_label
+from app.services.explain_service import PostgreSQLExplainService, _parse_node, _plan_to_dict
 from app.services.advice import Advice, AdviceStep, advice_to_dict
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.database_load import wait_profiles_by_query
@@ -293,6 +296,136 @@ async def get_query_diagnostics(
         agent_configured=agent_configured,
         server_resource_note=server_resource_note,
     )
+
+
+@router.get("/{instance_id}/captured-plans", response_model=CapturedPlanListOut)
+async def list_captured_plans(
+    instance_id: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    queryid: str | None = Query(default=None, description="Yalnızca bu queryid'ye bağlı planlar."),
+    db: AsyncSession = Depends(get_db),
+) -> CapturedPlanListOut:
+    """auto_explain ile GERÇEK çalıştırmadan yakalanmış planlar (Faz 26 İŞ 1).
+
+    Boş liste dönmek yetmez: "neden hiç plan yok" sorusu burada cevaplanıyor — auto_explain
+    kurulu değil mi, host-agent yok mu, yoksa henüz eşiği aşan sorgu mu olmadı.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+
+    conditions = [CapturedPlan.instance_id == instance_id]
+    if queryid:
+        conditions.append(CapturedPlan.queryid == queryid)
+    rows = (
+        await db.execute(
+            select(CapturedPlan)
+            .where(*conditions)
+            .order_by(CapturedPlan.captured_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    out = CapturedPlanListOut(
+        instance_id=instance_id,
+        plans=[
+            CapturedPlanOut(
+                id=row.id,
+                captured_at=row.captured_at,
+                source=row.source,
+                source_label=plan_source_label(row.source),
+                duration_ms=row.duration_ms,
+                query_text=row.query_text,
+                queryid=row.queryid,
+                has_actual_rows=row.has_actual_rows,
+            )
+            for row in rows
+        ],
+    )
+    if not out.plans:
+        if instance.engine != "postgresql":
+            out.unavailable_reason = (
+                "auto_explain yalnızca PostgreSQL'de var; bu motor için gerçek çalıştırma planı "
+                "yakalanamıyor."
+            )
+        elif not (instance.options or {}).get("agent_url"):
+            out.unavailable_reason = (
+                "Bu instance için host-agent yapılandırılmamış. auto_explain planları sunucu "
+                "log'undan okunuyor ve log'a erişim agent üzerinden sağlanıyor."
+            )
+            out.managed_service_guidance = MANAGED_SERVICE_GUIDANCE
+        else:
+            out.unavailable_reason = (
+                "Henüz yakalanmış plan yok. Ön koşullar panelindeki auto_explain kontrollerine "
+                "bakın: kütüphane yüklü, eşik ayarlı ve log_format='json' olmalı. Üçü de "
+                "tamamsa, eşiği aşan bir sorgu çalışana kadar plan birikmez."
+            )
+    return out
+
+
+@router.get("/{instance_id}/captured-plans/{plan_id}", response_model=ExplainOut)
+async def get_captured_plan(
+    instance_id: int,
+    plan_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ExplainOut:
+    """Yakalanmış tek bir planın ağacı — canlı EXPLAIN ile AYNI yapıda dönüyor.
+
+    Aynı yapı bilinçli: arayüz tek bir plan bileşeni kullanıyor. İki ayrı şekil, iki ayrı
+    bileşen ve zamanla ayrışan iki görünüm demekti (projede daha önce yaşandı).
+    """
+    row = await db.get(CapturedPlan, plan_id)
+    if not row or row.instance_id != instance_id:
+        raise HTTPException(status_code=404, detail="Plan bulunamadı")
+
+    plan_root = (row.plan_json or {}).get("Plan")
+    node = _parse_node(plan_root) if isinstance(plan_root, dict) else None
+    insights: list[str] = []
+    if node:
+        _collect_plan_insights(node, insights)
+
+    return ExplainOut(
+        query=row.query_text,
+        # auto_explain planı gerçek çalıştırmadan geldiği için "analyzed" ancak gerçek satır
+        # sayıları da varsa doğrudur (log_analyze açık).
+        analyzed=row.has_actual_rows,
+        planning_time_ms=_plan_float(row.plan_json, "Planning Time"),
+        execution_time_ms=_plan_float(row.plan_json, "Execution Time") or row.duration_ms,
+        total_cost=node.total_cost if node else None,
+        insights=insights,
+        plan=_plan_to_dict(node) if node else None,
+        raw_plan=[row.plan_json] if row.plan_json else [],
+        source=row.source,
+        source_label=plan_source_label(row.source),
+        source_caveat=(
+            None
+            if row.has_actual_rows
+            else (
+                "Bu plan gerçek çalıştırmadan yakalandı ama auto_explain.log_analyze kapalı "
+                "olduğu için GERÇEK SATIR SAYISI yok — yalnızca planlayıcının tahmini var. "
+                "Tahmini/gerçek sapma analizi bu planda yapılamaz."
+            )
+        ),
+        captured_at=row.captured_at,
+    )
+
+
+def _plan_float(plan_json: dict | None, key: str) -> float | None:
+    if not isinstance(plan_json, dict):
+        return None
+    value = plan_json.get(key)
+    try:
+        return float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _collect_plan_insights(node, out: list[str]) -> None:
+    for tip in node.insights:
+        if tip not in out:
+            out.append(tip)
+    for child in node.children:
+        _collect_plan_insights(child, out)
 
 
 @router.post("/{instance_id}/explain", response_model=ExplainOut)

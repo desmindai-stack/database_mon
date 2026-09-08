@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import SessionLocal
 from app.models import (
     ActiveSessionMinute,
+    CapturedPlan,
     AlertEvent,
     AppSetting,
     MetricSample,
@@ -87,6 +88,9 @@ async def run_retention_cleanup() -> int:
             # Sözlük satırı, o sorgu artık hiç görülmüyorsa anlamsız kalıyor — `last_seen_at`
             # üzerinden aynı pencereye tabi.
             (WaitQuerySignature, WaitQuerySignature.last_seen_at),
+            # Faz 26 İŞ 1: yakalanan planlar. Plan JSON'u satır başına kilobaytlar tutuyor —
+            # saklama politikasının dışında bırakmak, tabloyu en hızlı büyüyen tablo yapardı.
+            (CapturedPlan, CapturedPlan.captured_at),
         ):
             result = await session.execute(delete(model).where(ts_column < cutoff))
             total_deleted += result.rowcount or 0

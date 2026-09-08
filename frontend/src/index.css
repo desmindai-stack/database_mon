@@ -3504,3 +3504,43 @@ td code,
     height: 280px;
   }
 }
+
+/* --- Plan kaynağı rozeti (Faz 26 İŞ 1) ------------------------------------ */
+/* Yakalanan plan ile sonradan alınan planın GÖRSEL olarak da ayrılması bilinçli:
+   metin okunmasa bile renk farkı "bu ölçüm mü tahmin mi" sorusunu cevaplıyor. */
+
+.plan-source {
+  border-left: 4px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.plan-source.captured {
+  border-left-color: var(--ok, #22c55e);
+}
+
+.plan-source.estimated {
+  border-left-color: var(--warn, #f59e0b);
+}
+
+.plan-source p {
+  margin: var(--space-1) 0 0;
+}
+
+.captured-plan-list {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.captured-plan-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}

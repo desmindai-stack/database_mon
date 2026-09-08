@@ -8,6 +8,7 @@ PostgreSQL ve SQL Server için ayrı kontrol setleri var; MongoDB desteklenmiyor
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from app.collectors.base import ConnectionTarget
 from app.domain.engines import DatabaseEngine
@@ -61,6 +62,44 @@ def _partial(
 
 def _unknown(key: str, name: str, severity: str, impact: str, detail: str | None = None) -> PrerequisiteCheck:
     return PrerequisiteCheck(key=key, name=name, status="unknown", severity=severity, impact=impact, detail=detail)
+
+
+def _parse_duration_ms(value: Any) -> float | None:
+    """PostgreSQL süre ayarını milisaniyeye çevirir ('1s', '500ms', '-1', '2min').
+
+    `SHOW` değeri BİRİMLE döner ve birim sunucudan sunucuya değişir; ham metni doğrudan sayıya
+    çevirmeye çalışmak ('1s' için int()) patlar ve kontrol sessizce "bilinmiyor"a düşerdi —
+    yani ayar doğruyken bile kırmızı görünürdü.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    # Sıra önemli: "ms" ile "min" ikisi de "m" ile başlıyor, "s" de "ms"nin sonu.
+    for suffix, factor in (("ms", 1.0), ("min", 60_000.0), ("s", 1000.0), ("h", 3_600_000.0), ("d", 86_400_000.0)):
+        if text.endswith(suffix):
+            try:
+                return float(text[: -len(suffix)].strip()) * factor
+            except ValueError:
+                return None
+    try:
+        # Birimsiz değer auto_explain.log_min_duration için milisaniye sayılır.
+        return float(text)
+    except ValueError:
+        return None
+
+
+async def _show_or_none(conn, setting: str):
+    """`SHOW <ayar>` — ayar tanımlı değilse (kütüphane yüklenmemişse) hata yerine None.
+
+    auto_explain ayarları kütüphane yüklenmeden GUC olarak var olmaz ve `SHOW` hata verir;
+    bu hatayı yukarı taşımak tüm ön koşul denetimini düşürürdü.
+    """
+    try:
+        return await conn.fetchval(f"SHOW {setting}")
+    except Exception:
+        return None
 
 
 async def _pg_extension_installed(conn, extname: str) -> bool:
@@ -412,6 +451,134 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                     detail=track_io,
                 )
             )
+        # 13-16. auto_explain — GERÇEK çalıştırmanın planını yakalama (Faz 26 İŞ 1).
+        #
+        # Dört ayrı kontrol, çünkü "auto_explain kurulu" tek başına hiçbir şey söylemiyor:
+        # kütüphane yüklü ama eşik ayarlanmamışsa hiçbir plan yazılmaz; eşik varsa ama
+        # log_analyze kapalıysa plan gerçektir fakat GERÇEK SATIR SAYISI yoktur (tahmini/gerçek
+        # sapma analizi o durumda yapılamaz); ikisi de varsa ama log_format 'text' ise dbace
+        # çıktıyı ayrıştıramaz. Üç farklı sonuç, üç farklı düzeltme — tek bir kontrole
+        # sıkıştırmak "auto_explain var ama plan gelmiyor" bilmecesini üretirdi.
+        auto_explain_loaded = "auto_explain" in str(probe.preload_raw or "")
+        if not auto_explain_loaded:
+            checks.append(
+                _missing(
+                    "auto_explain",
+                    "auto_explain kütüphanesi",
+                    "medium",
+                    "Yüklü değil. Planlar yalnızca SONRADAN, EXPLAIN çalıştırılarak alınabilir; "
+                    "bu plan sorgunun yavaş çalıştığı andaki plan OLMAYABİLİR (parametreler "
+                    "bilinmediği için NULL konur, veri ve istatistikler o günden beri "
+                    "değişmiş olabilir).",
+                    "-- postgresql.conf (YENİDEN BAŞLATMA gerektirir):\n"
+                    "shared_preload_libraries = 'pg_stat_statements,auto_explain'\n"
+                    "-- Patroni kullanıyorsanız:\n"
+                    "-- patronictl edit-config -p postgresql.parameters.shared_preload_libraries='pg_stat_statements,auto_explain'",
+                    detail=str(probe.preload_raw or "(boş)"),
+                )
+            )
+        else:
+            checks.append(
+                _ok(
+                    "auto_explain",
+                    "auto_explain kütüphanesi",
+                    "Yüklü — eşiği aşan sorguların gerçek planı log'a yazılabiliyor.",
+                    detail=str(probe.preload_raw),
+                )
+            )
+
+            raw_threshold = await _show_or_none(conn, "auto_explain.log_min_duration")
+            threshold_ms = _parse_duration_ms(raw_threshold)
+            if threshold_ms is None or threshold_ms < 0:
+                checks.append(
+                    _missing(
+                        "auto_explain_threshold",
+                        "auto_explain.log_min_duration",
+                        "medium",
+                        f"Değer '{raw_threshold}' — kütüphane yüklü ama eşik kapalı (-1), yani "
+                        "hiçbir plan log'a yazılmıyor. auto_explain sessizce hiçbir şey yapmıyor; "
+                        "kurulu olduğuna bakıp çalıştığını varsaymak kolay.",
+                        "ALTER SYSTEM SET auto_explain.log_min_duration = '1s';\n"
+                        "SELECT pg_reload_conf();",
+                        detail=str(raw_threshold),
+                    )
+                )
+            elif threshold_ms == 0:
+                checks.append(
+                    _partial(
+                        "auto_explain_threshold",
+                        "auto_explain.log_min_duration",
+                        "high",
+                        "Değer 0 — HER sorgunun planı log'a yazılıyor. Yoğun bir sunucuda bu, "
+                        "log diskini doldurur ve her sorguya plan üretme maliyeti bindirir. "
+                        "İzleme aracının izlediği sunucuyu yavaşlatması kabul edilemez.",
+                        "ALTER SYSTEM SET auto_explain.log_min_duration = '1s';\n"
+                        "SELECT pg_reload_conf();",
+                        detail=str(raw_threshold),
+                    )
+                )
+            else:
+                checks.append(
+                    _ok(
+                        "auto_explain_threshold",
+                        "auto_explain.log_min_duration",
+                        f"{threshold_ms:.0f} ms üzerindeki sorguların planı yakalanıyor.",
+                        detail=str(raw_threshold),
+                    )
+                )
+
+            log_format = await _show_or_none(conn, "auto_explain.log_format")
+            if str(log_format or "").lower() == "json":
+                checks.append(
+                    _ok(
+                        "auto_explain_format",
+                        "auto_explain.log_format",
+                        "JSON — dbace planları ayrıştırıp plan ağacı olarak gösterebiliyor.",
+                        detail=str(log_format),
+                    )
+                )
+            else:
+                checks.append(
+                    _missing(
+                        "auto_explain_format",
+                        "auto_explain.log_format",
+                        "medium",
+                        f"Değer '{log_format}' — dbace yalnızca JSON biçimini ayrıştırabiliyor. "
+                        "Metin biçimindeki planlar log'da birikir ama dbace'te hiç görünmez.",
+                        "ALTER SYSTEM SET auto_explain.log_format = 'json';\n"
+                        "SELECT pg_reload_conf();",
+                        detail=str(log_format),
+                    )
+                )
+
+            log_analyze = await _show_or_none(conn, "auto_explain.log_analyze")
+            if str(log_analyze or "").lower() == "on":
+                checks.append(
+                    _ok(
+                        "auto_explain_analyze",
+                        "auto_explain.log_analyze",
+                        "Açık — planda gerçek satır sayıları ve düğüm süreleri de var, "
+                        "tahmini/gerçek sapma analizi yapılabiliyor.",
+                        detail=str(log_analyze),
+                    )
+                )
+            else:
+                checks.append(
+                    _partial(
+                        "auto_explain_analyze",
+                        "auto_explain.log_analyze",
+                        "medium",
+                        f"Değer '{log_analyze}' — yakalanan plan gerçek çalıştırmanın planı ama "
+                        "GERÇEK SATIR SAYISI yok. Planlayıcının tahmini ile gerçeğin ne kadar "
+                        "ayrıştığı ölçülemez; bu, sorgu yavaşlığının en yaygın sebeplerinden "
+                        "birinin görünmemesi demek.",
+                        "ALTER SYSTEM SET auto_explain.log_analyze = on;\n"
+                        "ALTER SYSTEM SET auto_explain.log_buffers = on;\n"
+                        "SELECT pg_reload_conf();",
+                        detail=str(log_analyze),
+                    )
+                )
+
         # 11-12. BEKLEME ANALİZİ ÖN KOŞULLARI (Faz 25 İŞ 5).
         #
         # Bekleme örnekleyicisi pg_stat_activity'yi okuyor. Yetkisiz bir rol bu görünümde

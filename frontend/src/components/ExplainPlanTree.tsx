@@ -31,8 +31,23 @@ function PlanNodeView({ node, depth = 0 }: { node: ExplainPlanNode; depth?: numb
 }
 
 export default function ExplainPlanTree({ result }: Props) {
+  // PLANIN KAYNAĞI (Faz 26 İŞ 1). auto_explain ile gerçek çalıştırmadan yakalanan plan ile
+  // sonradan EXPLAIN çalıştırılarak alınan plan farklı güvenilirliktedir. İkisini aynı
+  // görünümde ayrımsız göstermek, tahmini bir planı ölçüm sanmaya yol açar — ki sorgu
+  // tanısında en pahalı yanılgı budur.
+  const captured = result.source === "auto_explain";
   return (
     <div className="explain-panel">
+      <div className={`plan-source${captured ? " captured" : " estimated"}`}>
+        <strong>{result.source_label || (captured ? "Yakalanan plan" : "Sonradan alınan plan")}</strong>
+        {result.captured_at && (
+          <span className="muted-note">
+            {" "}
+            — {new Date(result.captured_at).toLocaleString("tr-TR")}
+          </span>
+        )}
+        {result.source_caveat && <p className="muted-note">{result.source_caveat}</p>}
+      </div>
       <div className="explain-meta">
         <span>Plan cost: {result.total_cost?.toFixed(1) ?? "—"}</span>
         {result.planning_time_ms != null && <span>Planning: {result.planning_time_ms.toFixed(2)} ms</span>}

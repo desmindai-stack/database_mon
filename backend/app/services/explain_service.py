@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 
 from app.collectors.base import ConnectionTarget
+from app.services.auto_explain import plan_source_caveat, plan_source_label
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +225,10 @@ class PostgreSQLExplainService:
 
     @staticmethod
     def to_payload(result: ExplainResult) -> dict[str, Any]:
+        # Bu servis planı SONRADAN üretiyor — kaynak buna göre işaretleniyor. ANALYZE ile
+        # alınan plan gerçek satır sayılarını taşır ama yine de sorgu YENİDEN çalıştırıldığı
+        # için yavaşlık anındaki plan olmayabilir; ikisi ayrı etiket.
+        source = "manual_analyze" if result.analyzed else "manual_estimate"
         return {
             "query": result.query,
             "analyzed": result.analyzed,
@@ -233,4 +238,8 @@ class PostgreSQLExplainService:
             "insights": result.insights,
             "plan": _plan_to_dict(result.plan) if result.plan else None,
             "raw_plan": result.raw_plan,
+            "source": source,
+            "source_label": plan_source_label(source),
+            "source_caveat": plan_source_caveat(source),
+            "captured_at": None,
         }

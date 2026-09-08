@@ -261,6 +261,7 @@ _COMPOSITE_INDEXES = (
     # Faz 25: bekleme analizinin her sorgusu "şu instance'ın şu zaman aralığı" biçiminde.
     ("ix_wait_sample_minutes_instance_minute", "wait_sample_minutes", "instance_id, minute"),
     ("ix_active_session_minutes_instance_minute", "active_session_minutes", "instance_id, minute"),
+    ("ix_captured_plans_instance_captured", "captured_plans", "instance_id, captured_at"),
 )
 
 

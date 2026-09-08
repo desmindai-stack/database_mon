@@ -35,7 +35,7 @@ def _pg_responses(**overrides) -> dict:
         # pg_stat_statements ailesi artık services/pgss.py probe'undan geliyor (Faz 16-B İŞ 1):
         # şema çözümü + tek sayım sorgusu.
         "WHERE e.extname = $1": "public",
-        "SHOW shared_preload_libraries": "pg_stat_statements,pg_cron",
+        "SHOW shared_preload_libraries": "pg_stat_statements,auto_explain,pg_cron",
         "SHOW pg_stat_statements.track": "top",
         "pg_has_role(current_user, 'pg_read_all_stats'": True,
         'FROM "public".pg_stat_statements': {"total": 42, "redacted": 0},
@@ -48,6 +48,10 @@ def _pg_responses(**overrides) -> dict:
         "server_version_num": 160000,
         "FROM pg_stat_activity": {"toplam": 5, "maskeli": 0},
         "SHOW compute_query_id": "on",
+        # Faz 26 İŞ 1 — auto_explain ayarları.
+        "SHOW auto_explain.log_min_duration": "1s",
+        "SHOW auto_explain.log_format": "json",
+        "SHOW auto_explain.log_analyze": "on",
     }
     base.update(overrides)
     return base

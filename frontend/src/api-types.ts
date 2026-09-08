@@ -1157,6 +1157,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queries/{instance_id}/captured-plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Captured Plans
+         * @description auto_explain ile GERÇEK çalıştırmadan yakalanmış planlar (Faz 26 İŞ 1).
+         *
+         *     Boş liste dönmek yetmez: "neden hiç plan yok" sorusu burada cevaplanıyor — auto_explain
+         *     kurulu değil mi, host-agent yok mu, yoksa henüz eşiği aşan sorgu mu olmadı.
+         */
+        get: operations["list_captured_plans_api_queries__instance_id__captured_plans_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queries/{instance_id}/captured-plans/{plan_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Captured Plan
+         * @description Yakalanmış tek bir planın ağacı — canlı EXPLAIN ile AYNI yapıda dönüyor.
+         *
+         *     Aynı yapı bilinçli: arayüz tek bir plan bileşeni kullanıyor. İki ayrı şekil, iki ayrı
+         *     bileşen ve zamanla ayrışan iki görünüm demekti (projede daha önce yaşandı).
+         */
+        get: operations["get_captured_plan_api_queries__instance_id__captured_plans__plan_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queries/{instance_id}/diagnostics": {
         parameters: {
             query?: never;
@@ -1988,6 +2034,48 @@ export interface components {
             /** Findings */
             findings: components["schemas"]["FindingStatusUpdate"][];
         };
+        /** CapturedPlanListOut */
+        CapturedPlanListOut: {
+            /** Instance Id */
+            instance_id: number;
+            /** Managed Service Guidance */
+            managed_service_guidance?: string | null;
+            /**
+             * Plans
+             * @default []
+             */
+            plans: components["schemas"]["CapturedPlanOut"][];
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+        };
+        /**
+         * CapturedPlanOut
+         * @description auto_explain ile yakalanmış bir plan kaydı (listeleme için — plan ağacı ayrı uçta).
+         */
+        CapturedPlanOut: {
+            /**
+             * Captured At
+             * Format: date-time
+             */
+            captured_at: string;
+            /** Duration Ms */
+            duration_ms: number;
+            /**
+             * Has Actual Rows
+             * @default false
+             */
+            has_actual_rows: boolean;
+            /** Id */
+            id: number;
+            /** Query Text */
+            query_text: string;
+            /** Queryid */
+            queryid?: string | null;
+            /** Source */
+            source: string;
+            /** Source Label */
+            source_label: string;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Current Password */
@@ -2606,6 +2694,8 @@ export interface components {
         ExplainOut: {
             /** Analyzed */
             analyzed: boolean;
+            /** Captured At */
+            captured_at?: string | null;
             /** Execution Time Ms */
             execution_time_ms: number | null;
             /** Insights */
@@ -2620,6 +2710,18 @@ export interface components {
              * @default []
              */
             raw_plan: unknown[];
+            /**
+             * Source
+             * @default manual_estimate
+             */
+            source: string;
+            /** Source Caveat */
+            source_caveat?: string | null;
+            /**
+             * Source Label
+             * @default
+             */
+            source_label: string;
             /** Total Cost */
             total_cost: number | null;
         };
@@ -7045,6 +7147,73 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SlowQueryAvailabilityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_captured_plans_api_queries__instance_id__captured_plans_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Yalnızca bu queryid'ye bağlı planlar. */
+                queryid?: string | null;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CapturedPlanListOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_captured_plan_api_queries__instance_id__captured_plans__plan_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: number;
+                plan_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExplainOut"];
                 };
             };
             /** @description Validation Error */

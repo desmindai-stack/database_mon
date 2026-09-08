@@ -17,6 +17,7 @@ from app.services.rollup import run_daily_rollup
 from app.services.health_report import run_scheduled_reports
 from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
 from app.services.prediction_accuracy import evaluate_due_outcomes
+from app.services.plan_capture import capture_plans_tick
 from app.services.wait_sampling import sampling_tick, shutdown_sampling
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ DAILY_ROLLUP_JOB_ID = "daily_rollup"
 PREDICTION_ACCURACY_JOB_ID = "prediction_accuracy"
 HEALTH_REPORT_JOB_ID = "daily_health_report"
 WAIT_SAMPLING_JOB_ID = "wait_event_sampling"
+PLAN_CAPTURE_JOB_ID = "auto_explain_plan_capture"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -129,6 +131,22 @@ async def wait_sampling_tick() -> None:
         logger.exception("Bekleme örneklemesi turu başarısız")
 
 
+async def plan_capture_tick() -> None:
+    """Faz 26 İŞ 1: auto_explain planlarını host-agent log'undan toplar.
+
+    Hedef veritabanına HİÇ bağlanmıyor — yalnızca agent'a HTTP isteği. Bu yüzden izlenen
+    sunucuya ek sorgu yükü bindirmiyor.
+    """
+    try:
+        totals = await capture_plans_tick()
+        if totals.get("written"):
+            logger.info(
+                "Plan yakalama: %s instance, %s yeni plan", totals["instances"], totals["written"]
+            )
+    except Exception:
+        logger.exception("Plan yakalama turu başarısız")
+
+
 async def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -221,6 +239,18 @@ async def start_scheduler() -> None:
             "interval",
             seconds=max(1, settings.wait_sample_interval_seconds),
             id=WAIT_SAMPLING_JOB_ID,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(),
+        )
+
+    if settings.plan_capture_enabled:
+        scheduler.add_job(
+            plan_capture_tick,
+            "interval",
+            seconds=max(60, settings.plan_capture_interval_seconds),
+            id=PLAN_CAPTURE_JOB_ID,
             replace_existing=True,
             max_instances=1,
             coalesce=True,

@@ -1179,6 +1179,105 @@
         "title": "BulkFindingStatusUpdate",
         "type": "object"
       },
+      "CapturedPlanListOut": {
+        "properties": {
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "integer"
+          },
+          "managed_service_guidance": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Managed Service Guidance"
+          },
+          "plans": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/CapturedPlanOut"
+            },
+            "title": "Plans",
+            "type": "array"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "instance_id"
+        ],
+        "title": "CapturedPlanListOut",
+        "type": "object"
+      },
+      "CapturedPlanOut": {
+        "description": "auto_explain ile yakalanmış bir plan kaydı (listeleme için — plan ağacı ayrı uçta).",
+        "properties": {
+          "captured_at": {
+            "format": "date-time",
+            "title": "Captured At",
+            "type": "string"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "number"
+          },
+          "has_actual_rows": {
+            "default": false,
+            "title": "Has Actual Rows",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "query_text": {
+            "title": "Query Text",
+            "type": "string"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_label": {
+            "title": "Source Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "captured_at",
+          "source",
+          "source_label",
+          "duration_ms",
+          "query_text"
+        ],
+        "title": "CapturedPlanOut",
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "properties": {
           "current_password": {
@@ -2692,6 +2791,18 @@
             "title": "Analyzed",
             "type": "boolean"
           },
+          "captured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Captured At"
+          },
           "execution_time_ms": {
             "anyOf": [
               {
@@ -2740,6 +2851,27 @@
             "items": {},
             "title": "Raw Plan",
             "type": "array"
+          },
+          "source": {
+            "default": "manual_estimate",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_caveat": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Caveat"
+          },
+          "source_label": {
+            "default": "",
+            "title": "Source Label",
+            "type": "string"
           },
           "total_cost": {
             "anyOf": [
@@ -12376,6 +12508,141 @@
           }
         ],
         "summary": "Get Slow Query Availability Endpoint",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/captured-plans": {
+      "get": {
+        "description": "auto_explain ile GERÇEK çalıştırmadan yakalanmış planlar (Faz 26 İŞ 1).\n\nBoş liste dönmek yetmez: \"neden hiç plan yok\" sorusu burada cevaplanıyor — auto_explain\nkurulu değil mi, host-agent yok mu, yoksa henüz eşiği aşan sorgu mu olmadı.",
+        "operationId": "list_captured_plans_api_queries__instance_id__captured_plans_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Yalnızca bu queryid'ye bağlı planlar.",
+            "in": "query",
+            "name": "queryid",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Yalnızca bu queryid'ye bağlı planlar.",
+              "title": "Queryid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapturedPlanListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Captured Plans",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/captured-plans/{plan_id}": {
+      "get": {
+        "description": "Yakalanmış tek bir planın ağacı — canlı EXPLAIN ile AYNI yapıda dönüyor.\n\nAynı yapı bilinçli: arayüz tek bir plan bileşeni kullanıyor. İki ayrı şekil, iki ayrı\nbileşen ve zamanla ayrışan iki görünüm demekti (projede daha önce yaşandı).",
+        "operationId": "get_captured_plan_api_queries__instance_id__captured_plans__plan_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "plan_id",
+            "required": true,
+            "schema": {
+              "title": "Plan Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExplainOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Captured Plan",
         "tags": [
           "queries"
         ]

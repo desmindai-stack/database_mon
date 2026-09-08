@@ -5313,6 +5313,127 @@ yeşil, kritik paket arka arkaya iki kez temiz.
 
 Toplam 1049 backend testi yeşil.
 
+## Faz 26 — İŞ 1: auto_explain entegrasyonu (gerçek çalıştırmanın planı)
+
+**Sorun:** dbace EXPLAIN'i SONRADAN çalıştırıyordu. Bu planın, sorgunun yavaş
+çalıştığı andaki planla aynı olduğu garanti değil — hatta çoğu zaman değil:
+
+- **Parametre bilinmiyor.** pg_stat_statements sorguyu normalleştirir
+  (`WHERE id = $1`); sonradan EXPLAIN alırken `$1` yerine `NULL` konur ve
+  planlayıcı bambaşka bir plan seçebilir. Üstelik asıl sorun genelde tam da
+  budur: *bazı* parametre değerlerinde plan çöker.
+- Veri, istatistikler ve index'ler o günden beri değişmiş olabilir.
+- Sorgu yavaşken sunucu yük altındaydı; şimdi değil.
+
+Yani sonradan alınan plan bir TAHMİNDİR. auto_explain eşiği aşan sorguların
+gerçekten kullanılan planını yazar.
+
+### Log ayrıştırma
+
+`services/auto_explain.py` auto_explain'in JSON çıktısını host-agent'ın verdiği
+log satırlarından çıkarıyor. Üç tasarım kararı:
+
+- **Süslü parantez dengesi sayılıyor**, satır sayısı ya da girinti değil:
+  `log_line_prefix` her kurulumda farklı ve ona bağlanan bir ayrıştırıcı
+  müşteriden müşteriye kırılırdı.
+- **Yarım plan ATILIYOR.** Log penceresi planın ortasında bitmişse blok
+  kaydedilmiyor — tamamlanmamış bir planı "yakalandı" diye göstermek yanıltıcı
+  olurdu.
+- **Ayrıştırılamayan bloklar SAYILIYOR** ve sebebi yazılıyor. En yaygın sebep
+  `log_format` değerinin varsayılan `text` olması; sessizce atmak "auto_explain
+  açık ama dbace'te plan yok" bilmecesini üretirdi.
+
+Tur başına 50 plan sınırı var: sınırsız okumak, yoğun bir sunucuda tek turda
+binlerce satır yazmak demekti (bekleme örnekleyicisinde kaçındığımız hatanın
+aynısı).
+
+### Eşleştirme kesin değil ve bu saklanmıyor
+
+auto_explain log'u **queryid yazmıyor** (PostgreSQL 16'da `log_line_prefix`'e
+`%Q` eklenebiliyor ama her kurulumda yok, 16 öncesinde hiç yok). Eşleştirme
+metin normalleştirmesiyle yapılıyor: literaller ve yer tutucular aynı anahtara
+indirgeniyor.
+
+Normalleştirmede bir sıra tuzağı çıktı ve test yakaladı: yer tutucular, sayı
+kuralından ÖNCE değiştirilmeli. Tersi olursa yer tutucudaki rakam önce soru
+işaretine dönüşüyor, desen artık eşleşmiyor ve pg_stat_statements'ın
+normalleştirilmiş metni ile auto_explain'in gerçek değerli metni ASLA
+eşleşmiyor — yani yakalanan hiçbir plan sorgusuna bağlanamıyordu.
+
+**Eşleşme bulunamazsa plan yine kaydediliyor** (queryid boş). Yanlış bir sorguya
+bağlamaktansa bağlamamak yeğdir ve planın kendisi eşleşmeden bağımsız olarak
+değerli.
+
+### Planın kaynağı kullanıcıya gösteriliyor
+
+`ExplainOut` artık `source`, `source_label`, `source_caveat` ve `captured_at`
+taşıyor. Üç kaynak var ve üçü farklı güvenilirlikte:
+
+| Kaynak | Etiket | Uyarı |
+|---|---|---|
+| `auto_explain` | Gerçek çalıştırmadan yakalandı | Yok — bu ölçüm |
+| `manual_analyze` | Sonradan EXPLAIN ANALYZE ile alındı | Gerçek satır sayıları doğru ama plan yavaşlık anındaki plan olmayabilir |
+| `manual_estimate` | Sonradan EXPLAIN ile alındı | Sorgu çalıştırılmadı; gerçek satır sayısı yok, ayrıca parametre tuzağı |
+
+Arayüzde plan ağacının üstünde renkli bir şeritle gösteriliyor — metin okunmasa
+bile renk farkı "bu ölçüm mü tahmin mi" sorusunu cevaplıyor.
+
+### Toplama ve saklama
+
+Ayrı bir zamanlayıcı işi (varsayılan 5 dakika). **Hedef veritabanına HİÇ
+bağlanmıyor** — yalnızca host-agent'a HTTP isteği. Sık çekmenin kazancı yok: her
+çekim log'un son satırlarını yeniden okuyor.
+
+Tekrar yazma koruması UNIQUE kısıtla: (instance, captured_at, duration_ms,
+fingerprint). "En son ne zaman çektik" saymacı kullanmak worker yeniden
+başladığında çöker ve aynı planlar ikinci kez yazılırdı.
+
+`captured_plans` saklama politikasına dahil — plan JSON'u satır başına
+kilobaytlar tuttuğu için dışarıda bırakılsa en hızlı büyüyen tablo olurdu.
+
+### Ön koşullar: DÖRT ayrı kontrol
+
+"auto_explain kurulu" tek başına hiçbir şey söylemiyor:
+
+| Kontrol | Neyi yakalıyor |
+|---|---|
+| `auto_explain` | Kütüphane `shared_preload_libraries` içinde mi |
+| `auto_explain_threshold` | `-1` = sessizce hiçbir şey yapmıyor; `0` = her sorgu, log diskini doldurur |
+| `auto_explain_format` | `text` ise dbace ayrıştıramıyor, planlar log'da birikip görünmüyor |
+| `auto_explain_analyze` | Kapalıysa plan gerçek ama GERÇEK SATIR SAYISI yok — sapma analizi (İŞ 2) yapılamaz |
+
+Üçü farklı sonuç, üçü farklı düzeltme. Tek kontrole sıkıştırmak "auto_explain var
+ama plan gelmiyor" bilmecesini üretirdi.
+
+Bir yardımcı da eklendi: `_parse_duration_ms`. `SHOW` süre ayarlarını BİRİMLE
+döndürüyor (`1s`, `500ms`) ve ham metni `int()` ile çevirmeye çalışmak
+patlıyordu — kontrol sessizce "bilinmiyor"a düşer, yani ayar doğruyken bile
+kırmızı görünürdü.
+
+### Yönetilen servisler
+
+`docs/AUTO_EXPLAIN.md` yazıldı: kurulum adımları, eşik seçiminin maliyeti
+(`log_analyze` ölçüm maliyeti ekler, `log_timing = off` ile azaltılabilir), ve
+**log erişimi olmayan ortamlar** (Supabase, RDS, Azure, Cloud SQL) için iki
+seçenek. İkincisi salt-okunur izleme kullanıcısının EXPLAIN alabilmesi için
+SECURITY DEFINER fonksiyon; kurulum SQL'i, `search_path` sabitlemesinin NEDEN
+zorunlu olduğu (klasik ayrıcalık yükseltme yolu), doğrulama ve geri alma
+adımlarıyla birlikte yazıldı. dbace bu fonksiyonu bugün otomatik kullanmıyor;
+belge, izleme kullanıcısını daha da kısıtlamak isteyen kurulumlar için.
+
+### Yan düzeltme: elle yazılmış tip yine ayrıştı
+
+`ExplainResult` ve `ExplainPlanNode` frontend'de elle yazılmıştı ve yeni alanları
+bilmiyordu. Üretilen şemadan türetildi, `MUST_BE_DERIVED` listesine eklendi.
+Faz 24'te `InstanceDependencies` ile yaşanan senaryonun aynısı — tek farkı bu
+sefer sessizce değil, derlemede patlaması.
+
+**Testler:** `tests/test_auto_explain.py` (16 test) — çok satırlı plan
+ayrıştırma, bilinmeyen `log_line_prefix`, yarım planın atılması, metin biçiminin
+sayılıp açıklanması, sınır, `log_analyze` durumunun ÇIKTIDAN okunması,
+normalleştirme, tekrar yazmama, eşleşmeyen planın yine saklanması. Toplam 1068
+test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

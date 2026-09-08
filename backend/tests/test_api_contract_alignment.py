@@ -119,6 +119,9 @@ MUST_BE_DERIVED = [
     # Faz 24: elle yazılmış hâli Faz 23'te eklenen iki bağımlılık alanını içermiyordu,
     # kullanıcı dökümde göremiyordu.
     "InstanceDependencies",
+    # Faz 26: elle yazılmış hâli `source`/`source_caveat`/`captured_at` alanlarını bilmiyordu.
+    "ExplainResult",
+    "ExplainPlanNode",
 ]
 
 # Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler

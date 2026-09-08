@@ -1188,6 +1188,40 @@ class ExplainOut(BaseModel):
     insights: list[str]
     plan: ExplainPlanNodeOut | None
     raw_plan: list[Any] = []
+    # PLANIN KAYNAĞI (Faz 26 İŞ 1). auto_explain ile GERÇEK çalıştırmadan yakalanan plan ile
+    # sonradan EXPLAIN çalıştırılarak alınan plan farklı güvenilirliktedir; ikisinin aynı
+    # ekranda aynı görünmesi, tahmini bir planı ölçüm sanmaya yol açardı.
+    # auto_explain | manual_analyze | manual_estimate
+    source: str = "manual_estimate"
+    source_label: str = ""
+    # Kaynağın sınırı — "bu plan neye kadar güvenilir". auto_explain'de None (sınır yok).
+    source_caveat: str | None = None
+    captured_at: datetime | None = None
+
+
+class CapturedPlanOut(BaseModel):
+    """auto_explain ile yakalanmış bir plan kaydı (listeleme için — plan ağacı ayrı uçta)."""
+
+    id: int
+    captured_at: datetime
+    source: str
+    source_label: str
+    duration_ms: float
+    query_text: str
+    queryid: str | None = None
+    # log_analyze kapalıyken plan gerçektir ama gerçek satır sayısı yoktur; sapma analizi
+    # o durumda yapılamaz ve arayüz bunu söylemek zorunda.
+    has_actual_rows: bool = False
+
+
+class CapturedPlanListOut(BaseModel):
+    instance_id: int
+    plans: list[CapturedPlanOut] = []
+    # Hiç plan yoksa NEDEN yok — boş liste gösterip susmak, kullanıcıyı "özellik bozuk mu"
+    # sorusuyla baş başa bırakırdı.
+    unavailable_reason: str | None = None
+    # Yönetilen servislerde (Supabase, RDS) log erişimi hiç yok; orada ne yapılabileceği.
+    managed_service_guidance: str | None = None
 
 
 ExplainPlanNodeOut.model_rebuild()

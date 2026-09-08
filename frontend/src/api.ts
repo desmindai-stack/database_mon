@@ -250,32 +250,12 @@ export interface ActivitySnapshot {
   };
 }
 
-export interface ExplainPlanNode {
-  node_type: string;
-  relation_name: string | null;
-  alias: string | null;
-  startup_cost: number | null;
-  total_cost: number | null;
-  plan_rows: number | null;
-  plan_width: number | null;
-  actual_total_time: number | null;
-  actual_rows: number | null;
-  shared_hit_blocks: number | null;
-  shared_read_blocks: number | null;
-  insights: string[];
-  children: ExplainPlanNode[];
-}
-
-export interface ExplainResult {
-  query: string;
-  analyzed: boolean;
-  planning_time_ms: number | null;
-  execution_time_ms: number | null;
-  total_cost: number | null;
-  insights: string[];
-  plan: ExplainPlanNode | null;
-  raw_plan: unknown[];
-}
+// Elle yazılmıştı; Faz 26'da üretilen şemadan TÜRETİLDİ. Elle yazılan hâli backend'e eklenen
+// `source` / `source_caveat` / `captured_at` alanlarını bilmiyordu ve arayüz bu alanlara
+// eriştiğinde derleme hatası veriyordu — Faz 24'te `InstanceDependencies` ile yaşanan
+// senaryonun aynısı, tek farkı bu sefer sessizce değil derlemede patlaması.
+export type ExplainPlanNode = Gen["ExplainPlanNodeOut"];
+export type ExplainResult = Gen["ExplainOut"];
 
 export interface QueryHistoryPoint {
   collected_at: string;
@@ -362,6 +342,10 @@ export interface SlowQueryAvailability {
  * güncel kalıyor. Önceki elle yazılmış hâli Faz 23'te eklenen iki alanı içermiyordu.
  */
 export type InstanceDependencies = Gen["InstanceDependenciesOut"];
+
+// --- Yakalanan planlar (Faz 26 İŞ 1) ---
+export type CapturedPlan = Gen["CapturedPlanOut"];
+export type CapturedPlanList = Gen["CapturedPlanListOut"];
 
 // --- Veritabanı yükü / bekleme analizi (Faz 25) ---
 //
@@ -1399,6 +1383,15 @@ export const api = {
     request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
   getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
+  /** auto_explain ile GERÇEK çalıştırmadan yakalanmış planlar (Faz 26 İŞ 1). */
+  getCapturedPlans: (id: number, queryid?: string, limit = 20) =>
+    request<CapturedPlanList>(
+      `/api/queries/${id}/captured-plans?limit=${limit}` +
+        (queryid ? `&queryid=${encodeURIComponent(queryid)}` : ""),
+    ),
+  /** Yakalanmış tek planın ağacı — canlı EXPLAIN ile AYNI yapıda döner. */
+  getCapturedPlan: (id: number, planId: number) =>
+    request<ExplainResult>(`/api/queries/${id}/captured-plans/${planId}`),
   /** Veritabanı yükü (AAS), bekleme kategorisine göre kırılmış (Faz 25 İŞ 2). */
   getDatabaseLoad: (id: number, hours = 1) =>
     request<DatabaseLoad>(`/api/instances/${id}/database-load?hours=${hours}`),

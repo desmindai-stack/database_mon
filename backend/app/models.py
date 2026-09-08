@@ -779,3 +779,46 @@ class WaitQuerySignature(Base):
     query_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CapturedPlan(Base):
+    """auto_explain ile GERÇEK çalıştırmadan yakalanan sorgu planı (Faz 26 İŞ 1).
+
+    Sonradan alınan EXPLAIN, sorgunun yavaş çalıştığı andaki planı GÖSTERMEZ: parametre
+    bilinmediği için `NULL` konur ve planlayıcı bambaşka bir plan seçebilir, veri ve
+    istatistikler değişmiş olabilir. auto_explain ise gerçekten kullanılan planı yazar.
+
+    `source` alanı bu ayrımı taşıyor ve arayüzde gösteriliyor — iki kaynağın aynı ekranda
+    aynı görünmesi, tahmini bir planı ölçüm sanmaya yol açardı.
+    """
+
+    __tablename__ = "captured_plans"
+    __table_args__ = (
+        Index("ix_captured_plans_instance_captured", "instance_id", "captured_at"),
+        # Aynı planın tekrar tekrar yazılmasını engelleyen anahtar: log penceresi her çekimde
+        # örtüşüyor (son N satır okunuyor), yani aynı satırlar birden çok kez görülüyor.
+        UniqueConstraint(
+            "instance_id", "captured_at", "duration_ms", "query_fingerprint",
+            name="uq_captured_plan_occurrence",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # auto_explain | manual_analyze | manual_estimate
+    source: Mapped[str] = mapped_column(String(24), nullable=False, default="auto_explain")
+    duration_ms: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Normalleştirilmiş sorgu metninin kısa özeti — pg_stat_statements kaydıyla eşleştirmede
+    # ve tekrar tespitinde kullanılıyor. auto_explain log'u queryid yazmadığı için eşleştirme
+    # metin üzerinden yapılmak zorunda (bkz. services/auto_explain.py).
+    query_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # pg_stat_statements queryid'si eşleştirilebildiyse; eşleşme kesin olmadığı için boş
+    # kalabilir ve bu bir hata değil — plan tek başına da değerli.
+    queryid: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    # log_analyze kapalıyken plan gerçektir ama GERÇEK SATIR SAYISI yoktur; tahmini/gerçek
+    # sapma analizi (İŞ 2) o durumda yapılamaz ve kullanıcıya öyle söylenir.
+    has_actual_rows: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    plan_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

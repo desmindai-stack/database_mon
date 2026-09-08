@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # izlenen sunucuya gereksiz yük bindirir.
     wait_sampling_enabled: bool = True
     wait_sample_interval_seconds: int = 1
+    # Plan yakalama (auto_explain) — Faz 26 İŞ 1. Log çekimi host-agent üzerinden HTTP ile
+    # yapılıyor, hedef veritabanına hiç bağlanılmıyor. 5 dakika: auto_explain eşiği genelde
+    # saniyeler mertebesinde olduğu için daha sık çekmenin bir kazancı yok, üstelik her çekim
+    # log'un son N satırını yeniden okuyor.
+    plan_capture_enabled: bool = True
+    plan_capture_interval_seconds: int = 300
     db_statement_timeout_seconds: int = 120
     dashboard_refresh_interval_seconds: int = 60
     api_host: str = "0.0.0.0"
