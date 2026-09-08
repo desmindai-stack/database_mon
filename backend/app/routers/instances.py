@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
@@ -14,6 +14,7 @@ from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
 from app.models import (
     AlertEvent,
     AlertRule,
+    DeadlockEvent,
     Instance,
     MetricRollupDaily,
     MetricSample,
@@ -24,7 +25,10 @@ from app.models import (
 )
 from app.schemas import (
     ActivityOut,
+    BlockingEpisodeOut,
+    BlockingHistoryOut,
     BlockingTreeOut,
+    DeadlockEventOut,
     ClusterHealthOut,
     ClusterLogsOut,
     ConnectionTestResult,
@@ -51,6 +55,7 @@ from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
 from app.services.advice import advice_to_dict
 from app.services.blocking import build_blocking_tree, tree_to_dict
+from app.services.blocking_history import recent_episodes
 from app.services.collection import connection_target_for
 from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
@@ -599,6 +604,98 @@ async def get_blocking_tree(
         advice=advice_to_dict(advice) if advice else None,
         **payload,
     )
+
+
+@router.get("/{instance_id}/blocking-history", response_model=BlockingHistoryOut)
+async def get_blocking_history(
+    instance_id: int,
+    hours: int = Query(default=168, ge=1, le=720),
+    limit: int = Query(default=50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> BlockingHistoryOut:
+    """Geçmiş bloklama olayları ve deadlock'lar (Faz 26 İŞ 3).
+
+    Canlı ağaç "şu anda kim kimi blokluyor" sorusunu cevaplıyor; bu uç "dün gece 03:14'te ne
+    oldu" sorusunu. En kötü olaylar kimsenin ekrana bakmadığı saatlerde yaşanıyor ve sabah
+    geriye kalan tek şey "gece sistem yavaştı" cümlesi oluyordu.
+
+    Deadlock'ta KURBAN ve KAZANAN sorgular birlikte dönüyor: yalnızca kurbanı göstermek
+    yarım teşhistir — kurbanın "suçu" genelde yoktur, döngüyü oluşturan kilit sırası
+    kazananındır ve düzeltme orada yapılır.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+
+    end = datetime.now(UTC)
+    start = end - timedelta(hours=hours)
+    episodes = await recent_episodes(db, [instance_id], start, end, limit=limit)
+    deadlocks = (
+        await db.execute(
+            select(DeadlockEvent)
+            .where(
+                DeadlockEvent.instance_id == instance_id,
+                DeadlockEvent.detected_at >= start,
+                DeadlockEvent.detected_at <= end,
+            )
+            .order_by(DeadlockEvent.detected_at.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    out = BlockingHistoryOut(
+        instance_id=instance_id,
+        episodes=[
+            BlockingEpisodeOut(
+                id=e.id,
+                started_at=e.started_at,
+                ended_at=e.ended_at,
+                duration_seconds=e.duration_seconds,
+                root_pid=e.root_pid,
+                root_query=e.root_query,
+                root_username=e.root_username,
+                root_application=e.root_application,
+                root_was_idle=e.root_was_idle,
+                max_blocked_sessions=e.max_blocked_sessions,
+                max_chain_depth=e.max_chain_depth,
+                lock_object=e.lock_object,
+            )
+            for e in episodes
+        ],
+        deadlocks=[
+            DeadlockEventOut(
+                id=d.id,
+                detected_at=d.detected_at,
+                source=d.source,
+                victim_pid=d.victim_pid,
+                victim_query=d.victim_query,
+                winner_pid=d.winner_pid,
+                winner_query=d.winner_query,
+                participants=d.participants,
+            )
+            for d in deadlocks
+        ],
+    )
+    if not out.episodes and not out.deadlocks:
+        # "Olay olmadı" ile "olay ölçülmedi" farklı şeyler; ikincisini sessizce boş liste
+        # göstermek, kullanıcıya yanlış bir güvence verirdi.
+        if not settings.wait_sampling_enabled:
+            out.unavailable_reason = (
+                "Bekleme örnekleyicisi kapalı (WAIT_SAMPLING_ENABLED=false). Bloklama olayları "
+                "örnekleme sırasında tespit ediliyor; kapalıyken hiçbir olay kaydedilmez. Bu, "
+                "'bloklama olmadı' anlamına GELMEZ."
+            )
+        elif instance.engine == "mongodb":
+            out.unavailable_reason = (
+                "MongoDB'de kilit bekleme zinciri ve deadlock kaydı bu şekilde toplanmıyor."
+            )
+        else:
+            out.unavailable_reason = (
+                f"Son {hours} saatte kayda değer bloklama olayı ya da deadlock görülmedi. "
+                "Kısa süreli kilit beklemeleri (5 saniyenin altı) bilerek kaydedilmiyor — "
+                "kilit beklemesi veritabanının normal çalışmasının parçası."
+            )
+    return out
 
 
 @router.get("/{instance_id}/database-load", response_model=DatabaseLoadOut)

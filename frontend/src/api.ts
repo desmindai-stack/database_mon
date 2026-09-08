@@ -336,6 +336,9 @@ export type CapturedPlanList = Gen["CapturedPlanListOut"];
 // --- Blocking hiyerarşisi (Faz 26 İŞ 3) ---
 export type BlockingNode = Gen["BlockingNodeOut"];
 export type BlockingTree = Gen["BlockingTreeOut"];
+export type BlockingEpisode = Gen["BlockingEpisodeOut"];
+export type DeadlockEvent = Gen["DeadlockEventOut"];
+export type BlockingHistory = Gen["BlockingHistoryOut"];
 
 // --- Veritabanı yükü / bekleme analizi (Faz 25) ---
 //
@@ -1375,6 +1378,10 @@ export const api = {
   getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
   /** Kim kimi blokluyor — zincir hâlinde (Faz 26 İŞ 3). Canlı sorgu, periyodik değil. */
   getBlockingTree: (id: number) => request<BlockingTree>(`/api/instances/${id}/blocking`),
+  /** Geçmiş bloklama olayları ve deadlock'lar (Faz 26 İŞ 3). Canlı ağaç "şu anda" sorusunu,
+   *  bu "dün gece 03:14'te ne oldu" sorusunu cevaplıyor. */
+  getBlockingHistory: (id: number, hours = 168) =>
+    request<BlockingHistory>(`/api/instances/${id}/blocking-history?hours=${hours}`),
   /** auto_explain ile GERÇEK çalıştırmadan yakalanmış planlar (Faz 26 İŞ 1). */
   getCapturedPlans: (id: number, queryid?: string, limit = 20) =>
     request<CapturedPlanList>(

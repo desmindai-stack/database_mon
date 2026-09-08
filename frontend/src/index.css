@@ -3691,3 +3691,36 @@ td code,
     margin-left: 0 !important;
   }
 }
+
+/* --- Deadlock listesi (Faz 26 İŞ 3) --------------------------------------- */
+/* Kurban ve kazanan GÖRSEL olarak da ayrılıyor, ama "kazanan" yeşil DEĞİL: döngüyü
+   oluşturan kilit sırası genelde kazananındır ve yeşil, onu masum gösterirdi. */
+
+.deadlock-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.deadlock-item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-3);
+}
+
+.deadlock-side {
+  margin-top: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 3px solid var(--border);
+}
+
+.deadlock-side.victim {
+  border-left-color: var(--danger, #ef4444);
+}
+
+.deadlock-side.winner {
+  border-left-color: var(--warn, #f59e0b);
+}

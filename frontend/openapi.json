@@ -1161,6 +1161,141 @@
         "title": "BlockingEdgeOut",
         "type": "object"
       },
+      "BlockingEpisodeOut": {
+        "description": "Geçmiş bir bloklama olayı (Faz 26 İŞ 3).",
+        "properties": {
+          "duration_seconds": {
+            "default": 0.0,
+            "title": "Duration Seconds",
+            "type": "number"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "lock_object": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lock Object"
+          },
+          "max_blocked_sessions": {
+            "default": 0,
+            "title": "Max Blocked Sessions",
+            "type": "integer"
+          },
+          "max_chain_depth": {
+            "default": 0,
+            "title": "Max Chain Depth",
+            "type": "integer"
+          },
+          "root_application": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Application"
+          },
+          "root_pid": {
+            "title": "Root Pid",
+            "type": "integer"
+          },
+          "root_query": {
+            "default": "",
+            "title": "Root Query",
+            "type": "string"
+          },
+          "root_username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Root Username"
+          },
+          "root_was_idle": {
+            "default": false,
+            "title": "Root Was Idle",
+            "type": "boolean"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "started_at",
+          "root_pid"
+        ],
+        "title": "BlockingEpisodeOut",
+        "type": "object"
+      },
+      "BlockingHistoryOut": {
+        "properties": {
+          "deadlocks": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DeadlockEventOut"
+            },
+            "title": "Deadlocks",
+            "type": "array"
+          },
+          "episodes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/BlockingEpisodeOut"
+            },
+            "title": "Episodes",
+            "type": "array"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "integer"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "instance_id"
+        ],
+        "title": "BlockingHistoryOut",
+        "type": "object"
+      },
       "BlockingNodeOut": {
         "description": "Bloklama ağacındaki tek oturum.",
         "properties": {
@@ -2871,6 +3006,68 @@
           "blocked_aas"
         ],
         "title": "DatabaseLoadPointOut",
+        "type": "object"
+      },
+      "DeadlockEventOut": {
+        "description": "Yakalanmış bir deadlock. Kurban VE kazanan sorgular birlikte veriliyor: yalnızca\nkurbanı göstermek yarım teşhistir, döngüyü oluşturan kilit sırası genelde kazananındır.",
+        "properties": {
+          "detected_at": {
+            "format": "date-time",
+            "title": "Detected At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "participants": {
+            "default": 2,
+            "title": "Participants",
+            "type": "integer"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "victim_pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Victim Pid"
+          },
+          "victim_query": {
+            "default": "",
+            "title": "Victim Query",
+            "type": "string"
+          },
+          "winner_pid": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Winner Pid"
+          },
+          "winner_query": {
+            "default": "",
+            "title": "Winner Query",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "detected_at",
+          "source"
+        ],
+        "title": "DeadlockEventOut",
         "type": "object"
       },
       "DownNodeOut": {
@@ -11703,6 +11900,78 @@
           }
         ],
         "summary": "Get Blocking Tree",
+        "tags": [
+          "instances"
+        ]
+      }
+    },
+    "/api/instances/{instance_id}/blocking-history": {
+      "get": {
+        "description": "Geçmiş bloklama olayları ve deadlock'lar (Faz 26 İŞ 3).\n\nCanlı ağaç \"şu anda kim kimi blokluyor\" sorusunu cevaplıyor; bu uç \"dün gece 03:14'te ne\noldu\" sorusunu. En kötü olaylar kimsenin ekrana bakmadığı saatlerde yaşanıyor ve sabah\ngeriye kalan tek şey \"gece sistem yavaştı\" cümlesi oluyordu.\n\nDeadlock'ta KURBAN ve KAZANAN sorgular birlikte dönüyor: yalnızca kurbanı göstermek\nyarım teşhistir — kurbanın \"suçu\" genelde yoktur, döngüyü oluşturan kilit sırası\nkazananındır ve düzeltme orada yapılır.",
+        "operationId": "get_blocking_history_api_instances__instance_id__blocking_history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockingHistoryOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Blocking History",
         "tags": [
           "instances"
         ]

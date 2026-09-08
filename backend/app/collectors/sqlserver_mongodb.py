@@ -11,6 +11,7 @@ from app.collectors.base import (
     classify_connection_error,
 )
 from app.domain.waits import classify_sqlserver_wait
+from app.services.deadlocks import SQLSERVER_DEADLOCK_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +481,25 @@ class SqlServerCollector(BaseCollector):
                 }
             )
         return out
+
+    async def collect_deadlocks(self, limit: int = 20) -> list[dict[str, Any]]:
+        """system_health halka tamponundaki deadlock raporları (Faz 26 İŞ 3).
+
+        Deadlock ANLIK bir olaydır: veritabanı döngüyü kırar ve bir tarafı iptal eder; canlı
+        ekranda hiçbir izi kalmaz. SQL Server bu olayları `system_health` genişletilmiş olay
+        oturumunda tutuyor — 2012+ ile VARSAYILAN OLARAK açık, ek yapılandırma gerektirmiyor.
+
+        Halka tamponu döngüsel: eski olaylar zamanla düşüyor. Bu yüzden periyodik olarak
+        okunup kalıcı tabloya yazılıyor.
+        """
+        conn = await self._connect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(SQLSERVER_DEADLOCK_SQL.format(limit=int(limit)))
+                columns = [c[0] for c in cur.description]
+                return [dict(zip(columns, row)) for row in await cur.fetchall()]
+        finally:
+            await conn.close()
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()

@@ -1813,6 +1813,48 @@ class BlockingNodeOut(BaseModel):
 BlockingNodeOut.model_rebuild()
 
 
+class BlockingEpisodeOut(BaseModel):
+    """Geçmiş bir bloklama olayı (Faz 26 İŞ 3)."""
+
+    id: int
+    started_at: datetime
+    # Sürerken None. "Hâlâ devam ediyor" ayrı bir bayrakla değil bu alanla temsil ediliyor.
+    ended_at: datetime | None = None
+    duration_seconds: float = 0.0
+    root_pid: int
+    root_query: str = ""
+    root_username: str | None = None
+    root_application: str | None = None
+    # Kök engelleyici sorgu ÇALIŞTIRMIYOR muydu — raporun en değerli ayrımı: bu durumda
+    # sorun veritabanında değil uygulamadadır.
+    root_was_idle: bool = False
+    max_blocked_sessions: int = 0
+    max_chain_depth: int = 0
+    lock_object: str | None = None
+
+
+class DeadlockEventOut(BaseModel):
+    """Yakalanmış bir deadlock. Kurban VE kazanan sorgular birlikte veriliyor: yalnızca
+    kurbanı göstermek yarım teşhistir, döngüyü oluşturan kilit sırası genelde kazananındır."""
+
+    id: int
+    detected_at: datetime
+    source: str
+    victim_pid: int | None = None
+    victim_query: str = ""
+    winner_pid: int | None = None
+    winner_query: str = ""
+    participants: int = 2
+
+
+class BlockingHistoryOut(BaseModel):
+    instance_id: int
+    episodes: list[BlockingEpisodeOut] = []
+    deadlocks: list[DeadlockEventOut] = []
+    # Hiç kayıt yoksa NEDEN yok — "bloklama olmadı" ile "bloklama ölçülmedi" farklı şeyler.
+    unavailable_reason: str | None = None
+
+
 class BlockingTreeOut(BaseModel):
     instance_id: int
     collected_at: datetime

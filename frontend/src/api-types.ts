@@ -754,6 +754,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{instance_id}/blocking-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Blocking History
+         * @description Geçmiş bloklama olayları ve deadlock'lar (Faz 26 İŞ 3).
+         *
+         *     Canlı ağaç "şu anda kim kimi blokluyor" sorusunu cevaplıyor; bu uç "dün gece 03:14'te ne
+         *     oldu" sorusunu. En kötü olaylar kimsenin ekrana bakmadığı saatlerde yaşanıyor ve sabah
+         *     geriye kalan tek şey "gece sistem yavaştı" cümlesi oluyordu.
+         *
+         *     Deadlock'ta KURBAN ve KAZANAN sorgular birlikte dönüyor: yalnızca kurbanı göstermek
+         *     yarım teşhistir — kurbanın "suçu" genelde yoktur, döngüyü oluşturan kilit sırası
+         *     kazananındır ve düzeltme orada yapılır.
+         */
+        get: operations["get_blocking_history_api_instances__instance_id__blocking_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/{instance_id}/cluster-health": {
         parameters: {
             query?: never;
@@ -2054,6 +2082,71 @@ export interface components {
             wait_event_type: string | null;
         };
         /**
+         * BlockingEpisodeOut
+         * @description Geçmiş bir bloklama olayı (Faz 26 İŞ 3).
+         */
+        BlockingEpisodeOut: {
+            /**
+             * Duration Seconds
+             * @default 0
+             */
+            duration_seconds: number;
+            /** Ended At */
+            ended_at?: string | null;
+            /** Id */
+            id: number;
+            /** Lock Object */
+            lock_object?: string | null;
+            /**
+             * Max Blocked Sessions
+             * @default 0
+             */
+            max_blocked_sessions: number;
+            /**
+             * Max Chain Depth
+             * @default 0
+             */
+            max_chain_depth: number;
+            /** Root Application */
+            root_application?: string | null;
+            /** Root Pid */
+            root_pid: number;
+            /**
+             * Root Query
+             * @default
+             */
+            root_query: string;
+            /** Root Username */
+            root_username?: string | null;
+            /**
+             * Root Was Idle
+             * @default false
+             */
+            root_was_idle: boolean;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+        };
+        /** BlockingHistoryOut */
+        BlockingHistoryOut: {
+            /**
+             * Deadlocks
+             * @default []
+             */
+            deadlocks: components["schemas"]["DeadlockEventOut"][];
+            /**
+             * Episodes
+             * @default []
+             */
+            episodes: components["schemas"]["BlockingEpisodeOut"][];
+            /** Instance Id */
+            instance_id: number;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+        };
+        /**
          * BlockingNodeOut
          * @description Bloklama ağacındaki tek oturum.
          */
@@ -2708,6 +2801,41 @@ export interface components {
             };
             /** Total Aas */
             total_aas: number;
+        };
+        /**
+         * DeadlockEventOut
+         * @description Yakalanmış bir deadlock. Kurban VE kazanan sorgular birlikte veriliyor: yalnızca
+         *     kurbanı göstermek yarım teşhistir, döngüyü oluşturan kilit sırası genelde kazananındır.
+         */
+        DeadlockEventOut: {
+            /**
+             * Detected At
+             * Format: date-time
+             */
+            detected_at: string;
+            /** Id */
+            id: number;
+            /**
+             * Participants
+             * @default 2
+             */
+            participants: number;
+            /** Source */
+            source: string;
+            /** Victim Pid */
+            victim_pid?: number | null;
+            /**
+             * Victim Query
+             * @default
+             */
+            victim_query: string;
+            /** Winner Pid */
+            winner_pid?: number | null;
+            /**
+             * Winner Query
+             * @default
+             */
+            winner_query: string;
         };
         /** DownNodeOut */
         DownNodeOut: {
@@ -6679,6 +6807,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BlockingTreeOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_blocking_history_api_instances__instance_id__blocking_history_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockingHistoryOut"];
                 };
             };
             /** @description Validation Error */

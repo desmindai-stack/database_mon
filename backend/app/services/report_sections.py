@@ -1555,6 +1555,38 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
 # --------------------------------------------------------------------------------------
 
 
+def _deadlock_facts(events) -> list[dict]:
+    """Deadlock bulgusunun sayısal özeti + taraf sorguları.
+
+    Sorgular kısaltılıyor: bulgu kartı bir teşhis özeti, tam sorgu metni değil. Tam metin
+    Bloklama sekmesindeki geçmiş listesinde duruyor.
+    """
+    latest = events[0]
+    facts = [
+        {"label": "Deadlock sayısı", "value": str(len(events)), "tone": "bad"},
+        {
+            "label": "Farklı desen",
+            "value": str(len({e.fingerprint for e in events})),
+            "tone": "neutral",
+        },
+    ]
+    if latest.victim_query:
+        facts.append(
+            {"label": "İptal edilen (kurban)", "value": _short_query(latest.victim_query), "tone": "bad"}
+        )
+    if latest.winner_query:
+        # Kazanan "iyi taraf" değil: döngüyü oluşturan kilit sırası genelde onundur.
+        facts.append(
+            {"label": "Devam eden (kazanan)", "value": _short_query(latest.winner_query), "tone": "neutral"}
+        )
+    return facts
+
+
+def _short_query(text: str, limit: int = 120) -> str:
+    collapsed = " ".join((text or "").split())
+    return collapsed if len(collapsed) <= limit else collapsed[: limit - 1] + "…"
+
+
 @register_section
 async def blocking_section(ctx: ReportContext) -> SectionResult:
     """Bloklama ve deadlock — dönem içinde kim kimi bekletti (Faz 26 İŞ 3).
@@ -1677,13 +1709,20 @@ async def blocking_section(ctx: ReportContext) -> SectionResult:
             )
         )
 
+    # KURBAN VE KAZANAN SORGULARI (Faz 26 İŞ 3c). Öncesinde yalnızca pid'ler vardı ve pid
+    # olaydan sonra hiçbir şey ifade etmiyor — süreç çoktan kapanmış oluyor. Teşhis için
+    # gereken şey SORGULAR: kurbanın "suçu" genelde yoktur, döngüyü oluşturan kilit sırası
+    # kazananındır ve düzeltme orada yapılır.
     deadlock_rows = [
         {
             "instance_id": event.instance_id,
             "detected_at": as_utc(event.detected_at).isoformat(),
             "victim_pid": event.victim_pid,
+            "victim_query": event.victim_query,
             "winner_pid": event.winner_pid,
+            "winner_query": event.winner_query,
             "participants": event.participants,
+            "source": event.source,
         }
         for event in deadlocks
     ]
@@ -1705,14 +1744,7 @@ async def blocking_section(ctx: ReportContext) -> SectionResult:
                     "threshold": 1,
                     "measured_at": as_utc(deadlocks[0].detected_at).isoformat(),
                 },
-                facts=[
-                    {"label": "Deadlock sayısı", "value": str(len(deadlocks)), "tone": "bad"},
-                    {
-                        "label": "Farklı desen",
-                        "value": str(len({e.fingerprint for e in deadlocks})),
-                        "tone": "neutral",
-                    },
-                ],
+                facts=_deadlock_facts(deadlocks),
                 recommendation=(
                     "Taraf sorguları aynı tabloları AYNI SIRADA kilitleyecek şekilde "
                     "düzenlenmeli; deadlock'ın çözümü yeniden deneme değil, sıra tutarlılığıdır."

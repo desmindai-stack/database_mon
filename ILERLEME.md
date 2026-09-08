@@ -6136,6 +6136,74 @@ hesaplanmış bir aralığı yapay olarak büyütmek ölçümü bozmak olurdu.
 çöküşü gerçekten yakaladığı doğrulandı. Ayrıca gürültülü serinin kendi geniş
 aralığının daraltılmadığı da test ediliyor.
 
+## Faz 26 — İŞ 3c: Bloklama işinin yarım kalan uçları
+
+Faz 26 İŞ 3 iki commit'te yapılmıştı (canlı ağaç, sonra geçmiş + deadlock).
+Gözden geçirince **üç uç açık kalmıştı** — üçü de "yazıldı ama bağlanmadı"
+cinsinden, yani test yeşil görünürken özellik çalışmıyordu.
+
+### 1. SQL Server deadlock toplama ÖLÜ KODDU
+
+`SQLSERVER_DEADLOCK_SQL` ve `parse_sqlserver_deadlock_xml` yazılmış ve test
+edilmişti ama **üretim kodunda hiçbir yerden çağrılmıyordu**. PostgreSQL
+deadlock'ları log çekiminden geliyordu; SQL Server tarafı sessizce hiç
+çalışmıyordu. Testler geçiyordu çünkü ayrıştırıcıyı doğrudan çağırıyorlardı.
+
+Bağlandı: `collect_deadlocks()` collector'a eklendi ve olay yakalama işine
+(5 dakikada bir) SQL Server dalı kondu.
+
+**İki motor, iki ayrı yol** ve bu koda yazıldı: PostgreSQL'de deadlock sunucu
+log'una yazılıyor ve host-agent üzerinden okunuyor; SQL Server'da log yok,
+olaylar `system_health` XE oturumunun halka tamponunda duruyor ve oraya
+SORGUYLA erişiliyor — agent gerekmiyor. Aynı işte toplanmalarının sebebi
+ikisinin de "geriye dönük olay yakalama" olması ve aynı seyrek aralığın ikisine
+de uyması.
+
+**Bir hata da yakalandı:** sorgu `DATEADD` ile zaman damgasını yerel saate
+çeviriyordu, ama XE zaman damgası **zaten UTC**. Sonuç UTC gibi saklanacaktı —
+saat farkı kadar kaymış deadlock kayıtları demek. Dönüşüm kaldırıldı.
+
+### 2. Kurban ve kazanan SORGULARI hiçbir yerde görünmüyordu
+
+Kullanıcının isteği açıktı: *"kurban ve kazanan sorguları göster."* Rapor
+yalnızca **pid** taşıyordu — ve pid olaydan sonra hiçbir şey ifade etmiyor,
+süreç çoktan kapanmış oluyor.
+
+Artık hem rapor bulgusunun `facts` alanında (kısaltılmış) hem de geçmiş
+listesinde (tam metin) görünüyor. Arayüzde kurban kırmızı, kazanan turuncu
+şeritle ayrılıyor — **kazanan yeşil DEĞİL**, çünkü döngüyü oluşturan kilit
+sırası genelde onundur ve yeşil onu masum gösterirdi.
+
+### 3. Toplanan geçmiş ekrandan görünmüyordu
+
+Veri birikiyordu ama tek çıkışı günlük rapordu. `GET
+/api/instances/{id}/blocking-history` eklendi ve Bloklama sekmesinin altına
+iki tablo kondu: geçmiş bloklama olayları (başlangıç, süre, etkilenen oturum,
+zincir derinliği, kök engelleyici — sessiz blok rozetiyle) ve deadlock'lar.
+
+Geçmiş **ayrı** yükleniyor: canlı ağaç 10 saniyede bir tazeleniyor, geçmiş ise
+nadiren değişiyor; ikisini birlikte çekmek 10 saniyede bir gereksiz sorgu
+demekti. Geçmiş alınamazsa canlı ağaç yine gösteriliyor — ek bilgi, ana
+işlevi düşürmemeli.
+
+Kayıt yoksa sebep yazılıyor ve **kısa beklemelerin bilerek kaydedilmediği**
+söyleniyor (5 saniyenin altı), yoksa kullanıcı "hiç mi olmadı" diye şüphelenir.
+
+### Yakalanan bir hata daha
+
+Yeni uç `timedelta` kullanıyordu ama import edilmemişti. **Tam test paketi
+yeşil geçti** — çünkü hiçbir test o ucu çağırmıyordu. Canlıda ilk istekte 500
+verirdi. Uç testleri yazılınca 8 test birden düştü ve hata görünür oldu.
+
+Bu, bu turun kendi dersi: *"yazıldı ve test edildi" ile "bağlandı ve çağrıldı"
+aynı şey değil.* Üç boşluğun üçü de bu ayrımın içine düşmüştü.
+
+**Testler:** `tests/test_blocking_history_api.py` (17 test) — geçmiş ucu,
+kurban/kazanan sorguları, zaman penceresi, instance kapsamı, boş durumun sebebi,
+SQL Server toplamasının GERÇEKTEN bağlı olduğu, XE zaman damgasının kaymadığı,
+bozuk tek bir XML'in turu düşürmediği. **`timedelta` importu kaldırıldığında 8
+test düşüyor.** Toplam 1320 test yeşil, 16 kritik tarayıcı testi yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

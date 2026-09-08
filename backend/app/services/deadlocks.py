@@ -205,11 +205,8 @@ def _winner(
 #: 2012+ ile VARSAYILAN OLARAK açıktır; ayrıca yapılandırma gerektirmiyor.
 SQLSERVER_DEADLOCK_SQL = """
 SELECT TOP ({limit})
-    CONVERT(VARCHAR(33), DATEADD(
-        ms,
-        DATEDIFF(ms, GETUTCDATE(), GETDATE()),
-        x.value('(@timestamp)[1]', 'datetime2')), 126) AS detected_at,
-    x.query('.') AS deadlock_xml
+    CONVERT(VARCHAR(33), x.value('(@timestamp)[1]', 'datetime2'), 126) AS detected_at,
+    CONVERT(NVARCHAR(MAX), x.query('.')) AS deadlock_xml
 FROM (
     SELECT CAST(target_data AS XML) AS td
     FROM sys.dm_xe_session_targets st
@@ -219,6 +216,42 @@ FROM (
 CROSS APPLY td.nodes('RingBufferTarget/event[@name="xml_deadlock_report"]') AS q(x)
 ORDER BY detected_at DESC
 """
+
+#: XE zaman damgası ZATEN UTC. İlk yazımda sorgu `DATEADD` ile yerel saate çeviriyordu ve
+#: sonuç UTC gibi saklanacaktı — saat farkı kadar kaymış deadlock kayıtları demek. Dönüşüm
+#: kaldırıldı; değer olduğu gibi UTC olarak okunuyor.
+_XE_TIMESTAMP_FORMATS = ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S")
+
+
+def parse_sqlserver_deadlock_rows(rows: list[dict]) -> list[DeadlockRecord]:
+    """`SQLSERVER_DEADLOCK_SQL` satırlarını kayda çevirir.
+
+    Bozuk tek bir XML tüm turu düşürmemeli: ayrıştırılamayan satır atlanıyor, diğerleri
+    işleniyor. system_health halka tamponu döngüsel olduğu için orada her zaman eski ve
+    yarım kalmış olaylar bulunabiliyor.
+    """
+    records: list[DeadlockRecord] = []
+    for row in rows:
+        xml_text = row.get("deadlock_xml")
+        if not xml_text:
+            continue
+        detected_at = _parse_xe_timestamp(row.get("detected_at"))
+        record = parse_sqlserver_deadlock_xml(str(xml_text), detected_at)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _parse_xe_timestamp(value) -> datetime:
+    if not value:
+        return datetime.now(UTC)
+    text = str(value).strip().rstrip("Z")
+    for fmt in _XE_TIMESTAMP_FORMATS:
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return datetime.now(UTC)
 
 
 def parse_sqlserver_deadlock_xml(xml_text: str, detected_at: datetime) -> DeadlockRecord | None:

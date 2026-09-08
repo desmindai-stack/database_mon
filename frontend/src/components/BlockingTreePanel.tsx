@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, BlockingNode, BlockingTree } from "../api";
+import { api, BlockingHistory, BlockingNode, BlockingTree } from "../api";
 import AdviceCard from "./AdviceCard";
 import { EmptyState, PageError, PageSkeleton } from "./PageState";
 
@@ -94,6 +94,9 @@ export default function BlockingTreePanel({ instanceId }: { instanceId: number }
   // HAM hata saklanıyor: PageError 500 ile ağ kopmasını ApiError.status üzerinden ayırıyor.
   const [error, setError] = useState<unknown>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  /** Geçmiş AYRI yükleniyor: canlı ağaç 10 saniyede bir tazeleniyor, geçmiş ise nadiren
+   *  değişiyor. İkisini birlikte çekmek, 10 saniyede bir gereksiz bir geçmiş sorgusu demekti. */
+  const [history, setHistory] = useState<BlockingHistory | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +117,22 @@ export default function BlockingTreePanel({ instanceId }: { instanceId: number }
       cancelled = true;
     };
   }, [instanceId, reloadKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getBlockingHistory(instanceId)
+      .then((data) => {
+        if (!cancelled) setHistory(data);
+      })
+      .catch(() => {
+        // Geçmiş bir EK bilgi: alınamazsa canlı ağaç yine gösterilmeli.
+        if (!cancelled) setHistory(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [instanceId]);
 
   // Bloklama ANLIK bir durumdur ve saniyeler içinde değişir; kullanıcının elle yenilemesi
   // gerekmesin diye periyodik tazeleniyor. 10 saniye: canlı hissettirecek kadar sık, hedef
@@ -217,6 +236,100 @@ export default function BlockingTreePanel({ instanceId }: { instanceId: number }
           )}
         </>
       )}
+
+      <HistorySection history={history} />
     </div>
+  );
+}
+
+/**
+ * GEÇMİŞ (Faz 26 İŞ 3). Canlı ağaç "şu anda kim kimi blokluyor" sorusunu cevaplıyor; burası
+ * "dün gece 03:14'te ne oldu" sorusunu. En kötü olaylar kimsenin ekrana bakmadığı saatlerde
+ * yaşanıyor ve sabah geriye kalan tek şey "gece sistem yavaştı" cümlesi oluyordu.
+ */
+function HistorySection({ history }: { history: BlockingHistory | null }) {
+  if (!history) return null;
+
+  if (history.unavailable_reason) {
+    return (
+      <div className="card">
+        <h3 className="chart-title">Geçmiş olaylar</h3>
+        <p className="muted-note">{history.unavailable_reason}</p>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {history.episodes.length > 0 && (
+        <div className="card">
+          <h3 className="chart-title">Geçmiş bloklama olayları (son 7 gün)</h3>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Başlangıç</th>
+                  <th>Süre</th>
+                  <th>Etkilenen</th>
+                  <th>Zincir</th>
+                  <th>Kök engelleyici</th>
+                </tr>
+              </thead>
+              <tbody>
+                {history.episodes.map((episode) => (
+                  <tr key={episode.id}>
+                    <td>{new Date(episode.started_at).toLocaleString("tr-TR")}</td>
+                    <td>{seconds(episode.duration_seconds)}</td>
+                    <td>
+                      <strong>{episode.max_blocked_sessions}</strong> oturum
+                    </td>
+                    <td>{episode.max_chain_depth}</td>
+                    <td>
+                      {/* SESSİZ BLOK AYRIMI en değerli bilgi: kök engelleyici sorgu
+                          çalıştırmıyorduysa sorun veritabanında değil uygulamadadır. */}
+                      {episode.root_was_idle && (
+                        <span className="blocking-badge idle">sorgu çalıştırmıyordu</span>
+                      )}{" "}
+                      <code>pid {episode.root_pid}</code>
+                      {episode.root_query && <pre className="query-text">{episode.root_query}</pre>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {history.deadlocks.length > 0 && (
+        <div className="card">
+          <h3 className="chart-title">Deadlock'lar (son 7 gün)</h3>
+          <p className="muted-note">
+            Deadlock anlık bir olaydır: veritabanı döngüyü kırıp bir tarafı iptal eder, canlı
+            ekranda hiçbir izi kalmaz. <strong>Kazanan "iyi taraf" değildir</strong> — döngüyü
+            oluşturan kilit sırası genelde onundur ve düzeltme orada yapılır.
+          </p>
+          <ul className="deadlock-list">
+            {history.deadlocks.map((event) => (
+              <li key={event.id} className="deadlock-item">
+                <div className="muted-note">
+                  {new Date(event.detected_at).toLocaleString("tr-TR")} — {event.participants} taraf
+                </div>
+                <div className="deadlock-side victim">
+                  <span className="blocking-badge root">iptal edildi (kurban)</span>
+                  {event.victim_pid != null && <code> pid {event.victim_pid}</code>}
+                  <pre className="query-text">{event.victim_query || "(sorgu metni yok)"}</pre>
+                </div>
+                <div className="deadlock-side winner">
+                  <span className="blocking-badge idle">devam etti (kazanan)</span>
+                  {event.winner_pid != null && <code> pid {event.winner_pid}</code>}
+                  <pre className="query-text">{event.winner_query || "(sorgu metni yok)"}</pre>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
   );
 }

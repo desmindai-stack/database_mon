@@ -34,7 +34,13 @@ from app.services.auto_explain import (
     parse_auto_explain_log,
 )
 from app.services.cluster_health import fetch_agent_logs
-from app.services.deadlocks import DeadlockRecord, parse_postgres_deadlocks
+from app.collectors.registry import get_collector
+from app.services.collection import connection_target_for
+from app.services.deadlocks import (
+    DeadlockRecord,
+    parse_postgres_deadlocks,
+    parse_sqlserver_deadlock_rows,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -213,6 +219,37 @@ async def store_deadlocks(
     return written
 
 
+async def capture_sqlserver_deadlocks(session: AsyncSession, instance: Instance) -> dict:
+    """SQL Server deadlock'larını system_health oturumundan toplar.
+
+    PostgreSQL'den FARKLI bir yol: orada deadlock sunucu log'una yazılıyor ve host-agent
+    üzerinden okunuyor. SQL Server'da log yok, olaylar `system_health` genişletilmiş olay
+    oturumunun halka tamponunda duruyor ve oraya SORGUYLA erişiliyor — yani host-agent
+    gerekmiyor, hedef veritabanına bağlanılıyor.
+
+    Halka tamponu DÖNGÜSEL: eski olaylar zamanla düşüyor. Periyodik okuma bu yüzden şart;
+    "gerektiğinde bakarız" demek, olayın kaybolmasından sonra bakmak demek.
+    """
+    outcome = {"found": 0, "written": 0, "error": None}
+    if instance.engine != str(DatabaseEngine.SQLSERVER):
+        outcome["error"] = "system_health yalnızca SQL Server için geçerli"
+        return outcome
+
+    collector = get_collector(DatabaseEngine(instance.engine), connection_target_for(instance))
+    try:
+        rows = await collector.collect_deadlocks()
+    except Exception as exc:
+        # XE oturumu kapalı olabilir ya da yetki yetmeyebilir. Toplamanın geri kalanını
+        # düşürmemeli: deadlock geçmişi bir ek yetenek.
+        outcome["error"] = f"deadlock okunamadı: {exc}"
+        return outcome
+
+    records = parse_sqlserver_deadlock_rows(rows)
+    outcome["found"] = len(records)
+    outcome["written"] = await store_deadlocks(session, instance.id, records)
+    return outcome
+
+
 async def capture_plans_tick() -> dict:
     """Zamanlayıcı turu: auto_explain açık olabilecek tüm PostgreSQL instance'ları."""
     if not settings.plan_capture_enabled:
@@ -223,11 +260,32 @@ async def capture_plans_tick() -> dict:
             await session.execute(
                 select(Instance).where(
                     Instance.enabled.is_(True),
-                    Instance.engine == str(DatabaseEngine.POSTGRESQL),
+                    Instance.engine.in_(
+                        [str(DatabaseEngine.POSTGRESQL), str(DatabaseEngine.SQLSERVER)]
+                    ),
                 )
             )
         ).scalars().all()
         for instance in instances:
+            # İKİ MOTOR, İKİ AYRI YOL. PostgreSQL'de planlar ve deadlock'lar sunucu log'undan
+            # (host-agent üzerinden) okunuyor; SQL Server'da deadlock'lar system_health
+            # oturumundan SORGUYLA alınıyor ve agent gerekmiyor. Aynı işte toplanmalarının
+            # sebebi ikisinin de "geriye dönük olay yakalama" olması ve aynı seyrek aralığın
+            # (5 dakika) ikisine de uygun düşmesi.
+            if instance.engine == str(DatabaseEngine.SQLSERVER):
+                totals["instances"] += 1
+                try:
+                    outcome = await capture_sqlserver_deadlocks(session, instance)
+                    totals["deadlocks"] += outcome["written"]
+                    if outcome["error"]:
+                        logger.debug(
+                            "SQL Server deadlock toplama atlandı (%s): %s",
+                            instance.name, outcome["error"],
+                        )
+                except Exception:
+                    logger.exception("Deadlock toplama başarısız (instance %s)", instance.name)
+                continue
+
             if not agent_configured(instance):
                 continue
             totals["instances"] += 1

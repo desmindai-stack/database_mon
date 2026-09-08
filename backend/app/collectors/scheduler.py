@@ -132,16 +132,18 @@ async def wait_sampling_tick() -> None:
 
 
 async def plan_capture_tick() -> None:
-    """Faz 26 İŞ 1: auto_explain planlarını host-agent log'undan toplar.
+    """Geriye dönük olay yakalama: auto_explain planları ve deadlock'lar (Faz 26 İŞ 1/3).
 
-    Hedef veritabanına HİÇ bağlanmıyor — yalnızca agent'a HTTP isteği. Bu yüzden izlenen
-    sunucuya ek sorgu yükü bindirmiyor.
+    PostgreSQL tarafında hedef veritabanına HİÇ bağlanılmıyor — yalnızca host-agent'a HTTP
+    isteği (planlar ve deadlock'lar aynı log çekiminden). SQL Server tarafında deadlock'lar
+    `system_health` oturumundan sorguyla alınıyor; orada log erişimi yok.
     """
     try:
         totals = await capture_plans_tick()
-        if totals.get("written"):
+        if totals.get("written") or totals.get("deadlocks"):
             logger.info(
-                "Plan yakalama: %s instance, %s yeni plan", totals["instances"], totals["written"]
+                "Olay yakalama: %s instance, %s yeni plan, %s yeni deadlock",
+                totals["instances"], totals["written"], totals.get("deadlocks", 0),
             )
     except Exception:
         logger.exception("Plan yakalama turu başarısız")
