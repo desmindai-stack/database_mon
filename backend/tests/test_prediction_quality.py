@@ -290,3 +290,98 @@ def test_the_method_label_names_what_was_actually_applied():
     result = forecast_with_seasonality(_daily(values), BASE + timedelta(days=27))
     assert "doğrusal regresyon" in result.method
     assert "aykırı" in result.method, "atılan ölçümler yöntem etiketinde görünmeli"
+
+
+# --- ETA aralığı asla tek noktaya çökmez (Faz 20 İŞ 3'ün korunması) ------------------------
+
+
+def test_a_perfect_fit_still_produces_a_range_not_a_single_date():
+    """KUSURSUZ UYUM KESİNLİK DEĞİLDİR.
+
+    Eğim belirsizliği regresyonun ARTIKLARINDAN hesaplanıyor. Veri kusursuz doğrusalsa
+    artıklar sıfır, belirsizlik sıfır ve aralık tek noktaya çöküyordu: "39-39 gün". Bu, Faz
+    20 İŞ 3'ün tam olarak yasakladığı şey — sahip olmadığımız bir kesinliği iddia etmek.
+
+    Geçmişin kusursuz uyması GELECEĞİ garanti etmez: yük deseni değişebilir, yeni bir iş
+    eklenebilir, temizlik çalışabilir.
+    """
+    from app.services.forecasting import (
+        MIN_ETA_RELATIVE_SPREAD,
+        SeasonalPoint,
+        eta_days_range,
+        forecast_with_seasonality,
+    )
+
+    base = datetime(2026, 8, 20, tzinfo=UTC)
+    # Kusursuz doğrusal: her gün tam olarak 500 MB.
+    points = [
+        SeasonalPoint(base + timedelta(days=i), 10_000_000_000 + i * 500_000_000)
+        for i in range(20)
+    ]
+    forecast = forecast_with_seasonality(points, base + timedelta(days=21))
+
+    fastest, slowest = eta_days_range(5_000_000_000, forecast)
+    assert fastest is not None and slowest is not None
+    assert fastest < slowest, "aralık tek noktaya çökmüş — kesinlik iddia ediliyor"
+
+    center = (fastest + slowest) / 2
+    assert (slowest - fastest) >= center * MIN_ETA_RELATIVE_SPREAD * 0.99
+
+
+def test_a_genuinely_uncertain_series_keeps_its_own_wider_range():
+    """Taban YALNIZCA çökmüş aralıklara dokunuyor. Hesaplanmış geniş bir aralığı yapay
+    olarak daraltmak ya da büyütmek, ölçümü bozmak olurdu."""
+    import random
+
+    from app.services.forecasting import (
+        MIN_ETA_RELATIVE_SPREAD,
+        SeasonalPoint,
+        eta_days_range,
+        forecast_with_seasonality,
+    )
+
+    random.seed(7)
+    base = datetime(2026, 8, 20, tzinfo=UTC)
+    noisy = [
+        SeasonalPoint(
+            base + timedelta(days=i),
+            10_000_000_000 + i * 500_000_000 + random.uniform(-2e9, 2e9),
+        )
+        for i in range(20)
+    ]
+    forecast = forecast_with_seasonality(noisy, base + timedelta(days=21))
+    fastest, slowest = eta_days_range(5_000_000_000, forecast)
+    if fastest is None or slowest is None:
+        return  # eğim alt sınırı negatif — "en geç" bilinemez, ayrı ve doğru bir durum
+    center = (fastest + slowest) / 2
+    assert (slowest - fastest) > center * MIN_ETA_RELATIVE_SPREAD, "gerçek belirsizlik daraltılmış"
+
+
+def test_an_already_reached_threshold_stays_at_zero():
+    """Eşik zaten aşılmışsa "0-0 gün" doğru cevaptır; oraya yapay bir aralık koymak
+    saçma olurdu."""
+    from app.services.forecasting import (
+        SeasonalPoint,
+        eta_days_range,
+        forecast_with_seasonality,
+    )
+
+    base = datetime(2026, 8, 20, tzinfo=UTC)
+    points = [SeasonalPoint(base + timedelta(days=i), 100 + i) for i in range(10)]
+    forecast = forecast_with_seasonality(points, base + timedelta(days=11))
+    assert eta_days_range(-5, forecast) == (0.0, 0.0)
+
+
+def test_an_unknown_upper_bound_is_left_unknown():
+    """Eğimin alt sınırı sıfır/negatifse eşiğe hiç ulaşılmayabilir. Oraya uydurma bir üst
+    sınır yazmak, olmayan bir tarih vermek olurdu."""
+    from app.services.forecasting import ForecastResult, eta_days_range
+
+    flat = ForecastResult(
+        point=0.0, lower=0.0, upper=0.0, slope_per_day=0.0, r_squared=0.0, seasonality="none"
+    )
+    flat.slope_upper_per_day = 1.0
+    flat.slope_lower_per_day = 0.0
+    fastest, slowest = eta_days_range(100, flat)
+    assert fastest is not None
+    assert slowest is None

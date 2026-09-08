@@ -6096,6 +6096,46 @@ PG 18'in yeni vacuum süre sayaçları (`total_vacuum_time` vb.) bilerek
 eklenmedi: yeni metrik eklemek katalog + saklama + arayüz değişikliği demek ve
 İŞ 5 sürüm UYUMU işiydi. Gerekçe ve nasıl ekleneceği SORULAR.md'de.
 
+## Tahmin düzeltmesi — ETA aralığı tek noktaya çöküyordu
+
+Faz 26 İŞ 3c üzerinde çalışırken `test_every_prediction_records_how_it_was_produced`
+düştü. Değişikliklerim olmadan da düştüğünü doğruladım (stash ile) — yani
+**mevcut bir kusurdu**, benim eklediğim bir gerileme değil.
+
+**Belirti:** `assert 39.0 < 39.0` — tahminin "en erken" ve "en geç" günü aynı.
+
+**Kök neden:** eğim belirsizliği regresyonun ARTIKLARINDAN hesaplanıyor
+(`se_slope = sqrt(kalıntı varyansı / Sxx)`). Veri kusursuz doğrusalsa artıklar
+sıfır, belirsizlik sıfır, `slope_lower == slope_upper` ve aralık tek noktaya
+çöküyor.
+
+**Neden dün geçiyordu:** test verisi `date.today()`'e göre kuruluyor. x
+değerleri tarihten türetildiği için sayısal koşullanma günden güne değişiyor;
+bazı günlerde artık varyansı kayan noktada tam sıfıra inmiyor ve minik bir
+belirsizlik kalıyordu. Yani test **tesadüfen** geçiyordu, doğrulukla değil.
+
+**Neden bu bir ürün kusuru:** Faz 20 İŞ 3'ün açık kuralı "tek nokta yerine
+aralık sunulsun, tarih uydurmayalım"dı. "39-39 gün" tam olarak yasaklanan şey —
+sahip olmadığımız bir kesinliği iddia etmek. **Geçmişin kusursuz uyması geleceği
+garanti etmiyor:** yük deseni değişebilir, yeni bir iş eklenebilir, temizlik
+çalışabilir.
+
+**Düzeltme:** `MIN_ETA_RELATIVE_SPREAD = 0.10` — aralık en dar hâlinde merkezin
+±%5'i olacak şekilde genişletiliyor. Taban YALNIZCA çökmüş aralıklara dokunuyor:
+gerçek belirsizlik zaten tabandan genişse olduğu gibi bırakılıyor, çünkü
+hesaplanmış bir aralığı yapay olarak büyütmek ölçümü bozmak olurdu.
+
+İki uç durum korundu:
+
+- Eşik zaten aşılmışsa `(0, 0)` — oraya yapay aralık koymak saçma olurdu.
+- Eğimin alt sınırı sıfır/negatifse "en geç" **bilinmiyor** kalıyor (`None`),
+  çünkü o senaryoda eşiğe hiç ulaşılmayabilir. Genişletme merkez gerektirdiği
+  için bu duruma hiç dokunmuyor.
+
+**Testler:** 4 yeni test. **Taban kaldırıldığında kusursuz uyum testi düşüyor** —
+çöküşü gerçekten yakaladığı doğrulandı. Ayrıca gürültülü serinin kendi geniş
+aralığının daraltılmadığı da test ediliyor.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

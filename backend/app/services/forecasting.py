@@ -399,6 +399,18 @@ def forecast_with_seasonality(
     )
 
 
+#: ETA aralığının en dar hâli — merkezin ±%10'u.
+#:
+#: NEDEN GEREKLİ: eğim belirsizliği regresyonun ARTIKLARINDAN hesaplanıyor. Veri kusursuz
+#: doğrusalsa artıklar sıfır, belirsizlik sıfır, aralık da tek noktaya çöküyor: "39-39 gün".
+#: Bu, Faz 20 İŞ 3'ün tam olarak yasakladığı şey — sahip olmadığımız bir kesinliği iddia etmek.
+#:
+#: Geçmişin kusursuz uyması GELECEĞİ garanti etmiyor: yük deseni değişebilir, yeni bir iş
+#: eklenebilir, temizlik çalışabilir. Bu taban, "model geçmişe ne kadar iyi oturdu" ile
+#: "gelecek ne kadar öngörülebilir" arasındaki farkı temsil ediyor.
+MIN_ETA_RELATIVE_SPREAD = 0.10
+
+
 def eta_days_range(
     distance: float, forecast: ForecastResult
 ) -> tuple[float | None, float | None]:
@@ -411,12 +423,35 @@ def eta_days_range(
     Dönüş `(en_erken, en_geç)`. Eğimin alt sınırı sıfır veya negatifse "en geç" bilinemez
     (o senaryoda eşiğe hiç ulaşılmayabilir) — `None` dönüyor ve arayüz bunu "belirsiz" diye
     gösteriyor, uydurma bir üst sınır yazmıyor.
+
+    ARALIK ASLA TEK NOKTAYA ÇÖKMEZ: bkz. `MIN_ETA_RELATIVE_SPREAD`.
     """
     if distance <= 0:
         return (0.0, 0.0)
     fastest = distance / forecast.slope_upper_per_day if forecast.slope_upper_per_day > 0 else None
     slowest = distance / forecast.slope_lower_per_day if forecast.slope_lower_per_day > 0 else None
-    return (fastest, slowest)
+    return _widen_to_minimum(fastest, slowest)
+
+
+def _widen_to_minimum(
+    fastest: float | None, slowest: float | None
+) -> tuple[float | None, float | None]:
+    """Aralık taban genişliğin altındaysa merkez etrafında genişletir.
+
+    Yalnızca ÇÖKMÜŞ aralıklara dokunuyor: gerçek belirsizlik zaten tabandan genişse olduğu
+    gibi bırakılıyor — hesaplanmış bir aralığı yapay olarak büyütmek, ölçümü bozmak olurdu.
+    """
+    if fastest is None or slowest is None:
+        # Üst uç bilinmiyorsa genişletecek bir merkez de yok; "belirsiz" olarak kalıyor.
+        return (fastest, slowest)
+    center = (fastest + slowest) / 2
+    if center <= 0:
+        return (fastest, slowest)
+    minimum_spread = center * MIN_ETA_RELATIVE_SPREAD
+    if (slowest - fastest) >= minimum_spread:
+        return (fastest, slowest)
+    half = minimum_spread / 2
+    return (max(0.0, center - half), center + half)
 
 
 @dataclass
