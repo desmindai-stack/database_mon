@@ -9,7 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import SessionLocal
 from app.models import (
     ActiveSessionMinute,
+    BlockingEpisode,
     CapturedPlan,
+    DeadlockEvent,
     AlertEvent,
     AppSetting,
     MetricSample,
@@ -91,6 +93,11 @@ async def run_retention_cleanup() -> int:
             # Faz 26 İŞ 1: yakalanan planlar. Plan JSON'u satır başına kilobaytlar tutuyor —
             # saklama politikasının dışında bırakmak, tabloyu en hızlı büyüyen tablo yapardı.
             (CapturedPlan, CapturedPlan.captured_at),
+            # Faz 26 İŞ 3: bloklama olayları ve deadlock'lar. Hacimleri küçük ama sınırsız
+            # değil; saklama politikasının dışında kalan her tablo eninde sonunda en büyük
+            # tablo oluyor (slow_query_samples dersi).
+            (BlockingEpisode, BlockingEpisode.started_at),
+            (DeadlockEvent, DeadlockEvent.detected_at),
         ):
             result = await session.execute(delete(model).where(ts_column < cutoff))
             total_deleted += result.rowcount or 0

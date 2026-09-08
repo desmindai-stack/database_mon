@@ -262,6 +262,8 @@ _COMPOSITE_INDEXES = (
     ("ix_wait_sample_minutes_instance_minute", "wait_sample_minutes", "instance_id, minute"),
     ("ix_active_session_minutes_instance_minute", "active_session_minutes", "instance_id, minute"),
     ("ix_captured_plans_instance_captured", "captured_plans", "instance_id, captured_at"),
+    ("ix_blocking_episodes_instance_started", "blocking_episodes", "instance_id, started_at"),
+    ("ix_deadlock_events_instance_detected", "deadlock_events", "instance_id, detected_at"),
 )
 
 

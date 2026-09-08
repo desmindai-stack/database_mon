@@ -37,6 +37,9 @@ from app.config import settings
 from app.database import SessionLocal
 from app.domain.engines import DatabaseEngine
 from app.models import ActiveSessionMinute, Instance, WaitQuerySignature, WaitSampleMinute
+from app.services.blocking import build_blocking_tree
+from app.services.blocking_history import close_all as close_open_episodes
+from app.services.blocking_history import record_tree
 from app.services.collection import connection_target_for
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,12 @@ INSTANCE_CACHE_TTL_SECONDS = 30
 #: Arka arkaya bu kadar başarısız turdan sonra hata log'u seyreltilir. Erişilemeyen bir sunucu
 #: saniyede bir log satırı üretirse log'lar kullanılamaz hale gelir.
 FAILURE_LOG_EVERY = 60
+
+#: Bloklama kontrolü örnekleyicinin KALICI bağlantısı üzerinde, ama çok daha seyrek.
+#: Ayrı bir iş yapıp 10 saniyede bir yeni bağlantı açmak, ölçmeye çalıştığımız yükün
+#: kendisini üretirdi. 10 saniye: bir bloklama olayının başlangıcını kaçırmayacak kadar
+#: sık, `pg_locks` taramasını sürekli tekrarlamayacak kadar seyrek.
+BLOCKING_CHECK_INTERVAL_SECONDS = 10.0
 
 
 def minute_floor(moment: datetime) -> datetime:
@@ -80,6 +89,8 @@ class _InstanceSampler:
     conn: SamplingConnection | None = None
     consecutive_failures: int = 0
     has_query_id: bool = True
+    #: Son bloklama kontrolü — örnekleme her saniye, bu kontrol 10 saniyede bir.
+    last_blocking_check: datetime | None = None
 
 
 # Süreç ömrü boyunca yaşayan durum. Modül seviyesinde: `_previous_state` (collection.py) ile
@@ -319,19 +330,57 @@ async def sampling_tick() -> None:
         # (hata zaten _sample_instance içinde yakalanıyor, bu ikinci savunma).
         await asyncio.gather(*(_sample_instance(i, now) for i in instances), return_exceptions=True)
 
-    if _pending_flush:
+    due_for_blocking = [
+        instance
+        for instance in instances
+        if _blocking_check_due(_samplers.get(instance.id), now)
+    ]
+    if _pending_flush or due_for_blocking:
         async with SessionLocal() as session:
             written = await flush_completed_buckets(session)
+            for instance in due_for_blocking:
+                await _check_blocking(session, instance, now)
             await session.commit()
             if written:
                 logger.debug("Bekleme örnekleri yazıldı: %s dakika kovası", written)
 
 
+def _blocking_check_due(sampler: _InstanceSampler | None, now: datetime) -> bool:
+    if sampler is None or sampler.conn is None:
+        return False
+    last = sampler.last_blocking_check
+    return last is None or (now - last).total_seconds() >= BLOCKING_CHECK_INTERVAL_SECONDS
+
+
+async def _check_blocking(session: AsyncSession, instance: Instance, now: datetime) -> None:
+    """Bloklama fotoğrafı çekip geçmişe işler (Faz 26 İŞ 3).
+
+    Örnekleyicinin KALICI bağlantısı kullanılıyor. Hata durumunda sessizce geçiliyor:
+    bloklama geçmişi bir ek yetenek, bekleme örneklemesini düşürmesi kabul edilemez.
+    """
+    sampler = _samplers.get(instance.id)
+    if sampler is None or sampler.conn is None:
+        return
+    sampler.last_blocking_check = now
+    try:
+        rows = await sampler.collector.collect_blocking(conn=sampler.conn.raw)
+    except Exception as exc:
+        logger.debug("Bloklama kontrolü atlandı (instance %s): %s", instance.name, exc)
+        return
+    try:
+        await record_tree(session, instance.id, build_blocking_tree(rows), now=now)
+    except Exception:
+        logger.exception("Bloklama geçmişi yazılamadı (instance %s)", instance.name)
+
+
 async def shutdown_sampling() -> None:
-    """Bağlantıları kapatır ve yarım kalmış dakikaları yazar."""
+    """Bağlantıları kapatır, yarım kalmış dakikaları ve açık bloklama olaylarını yazar."""
     async with SessionLocal() as session:
         try:
             await flush_all_buckets(session)
+            # Açık bloklama olayları kapatılmazsa `ended_at` sonsuza kadar NULL kalır ve olay
+            # raporlarda "hâlâ sürüyor" gibi görünür.
+            await close_open_episodes(session)
             await session.commit()
         except Exception:
             logger.exception("Kapanışta bekleme kovaları yazılamadı")

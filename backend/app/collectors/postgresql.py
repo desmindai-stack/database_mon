@@ -536,7 +536,9 @@ class PostgreSQLCollector(BaseCollector):
             )
         return {"sessions": sessions, "blocked": blocked, "has_query_id": has_query_id}
 
-    async def collect_blocking(self, limit: int = 200) -> list[dict[str, Any]]:
+    async def collect_blocking(
+        self, limit: int = 200, conn: asyncpg.Connection | None = None
+    ) -> list[dict[str, Any]]:
         """Bloklama ağacını kurmak için gereken oturum ayrıntısı (Faz 26 İŞ 3).
 
         `collect_activity`'den ayrı bir sorgu, çünkü sorulan soru farklı ve daha pahalı:
@@ -548,7 +550,12 @@ class PostgreSQLCollector(BaseCollector):
         `idle in transaction` oturumları BİLEREK dahil: hiçbir sorgu çalıştırmıyorlar ama
         açık transaction'larıyla kilit tutuyorlar — sessiz bloklamanın kaynağı bu.
         """
-        conn = await self._connect()
+        # `conn` verilmişse KALICI bağlantı üzerinden çalışıyoruz (bekleme örnekleyicisinin
+        # bağlantısı). Geçmiş kaydı için 10 saniyede bir yeni bağlantı açmak, ölçmeye
+        # çalıştığımız yükün kendisini üretirdi — örnekleyicide verilen kararın aynısı.
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
         try:
             rows = await conn.fetch(
                 """
@@ -623,7 +630,8 @@ class PostgreSQLCollector(BaseCollector):
                 )
             return out
         finally:
-            await conn.close()
+            if owns_conn:
+                await conn.close()
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()

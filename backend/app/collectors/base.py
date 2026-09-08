@@ -169,7 +169,7 @@ class BaseCollector(ABC):
         """
         return None
 
-    async def collect_blocking(self, limit: int = 200) -> list[dict[str, Any]]:
+    async def collect_blocking(self, limit: int = 200, conn: Any | None = None) -> list[dict[str, Any]]:
         """Bloklama ağacı için oturum ayrıntısı (Faz 26 İŞ 3).
 
         Her satır: pid, kullanıcı, sorgu, süreler, `blocking_pids`, beklenen kilidin

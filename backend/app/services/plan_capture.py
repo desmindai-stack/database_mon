@@ -27,13 +27,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import SessionLocal
 from app.domain.engines import DatabaseEngine
-from app.models import CapturedPlan, Instance, SlowQuerySample
+from app.models import CapturedPlan, DeadlockEvent, Instance, SlowQuerySample
 from app.services.auto_explain import (
     CapturedPlanRecord,
     normalize_query_key,
     parse_auto_explain_log,
 )
 from app.services.cluster_health import fetch_agent_logs
+from app.services.deadlocks import DeadlockRecord, parse_postgres_deadlocks
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +140,7 @@ async def capture_plans_for_instance(session: AsyncSession, instance: Instance) 
     Dönen sözlük teşhis içindir: kaç plan bulundu, kaçı yeni, ayrıştırılamayan var mı. "Neden
     hiç plan gelmiyor" sorusu log'a bakmadan cevaplanabilsin diye.
     """
-    outcome = {"found": 0, "written": 0, "unparsed": 0, "error": None, "note": None}
+    outcome = {"found": 0, "written": 0, "unparsed": 0, "deadlocks": 0, "error": None, "note": None}
     if instance.engine != str(DatabaseEngine.POSTGRESQL):
         outcome["error"] = "auto_explain yalnızca PostgreSQL için geçerli"
         return outcome
@@ -160,19 +161,63 @@ async def capture_plans_for_instance(session: AsyncSession, instance: Instance) 
         outcome["error"] = "agent beklenmedik bir log yanıtı döndü"
         return outcome
 
-    parsed = parse_auto_explain_log([str(line) for line in lines])
+    text_lines = [str(line) for line in lines]
+    parsed = parse_auto_explain_log(text_lines)
     outcome["found"] = len(parsed.plans)
     outcome["unparsed"] = parsed.unparsed_blocks
     outcome["note"] = parsed.note
     outcome["written"] = await store_captured_plans(session, instance.id, parsed.plans)
+
+    # AYNI LOG ÇEKİMİNDEN deadlock'lar da ayrıştırılıyor (Faz 26 İŞ 3). İkinci bir çekim
+    # yapmak, aynı satırları ağdan iki kez geçirmek ve agent'a iki kat istek atmak olurdu.
+    # Deadlock yalnızca log'dan görülebilir: veritabanı döngüyü kırar ve olay anlıktır,
+    # canlı ekranda hiçbir izi kalmaz.
+    outcome["deadlocks"] = await store_deadlocks(
+        session, instance.id, parse_postgres_deadlocks(text_lines)
+    )
     return outcome
+
+
+async def store_deadlocks(
+    session: AsyncSession, instance_id: int, records: list[DeadlockRecord]
+) -> int:
+    """Deadlock olaylarını yazar, zaten var olanları atlar."""
+    written = 0
+    for record in records:
+        exists = (
+            await session.execute(
+                select(DeadlockEvent.id).where(
+                    DeadlockEvent.instance_id == instance_id,
+                    DeadlockEvent.detected_at == record.detected_at,
+                    DeadlockEvent.fingerprint == record.fingerprint,
+                )
+            )
+        ).first()
+        if exists:
+            continue
+        session.add(
+            DeadlockEvent(
+                instance_id=instance_id,
+                detected_at=record.detected_at,
+                source=record.source,
+                fingerprint=record.fingerprint,
+                victim_pid=record.victim_pid,
+                victim_query=record.victim_query[:4000],
+                winner_pid=record.winner_pid,
+                winner_query=record.winner_query[:4000],
+                participants=record.participants,
+                raw_detail=record.raw_detail,
+            )
+        )
+        written += 1
+    return written
 
 
 async def capture_plans_tick() -> dict:
     """Zamanlayıcı turu: auto_explain açık olabilecek tüm PostgreSQL instance'ları."""
     if not settings.plan_capture_enabled:
         return {"instances": 0, "written": 0}
-    totals = {"instances": 0, "written": 0}
+    totals = {"instances": 0, "written": 0, "deadlocks": 0}
     async with SessionLocal() as session:
         instances = (
             await session.execute(
@@ -189,6 +234,7 @@ async def capture_plans_tick() -> dict:
             try:
                 outcome = await capture_plans_for_instance(session, instance)
                 totals["written"] += outcome["written"]
+                totals["deadlocks"] += outcome.get("deadlocks", 0)
                 if outcome["error"]:
                     logger.debug("Plan yakalama atlandı (%s): %s", instance.name, outcome["error"])
             except Exception:

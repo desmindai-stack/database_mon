@@ -437,15 +437,18 @@ class SqlServerCollector(BaseCollector):
         # `query_id` sürüm kısıtının karşılığı burada yok.
         return {"sessions": sessions, "blocked": blocked, "has_query_id": True}
 
-    async def collect_blocking(self, limit: int = 200) -> list[dict[str, Any]]:
-        conn = await self._connect()
+    async def collect_blocking(self, limit: int = 200, conn: Any | None = None) -> list[dict[str, Any]]:
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
         try:
             async with conn.cursor() as cur:
                 await cur.execute(_BLOCKING_SQL.format(limit=int(limit)))
                 columns = [c[0] for c in cur.description]
                 rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
         finally:
-            await conn.close()
+            if owns_conn:
+                await conn.close()
 
         out: list[dict[str, Any]] = []
         for row in rows:

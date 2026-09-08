@@ -93,6 +93,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 33 | `20260909090000_hot_table_composite_indexes.sql` | **YENİ** — metric_samples + slow_query_samples (instance_id, collected_at) bileşik indeksleri. **CANLI 502 DÜZELTMESİ.** ⚠️ **psql gerekir** — CONCURRENTLY kullanıyor, SQL Editor'den çalıştırılamaz (bkz. aşağıdaki bölüm) |
 | 34 | `20260910090000_wait_event_sampling.sql` | **YENİ** — bekleme analizi tabloları: active_session_minutes, wait_sample_minutes, wait_query_signatures (aktif oturum örnekleyicisi). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 | 35 | `20260911090000_captured_plans.sql` | **YENİ** — captured_plans tablosu (auto_explain ile yakalanan gerçek çalıştırma planları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
+| 36 | `20260912090000_blocking_history.sql` | **YENİ** — blocking_episodes + deadlock_events (bloklama geçmişi ve deadlock kayıtları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 

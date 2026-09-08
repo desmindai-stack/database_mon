@@ -23,6 +23,7 @@ from app.models import (
     DailyStateSnapshot,
     FindingAcknowledgement,
     GroupHealthSnapshot,
+    DeadlockEvent,
     Instance,
     MetricSample,
     PredictionInsight,
@@ -40,6 +41,8 @@ from app.services.finding_status import (
     make_finding_type,
     resolve_status,
 )
+from app.config import settings
+from app.services.blocking_history import recent_episodes
 from app.services.health_report import (
     FindingDraft,
     ReportContext,
@@ -228,6 +231,13 @@ async def _outages_for_instance(ctx: ReportContext, instance: Instance) -> list[
             )
     return outages
 
+
+#: Bloklama bulgusu için eşik. Tek bir oturumun kısa süre beklemesi normaldir; kilit
+#: beklemesi veritabanının çalışma biçiminin parçasıdır. Bulgu üretmek için birden çok
+#: oturumun etkilenmesi gerekiyor.
+BLOCKING_FINDING_MIN_SESSIONS = 2
+#: Bu sayının üstünde bloklama artık "kritik": tek bir oturum onlarca isteği durduruyor.
+BLOCKING_CRITICAL_SESSIONS = 5
 
 @register_section
 async def availability_section(ctx: ReportContext) -> SectionResult:
@@ -1543,6 +1553,192 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
 # --------------------------------------------------------------------------------------
 # 9. Alarmlar
 # --------------------------------------------------------------------------------------
+
+
+@register_section
+async def blocking_section(ctx: ReportContext) -> SectionResult:
+    """Bloklama ve deadlock — dönem içinde kim kimi bekletti (Faz 26 İŞ 3).
+
+    Canlı ekran "şu anda" sorusunu cevaplıyor; rapor "dün gece" sorusunu. En kötü bloklama
+    olayları kimsenin ekrana bakmadığı saatlerde yaşanır ve sabah geriye kalan tek şey "gece
+    sistem yavaştı" cümlesidir.
+    """
+    instance_ids = ctx.instance_ids()
+    if not instance_ids:
+        return SectionResult(
+            key="blocking", title="Bloklama ve deadlock", status="unknown",
+            summary="Kapsamda instance yok.",
+            unknown_reason="Kapsama bağlı instance bulunamadı.",
+        )
+
+    episodes = await recent_episodes(ctx.session, instance_ids, ctx.period_start, ctx.period_end)
+    deadlocks = (
+        await ctx.session.execute(
+            select(DeadlockEvent)
+            .where(
+                DeadlockEvent.instance_id.in_(instance_ids),
+                DeadlockEvent.detected_at >= ctx.period_start,
+                DeadlockEvent.detected_at <= ctx.period_end,
+            )
+            .order_by(DeadlockEvent.detected_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+
+    if not episodes and not deadlocks:
+        # "Bloklama olmadı" ile "bloklama ölçülmedi" farklı şeyler. Örnekleyici kapalıysa
+        # ikincisi geçerli ve bunu "sorunsuz" diye raporlamak yanıltıcı olurdu.
+        if not settings.wait_sampling_enabled:
+            return SectionResult(
+                key="blocking", title="Bloklama ve deadlock", status="unknown",
+                summary="Bloklama izleme kapalı.",
+                unknown_reason=(
+                    "Bekleme örnekleyicisi kapalı (WAIT_SAMPLING_ENABLED=false). Bloklama "
+                    "olayları örnekleme sırasında tespit ediliyor; kapalıyken hiçbir olay "
+                    "kaydedilmez. Bu, 'bloklama olmadı' anlamına GELMEZ."
+                ),
+            )
+        return SectionResult(
+            key="blocking", title="Bloklama ve deadlock", status="ok",
+            summary="Dönem içinde kayda değer bloklama ya da deadlock görülmedi.",
+        )
+
+    findings: list[FindingDraft] = []
+    episode_rows: list[dict] = []
+    for episode in episodes:
+        episode_rows.append(
+            {
+                "instance_id": episode.instance_id,
+                "started_at": as_utc(episode.started_at).isoformat(),
+                "ended_at": as_utc(episode.ended_at).isoformat() if episode.ended_at else None,
+                "duration_seconds": round(episode.duration_seconds, 1),
+                "root_pid": episode.root_pid,
+                "root_was_idle": episode.root_was_idle,
+                "max_blocked_sessions": episode.max_blocked_sessions,
+                "max_chain_depth": episode.max_chain_depth,
+                "lock_object": episode.lock_object,
+            }
+        )
+
+    worst = max(episodes, key=lambda e: e.max_blocked_sessions, default=None)
+    if worst is not None and worst.max_blocked_sessions >= BLOCKING_FINDING_MIN_SESSIONS:
+        # SESSİZ BLOK AYRIMI raporun en değerli kısmı: kök engelleyici sorgu çalıştırmıyorsa
+        # sorun veritabanında değil uygulamadadır ve DBA'nın yapabileceği kalıcı bir şey yok.
+        if worst.root_was_idle:
+            detail = (
+                f"Zincirin başındaki oturum (pid {worst.root_pid}) hiçbir sorgu çalıştırmıyordu "
+                f"— açık transaction'ıyla en fazla {worst.max_blocked_sessions} oturumu "
+                f"{worst.duration_seconds:.0f} saniye bekletti. Bu bir veritabanı sorunu "
+                "değildir: uygulama transaction'ı açmış ve kapatmamıştır."
+            )
+            recommendation = (
+                "Uygulamada transaction kapsamını daraltın ve sunucu tarafında "
+                "idle_in_transaction_session_timeout ayarlayın."
+            )
+        else:
+            detail = (
+                f"Zincirin başındaki oturum (pid {worst.root_pid}) en fazla "
+                f"{worst.max_blocked_sessions} oturumu {worst.duration_seconds:.0f} saniye "
+                f"bekletti (zincir derinliği {worst.max_chain_depth})."
+            )
+            recommendation = (
+                "Bloklayan sorguyu inceleyin; kilit kapsamını daraltın ya da toplu işlemleri "
+                "parçalara bölün."
+            )
+        findings.append(
+            FindingDraft(
+                section="blocking",
+                severity="warning" if worst.max_blocked_sessions < BLOCKING_CRITICAL_SESSIONS else "critical",
+                title=(
+                    f"Bloklama: {worst.max_blocked_sessions} oturum "
+                    f"{worst.duration_seconds:.0f} sn bekledi"
+                ),
+                detail=detail,
+                evidence={
+                    "metric": "blocked_sessions",
+                    "value": worst.max_blocked_sessions,
+                    "threshold": BLOCKING_FINDING_MIN_SESSIONS,
+                    "measured_at": as_utc(worst.started_at).isoformat(),
+                },
+                facts=[
+                    {"label": "Bekleyen oturum (zirve)", "value": str(worst.max_blocked_sessions), "tone": "bad"},
+                    {"label": "Süre", "value": f"{worst.duration_seconds:.0f} sn", "tone": "bad"},
+                    {"label": "Zincir derinliği", "value": str(worst.max_chain_depth), "tone": "neutral"},
+                    {
+                        "label": "Kök engelleyici",
+                        "value": "sorgu çalıştırmıyordu" if worst.root_was_idle else "sorgu çalıştırıyordu",
+                        "tone": "bad" if worst.root_was_idle else "neutral",
+                    },
+                ],
+                recommendation=recommendation,
+                fingerprint_parts=("blocking", str(worst.instance_id), str(worst.root_pid)),
+                related_object_type="instance",
+                related_object_id=worst.instance_id,
+            )
+        )
+
+    deadlock_rows = [
+        {
+            "instance_id": event.instance_id,
+            "detected_at": as_utc(event.detected_at).isoformat(),
+            "victim_pid": event.victim_pid,
+            "winner_pid": event.winner_pid,
+            "participants": event.participants,
+        }
+        for event in deadlocks
+    ]
+    if deadlocks:
+        findings.append(
+            FindingDraft(
+                section="blocking",
+                severity="warning",
+                title=f"Deadlock: dönem içinde {len(deadlocks)} olay",
+                detail=(
+                    f"Dönem içinde {len(deadlocks)} deadlock tespit edildi. Veritabanı döngüyü "
+                    "kırıp bir tarafı iptal etti; iptal edilen tarafta uygulama hata aldı. "
+                    "Deadlock kendiliğinden 'çözülmüş' sayılmaz — tekrar ediyorsa kilit sırası "
+                    "uygulamada tutarsızdır."
+                ),
+                evidence={
+                    "metric": "deadlock_count",
+                    "value": len(deadlocks),
+                    "threshold": 1,
+                    "measured_at": as_utc(deadlocks[0].detected_at).isoformat(),
+                },
+                facts=[
+                    {"label": "Deadlock sayısı", "value": str(len(deadlocks)), "tone": "bad"},
+                    {
+                        "label": "Farklı desen",
+                        "value": str(len({e.fingerprint for e in deadlocks})),
+                        "tone": "neutral",
+                    },
+                ],
+                recommendation=(
+                    "Taraf sorguları aynı tabloları AYNI SIRADA kilitleyecek şekilde "
+                    "düzenlenmeli; deadlock'ın çözümü yeniden deneme değil, sıra tutarlılığıdır."
+                ),
+                fingerprint_parts=("deadlock", str(deadlocks[0].instance_id)),
+                related_object_type="instance",
+                related_object_id=deadlocks[0].instance_id,
+            )
+        )
+
+    status = "ok"
+    if findings:
+        status = "critical" if any(f.severity == "critical" for f in findings) else "warning"
+
+    return SectionResult(
+        key="blocking",
+        title="Bloklama ve deadlock",
+        status=status,
+        summary=(
+            f"{len(episodes)} bloklama olayı, {len(deadlocks)} deadlock."
+            if episodes or deadlocks
+            else "Kayda değer bloklama görülmedi."
+        ),
+        findings=findings,
+        data={"episodes": episode_rows, "deadlocks": deadlock_rows},
+    )
 
 
 @register_section

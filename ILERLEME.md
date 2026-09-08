@@ -5617,6 +5617,100 @@ beklenen kilidin türü ve nesnesi.
 (her düğüm kök yapıldığında) beş test düşüyor** — zincir mantığını gerçekten
 koruduğu doğrulandı. Toplam 1121 test yeşil, 16 kritik tarayıcı testi yeşil.
 
+## Faz 26 — İŞ 3b: Bloklama geçmişi, deadlock tespiti ve rapor bölümü
+
+İŞ 3a canlı ağacı verdi ("şu anda kim kimi blokluyor"). Bu commit ikinci soruyu
+cevaplıyor: **"dün gece 03:14'te ne oldu."** En kötü bloklama olayları kimsenin
+ekrana bakmadığı saatlerde yaşanır ve sabah geriye kalan tek şey "gece sistem
+yavaştı" cümlesidir.
+
+### Olay kaydı — örnekleyicinin kalıcı bağlantısı üzerinde
+
+Bloklama kontrolü **bekleme örnekleyicisinin var olan kalıcı bağlantısında**
+çalışıyor, 10 saniyede bir. Ayrı bir iş yapıp 10 saniyede bir yeni bağlantı
+açmak, ölçmeye çalıştığımız yükün kendisini üretirdi — Faz 25'te örnekleyici
+için verilen kararın aynısı. Bunun için `collect_blocking` dışarıdan bağlantı
+kabul edecek şekilde açıldı (canlı uç kendi bağlantısını açmaya devam ediyor).
+
+Olay tanımı: **aynı kök engelleyicinin KESİNTİSİZ bekletme dönemi.** Aynı pid
+tekrar bekletmeye başlarsa bu yeni bir olaydır; arada sistem düzelmiş demektir
+ve iki dönemi tek olay saymak süreyi olduğundan uzun gösterirdi.
+
+Kararlar:
+
+- **Zirve değerler saklanıyor, anlık değil.** Olayın etkisini "o an kaç oturum
+  bekliyordu" değil "en fazla kaç oturum bekledi" anlatır.
+- **Süren olayın satırı her turda güncelleniyor.** Bunu ilk yazdığımda yalnızca
+  açılışta yazıp kapanışta güncelliyordum; test yakaladı: 9 oturumu bekleten bir
+  olay, açılışta 2 görülmüşse raporda 2 kalıyordu. Ayrıca worker olay sürerken
+  çökerse son bilinen değerler artık diskte kalıyor.
+- **Tek turluk kayboluş olayı kapatmıyor.** Ölçüm penceresine denk gelmemiş
+  olabilir; hemen kapatmak tek bir olayı onlarca kısa parçaya bölerdi.
+- **5 saniyeden kısa bloklamalar kaydedilmiyor.** Kilit beklemesi veritabanının
+  çalışma biçiminin parçasıdır; her çakışmayı olay yazmak gerçek olayları
+  gürültüde boğardı.
+- **Başlangıç, transaction yaşından tahmin ediliyor**, "ilk gördüğümüz an"dan
+  değil: 10 saniyelik örnekleme aralığı olayları sistematik olarak kısa
+  gösterirdi. Bu bir yaklaşımdır ve kodda öyle yazılı.
+- **"Sessizdi" bilgisi bir kez bile doğruysa korunuyor** — kök engelleyici arada
+  sorgu çalıştırmaya başlayabilir ama teşhis açısından belirleyici olan, hiç
+  çalıştırmadan bekletmiş olmasıdır.
+- Kapanışta açık olaylar kapatılıyor; yoksa `ended_at` sonsuza kadar NULL kalır
+  ve olay raporda "hâlâ sürüyor" görünür.
+
+### Deadlock — yalnızca geriye dönük görülebilir
+
+Deadlock bloklamadan **farklı** bir olaydır: veritabanı döngüyü kendisi kırar ve
+bir tarafı iptal eder. Yani sürüp giden bir durum değil, ANLIK bir olay — canlı
+ekranda hiçbir izi kalmaz, bir dakika sonra bakan hiçbir şey göremez.
+
+- **PostgreSQL**: sunucu log'undan ayrıştırılıyor. Önemli olan, bunun
+  auto_explain planlarıyla **AYNI LOG ÇEKİMİNDEN** yapılması — ikinci bir çekim
+  aynı satırları ağdan iki kez geçirmek ve agent'a iki kat istek atmak olurdu.
+- **SQL Server**: `system_health` XE halka tamponundaki deadlock XML'i
+  (2012+ varsayılan açık, ek yapılandırma gerektirmiyor).
+
+**Kurban ve kazanan ayrımı** yapılıyor: kurban veritabanının iptal ettiği
+taraftır ve uygulamada hata alan odur. Yalnızca kurbanı göstermek yarım
+teşhistir — kurbanın "suçu" genelde yoktur, döngüyü oluşturan kilit sırası
+KAZANANINDIR ve düzeltme orada yapılır. SQL Server kurbanı XML'de açıkça
+işaretlediği için orada tahmin gerekmiyor; PostgreSQL'de `STATEMENT:`
+satırından çıkarılıyor.
+
+**Tekrar anahtarı sorgu metinlerinden türetiliyor, pid'lerden değil.** pid'ler
+her deadlock'ta farklıdır ama aynı deadlock tekrar ettiğinde sorgular aynıdır;
+bu sayede hem tekrar yazma engelleniyor hem de "aynı deadlock 40 kez oldu"
+sorusu cevaplanabiliyor.
+
+### Rapor bölümü
+
+Günlük rapora "Bloklama ve deadlock" bölümü eklendi (Alarmlar'dan önce — "şu
+anda ne oldu" bölümü alarmlardan önce okunmalı).
+
+En değerli ayrım bulgu metnine taşındı: kök engelleyici sorgu çalıştırmıyorduysa
+bulgu açıkça **"Bu bir veritabanı sorunu değildir: uygulama transaction'ı açmış
+ve kapatmamıştır"** diyor. DBA'nın orada yapabileceği kalıcı bir şey yok ve
+bunu söylememek onu boşuna arattırır.
+
+Deadlock bulgusunda da yaygın bir yanlış düzeltiliyor: **"deadlock'ın çözümü
+yeniden deneme değil, kilit sırası tutarlılığıdır."**
+
+Örnekleyici kapalıysa bölüm `ok` değil `unknown` dönüyor: "bloklama olmadı" ile
+"bloklama ölçülmedi" farklı şeylerdir ve ikincisini sorunsuz diye raporlamak
+yanıltıcı olurdu.
+
+### Saklama
+
+`blocking_episodes` ve `deadlock_events` saklama politikasına dahil. Hacimleri
+küçük ama sınırsız değil — politikanın dışında kalan her tablo eninde sonunda
+en büyük tablo oluyor (`slow_query_samples` dersi).
+
+**Testler:** `tests/test_blocking_history.py` (18 test) — olay yaşam döngüsü,
+zirve değerler, tek turluk kayboluş, sessizlik bayrağının korunması, başlangıç
+tahmini, kapanış; PostgreSQL log ayrıştırma (kurban/kazanan/döngü kenarları,
+pid'den bağımsız parmak izi, tekrar yazmama), SQL Server XML ayrıştırma ve bozuk
+XML'in tüm turu düşürmemesi. Toplam 1141 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -822,3 +822,79 @@ class CapturedPlan(Base):
     has_actual_rows: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     plan_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BlockingEpisode(Base):
+    """Bir bloklama olayının geçmiş kaydı (Faz 26 İŞ 3).
+
+    Canlı ağaç "şu anda kim kimi blokluyor" sorusunu cevaplıyor; bu tablo "dün gece 03:14'te
+    ne oldu" sorusunu. İkisi ayrı sorular ve ikincisi olmadan bloklama hep "olduğu anda
+    bakabilirsen" görünür kalır — oysa en kötü olaylar kimsenin ekrana bakmadığı saatlerde
+    yaşanır.
+
+    Bir olay, aynı kök engelleyicinin (pid) kesintisiz bekletme dönemidir. Açılışta yazılıyor
+    (canlıyken de görünsün) ve bittiğinde güncelleniyor.
+    """
+
+    __tablename__ = "blocking_episodes"
+    __table_args__ = (
+        Index("ix_blocking_episodes_instance_started", "instance_id", "started_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Olay sürerken NULL. "Hâlâ devam ediyor" durumunu ayrı bir bayrakla değil bu alanla
+    # temsil etmek, iki alanın çelişmesini imkânsız kılıyor.
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+
+    root_pid: Mapped[int] = mapped_column(Integer, nullable=False)
+    root_query: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    root_username: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    root_application: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Kök engelleyici sorgu ÇALIŞTIRMIYOR muydu — sessiz blok. Raporun en değerli ayrımı:
+    # bu durumda sorun veritabanında değil uygulamadadır.
+    root_was_idle: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # Olay boyunca görülen EN YÜKSEK değerler — anlık değil zirve, çünkü etkinin ölçüsü budur.
+    max_blocked_sessions: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    max_chain_depth: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    lock_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    lock_object: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DeadlockEvent(Base):
+    """Yakalanan deadlock olayı (Faz 26 İŞ 3).
+
+    Deadlock, bloklamadan FARKLI bir olaydır: veritabanı döngüyü kendisi kırar ve
+    taraflardan birini (kurban) iptal eder. Yani bloklama gibi "sürüp giden" bir durum
+    değil, anlık ve GERİYE DÖNÜK olarak yalnızca log'dan görülebilen bir olaydır — canlı
+    ekranda hiçbir izi kalmaz.
+
+    Kaynak: PostgreSQL sunucu log'u ya da SQL Server system_health oturumu.
+    """
+
+    __tablename__ = "deadlock_events"
+    __table_args__ = (
+        Index("ix_deadlock_events_instance_detected", "instance_id", "detected_at"),
+        # Log penceresi her çekimde örtüşüyor; aynı olayın tekrar yazılmasını engelliyor.
+        UniqueConstraint("instance_id", "detected_at", "fingerprint", name="uq_deadlock_event"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # postgresql_log | sqlserver_system_health
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="postgresql_log")
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # Kurban: veritabanının iptal ettiği taraf. Kazanan: işine devam eden.
+    victim_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    victim_query: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    winner_pid: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    winner_query: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    participants: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    raw_detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
