@@ -19,7 +19,15 @@ test.describe("DPA (instance detay)", () => {
 
     // Hiç metrik toplanmamış bir instance en kırılgan durum: bütün paneller boş veriyle
     // render ediliyor. Çökmelerin çoğu tam da burada çıkıyordu.
-    for (const label of ["Metrikler", "Yavaş Sorgular", "Tuning", "Uyarılar", "Tahminler", "Özet"]) {
+    for (const label of [
+      "Metrikler",
+      "Veritabanı Yükü",
+      "Yavaş Sorgular",
+      "Tuning",
+      "Uyarılar",
+      "Tahminler",
+      "Özet",
+    ]) {
       await tab(page, label).click();
       await expect(page.getByText("Sayfa render hatası")).toHaveCount(0);
     }
@@ -38,6 +46,22 @@ test.describe("DPA (instance detay)", () => {
     // Aynı adres yeniden açıldığında aynı sekme gelmeli.
     await page.goto(`/instances/${instance.id}?tab=metrics`);
     await expect(page.locator(".detail-tabs .tab-btn.active")).toHaveText("Metrikler");
+
+    await api.delete(`/api/instances/${instance.id}?cascade=true`);
+  });
+
+  test("@critical veritabanı yükü sekmesi veri yokken sebebini yazar", async ({ page, request }) => {
+    // E2E'de örnekleyici kapalı (RUN_MODE=api → zamanlayıcı yok), yani bekleme örneği hiç
+    // birikmiyor. Bu, boş durumun DOĞRU davranışını test etmek için ideal: boş bir grafik
+    // gösterip susmak yerine NEDEN veri olmadığı yazılmalı.
+    const api = new ApiHelper(request);
+    const instance = await api.createInstance();
+
+    await page.goto(`/instances/${instance.id}?tab=load`);
+    await expect(page.locator(".detail-tabs .tab-btn.active")).toHaveText(/^Veritabanı Yükü/);
+    await expect(page.getByRole("heading", { name: "Veritabanı yükü hesaplanamadı" })).toBeVisible();
+    await expect(page.getByText(/örnek/i).first()).toBeVisible();
+    await expect(page.getByText("Sayfa render hatası")).toHaveCount(0);
 
     await api.delete(`/api/instances/${instance.id}?cascade=true`);
   });

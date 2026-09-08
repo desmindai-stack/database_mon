@@ -377,6 +377,57 @@ async def _top_queries(
     return result
 
 
+async def wait_profiles_by_query(
+    session: AsyncSession,
+    instance_id: int,
+    *,
+    hours: int = 24,
+) -> dict[str, list[CategoryShare]]:
+    """queryid → bekleme profili (aralık boyunca payları).
+
+    Faz 25 İŞ 3: darboğaz sınıflandırması (`query_diagnostics.py`) için KANIT kaynağı.
+    Sınıflandırma bugüne kadar `exec_user_time`/`exec_sys_time` sütunlarına dayanıyordu; bu
+    sütunlar `pg_stat_statements` `track_planning`/sürüm ayarlarına bağlı ve pratikte çoğu
+    kurulumda BOŞ geliyordu — o yüzden sınıflandırma "unknown" dönüp duruyordu. Bekleme
+    örnekleri bu boşluğu gerçek ölçümle dolduruyor.
+
+    Payda burada TOPLAM örnek değil, o SORGUNUN örnek sayısı: soru "sorgu süresinin yüzde kaçı
+    nerede geçti", "sunucu yükünün yüzde kaçı" değil.
+    """
+    end = datetime.now(UTC)
+    start = end - timedelta(hours=hours)
+    rows = (
+        await session.execute(
+            select(
+                WaitSampleMinute.queryid,
+                WaitSampleMinute.wait_category,
+                func.sum(WaitSampleMinute.sample_count).label("samples"),
+            )
+            .where(
+                WaitSampleMinute.instance_id == instance_id,
+                WaitSampleMinute.minute >= start,
+                WaitSampleMinute.minute <= end,
+                WaitSampleMinute.queryid != "",
+            )
+            .group_by(WaitSampleMinute.queryid, WaitSampleMinute.wait_category)
+        )
+    ).all()
+
+    by_query: dict[str, dict[str, int]] = {}
+    for row in rows:
+        if not is_load_bearing(row.wait_category):
+            continue
+        by_query.setdefault(row.queryid, {})[row.wait_category] = int(row.samples or 0)
+
+    profiles: dict[str, list[CategoryShare]] = {}
+    for queryid, categories in by_query.items():
+        total = sum(categories.values())
+        if total == 0:
+            continue
+        profiles[queryid] = _category_shares(categories, total)
+    return profiles
+
+
 def report_to_dict(report: DatabaseLoadReport) -> dict[str, Any]:
     return {
         "instance_id": report.instance_id,

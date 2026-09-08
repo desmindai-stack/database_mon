@@ -10,6 +10,7 @@ const RESOURCE_TABS: { key: QueryResourceType | "all"; label: string }[] = [
   { key: "cpu", label: "CPU" },
   { key: "memory", label: "Bellek" },
   { key: "lock", label: "Kilit / Bekleme" },
+  { key: "client", label: "Uygulama" },
   { key: "unknown", label: "Bilinmiyor" },
 ];
 
@@ -18,6 +19,7 @@ const RESOURCE_LABELS_TR: Record<QueryResourceType, string> = {
   cpu: "CPU",
   memory: "Bellek",
   lock: "Kilit/Bekleme",
+  client: "Uygulama bekleniyor",
   unknown: "Bilinmiyor",
 };
 

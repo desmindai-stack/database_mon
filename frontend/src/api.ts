@@ -130,7 +130,10 @@ export interface SlowQuery {
   sample_count: number;
 }
 
-export type QueryResourceType = "io" | "cpu" | "memory" | "lock" | "unknown";
+// "client" Faz 25'te eklendi: bekleme ölçümü sorgunun süresini UYGULAMAYI BEKLEYEREK
+// geçirdiğini gösterebiliyor. Bunu "bilinmiyor" saymak, DBA'yı veritabanında olmayan bir
+// sorunu aramaya yollardı — teşhisin en değerli kısmı bazen "sorun burada değil"dir.
+export type QueryResourceType = "io" | "cpu" | "memory" | "lock" | "client" | "unknown";
 
 export interface QueryDiagnosis {
   queryid: string | null;

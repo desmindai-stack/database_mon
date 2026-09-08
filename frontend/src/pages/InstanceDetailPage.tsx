@@ -46,6 +46,7 @@ import {
 import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../components/PageState";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
+import DatabaseLoadPanel from "../components/DatabaseLoadPanel";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
@@ -61,10 +62,10 @@ import { ChartRange, useChartRangeSelection } from "../components/useChartRangeS
 import TuningPanel from "../components/TuningPanel";
 import { useAuth } from "../auth";
 
-type Tab = "overview" | "metrics" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
+type Tab = "overview" | "metrics" | "load" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
-const TABS: Tab[] = ["overview", "metrics", "queries", "activity", "cluster", "schema", "tuning", "alerts", "predictions"];
+const TABS: Tab[] = ["overview", "metrics", "load", "queries", "activity", "cluster", "schema", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
 /** Grafik ekseni etiketi. 24 saatten uzun aralıklarda gün de yazılır — aksi halde etiketler
@@ -894,6 +895,9 @@ export default function InstanceDetailPage() {
       <div className="detail-tabs">
         <TabButton value="overview" label="Özet" />
         <TabButton value="metrics" label="Metrikler" />
+        {/* Veritabanı Yükü, Metrikler ile Yavaş Sorgular ARASINDA: "ne kadar meşgul" →
+            "neyi bekliyor" → "hangi sorgu" sırası, teşhisin doğal akışı. */}
+        <TabButton value="load" label="Veritabanı Yükü" />
         <TabButton value="queries" label="Yavaş Sorgular" />
         <TabButton
           value="activity"
@@ -1245,6 +1249,14 @@ export default function InstanceDetailPage() {
           </ChartCard>
         </div>
         </>
+      )}
+
+      {tab === "load" && (
+        <DatabaseLoadPanel
+          instanceId={instanceId}
+          rangeHours={range}
+          customRange={customRange}
+        />
       )}
 
       {tab === "queries" && (

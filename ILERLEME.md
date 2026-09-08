@@ -5096,6 +5096,80 @@ varsayan hatalı sürüm konulduğunda ilgili test düşüyor** — hatayı yaka
 doğrulandı. TypeScript tipleri üretilen şemadan türetildi. Toplam 942 test
 yeşil.
 
+## Faz 25 — İŞ 3: Veritabanı yükü grafiği ve darboğaz sınıflandırmasının gerçek veriyle beslenmesi
+
+### Yeni sekme: Veritabanı Yükü
+
+DPA sekmelerine `load` eklendi — Metrikler ile Yavaş Sorgular ARASINDA.
+Sıra bilinçli: "ne kadar meşgul" → "neyi bekliyor" → "hangi sorgu", teşhisin
+doğal akışı. Mevcut sekmeler değişmedi.
+
+`components/DatabaseLoadPanel.tsx`:
+
+- **Yığılmış alan grafiği**: X ekseni zaman, Y ekseni AAS, renkler bekleme
+  kategorisi. Yığının kalınlığı yükü, rengi sebebini söylüyor.
+- **Sürükleyerek aralık seçme**: mevcut `useChartRangeSelection` altyapısı
+  kullanıldı; seçilen aralık `start`/`end` ile AYNI uca gidiyor ve altta o
+  aralığın sorguları listeleniyor. Seçilen son kova da aralığa dahil
+  ediliyor — aksi halde kullanıcının gördüğü son sütun cevaba girmiyordu.
+- **Her sorgu için bekleme profili**: tek satırlık yığılmış çubuk + yüzde
+  etiketleri. "Bu sorgu süresinin yüzde kaçını hangi beklemede geçirdi."
+- **Baskın kaynak** üstte, cümleyle ve kategori renginde bir şeritle.
+- **İskelet yükleme** (Faz 22 kuralı): içeriğin yeri korunuyor, kayma yok.
+- **Hata durumu ham `unknown` olarak saklanıyor**, metne çevrilmiş hâli
+  değil: `PageError` `ApiError.status`'a bakıp 500 ile ağ kopmasını ayırıyor
+  (Faz 23'te "Sunucuya ulaşılamıyor" yanlış teşhisi tam bu ayrımın
+  kaybolmasından çıkmıştı). "Tekrar dene" düğmesi var.
+
+Renkler arayüzde, **ad ve anlam sunucuda**. İkinci bir çeviri tablosu tutmak,
+aynı beklemenin grafikte ve raporda iki farklı adla görünmesi demekti.
+Kategori sırası da sunucudan geliyor (AAS'e göre sıralı) — burada ayrı bir
+sıra tanımlamak iki farklı öncelik olurdu.
+
+CSS boşlukları tek ölçekten (`--space-*`), göz kararı değer yok.
+
+### Darboğaz sınıflandırması artık ÖLÇÜMLE besleniyor
+
+`query_diagnostics.py` bugüne kadar `exec_user_time`/`exec_sys_time`
+sütunlarından türetiyordu. O sütunlar pg_stat_statements'ın sürüm/ayarına
+bağlı ve pratikte çoğu kurulumda BOŞ geliyor — yani sınıflandırma çalışıyor
+görünüyordu ama neredeyse her zaman "bilinmiyor" dönüyordu.
+
+Artık bir sorgunun bekleme profili varsa teşhis ONDAN yapılıyor ve
+`confidence="observed"` oluyor. Bunun üç somut sonucu var:
+
+1. **"Kilit" sınıfı artık çıkarım değil ölçüm.** Öncesinde dbace sorgu başına
+   kilit bekleme süresi tutmadığı için kilit teşhisi her zaman
+   `inferred`'dı ve "kesin teşhis için Activity sekmesine bakın" deniyordu.
+2. **Ölçüm, blok sayaçlarını yeniyor.** Sayaçlar sorgunun neye DOKUNDUĞUNU
+   söyler, beklemenin nerede olduğunu değil: diskten çok okuyan bir sorgu,
+   süresinin çoğunu bir kilidi beklerken geçiriyor olabilir. Bu çelişkide
+   ölçüm kazanıyor.
+3. **Yeni bir sınıf: `client`.** Bekleme ölçümü, sorgunun süresini uygulamanın
+   veriyi çekmesini bekleyerek geçirdiğini gösterebiliyor. Bunu "bilinmiyor"
+   saymak, DBA'yı veritabanında olmayan bir sorunu aramaya yollardı —
+   teşhisin en değerli hâli bazen "sorun burada değil"dir.
+
+Bekleme verisi yoksa eski türetme aynen devrede; yalnızca "bilinmiyor" mesajı
+artık ne yapılacağını söylüyor (Veritabanı Yükü sekmesini işaret ediyor).
+
+Baskınlık eşiği (%40) iki modülde de aynı sabit; farklı olsaydı aynı sorgu
+için grafikte "IO baskın" derken tanıda "belirsiz" denebilirdi.
+
+**Testler:** `tests/test_wait_diagnostics_ui.py` (14 test). Yarısı teşhis
+mantığı, yarısı arayüz garantisi — frontend'in kendi test koşucusu olmadığı
+için (CLAUDE.md) kaynak sınıfı listesinin, kategori renklerinin ve sekme
+kaydının statik olarak korunması gerekiyor: backend yeni bir kaynak sınıfı
+üretip arayüz haritasına eklenmezse kullanıcı BOŞ bir hücre görür, hata da
+alınmaz.
+
+**Tarayıcı testi:** `e2e/dpa-dashboard.spec.ts` sekme turuna eklendi, ayrıca
+yeni bir `@critical` test: e2e'de örnekleyici kapalı olduğu için sekme "veri
+yok" durumunu gösteriyor — boş grafik gösterip susmak yerine SEBEBİNİ yazdığı
+tarayıcıdan doğrulanıyor. 33 e2e testi yeşil, konsol temiz.
+
+Toplam 958 backend testi yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

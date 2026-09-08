@@ -3,10 +3,17 @@ da kilit/bekleme olduğunu — ve bunu HANGİ metriğin söylediğini — belirl
 zaten topladığı sütunlardan (shared/local/temp blk sayaçları, exec_user_time/exec_sys_time)
 türetilir; ekstra bir canlı sorgu ÇALIŞTIRMAZ.
 
-Dürüstlük kuralı (bkz. SORULAR.md): dbace hiçbir sorgu için per-query kilit bekleme SÜRESİ
-toplamıyor (sadece anlık Activity görüntüsü var, geçmişe dönük değil) — bu yüzden "lock" sınıfı
-her zaman `confidence="inferred"` ile işaretlenir ve CPU+I/O ile açıklanamayan bir süre farkı
-olduğunda öne sürülür, asla kesin bir teşhis olarak sunulmaz.
+FAZ 25 — BEKLEME VERİSİ ARTIK BİRİNCİL KANIT:
+Yukarıdaki türetme, `exec_user_time`/`exec_sys_time` sütunları dolu olduğunda çalışıyordu; bu
+sütunlar pg_stat_statements sürüm/ayarına bağlı ve pratikte çoğu kurulumda BOŞ geliyor — o
+yüzden sınıflandırma sık sık "unknown" dönüyordu. Bekleme örnekleyicisi (Faz 25 İŞ 1) artık
+sorgunun süresini NEREDE geçirdiğini doğrudan ölçüyor. Bir sorgunun bekleme profili varsa
+teşhis ONDAN yapılır ve `confidence="observed"` olur; yoksa eski türetme aynen devrede kalır.
+
+Bunun bir sonucu: "lock" sınıfı artık çıkarım değil ÖLÇÜM olabiliyor. Aşağıdaki eski yol için
+dürüstlük kuralı hâlâ geçerli (bkz. SORULAR.md): bekleme verisi olmadan kilit teşhisi
+`confidence="inferred"` kalır ve CPU+I/O ile açıklanamayan bir süre farkı olduğunda öne
+sürülür, asla kesin teşhis olarak sunulmaz.
 """
 
 from __future__ import annotations
@@ -21,6 +28,26 @@ UNEXPLAINED_TIME_SHARE_THRESHOLD = 0.30
 MIN_UNEXPLAINED_MS = 5.0
 
 
+#: Bekleme kategorisi → darboğaz kaynağı. Bekleme sözlüğü (domain/waits.py) daha ayrıntılı;
+#: burada tanı sınıfına indirgeniyor ki arayüzün mevcut dört sınıfı (io/cpu/memory/lock)
+#: değişmeden kalsın.
+WAIT_CATEGORY_TO_RESOURCE: dict[str, str] = {
+    "cpu": "cpu",
+    "io": "io",
+    "lock": "lock",
+    "lwlock": "lock",
+    "buffer_pin": "lock",
+    "memory": "memory",
+    "ipc": "cpu",
+    "client": "client",
+}
+
+#: Bekleme profilinden teşhis koymak için gereken en düşük pay. Altındaysa tek bir suçlu yok
+#: demektir; `database_load.py`'deki baskınlık eşiğiyle aynı sayı — iki modülün aynı soruya
+#: farklı eşikle cevap vermesi tutarsızlık olurdu.
+WAIT_DOMINANCE_THRESHOLD_PCT = 40.0
+
+
 @dataclass
 class QueryDiagnosis:
     queryid: str | None
@@ -28,7 +55,7 @@ class QueryDiagnosis:
     calls: int
     mean_time_ms: float
     total_time_ms: float
-    resource: str  # io | cpu | memory | lock | unknown
+    resource: str  # io | cpu | memory | lock | client | unknown
     reason: str
     confidence: str  # observed | inferred
 
@@ -41,8 +68,52 @@ def _cpu_time_ms(row) -> float | None:
     return float(user or 0) + float(sys or 0)
 
 
-def diagnose_query(row) -> QueryDiagnosis:
-    """`row` is a SlowQuerySample (or any object with the same attribute names)."""
+def _diagnose_from_waits(row, profile) -> QueryDiagnosis | None:
+    """Bekleme profilinden teşhis. `profile`: paya göre sıralı CategoryShare listesi."""
+    if not profile:
+        return None
+    top = profile[0]
+    resource = WAIT_CATEGORY_TO_RESOURCE.get(top.category)
+    if resource is None:
+        return None
+    if top.share_pct < WAIT_DOMINANCE_THRESHOLD_PCT:
+        # Yük dağılmış: tek bir kaynağa işaret etmek yanıltıcı olur, ama ölçüm yine de var —
+        # kullanıcıya dağılımı söylüyoruz.
+        spread = ", ".join(f"%{s.share_pct:.0f} {s.label.lower()}" for s in profile[:3])
+        return QueryDiagnosis(
+            queryid=row.queryid, query=row.query, calls=row.calls,
+            mean_time_ms=float(row.mean_time_ms or 0), total_time_ms=float(row.total_time_ms or 0),
+            resource="unknown",
+            reason=(
+                f"Bekleme ölçümüne göre süre tek bir kaynakta yoğunlaşmıyor ({spread}). "
+                "Tek bir değişiklikle toparlanması beklenmemeli."
+            ),
+            confidence="observed",
+        )
+    return QueryDiagnosis(
+        queryid=row.queryid, query=row.query, calls=row.calls,
+        mean_time_ms=float(row.mean_time_ms or 0), total_time_ms=float(row.total_time_ms or 0),
+        resource=resource,
+        reason=(
+            f"Bekleme ölçümü: sürenin %{top.share_pct:.0f}'i {top.label.lower()} olarak geçti. "
+            f"{top.meaning}"
+        ),
+        # ÇIKARIM DEĞİL ÖLÇÜM: aktif oturum örneklemesi sorgunun nerede beklediğini doğrudan
+        # gördü. Eski yol (blok sayaçlarından türetme) buna göre ikincil kaldı.
+        confidence="observed",
+    )
+
+
+def diagnose_query(row, wait_profile=None) -> QueryDiagnosis:
+    """`row` is a SlowQuerySample (or any object with the same attribute names).
+
+    `wait_profile` verilmişse (services/database_load.py::wait_profiles_by_query) teşhis
+    ondan yapılır — ölçüm, türetmeden önce gelir.
+    """
+    from_waits = _diagnose_from_waits(row, wait_profile)
+    if from_waits is not None:
+        return from_waits
+
     mean_ms = float(row.mean_time_ms or 0)
     temp_blocks = (row.temp_blks_read or 0) + (row.temp_blks_written or 0)
     shared_read = row.shared_blks_read or 0
@@ -89,9 +160,11 @@ def diagnose_query(row) -> QueryDiagnosis:
     else:
         resource = "unknown"
         reason = (
-            "CPU/I/O ayrımı için exec_user_time/exec_sys_time verisi yok — PostgreSQL sürümü "
-            "veya pg_stat_statements ayarları bu sütunları desteklemiyor olabilir "
-            "(Ön koşullar panelini kontrol edin)."
+            "CPU/I/O ayrımı yapılamadı: bu sorgu için bekleme örneği birikmemiş ve "
+            "exec_user_time/exec_sys_time sütunları boş (PostgreSQL sürümü ya da "
+            "pg_stat_statements ayarları desteklemiyor olabilir). Veritabanı Yükü sekmesi "
+            "birkaç dakika veri topladıktan sonra bu teşhis ölçümle yapılabilir — Ön koşullar "
+            "panelini de kontrol edin."
         )
         confidence = "inferred"
 
@@ -107,5 +180,6 @@ def diagnose_query(row) -> QueryDiagnosis:
     )
 
 
-def diagnose_queries(rows) -> list[QueryDiagnosis]:
-    return [diagnose_query(row) for row in rows]
+def diagnose_queries(rows, wait_profiles: dict | None = None) -> list[QueryDiagnosis]:
+    profiles = wait_profiles or {}
+    return [diagnose_query(row, profiles.get(row.queryid or "")) for row in rows]

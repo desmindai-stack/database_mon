@@ -3414,3 +3414,93 @@ td code,
   white-space: nowrap;
   border: 0;
 }
+
+/* --- Veritabanı yükü paneli (Faz 25 İŞ 3) --------------------------------- */
+/* Boşluklar tek ölçekten (--space-*): göz kararı değer yok (Faz 22 İŞ 2 kuralı). */
+
+.db-load {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.db-load-verdict {
+  border-left: 4px solid var(--border);
+}
+
+.db-load-verdict p {
+  margin: var(--space-2) 0 0;
+}
+
+/* Yığılmış alan grafiği tek bir grafikte tüm hikâyeyi anlatıyor; metrik kartlarından daha
+   yüksek olması bilinçli — kategori yığınları ince şeritlerde okunmuyor. */
+.db-load-chart {
+  height: 360px;
+}
+
+/* Kategori rengi ile adı arasındaki bağı kuran küçük kare. Renk tek başına bırakılmıyor:
+   metin etiketi her zaman yanında (renk körlüğü). */
+.wait-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+
+.query-load-list {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.query-load-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: var(--space-3);
+}
+
+.query-load-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.query-load-aas {
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+
+/* Bekleme profili: tek satırlık yığılmış çubuk. "Bu sorgu süresinin yüzde kaçını nerede
+   geçirdi" sorusunu tek bakışta cevaplıyor. */
+.wait-profile {
+  display: flex;
+  width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  overflow: hidden;
+  margin-top: var(--space-2);
+  background: var(--border);
+}
+
+.wait-profile-segment {
+  height: 100%;
+}
+
+.wait-profile-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+@media (max-width: 720px) {
+  .db-load-chart {
+    height: 280px;
+  }
+}

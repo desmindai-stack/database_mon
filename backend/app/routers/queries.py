@@ -27,6 +27,7 @@ from app.services.credentials import decrypt_secret
 from app.services.explain_service import PostgreSQLExplainService
 from app.services.advice import Advice, AdviceStep, advice_to_dict
 from app.services.index_advisor import PostgreSQLIndexAdvisor
+from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
 from app.services.noise_settings import get_noise_settings
@@ -247,7 +248,11 @@ async def get_query_diagnostics(
         )
         rows = list(result.scalars().all())
 
-    diagnoses = diagnose_queries(rows)
+    # Faz 25 İŞ 3: bekleme ölçümü varsa teşhis ONDAN yapılıyor. Öncesinde sınıflandırma
+    # exec_user_time/exec_sys_time'a bağlıydı ve bu sütunlar çoğu kurulumda boş geldiği için
+    # sonuç sık sık "unknown" oluyordu — yani darboğaz sınıflandırması pratikte çalışmıyordu.
+    wait_profiles = await wait_profiles_by_query(db, instance_id)
+    diagnoses = diagnose_queries(rows, wait_profiles)
     by_resource: dict[str, int] = {}
     for d in diagnoses:
         by_resource[d.resource] = by_resource.get(d.resource, 0) + 1
