@@ -5013,6 +5013,89 @@ toplandığı, sorgu metninin sözlükte tek kez durduğu, bağlantı koptuğund
 konulduğunda ilgili test düşüyor** — hatayı yakaladığı doğrulandı. Toplam
 923 test yeşil.
 
+## Faz 25 — İŞ 2: Veritabanı yükü (Average Active Sessions)
+
+AAS, bekleme analizinin merkez metriği: bir aralıkta ortalama kaç oturumun
+aynı anda iş yaptığı. Tek başına bir sayı olarak bile "sunucu ne kadar
+meşgul" sorusunu CPU yüzdesinden daha doğru cevaplıyor — CPU yüzdesi, kilit
+bekleyen 40 oturumu %2 diye gösterir. Asıl gücü kırılımında: AAS bekleme
+kategorisine bölününce "sistem neyi bekliyor" sorusu ölçümle cevaplanıyor.
+
+```
+AAS = (aralıkta görülen aktif oturum toplamı) / (aralıkta ALINAN örnek sayısı)
+```
+
+### Yeni uç
+
+`GET /api/instances/{id}/database-load?hours=` veya `?start=&end=`
+
+Metrik grafiğiyle AYNI kalıp: grafikte sürükleyerek seçilen aralık aynı uca
+`start`/`end` olarak gidiyor. Ayrı bir "seçili aralık" ucu yazmak, iki farklı
+hesap ve iki farklı cevap riski demekti.
+
+Yanıt: zaman serisi (kategoriye göre kırılmış), aralık toplamları, en çok yük
+üreten sorgular ve her birinin bekleme profili, baskın kaynak ve onun
+CÜMLEYLE yazılmış hükmü.
+
+### Toplama veritabanında yapılıyor
+
+7 günlük bir aralıkta ham satır sayısı yüz binleri bulabiliyor; hepsini
+Python'a çekmek, Faz 21'de `slow_query_samples` yüzünden yaşanan 502'nin
+aynısını davet ederdi. Kova (bucket) hesabı SQL'de yapılıyor; epoch ifadesi
+lehçeye göre değişiyor (SQLite `strftime`, PostgreSQL `extract`), tek fark bu.
+
+Kova genişliği aralığa göre seçiliyor ki nokta sayısı ~180'i geçmesin: 1 saat
+→ 1 dakika, 7 gün → 60 dakika. Daha fazlası hem ağdan boşuna geçer hem de
+ekranda piksel başına birden çok noktaya düşer.
+
+### Veri yetersizse SAYI ÜRETİLMİYOR
+
+Üç ayrı durum, üçünde de boş grafik değil AÇIKLAMA dönüyor:
+
+| Durum | Ne diyor |
+|---|---|
+| Hiç örnek yok | Örnekleyicinin yalnızca worker sürecinde çalıştığı, ilk verinin birikmesinin birkaç dakika sürdüğü |
+| 60'tan az örnek | Kaç örnek olduğu ve anlamlı ortalama için kaç gerektiği — "bu kadar az örnekten yük ortalaması üretmek, ölçüm gibi görünen bir tahmin olurdu" |
+| MongoDB | Bekleme sözlüğünün karşılığı olmadığı |
+| Örnekleyici kapalı | `WAIT_SAMPLING_ENABLED=false` olduğu |
+
+### Baskın kaynak kullanıcıya CÜMLEYLE söyleniyor
+
+Grafikten çıkarım yapmasını beklemek yerine: "Yükün %78'i disk g/ç kaynaklı.
+Veri diskten okunuyor ya da diske yazılıyor; cache'te bulunamadı."
+
+Bir kategori baskın sayılmak için %40 eşiğini geçmek zorunda. Altındaysa
+"tek bir baskın kaynak yok — en yüksek pay %34 ile ..." deniyor. %34'lük bir
+kategoriye bakıp "IO darboğazı" demek yanıltıcı olurdu ve tek bir
+değişiklikle toparlanma beklentisi yaratırdı.
+
+### "En yavaş sorgu" ile "en çok yük üreten sorgu" farklı sorular
+
+5 saniye süren ama günde iki kez çalışan bir sorgu, 20 ms süren ama saniyede
+300 kez çalışan bir sorgunun yanında hiçbir şey. Yavaş sorgu listesi
+birincisini, AAS ikincisini öne çıkarıyor — DPA sınıfı araçların asıl katkısı
+bu. Her sorgu kendi bekleme profiliyle geliyor: süresinin yüzde kaçını hangi
+beklemede geçirdiği.
+
+### Dürüstlük kararları
+
+- **Arka plan boşta beklemesi (`activity`) yük sayılmıyor** — saymak grafiğe
+  hiç inmeyen yalancı bir taban ekler.
+- **queryid'siz satırlar sahte bir "sorgu" olmuyor.** PostgreSQL 14 öncesinde
+  `pg_stat_activity.query_id` yok; kırılım yine üretiliyor ama sorgu listesi
+  boş kalıyor ve `query_attribution_available=false` ile bu AÇIKÇA
+  bildiriliyor.
+- **Sorgu metni sözlükte yoksa uydurulmuyor**: "(sorgu metni kaydedilmemiş —
+  queryid X)" deniyor ki kullanıcı en azından kimliği pg_stat_statements'ta
+  arayabilsin.
+- **Kategori etiketi ve anlamı SUNUCUDAN geliyor.** Arayüzde ayrı bir çeviri
+  tablosu tutmak, aynı beklemenin iki farklı adla görünmesi demekti.
+
+**Testler:** `tests/test_database_load.py` (18 test). **Paydayı sabit 60
+varsayan hatalı sürüm konulduğunda ilgili test düşüyor** — hatayı yakaladığı
+doğrulandı. TypeScript tipleri üretilen şemadan türetildi. Toplam 942 test
+yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

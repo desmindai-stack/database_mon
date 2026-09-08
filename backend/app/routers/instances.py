@@ -27,6 +27,7 @@ from app.schemas import (
     ClusterHealthOut,
     ClusterLogsOut,
     ConnectionTestResult,
+    DatabaseLoadOut,
     IgnoredPrerequisitesUpdate,
     InstanceCreate,
     InstanceDependenciesOut,
@@ -47,6 +48,7 @@ from app.schemas import (
 from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
+from app.services.database_load import build_database_load, report_to_dict
 from app.services.performance_insights import analyze_metrics
 from app.services.deletion import (
     clear_dependents,
@@ -540,6 +542,32 @@ async def get_prediction_readiness(instance_id: int, db: AsyncSession = Depends(
         raise HTTPException(status_code=404, detail="Instance not found")
     results = await compute_prediction_readiness(db, instance_id, instance.engine)
     return [PredictionReadinessOut(**vars(r)) for r in results]
+
+
+@router.get("/{instance_id}/database-load", response_model=DatabaseLoadOut)
+async def get_database_load(
+    instance_id: int,
+    hours: int = Query(default=1, ge=1, le=168),
+    start: datetime | None = Query(
+        default=None, description="Özel aralık başlangıcı (ISO-8601). Verilirse `hours` yok sayılır."
+    ),
+    end: datetime | None = Query(default=None, description="Özel aralık bitişi (ISO-8601)."),
+    db: AsyncSession = Depends(get_db),
+) -> DatabaseLoadOut:
+    """Veritabanı yükü (AAS) — bekleme kategorisine göre kırılmış zaman serisi + o aralıkta en
+    çok yük üreten sorgular (Faz 25 İŞ 2).
+
+    `start`/`end` grafikte sürükleyerek aralık seçmeyi karşılıyor: seçilen aralık aynı uca
+    gönderiliyor ve "bu aralıkta ne oluyordu" sorusu aynı hesapla cevaplanıyor — ayrı bir uç
+    yazmak, iki farklı hesap ve iki farklı cevap riski demekti.
+
+    Veri yetersizse boş seri DEĞİL, `unavailable_reason` dolu bir yanıt döner.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+    report = await build_database_load(db, instance, hours=hours, start=start, end=end)
+    return DatabaseLoadOut(**report_to_dict(report))
 
 
 @router.get("/{instance_id}/insights", response_model=TuningReportOut)

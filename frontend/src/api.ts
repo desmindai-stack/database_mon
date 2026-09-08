@@ -360,6 +360,16 @@ export interface SlowQueryAvailability {
  */
 export type InstanceDependencies = Gen["InstanceDependenciesOut"];
 
+// --- Veritabanı yükü / bekleme analizi (Faz 25) ---
+//
+// Hepsi üretilen şemadan TÜRETİLİYOR: elle yazılan bir arayüz tipi, backend'e alan
+// eklendiğinde sessizce geride kalıyor (Faz 24'te `InstanceDependencies` tam olarak bu yüzden
+// bağımlılık dökümünü göstermiyordu).
+export type WaitCategoryShare = Gen["WaitCategoryShareOut"];
+export type DatabaseLoadPoint = Gen["DatabaseLoadPointOut"];
+export type QueryLoad = Gen["QueryLoadOut"];
+export type DatabaseLoad = Gen["DatabaseLoadOut"];
+
 
 
 /* --- Sağlık Raporu (Faz 17) --- */
@@ -1386,6 +1396,14 @@ export const api = {
     request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
   getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
+  /** Veritabanı yükü (AAS), bekleme kategorisine göre kırılmış (Faz 25 İŞ 2). */
+  getDatabaseLoad: (id: number, hours = 1) =>
+    request<DatabaseLoad>(`/api/instances/${id}/database-load?hours=${hours}`),
+  /** Grafikte sürükleyerek seçilen aralık — metrik grafiğiyle AYNI kalıp, aynı uç. */
+  getDatabaseLoadRange: (id: number, start: string, end: string) =>
+    request<DatabaseLoad>(
+      `/api/instances/${id}/database-load?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,
+    ),
   /** Yoksayılan ön koşulların TAM listesini kaydeder (Faz 16-B İŞ 6). */
   setIgnoredPrerequisites: (id: number, keys: string[]) =>
     request<string[]>(`/api/instances/${id}/prerequisites/ignored`, {

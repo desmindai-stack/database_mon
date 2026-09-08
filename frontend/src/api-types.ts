@@ -761,6 +761,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{instance_id}/database-load": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Database Load
+         * @description Veritabanı yükü (AAS) — bekleme kategorisine göre kırılmış zaman serisi + o aralıkta en
+         *     çok yük üreten sorgular (Faz 25 İŞ 2).
+         *
+         *     `start`/`end` grafikte sürükleyerek aralık seçmeyi karşılıyor: seçilen aralık aynı uca
+         *     gönderiliyor ve "bu aralıkta ne oluyordu" sorusu aynı hesapla cevaplanıyor — ayrı bir uç
+         *     yazmak, iki farklı hesap ve iki farklı cevap riski demekti.
+         *
+         *     Veri yetersizse boş seri DEĞİL, `unavailable_reason` dolu bir yanıt döner.
+         */
+        get: operations["get_database_load_api_instances__instance_id__database_load_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/{instance_id}/dependencies": {
         parameters: {
             query?: never;
@@ -2382,6 +2409,86 @@ export interface components {
             /** Vip Address */
             vip_address?: string | null;
         };
+        /** DatabaseLoadOut */
+        DatabaseLoadOut: {
+            /** Average Aas */
+            average_aas: number;
+            /** Blocked Aas */
+            blocked_aas: number;
+            /** Bucket Seconds */
+            bucket_seconds: number;
+            /**
+             * Categories
+             * @default []
+             */
+            categories: components["schemas"]["WaitCategoryShareOut"][];
+            /** Dominant Category */
+            dominant_category?: string | null;
+            /**
+             * Dominant Share Pct
+             * @default 0
+             */
+            dominant_share_pct: number;
+            /**
+             * Dominant Verdict
+             * @default
+             */
+            dominant_verdict: string;
+            /**
+             * End
+             * Format: date-time
+             */
+            end: string;
+            /** Engine */
+            engine: string;
+            /** Instance Id */
+            instance_id: number;
+            /** Peak Aas */
+            peak_aas: number;
+            /**
+             * Query Attribution Available
+             * @default true
+             */
+            query_attribution_available: boolean;
+            /** Samples Taken */
+            samples_taken: number;
+            /**
+             * Series
+             * @default []
+             */
+            series: components["schemas"]["DatabaseLoadPointOut"][];
+            /**
+             * Start
+             * Format: date-time
+             */
+            start: string;
+            /**
+             * Top Queries
+             * @default []
+             */
+            top_queries: components["schemas"]["QueryLoadOut"][];
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+        };
+        /** DatabaseLoadPointOut */
+        DatabaseLoadPointOut: {
+            /** Blocked Aas */
+            blocked_aas: number;
+            /**
+             * Bucket Start
+             * Format: date-time
+             */
+            bucket_start: string;
+            /**
+             * By Category
+             * @default {}
+             */
+            by_category: {
+                [key: string]: number;
+            };
+            /** Total Aas */
+            total_aas: number;
+        };
         /** DownNodeOut */
         DownNodeOut: {
             /** Node Name */
@@ -3812,6 +3919,32 @@ export interface components {
             /** Trend Pct */
             trend_pct: number;
         };
+        /**
+         * QueryLoadOut
+         * @description Bir sorgunun ürettiği yük ve BEKLEME PROFİLİ: süresinin yüzde kaçını nerede geçirdi.
+         */
+        QueryLoadOut: {
+            /** Aas */
+            aas: number;
+            /** Dominant Category */
+            dominant_category?: string | null;
+            /**
+             * Dominant Share Pct
+             * @default 0
+             */
+            dominant_share_pct: number;
+            /** Query */
+            query: string;
+            /** Queryid */
+            queryid: string;
+            /** Share Pct */
+            share_pct: number;
+            /**
+             * Wait Profile
+             * @default []
+             */
+            wait_profile: components["schemas"]["WaitCategoryShareOut"][];
+        };
         /** RefreshIntervalIn */
         RefreshIntervalIn: {
             /** Seconds */
@@ -4362,6 +4495,24 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
+        };
+        /**
+         * WaitCategoryShareOut
+         * @description Tek bir bekleme kategorisinin payı. `label`/`meaning` sunucudan geliyor ki arayüz ile
+         *     rapor aynı sözlüğü konuşsun — iki yerde ayrı çeviri tablosu tutmak, aynı beklemenin iki
+         *     farklı adla görünmesi demekti.
+         */
+        WaitCategoryShareOut: {
+            /** Aas */
+            aas: number;
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Meaning */
+            meaning: string;
+            /** Share Pct */
+            share_pct: number;
         };
         /** WaitEventOut */
         WaitEventOut: {
@@ -6203,6 +6354,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ClusterLogsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_database_load_api_instances__instance_id__database_load_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                /** @description Özel aralık başlangıcı (ISO-8601). Verilirse `hours` yok sayılır. */
+                start?: string | null;
+                /** @description Özel aralık bitişi (ISO-8601). */
+                end?: string | null;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DatabaseLoadOut"];
                 };
             };
             /** @description Validation Error */

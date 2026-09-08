@@ -2386,6 +2386,154 @@
         "title": "DatabaseGroupUpdate",
         "type": "object"
       },
+      "DatabaseLoadOut": {
+        "properties": {
+          "average_aas": {
+            "title": "Average Aas",
+            "type": "number"
+          },
+          "blocked_aas": {
+            "title": "Blocked Aas",
+            "type": "number"
+          },
+          "bucket_seconds": {
+            "title": "Bucket Seconds",
+            "type": "integer"
+          },
+          "categories": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/WaitCategoryShareOut"
+            },
+            "title": "Categories",
+            "type": "array"
+          },
+          "dominant_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dominant Category"
+          },
+          "dominant_share_pct": {
+            "default": 0.0,
+            "title": "Dominant Share Pct",
+            "type": "number"
+          },
+          "dominant_verdict": {
+            "default": "",
+            "title": "Dominant Verdict",
+            "type": "string"
+          },
+          "end": {
+            "format": "date-time",
+            "title": "End",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "integer"
+          },
+          "peak_aas": {
+            "title": "Peak Aas",
+            "type": "number"
+          },
+          "query_attribution_available": {
+            "default": true,
+            "title": "Query Attribution Available",
+            "type": "boolean"
+          },
+          "samples_taken": {
+            "title": "Samples Taken",
+            "type": "integer"
+          },
+          "series": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DatabaseLoadPointOut"
+            },
+            "title": "Series",
+            "type": "array"
+          },
+          "start": {
+            "format": "date-time",
+            "title": "Start",
+            "type": "string"
+          },
+          "top_queries": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/QueryLoadOut"
+            },
+            "title": "Top Queries",
+            "type": "array"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "instance_id",
+          "engine",
+          "start",
+          "end",
+          "bucket_seconds",
+          "samples_taken",
+          "average_aas",
+          "peak_aas",
+          "blocked_aas"
+        ],
+        "title": "DatabaseLoadOut",
+        "type": "object"
+      },
+      "DatabaseLoadPointOut": {
+        "properties": {
+          "blocked_aas": {
+            "title": "Blocked Aas",
+            "type": "number"
+          },
+          "bucket_start": {
+            "format": "date-time",
+            "title": "Bucket Start",
+            "type": "string"
+          },
+          "by_category": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "default": {},
+            "title": "By Category",
+            "type": "object"
+          },
+          "total_aas": {
+            "title": "Total Aas",
+            "type": "number"
+          }
+        },
+        "required": [
+          "bucket_start",
+          "total_aas",
+          "blocked_aas"
+        ],
+        "title": "DatabaseLoadPointOut",
+        "type": "object"
+      },
       "DownNodeOut": {
         "properties": {
           "node_name": {
@@ -6265,6 +6413,59 @@
         "title": "QueryHistorySeriesOut",
         "type": "object"
       },
+      "QueryLoadOut": {
+        "description": "Bir sorgunun ürettiği yük ve BEKLEME PROFİLİ: süresinin yüzde kaçını nerede geçirdi.",
+        "properties": {
+          "aas": {
+            "title": "Aas",
+            "type": "number"
+          },
+          "dominant_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dominant Category"
+          },
+          "dominant_share_pct": {
+            "default": 0.0,
+            "title": "Dominant Share Pct",
+            "type": "number"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "queryid": {
+            "title": "Queryid",
+            "type": "string"
+          },
+          "share_pct": {
+            "title": "Share Pct",
+            "type": "number"
+          },
+          "wait_profile": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/WaitCategoryShareOut"
+            },
+            "title": "Wait Profile",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queryid",
+          "query",
+          "aas",
+          "share_pct"
+        ],
+        "title": "QueryLoadOut",
+        "type": "object"
+      },
       "RefreshIntervalIn": {
         "properties": {
           "seconds": {
@@ -7926,6 +8127,40 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "WaitCategoryShareOut": {
+        "description": "Tek bir bekleme kategorisinin payı. `label`/`meaning` sunucudan geliyor ki arayüz ile\nrapor aynı sözlüğü konuşsun — iki yerde ayrı çeviri tablosu tutmak, aynı beklemenin iki\nfarklı adla görünmesi demekti.",
+        "properties": {
+          "aas": {
+            "title": "Aas",
+            "type": "number"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "meaning": {
+            "title": "Meaning",
+            "type": "string"
+          },
+          "share_pct": {
+            "title": "Share Pct",
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "label",
+          "meaning",
+          "aas",
+          "share_pct"
+        ],
+        "title": "WaitCategoryShareOut",
         "type": "object"
       },
       "WaitEventOut": {
@@ -10866,6 +11101,104 @@
           }
         ],
         "summary": "Get Cluster Logs",
+        "tags": [
+          "instances"
+        ]
+      }
+    },
+    "/api/instances/{instance_id}/database-load": {
+      "get": {
+        "description": "Veritabanı yükü (AAS) — bekleme kategorisine göre kırılmış zaman serisi + o aralıkta en\nçok yük üreten sorgular (Faz 25 İŞ 2).\n\n`start`/`end` grafikte sürükleyerek aralık seçmeyi karşılıyor: seçilen aralık aynı uca\ngönderiliyor ve \"bu aralıkta ne oluyordu\" sorusu aynı hesapla cevaplanıyor — ayrı bir uç\nyazmak, iki farklı hesap ve iki farklı cevap riski demekti.\n\nVeri yetersizse boş seri DEĞİL, `unavailable_reason` dolu bir yanıt döner.",
+        "operationId": "get_database_load_api_instances__instance_id__database_load_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 168,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Özel aralık başlangıcı (ISO-8601). Verilirse `hours` yok sayılır.",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Özel aralık başlangıcı (ISO-8601). Verilirse `hours` yok sayılır.",
+              "title": "Start"
+            }
+          },
+          {
+            "description": "Özel aralık bitişi (ISO-8601).",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Özel aralık bitişi (ISO-8601).",
+              "title": "End"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatabaseLoadOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Database Load",
         "tags": [
           "instances"
         ]

@@ -1710,3 +1710,67 @@ class NoiseSettingsUpdate(BaseModel):
     finding_min_total_ms: float | None = Field(default=None, ge=0)
     finding_min_calls: int | None = Field(default=None, ge=0)
     show_system_queries: bool | None = None
+
+
+# --- Veritabanı yükü / bekleme analizi (Faz 25 İŞ 2) ---
+#
+# TANIM SIRASI: `WaitCategoryShareOut` kendisini KULLANAN modellerden önce tanımlı olmalı.
+# Yerel Python 3.14 annotation'ları ertelemeli değerlendirdiği için ters sıra yerelde sessizce
+# geçer, canlı Python 3.12'de import anında NameError verir (bkz. tests/test_definition_order.py).
+
+
+class WaitCategoryShareOut(BaseModel):
+    """Tek bir bekleme kategorisinin payı. `label`/`meaning` sunucudan geliyor ki arayüz ile
+    rapor aynı sözlüğü konuşsun — iki yerde ayrı çeviri tablosu tutmak, aynı beklemenin iki
+    farklı adla görünmesi demekti."""
+
+    category: str
+    label: str
+    meaning: str
+    aas: float
+    share_pct: float
+
+
+class DatabaseLoadPointOut(BaseModel):
+    bucket_start: datetime
+    total_aas: float
+    blocked_aas: float
+    # kategori anahtarı -> o kovadaki AAS. Yığılmış alan grafiğinin serisi bu.
+    by_category: dict[str, float] = {}
+
+
+class QueryLoadOut(BaseModel):
+    """Bir sorgunun ürettiği yük ve BEKLEME PROFİLİ: süresinin yüzde kaçını nerede geçirdi."""
+
+    queryid: str
+    query: str
+    aas: float
+    share_pct: float
+    dominant_category: str | None = None
+    dominant_share_pct: float = 0.0
+    wait_profile: list[WaitCategoryShareOut] = []
+
+
+class DatabaseLoadOut(BaseModel):
+    instance_id: int
+    engine: str
+    start: datetime
+    end: datetime
+    bucket_seconds: int
+    samples_taken: int
+    average_aas: float
+    peak_aas: float
+    blocked_aas: float
+    series: list[DatabaseLoadPointOut] = []
+    categories: list[WaitCategoryShareOut] = []
+    top_queries: list[QueryLoadOut] = []
+    dominant_category: str | None = None
+    dominant_share_pct: float = 0.0
+    # "CPU baskın mı, IO baskın mı" sorusunun AÇIK cevabı — kullanıcının grafikten çıkarım
+    # yapmasını beklemek yerine cümleyle yazılıyor.
+    dominant_verdict: str = ""
+    # PostgreSQL 14 öncesinde pg_stat_activity'de query_id yok: bekleme kırılımı var ama
+    # sorguya bağlanamıyor. Arayüz bunu söylemeli, boş liste gösterip susmamalı.
+    query_attribution_available: bool = True
+    # Veri yetersizse NEDEN yetersiz olduğu — boş grafik gösterip susmak yasak.
+    unavailable_reason: str | None = None
