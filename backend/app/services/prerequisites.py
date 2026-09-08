@@ -298,6 +298,9 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
     try:
         await conn.execute("SET statement_timeout = '5000ms'")
 
+        # Sürüm numarası: aşağıdaki bekleme kontrolleri sürüme bağlı (query_id 14+ ile geldi).
+        version_num = int(await conn.fetchval("SELECT current_setting('server_version_num')::int"))
+
         # 1-5. pg_stat_statements ailesi — hepsi TEK probe'dan (services/pgss.py) türetiliyor.
         # Daha önce bu blok kendi katalog sorgusunu yapıyordu ve DPA'nın "yavaş sorgu yok"
         # mesajı bambaşka bir kontrole dayanıyordu; ikisi çelişebiliyordu. Artık aynı kaynak.
@@ -409,6 +412,119 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                     detail=track_io,
                 )
             )
+        # 11-12. BEKLEME ANALİZİ ÖN KOŞULLARI (Faz 25 İŞ 5).
+        #
+        # Bekleme örnekleyicisi pg_stat_activity'yi okuyor. Yetkisiz bir rol bu görünümde
+        # DİĞER kullanıcıların satırlarını görür ama `query`, `state` ve `wait_event`
+        # alanları NULL gelir. Sonuç sinsi: örnekleyici çalışır, veri birikir, grafik çizilir
+        # — ama yalnızca kendi oturumlarını sayar. Yani ekran "sunucu sakin" der, sunucu
+        # yanarken. Bu yüzden kontrol yalnızca rol üyeliğine değil, GÖRÜNÜRLÜĞÜN ÖLÇÜSÜNE de
+        # bakıyor: kaç oturumun maskelendiği sayılıp kullanıcıya "ne kadarını görebiliyorsun"
+        # olarak yazılıyor.
+        stats_role = await conn.fetchval(
+            "SELECT pg_has_role(current_user, 'pg_read_all_stats', 'member') "
+            "OR pg_has_role(current_user, 'pg_monitor', 'member')"
+        )
+        visibility = await conn.fetchrow(
+            """
+            SELECT
+                count(*) FILTER (WHERE backend_type = 'client backend') AS toplam,
+                count(*) FILTER (
+                    WHERE backend_type = 'client backend' AND state IS NULL
+                ) AS maskeli
+            FROM pg_stat_activity
+            WHERE pid <> pg_backend_pid()
+            """
+        )
+        total_backends = int(visibility["toplam"] or 0)
+        masked = int(visibility["maskeli"] or 0)
+        visible = total_backends - masked
+        if stats_role:
+            checks.append(
+                _ok(
+                    "wait_visibility",
+                    "Bekleme görünürlüğü (pg_read_all_stats)",
+                    "Tüm oturumların bekleme durumu okunabiliyor — veritabanı yükü (AAS) "
+                    "gerçek değerini gösteriyor.",
+                    detail=f"{total_backends} istemci oturumunun tamamı görülebiliyor",
+                )
+            )
+        elif masked > 0:
+            checks.append(
+                _partial(
+                    "wait_visibility",
+                    "Bekleme görünürlüğü (pg_read_all_stats)",
+                    "high",
+                    f"Bağlanan rol {total_backends} istemci oturumundan yalnızca {visible} "
+                    f"tanesini görebiliyor; {masked} oturumun durumu ve beklemesi maskeli "
+                    "geliyor. Veritabanı yükü grafiği bu oturumları HİÇ saymaz — yani sunucu "
+                    "yoğunken bile sakin görünebilir. Sayı bir tahmin değil, şu anki ölçüm.",
+                    "GRANT pg_read_all_stats TO <kullanıcı>;\n"
+                    "-- ya da daha geniş kapsamlı: GRANT pg_monitor TO <kullanıcı>;",
+                    detail=f"{visible}/{total_backends} oturum görülebiliyor",
+                )
+            )
+        else:
+            # Rol yok ama şu an maskeli oturum da yok (tek kullanıcılı sunucu ya da o anda
+            # başka oturum yok). Yeşil göstermek yanıltıcı olurdu: yük geldiğinde körleşir.
+            checks.append(
+                _partial(
+                    "wait_visibility",
+                    "Bekleme görünürlüğü (pg_read_all_stats)",
+                    "high",
+                    "Bağlanan rol pg_read_all_stats/pg_monitor üyesi değil. Şu anda başka "
+                    "kullanıcının oturumu olmadığı için ölçülebilir bir kayıp görünmüyor, ama "
+                    "başka kullanıcılar bağlandığında onların beklemeleri maskelenecek ve "
+                    "veritabanı yükü olduğundan düşük görünecek.",
+                    "GRANT pg_read_all_stats TO <kullanıcı>;",
+                    detail="şu an karşılaştırılacak başka oturum yok",
+                )
+            )
+
+        # compute_query_id — beklemeyi SORGUYA bağlayan tek alan.
+        if version_num >= 140_000:
+            compute_query_id = await conn.fetchval("SHOW compute_query_id")
+            # 'auto' = pg_stat_statements yüklüyse açık. Yüklü olup olmadığını yukarıdaki
+            # probe zaten biliyor; burada onu tekrar sorgulamak yerine ondan yararlanıyoruz.
+            effective_on = compute_query_id in ("on", "regress") or (
+                compute_query_id == "auto" and probe.installed
+            )
+            if effective_on:
+                checks.append(
+                    _ok(
+                        "compute_query_id",
+                        "compute_query_id",
+                        "Açık — bekleme örnekleri sorgu bazında ayrıştırılabiliyor "
+                        "(\"bu sorgu süresinin yüzde kaçını kilitte geçirdi\").",
+                        detail=compute_query_id,
+                    )
+                )
+            else:
+                checks.append(
+                    _missing(
+                        "compute_query_id",
+                        "compute_query_id",
+                        "medium",
+                        f"Değer '{compute_query_id}' — pg_stat_activity.query_id boş geliyor. "
+                        "Bekleme kırılımı yine üretilir (\"sistem neyi bekliyor\" cevaplanır) "
+                        "ama hangi SORGUNUN beklediği ayrıştırılamaz.",
+                        "ALTER SYSTEM SET compute_query_id = on;\nSELECT pg_reload_conf();",
+                        detail=compute_query_id,
+                    )
+                )
+        else:
+            checks.append(
+                _missing(
+                    "compute_query_id",
+                    "compute_query_id (PostgreSQL 14+)",
+                    "low",
+                    f"Sunucu sürümü {version_num} — pg_stat_activity.query_id PostgreSQL 14 ile "
+                    "geldi. Bekleme kırılımı çalışıyor ama sorgu bazında ayrıştırma bu sürümde "
+                    "mümkün değil. Sürüm yükseltmesi dışında yapılabilecek bir şey yok.",
+                    "-- Sunucu sürümü yükseltmesi gerekir (PostgreSQL 14+).",
+                    detail=str(version_num),
+                )
+            )
     finally:
         await conn.close()
 
@@ -511,6 +627,51 @@ async def check_sqlserver_prerequisites(target: ConnectionTarget) -> list[Prereq
                     f"Durum okunamadı (SQL Server sürümü Query Store'u desteklemiyor olabilir — 2016+ gerekir): {exc}",
                 )
             )
+
+        # 4. BEKLEME ANALİZİ DMV'LERİ (Faz 25 İŞ 5).
+        #
+        # VIEW SERVER STATE yukarıda genel olarak kontrol ediliyor ama bekleme örnekleyicisi
+        # için ayrı bir kontrol var: yetki bayrağı ile GERÇEK erişim ayrışabiliyor (sunucu
+        # düzeyinde DENY, sınırlı sürüm, Azure SQL kısıtları). Bayrağa güvenip örneklemeyi
+        # açmak, boş bir grafiğin sebebini gizlemek olurdu.
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT COUNT(*) FROM sys.dm_exec_requests r "
+                    "LEFT JOIN sys.dm_os_waiting_tasks w ON w.session_id = r.session_id"
+                )
+                await cur.fetchone()
+            checks.append(
+                _ok(
+                    "wait_visibility",
+                    "Bekleme görünürlüğü (dm_exec_requests)",
+                    "Aktif istekler ve bekleme görevleri okunabiliyor — veritabanı yükü (AAS) "
+                    "ve bekleme kırılımı üretilebiliyor.",
+                )
+            )
+        except Exception as exc:
+            lower = str(exc).lower()
+            if "permission" in lower or "denied" in lower or "state" in lower:
+                checks.append(
+                    _unauthorized(
+                        "wait_visibility",
+                        "Bekleme görünürlüğü (dm_exec_requests)",
+                        "high",
+                        "DMV reddedildi — bekleme örnekleyicisi yalnızca KENDİ oturumunu "
+                        "görebilir. Veritabanı yükü grafiği bu durumda sunucu yoğunken bile "
+                        "sakin görünür; boş değil, YANLIŞ veri üretir.",
+                        "GRANT VIEW SERVER STATE TO <login>;",
+                    )
+                )
+            else:
+                checks.append(
+                    _unknown(
+                        "wait_visibility",
+                        "Bekleme görünürlüğü (dm_exec_requests)",
+                        "high",
+                        f"Sorgu başarısız oldu, sebep belirsiz: {exc}",
+                    )
+                )
     finally:
         await conn.close()
 

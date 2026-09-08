@@ -5237,6 +5237,82 @@ Türkçeye uygun şekilde normalize ediyor.
 
 Toplam 1039 backend testi yeşil.
 
+## Faz 25 — İŞ 5: Bekleme analizi ön koşulları
+
+Bekleme örnekleyicisinin YETKİSİZ çalışması, hiç çalışmamasından DAHA
+KÖTÜDÜR — ve bunu görmek zor. Yetkisiz bir PostgreSQL rolü
+`pg_stat_activity`'de diğer kullanıcıların satırlarını görür ama `state`,
+`query` ve `wait_event` alanları NULL gelir. Sonuç: örnekleyici çalışır, veri
+birikir, grafik çizilir, hiçbir hata çıkmaz — ama yalnızca kendi oturumları
+sayılır. Ekran "sunucu sakin" der, sunucu yanarken. Yani boş veri değil,
+**YANLIŞ veri** üretir.
+
+### PostgreSQL — üç yeni kontrol
+
+**`wait_visibility`** — yalnızca rol üyeliğine bakmıyor, GÖRÜNÜRLÜĞÜ ÖLÇÜYOR:
+
+```sql
+SELECT count(*) FILTER (WHERE backend_type = 'client backend')            AS toplam,
+       count(*) FILTER (WHERE backend_type = 'client backend'
+                          AND state IS NULL)                             AS maskeli
+FROM pg_stat_activity WHERE pid <> pg_backend_pid()
+```
+
+Kullanıcının isteği "yetki yoksa ne kadarını görebileceğini söyle" idi;
+cevap bir tahmin değil ölçüm: "20 istemci oturumundan yalnızca 3 tanesini
+görebiliyor; 17 oturumun durumu ve beklemesi maskeli geliyor." `detail`
+alanında da `3/20 oturum görülebiliyor` yazıyor. 20 oturumdan 3'ünü görmek
+ile 19'unu görmek bambaşka kararlar gerektirir; "yetkiniz eksik" demek bunu
+söylemez.
+
+Rol yok ama o anda maskeli oturum da yoksa (tek kullanıcılı sunucu) durum
+yine `partial`: yeşil göstermek, yük geldiğinde körleşecek bir kurulumu
+onaylamak olurdu.
+
+**`compute_query_id`** — beklemeyi SORGUYA bağlayan tek alan. Kapalıysa
+kırılım yine üretiliyor ("sistem neyi bekliyor" cevaplanıyor), kaybolan
+yalnızca "hangi sorgu". Bu yüzden `medium`, `high` değil — çalışan bir
+özelliği bozukmuş gibi göstermemek için. `auto` değeri tek başına bir cevap
+değil: pg_stat_statements yüklüyse açık demektir ve öyle raporlanıyor;
+"auto" görüp "kapalı" demek kullanıcıyı gereksiz bir ayar değişikliğine
+yollardı.
+
+**PostgreSQL 14 öncesi** ayrı ele alındı: `query_id` o sürümlerde YOK. "Şu
+ayarı açın" demek çalışmayan bir düzeltme önermek olurdu; tek yolun sürüm
+yükseltmesi olduğu açıkça yazılıyor ve önem derecesi `low`.
+
+### SQL Server — fonksiyonel DMV testi
+
+`VIEW SERVER STATE` zaten genel olarak kontrol ediliyordu; bekleme analizi
+için AYRI ve fonksiyonel bir kontrol eklendi (`dm_exec_requests` +
+`dm_os_waiting_tasks` gerçekten sorgulanıyor). Yetki bayrağı ile gerçek
+erişim ayrışabiliyor — sunucu düzeyinde DENY, Azure SQL kısıtları, sınırlı
+sürümler. Bayrağa güvenip örneklemeyi açmak, boş bir grafiğin sebebini
+gizlemek olurdu. Reddedilirse mesaj yine "YANLIŞ veri üretir" diyor; sebebi
+belirsiz bir hata ise `unauthorized` değil `unknown` — bilinmeyen hatayı
+"yetki eksik" diye raporlamak kullanıcıyı yanlış düzeltmeye yollar.
+
+**Testler:** `tests/test_wait_prerequisites.py` (10 test). **Ölçüm yerine
+genel bir "yetkiniz eksik" mesajı konulduğunda iki test düşüyor** — sayının
+gerçekten korunduğu doğrulandı.
+
+### Yan bulgu: paralel koşuda kırılgan bir tarayıcı testi
+
+E2E paketini koştururken `routing.spec.ts`'teki "silinmiş instance'a derin
+bağlantı" testi paralel koşuda düşüyor, tek başına geçiyordu. Sebep test
+altyapısında değil SQLite'ın davranışında: yeni satıra `max(rowid) + 1`
+veriliyor, yani EN YÜKSEK id'li satır silindiğinde o id bir sonraki eklemede
+YENİDEN KULLANILIYOR. Paralel koşan başka bir spec tam o anda instance
+oluşturup silinen id'yi kapıyor ve test "silinmiş kayıt" yerine bambaşka bir
+instance'ı açıyordu.
+
+Düzeltme: test, silinecek kayıttan SONRA bir koruyucu kayıt daha oluşturuyor;
+böylece silinen id artık en yüksek değil ve yeniden kullanılamıyor. Testi
+seri koşmaya zorlamak ya da bekleme eklemek belirtiyi gizlerdi. 33 e2e testi
+yeşil, kritik paket arka arkaya iki kez temiz.
+
+Toplam 1049 backend testi yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -44,6 +44,10 @@ def _pg_responses(**overrides) -> dict:
         "-- ext:pg_qualstats": True,
         "-- ext:pg_buffercache": True,
         "SHOW track_io_timing": "on",
+        # Faz 25 İŞ 5 — bekleme analizi ön koşulları.
+        "server_version_num": 160000,
+        "FROM pg_stat_activity": {"toplam": 5, "maskeli": 0},
+        "SHOW compute_query_id": "on",
     }
     base.update(overrides)
     return base
@@ -188,6 +192,8 @@ def _sqlserver_responses(**overrides) -> dict:
         "HAS_PERMS_BY_NAME": ([(1,)], [("x",)]),
         "sys.dm_exec_query_stats": ([(b"hash",)], [("query_hash",)]),
         "sys.database_query_store_options": ([("READ_WRITE", "READ_WRITE")], [("actual", ""), ("desired", "")]),
+        # Faz 25 İŞ 5 — bekleme örnekleyicisinin okuduğu DMV'ler.
+        "sys.dm_os_waiting_tasks": ([(3,)], [("", "")]),
     }
     base.update(overrides)
     return base

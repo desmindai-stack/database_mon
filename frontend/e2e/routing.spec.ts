@@ -26,12 +26,20 @@ test.describe("gezinme", () => {
   }) => {
     const api = new ApiHelper(request);
     const instance = await api.createInstance();
+    // KORUYUCU KAYIT — SQLite yeni satıra `max(rowid) + 1` verir, yani EN YÜKSEK id'li satır
+    // silindiğinde o id bir sonraki eklemede yeniden kullanılır. Testler paralel koştuğu için
+    // başka bir spec tam o anda instance oluşturup silinen id'yi kapabiliyordu; test o zaman
+    // "silinmiş kayıt" yerine bambaşka bir instance'ı açıyor ve sebepsiz düşüyordu.
+    // Sonrasına bir kayıt daha eklemek, silinen id'yi erişilemez kılıyor.
+    const guard = await api.createInstance();
     expect(await api.delete(`/api/instances/${instance.id}?cascade=true`)).toBe(204);
 
     await page.goto(`/instances/${instance.id}`);
 
     await expect(page.getByRole("heading", { name: "Instance bulunamadı" })).toBeVisible();
     await expect(page.getByRole("link", { name: /Instance listesine dön/ })).toBeVisible();
+
+    await api.delete(`/api/instances/${guard.id}?cascade=true`);
   });
 
   test("sayısal olmayan instance adresi sonsuz yüklenmede takılmaz", async ({ page }) => {
