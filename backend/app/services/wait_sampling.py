@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -61,6 +62,15 @@ FAILURE_LOG_EVERY = 60
 #: kendisini üretirdi. 10 saniye: bir bloklama olayının başlangıcını kaçırmayacak kadar
 #: sık, `pg_locks` taramasını sürekli tekrarlamayacak kadar seyrek.
 BLOCKING_CHECK_INTERVAL_SECONDS = 10.0
+
+#: Örnekleyici ne kadarda bir ÖZET loglayacak. Tur başına log yazmak saniyede bir satır,
+#: günde 86.400 satır demek — gerçek hatalar o yığının içinde kaybolur. Özet, aynı bilgiyi
+#: (kaç örnek, kaç hata, ne kadar gecikme) 288 satırda veriyor.
+SUMMARY_LOG_INTERVAL_SECONDS = 300.0
+
+#: Bir tur bu kadar gecikirse ANLAMLI bir olaydır ve tek başına loglanır: örnekleme
+#: aralığının katı kadar süren bir tur, ölçümde delik açıyor demektir.
+SLOW_ROUND_FACTOR = 3.0
 
 
 def minute_floor(moment: datetime) -> datetime:
@@ -104,12 +114,30 @@ _instance_cache_at: datetime | None = None
 _pending_flush: list[tuple[int, _MinuteBucket]] = []
 
 
+@dataclass
+class _RoundStats:
+    """Özet log için biriken sayaçlar (Faz 27 İŞ 2)."""
+
+    rounds: int = 0
+    failures: int = 0
+    samples: int = 0
+    total_duration: float = 0.0
+    max_duration: float = 0.0
+    slow_rounds: int = 0
+    last_logged_at: datetime | None = None
+
+
+_stats = _RoundStats()
+
+
 def reset_state() -> None:
     """Testler ve worker yeniden başlangıcı için: bellekteki her şeyi bırakır."""
     _samplers.clear()
     _buckets.clear()
     _known_signatures.clear()
     _pending_flush.clear()
+    global _stats
+    _stats = _RoundStats()
     _instance_cache.clear()
     global _instance_cache_at
     _instance_cache_at = None
@@ -316,6 +344,50 @@ async def flush_all_buckets(session: AsyncSession) -> int:
     return await flush_completed_buckets(session)
 
 
+def _record_round(now: datetime, duration: float, instance_count: int) -> None:
+    """Tur istatistiğini biriktirir; gerekiyorsa özet ya da gecikme uyarısı yazar.
+
+    TUR BAŞINA LOG YAZILMIYOR (Faz 27 İŞ 2). Saniyede bir çalışan bir işte her turu
+    loglamak günde 86.400 satır demek ve gerçek hatalar o yığının içinde kaybolur.
+    Yazılan iki şey var: 5 dakikada bir ÖZET, ve tek tek anlamlı olaylar (gecikmiş tur).
+    """
+    _stats.rounds += 1
+    _stats.samples += instance_count
+    _stats.total_duration += duration
+    _stats.max_duration = max(_stats.max_duration, duration)
+    _stats.failures = sum(1 for s in _samplers.values() if s.consecutive_failures > 0)
+
+    interval = max(settings.wait_sample_interval_seconds, 1)
+    if duration >= interval * SLOW_ROUND_FACTOR:
+        _stats.slow_rounds += 1
+        # Gecikmiş tur ANLAMLI bir olay: ölçümde delik açıyor ve AAS'in paydasını düşürüyor.
+        logger.warning(
+            "Bekleme örnekleme turu gecikti: %.1f sn (aralık %s sn, %s instance). "
+            "Bu süre boyunca örnek alınamadı.",
+            duration, interval, instance_count,
+        )
+
+    if _stats.last_logged_at is None:
+        _stats.last_logged_at = now
+        return
+    if (now - _stats.last_logged_at).total_seconds() < SUMMARY_LOG_INTERVAL_SECONDS:
+        return
+
+    average = _stats.total_duration / _stats.rounds if _stats.rounds else 0.0
+    logger.info(
+        "Bekleme örnekleyici özeti: %s tur, %s instance, ortalama %.0f ms, en yavaş %.0f ms, "
+        "%s gecikmiş tur, %s instance hata veriyor",
+        _stats.rounds, instance_count, average * 1000, _stats.max_duration * 1000,
+        _stats.slow_rounds, _stats.failures,
+    )
+    _stats.rounds = 0
+    _stats.samples = 0
+    _stats.total_duration = 0.0
+    _stats.max_duration = 0.0
+    _stats.slow_rounds = 0
+    _stats.last_logged_at = now
+
+
 async def sampling_tick() -> None:
     """Örnekleyicinin bir turu: her instance'tan bir fotoğraf + kapanmış dakikaları yaz."""
     if not settings.wait_sampling_enabled:
@@ -324,11 +396,13 @@ async def sampling_tick() -> None:
     async with SessionLocal() as session:
         instances = await _load_instances(session, now)
 
+    started = time.monotonic()
     if instances:
         # Sıralı değil PARALEL: yavaş/erişilemeyen tek bir sunucu, diğerlerinin örneklemesini
         # geciktirmemeli. `return_exceptions` — bir instance'ın hatası turu düşürmesin
         # (hata zaten _sample_instance içinde yakalanıyor, bu ikinci savunma).
         await asyncio.gather(*(_sample_instance(i, now) for i in instances), return_exceptions=True)
+    _record_round(now, time.monotonic() - started, len(instances))
 
     due_for_blocking = [
         instance

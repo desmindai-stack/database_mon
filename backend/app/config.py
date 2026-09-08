@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     # yapılıyor, hedef veritabanına hiç bağlanılmıyor. 5 dakika: auto_explain eşiği genelde
     # saniyeler mertebesinde olduğu için daha sık çekmenin bir kazancı yok, üstelik her çekim
     # log'un son N satırını yeniden okuyor.
+    # Log seviyesi (Faz 27 İŞ 2). Teşhis sırasında DEBUG'a çekip sonra geri almak, kod
+    # değiştirip yeniden dağıtmaktan hızlı. Gürültülü kütüphane logger'ları (APScheduler'ın
+    # tur başına iki satırı) INFO ve üstünde susturuluyor; DEBUG'da susturma uygulanmıyor
+    # çünkü DEBUG'a çeken kişi gürültüyü de istiyordur.
+    log_level: str = "INFO"
     plan_capture_enabled: bool = True
     plan_capture_interval_seconds: int = 300
     db_statement_timeout_seconds: int = 120

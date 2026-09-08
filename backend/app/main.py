@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 
 from app.collectors.scheduler import start_scheduler, stop_scheduler_async
+from app.logging_setup import configure_logging
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample, User
@@ -34,6 +35,9 @@ from app.services.bootstrap import ensure_default_admin, ensure_default_customer
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # API ve worker AYNI log yapılandırmasını kullanıyor: ikisinin farklı davranması,
+    # "worker'da görünen hata API'de görünmüyor" gibi bir teşhis kaybı demekti.
+    configure_logging()
     await init_db()
     await ensure_default_admin()
     await ensure_default_customer()

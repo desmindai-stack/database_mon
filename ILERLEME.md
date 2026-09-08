@@ -5807,6 +5807,62 @@ Bir not: uçtan uca testin eski regex'le de geçtiğini fark ettim — çünkü
 `advise()` ayrıştırmayı doğrudan yapıyor, `_extract_tables` üzerinden değil.
 Bunu test dosyasındaki yoruma yanlış yazmıştım, düzelttim.
 
+## Faz 27 — İŞ 2: Log gürültüsü
+
+Bekleme örnekleyicisi saniyede bir çalışıyor ve APScheduler her tetiklemeyi INFO
+seviyesinde logluyordu. Railway'de **günde 86.400 tur × 2 satır ≈ 172 bin satır**
+gürültü — gerçek hatalar bu yığının içinde kayboluyor. Log'un varlık sebebi ise
+tam olarak onları görebilmek.
+
+### Gürültülü kütüphane logger'ları susturuldu
+
+`app/logging_setup.py` eklendi. `apscheduler.executors.default` ("Running job",
+"Job executed successfully"), `apscheduler.scheduler`, `httpx` (her host-agent
+yoklamasını yazıyor) ve `asyncio` INFO ve üstünde WARNING'e çekiliyor.
+
+**Susturma hataları GİZLEMİYOR** ve bu test edildi: APScheduler bir iş exception
+fırlattığında zaten ERROR yazıyor, ERROR > WARNING olduğu için görünür kalıyor.
+
+`DEBUG`'da susturma **uygulanmıyor** — DEBUG'a çeken kişi teşhis yapıyordur ve
+gürültüyü de istiyordur; orada susturmak onu aradığı satırdan mahrum bırakırdı.
+
+### Örnekleyici: tur başına log yok, 5 dakikada bir özet
+
+Örnekleyici artık iki şey yazıyor:
+
+| Ne zaman | Ne yazıyor |
+|---|---|
+| 5 dakikada bir | Özet: kaç tur, kaç instance, ortalama süre, en yavaş tur, kaç gecikmiş tur, kaç instance hata veriyor |
+| Tur aralığın 3 katını aşarsa | Tek başına WARNING — gecikmiş tur ölçümde delik açıyor ve AAS'in paydasını düşürüyor; özeti beklemek sorunun 5 dakika görünmez kalması demekti |
+
+Aynı bilgi 86.400 satır yerine 288 satırda veriliyor.
+
+Bağlantı kopması ve yetki hataları zaten seyreltilmiş şekilde loglanıyordu
+(Faz 25: ilk hata + her 60 turda bir), o davranış korundu.
+
+### LOG_LEVEL ortam değişkeni
+
+`LOG_LEVEL` ile ayarlanabiliyor ve `Settings` üzerinden okunuyor (ham
+`os.getenv` değil) — .env dosyası ve Railway değişkenleri tek yerden yönetilsin
+diye. Tanınmayan bir değer (`LOG_LEVEL=verbose`) INFO'ya düşüyor **ve uyarı
+yazıyor**: yanlış yazım yüzünden log'un tamamen susması, teşhis edilmesi en zor
+durumlardan biri olurdu.
+
+API ve worker artık **aynı** yapılandırmayı kullanıyor. Öncesinde yalnızca
+worker'da `basicConfig` vardı; ikisinin farklı davranması "worker'da görünen hata
+API'de görünmüyor" gibi bir teşhis kaybı demekti.
+
+### Diğer sık işler denetlendi
+
+`evaluate_custom_rules_tick` (10 sn), `collect_all_instances` (15 sn) ve
+`wait_sampling_tick` yalnızca HATA durumunda yazıyor — statik bir test bunu
+kilitliyor ki gürültü sorunu başka bir kapıdan geri gelmesin.
+
+**Testler:** `tests/test_logging_noise.py` (15 test). En önemlisi
+`test_a_normal_round_writes_nothing`: 120 tur koşuluyor ve tek satır bile
+beklenmiyor — bu testin düşmesi, günde 86.400 satırın geri geldiği anlamına
+gelir. Toplam 1204 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -7,10 +7,12 @@ import logging
 import signal
 
 from app.collectors.scheduler import start_scheduler, stop_scheduler_async
+from app.logging_setup import configure_logging
 from app.config import settings
 from app.database import init_db
 
-logging.basicConfig(level=logging.INFO)
+# LOG_LEVEL ile ayarlanabilir; gürültülü kütüphane logger'ları susturuluyor (Faz 27 İŞ 2).
+configure_logging()
 logger = logging.getLogger("dbace.worker")
 
 
