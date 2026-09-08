@@ -2787,6 +2787,26 @@
       },
       "ExplainOut": {
         "properties": {
+          "analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PlanAnalysisOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "analysis_advice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdviceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "analyzed": {
             "title": "Analyzed",
             "type": "boolean"
@@ -2910,6 +2930,17 @@
             ],
             "title": "Actual Rows"
           },
+          "actual_total_rows": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Total Rows"
+          },
           "actual_total_time": {
             "anyOf": [
               {
@@ -2940,6 +2971,17 @@
             "title": "Children",
             "type": "array"
           },
+          "estimate_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate Ratio"
+          },
           "insights": {
             "default": [],
             "items": {
@@ -2947,6 +2989,21 @@
             },
             "title": "Insights",
             "type": "array"
+          },
+          "is_root_cause": {
+            "default": false,
+            "title": "Is Root Cause",
+            "type": "boolean"
+          },
+          "loops": {
+            "default": 1.0,
+            "title": "Loops",
+            "type": "number"
+          },
+          "misestimated": {
+            "default": false,
+            "title": "Misestimated",
+            "type": "boolean"
           },
           "node_type": {
             "title": "Node Type",
@@ -2985,6 +3042,17 @@
             ],
             "title": "Relation Name"
           },
+          "self_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Self Time Ms"
+          },
           "shared_hit_blocks": {
             "anyOf": [
               {
@@ -3018,6 +3086,11 @@
             ],
             "title": "Startup Cost"
           },
+          "time_share_pct": {
+            "default": 0.0,
+            "title": "Time Share Pct",
+            "type": "number"
+          },
           "total_cost": {
             "anyOf": [
               {
@@ -3028,6 +3101,11 @@
               }
             ],
             "title": "Total Cost"
+          },
+          "underestimated": {
+            "default": false,
+            "title": "Underestimated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -5749,6 +5827,189 @@
           "metric_unit"
         ],
         "title": "PerformanceInsightOut",
+        "type": "object"
+      },
+      "PlanAnalysisOut": {
+        "properties": {
+          "has_actual_rows": {
+            "default": false,
+            "title": "Has Actual Rows",
+            "type": "boolean"
+          },
+          "hottest": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PlanNodeAnalysisOut"
+            },
+            "title": "Hottest",
+            "type": "array"
+          },
+          "misestimated": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PlanNodeAnalysisOut"
+            },
+            "title": "Misestimated",
+            "type": "array"
+          },
+          "root_causes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PlanNodeAnalysisOut"
+            },
+            "title": "Root Causes",
+            "type": "array"
+          },
+          "total_time_ms": {
+            "default": 0.0,
+            "title": "Total Time Ms",
+            "type": "number"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "title": "PlanAnalysisOut",
+        "type": "object"
+      },
+      "PlanNodeAnalysisOut": {
+        "description": "Sapma analizinde öne çıkan tek bir düğüm (Faz 26 İŞ 2).",
+        "properties": {
+          "actual_rows": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Rows"
+          },
+          "actual_total_rows": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Total Rows"
+          },
+          "estimate_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimate Ratio"
+          },
+          "estimated_total_rows": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Total Rows"
+          },
+          "is_root_cause": {
+            "default": false,
+            "title": "Is Root Cause",
+            "type": "boolean"
+          },
+          "loops": {
+            "default": 1.0,
+            "title": "Loops",
+            "type": "number"
+          },
+          "misestimated": {
+            "default": false,
+            "title": "Misestimated",
+            "type": "boolean"
+          },
+          "node_type": {
+            "title": "Node Type",
+            "type": "string"
+          },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
+          "plan_rows": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Rows"
+          },
+          "relation_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation Name"
+          },
+          "self_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Self Time Ms"
+          },
+          "time_share_pct": {
+            "default": 0.0,
+            "title": "Time Share Pct",
+            "type": "number"
+          },
+          "total_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Time Ms"
+          },
+          "underestimated": {
+            "default": false,
+            "title": "Underestimated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "node_type"
+        ],
+        "title": "PlanNodeAnalysisOut",
         "type": "object"
       },
       "PredictionAccuracyOut": {

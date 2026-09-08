@@ -1176,7 +1176,52 @@ class ExplainPlanNodeOut(BaseModel):
     shared_hit_blocks: float | None = None
     shared_read_blocks: float | None = None
     insights: list[str] = []
+    # --- Faz 26 İŞ 2: sapma ve süre alanları ---
+    # `Plan Rows`/`Actual Rows` DÖNGÜ BAŞINADIR; toplam satır = değer × loops.
+    loops: float = 1.0
+    actual_total_rows: float | None = None
+    # gerçek/tahmini. >1 = az tahmin (nested loop tuzağının kaynağı).
+    estimate_ratio: float | None = None
+    misestimated: bool = False
+    underestimated: bool = False
+    is_root_cause: bool = False
+    # Düğümün KENDİ süresi (çocuklar hariç) — bu çıkarma olmadan en pahalı düğüm hep kök çıkar.
+    self_time_ms: float | None = None
+    time_share_pct: float = 0.0
     children: list["ExplainPlanNodeOut"] = []
+
+
+class PlanNodeAnalysisOut(BaseModel):
+    """Sapma analizinde öne çıkan tek bir düğüm (Faz 26 İŞ 2)."""
+
+    node_type: str
+    relation_name: str | None = None
+    path: str = ""
+    plan_rows: float | None = None
+    actual_rows: float | None = None
+    loops: float = 1.0
+    estimated_total_rows: float | None = None
+    actual_total_rows: float | None = None
+    estimate_ratio: float | None = None
+    misestimated: bool = False
+    underestimated: bool = False
+    is_root_cause: bool = False
+    self_time_ms: float | None = None
+    total_time_ms: float | None = None
+    time_share_pct: float = 0.0
+
+
+class PlanAnalysisOut(BaseModel):
+    total_time_ms: float = 0.0
+    has_actual_rows: bool = False
+    # Gerçek satır sayısı yoksa sapma ÖLÇÜLEMEZ; tahminleri birbiriyle karşılaştırmak hiçbir
+    # şey söylemez. Boş liste dönüp susmak yerine sebebi yazılıyor.
+    unavailable_reason: str | None = None
+    hottest: list[PlanNodeAnalysisOut] = []
+    misestimated: list[PlanNodeAnalysisOut] = []
+    # Sapma yukarı doğru YAYILIR: bir tarama yanlış tahmin edilirse üstündeki her join de
+    # yanlış tahmin eder. Asıl suçlu en derindeki düğümdür ve öneri ona göre üretilir.
+    root_causes: list[PlanNodeAnalysisOut] = []
 
 
 class ExplainOut(BaseModel):
@@ -1197,6 +1242,11 @@ class ExplainOut(BaseModel):
     # Kaynağın sınırı — "bu plan neye kadar güvenilir". auto_explain'de None (sınır yok).
     source_caveat: str | None = None
     captured_at: datetime | None = None
+    # Tahmini/gerçek satır sapması ve süre dağılımı (Faz 26 İŞ 2).
+    analysis: PlanAnalysisOut | None = None
+    # Sapmanın kök nedenine göre beş parçalı öneri; sapma yoksa None (olmayan bir sorun için
+    # öneri üretmek yanıltıcı olurdu).
+    analysis_advice: AdviceOut | None = None
 
 
 class CapturedPlanOut(BaseModel):

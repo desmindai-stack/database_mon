@@ -28,6 +28,12 @@ from app.services import query_cache
 from app.services.credentials import decrypt_secret
 from app.services.auto_explain import MANAGED_SERVICE_GUIDANCE, plan_source_label
 from app.services.explain_service import PostgreSQLExplainService, _parse_node, _plan_to_dict
+from app.services.plan_analysis import (
+    advice_for_analysis,
+    analysis_to_dict,
+    analyze_plan,
+    annotate_plan_dict,
+)
 from app.services.advice import Advice, AdviceStep, advice_to_dict
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.database_load import wait_profiles_by_query
@@ -383,6 +389,11 @@ async def get_captured_plan(
     insights: list[str] = []
     if node:
         _collect_plan_insights(node, insights)
+    plan_dict = _plan_to_dict(node) if node else None
+    # Sapma analizi HAM plan JSON'undan: `Actual Loops` ve koşul metinleri sadeleştirilmiş
+    # ağaçta yok ve analiz onlara ihtiyaç duyuyor.
+    analysis = analyze_plan(row.plan_json or {})
+    annotate_plan_dict(plan_dict, analysis)
 
     return ExplainOut(
         query=row.query_text,
@@ -393,8 +404,10 @@ async def get_captured_plan(
         execution_time_ms=_plan_float(row.plan_json, "Execution Time") or row.duration_ms,
         total_cost=node.total_cost if node else None,
         insights=insights,
-        plan=_plan_to_dict(node) if node else None,
+        plan=plan_dict,
         raw_plan=[row.plan_json] if row.plan_json else [],
+        analysis=analysis_to_dict(analysis),
+        analysis_advice=advice_to_dict(advice_for_analysis(analysis)),
         source=row.source,
         source_label=plan_source_label(row.source),
         source_caveat=(

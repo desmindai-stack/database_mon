@@ -2692,6 +2692,8 @@ export interface components {
         };
         /** ExplainOut */
         ExplainOut: {
+            analysis?: components["schemas"]["PlanAnalysisOut"] | null;
+            analysis_advice?: components["schemas"]["AdviceOut"] | null;
             /** Analyzed */
             analyzed: boolean;
             /** Captured At */
@@ -2729,6 +2731,8 @@ export interface components {
         ExplainPlanNodeOut: {
             /** Actual Rows */
             actual_rows?: number | null;
+            /** Actual Total Rows */
+            actual_total_rows?: number | null;
             /** Actual Total Time */
             actual_total_time?: number | null;
             /** Alias */
@@ -2738,11 +2742,28 @@ export interface components {
              * @default []
              */
             children: components["schemas"]["ExplainPlanNodeOut"][];
+            /** Estimate Ratio */
+            estimate_ratio?: number | null;
             /**
              * Insights
              * @default []
              */
             insights: string[];
+            /**
+             * Is Root Cause
+             * @default false
+             */
+            is_root_cause: boolean;
+            /**
+             * Loops
+             * @default 1
+             */
+            loops: number;
+            /**
+             * Misestimated
+             * @default false
+             */
+            misestimated: boolean;
             /** Node Type */
             node_type: string;
             /** Plan Rows */
@@ -2751,14 +2772,26 @@ export interface components {
             plan_width?: number | null;
             /** Relation Name */
             relation_name?: string | null;
+            /** Self Time Ms */
+            self_time_ms?: number | null;
             /** Shared Hit Blocks */
             shared_hit_blocks?: number | null;
             /** Shared Read Blocks */
             shared_read_blocks?: number | null;
             /** Startup Cost */
             startup_cost?: number | null;
+            /**
+             * Time Share Pct
+             * @default 0
+             */
+            time_share_pct: number;
             /** Total Cost */
             total_cost?: number | null;
+            /**
+             * Underestimated
+             * @default false
+             */
+            underestimated: boolean;
         };
         /** ExplainRequest */
         ExplainRequest: {
@@ -3731,6 +3764,90 @@ export interface components {
             severity: string;
             /** Title */
             title: string;
+        };
+        /** PlanAnalysisOut */
+        PlanAnalysisOut: {
+            /**
+             * Has Actual Rows
+             * @default false
+             */
+            has_actual_rows: boolean;
+            /**
+             * Hottest
+             * @default []
+             */
+            hottest: components["schemas"]["PlanNodeAnalysisOut"][];
+            /**
+             * Misestimated
+             * @default []
+             */
+            misestimated: components["schemas"]["PlanNodeAnalysisOut"][];
+            /**
+             * Root Causes
+             * @default []
+             */
+            root_causes: components["schemas"]["PlanNodeAnalysisOut"][];
+            /**
+             * Total Time Ms
+             * @default 0
+             */
+            total_time_ms: number;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+        };
+        /**
+         * PlanNodeAnalysisOut
+         * @description Sapma analizinde öne çıkan tek bir düğüm (Faz 26 İŞ 2).
+         */
+        PlanNodeAnalysisOut: {
+            /** Actual Rows */
+            actual_rows?: number | null;
+            /** Actual Total Rows */
+            actual_total_rows?: number | null;
+            /** Estimate Ratio */
+            estimate_ratio?: number | null;
+            /** Estimated Total Rows */
+            estimated_total_rows?: number | null;
+            /**
+             * Is Root Cause
+             * @default false
+             */
+            is_root_cause: boolean;
+            /**
+             * Loops
+             * @default 1
+             */
+            loops: number;
+            /**
+             * Misestimated
+             * @default false
+             */
+            misestimated: boolean;
+            /** Node Type */
+            node_type: string;
+            /**
+             * Path
+             * @default
+             */
+            path: string;
+            /** Plan Rows */
+            plan_rows?: number | null;
+            /** Relation Name */
+            relation_name?: string | null;
+            /** Self Time Ms */
+            self_time_ms?: number | null;
+            /**
+             * Time Share Pct
+             * @default 0
+             */
+            time_share_pct: number;
+            /** Total Time Ms */
+            total_time_ms?: number | null;
+            /**
+             * Underestimated
+             * @default false
+             */
+            underestimated: boolean;
         };
         /**
          * PredictionAccuracyOut

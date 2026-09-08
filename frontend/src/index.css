@@ -3544,3 +3544,59 @@ td code,
   gap: var(--space-3);
   flex-wrap: wrap;
 }
+
+/* --- Plan düğümü vurguları (Faz 26 İŞ 2) ---------------------------------- */
+/* Renk TEK BAŞINA bırakılmıyor: her vurgunun yanında metin etiketi var ("kök neden",
+   "20.000x AZ tahmin"). Renk körlüğünde de okunabilir olmalı. */
+
+.plan-node.hot > .plan-node-header {
+  background: rgba(245, 158, 11, 0.10);
+}
+
+.plan-node.misestimated > .plan-node-header {
+  border-left: 3px solid var(--warn, #f59e0b);
+  padding-left: var(--space-2);
+}
+
+/* Kök neden en güçlü vurgu: sapmış 12 düğüm arasında bakılacak tek yer burası. */
+.plan-node.root-cause > .plan-node-header {
+  border-left: 3px solid var(--danger, #ef4444);
+  padding-left: var(--space-2);
+  background: rgba(239, 68, 68, 0.10);
+}
+
+.plan-deviation {
+  color: var(--warn, #f59e0b);
+  font-weight: 600;
+}
+
+.plan-root-cause {
+  background: var(--danger, #ef4444);
+  color: #fff;
+  border-radius: 3px;
+  padding: 0 var(--space-2);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.plan-loops {
+  color: var(--muted, #8b9bb8);
+}
+
+.plan-analysis-summary {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--danger, #ef4444);
+  border-radius: 4px;
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.plan-analysis-summary ul {
+  margin: var(--space-2) 0 0;
+  padding-left: var(--space-4);
+}
+
+.plan-analysis-note {
+  margin-bottom: var(--space-3);
+}

@@ -9,7 +9,14 @@ from typing import Any
 import asyncpg
 
 from app.collectors.base import ConnectionTarget
+from app.services.advice import advice_to_dict
 from app.services.auto_explain import plan_source_caveat, plan_source_label
+from app.services.plan_analysis import (
+    advice_for_analysis,
+    analysis_to_dict,
+    analyze_plan,
+    annotate_plan_dict,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +154,18 @@ def _plan_to_dict(node: PlanNode) -> dict[str, Any]:
         "shared_hit_blocks": node.shared_hit_blocks,
         "shared_read_blocks": node.shared_read_blocks,
         "insights": node.insights,
+        # Faz 26 İŞ 2 alanları — `annotate_plan_dict` dolduruyor. Varsayılanlar burada:
+        # ANALYZE'siz bir planda gerçek satır yok, dolayısıyla sapma da hesaplanamaz ve
+        # alanlar boş kalır. Şemada zorunlu olmaları, arayüzün "alan yok" durumunu ayrıca
+        # ele almasını gerektirirdi.
+        "loops": 1.0,
+        "actual_total_rows": None,
+        "estimate_ratio": None,
+        "misestimated": False,
+        "underestimated": False,
+        "is_root_cause": False,
+        "self_time_ms": None,
+        "time_share_pct": 0.0,
         "children": [_plan_to_dict(c) for c in node.children],
     }
 
@@ -229,6 +248,13 @@ class PostgreSQLExplainService:
         # alınan plan gerçek satır sayılarını taşır ama yine de sorgu YENİDEN çalıştırıldığı
         # için yavaşlık anındaki plan olmayabilir; ikisi ayrı etiket.
         source = "manual_analyze" if result.analyzed else "manual_estimate"
+        plan_dict = _plan_to_dict(result.plan) if result.plan else None
+        # Faz 26 İŞ 2: sapma analizi ham EXPLAIN çıktısından yapılıyor, bizim ayrıştırdığımız
+        # sadeleştirilmiş ağaçtan değil — `Actual Loops`, `Filter`, `Index Cond` gibi alanlar
+        # sadeleştirmede taşınmıyor ve analiz onlara ihtiyaç duyuyor.
+        raw_root = result.raw_plan[0] if result.raw_plan else {}
+        analysis = analyze_plan(raw_root if isinstance(raw_root, dict) else {})
+        annotate_plan_dict(plan_dict, analysis)
         return {
             "query": result.query,
             "analyzed": result.analyzed,
@@ -236,10 +262,12 @@ class PostgreSQLExplainService:
             "execution_time_ms": result.execution_time_ms,
             "total_cost": result.total_cost,
             "insights": result.insights,
-            "plan": _plan_to_dict(result.plan) if result.plan else None,
+            "plan": plan_dict,
             "raw_plan": result.raw_plan,
             "source": source,
             "source_label": plan_source_label(source),
             "source_caveat": plan_source_caveat(source),
             "captured_at": None,
+            "analysis": analysis_to_dict(analysis),
+            "analysis_advice": advice_to_dict(advice_for_analysis(analysis)),
         }

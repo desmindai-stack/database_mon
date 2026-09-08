@@ -5434,6 +5434,98 @@ sayılıp açıklanması, sınır, `log_analyze` durumunun ÇIKTIDAN okunması,
 normalleştirme, tekrar yazmama, eşleşmeyen planın yine saklanması. Toplam 1068
 test yeşil.
 
+## Faz 26 — İŞ 2: Tahmini vs gerçek satır analizi
+
+Planlayıcı "bu koşuldan 10 satır döner" derse nested loop seçer; gerçekte 2
+milyon satır dönüyorsa aynı plan 200 bin kez iç döngü çalıştırır. Plan maliyeti
+UCUZ görünür, sorgu pratikte pahalıdır — ve `EXPLAIN` (ANALYZE olmadan) bunu
+ASLA göstermez, çünkü orada yalnızca tahmin vardır. Sorgu gecikmesinin en yaygın
+sebeplerinden biri budur.
+
+`services/plan_analysis.py` her düğüm için tahmini/gerçek oranını, kendi
+süresini ve süre payını hesaplıyor.
+
+### Üç tuzak — üçü de sessizce yanlış sonuç üretir
+
+**1. `Plan Rows`, `Actual Rows` ve `Actual Total Time` DÖNGÜ BAŞINADIR.**
+Nested loop'un iç tarafında bir düğüm 200 bin kez çalışıyorsa `Actual Rows: 1`
+yazar; toplam 200 bin satırdır. Aynı şekilde `0.02 ms` görünen bir düğüm
+gerçekte 4 saniye harcamıştır. Çarpmayı atlamak, sorgunun tamamını tüketen
+düğümü "ihmal edilebilir" gösterirdi. (Oran hesabı ham değerlerden yapılıyor —
+ikisi de döngü başına olduğu için doğru; toplam satır/süre ise `× loops`.)
+
+**2. `Actual Total Time` ÇOCUKLARI İÇERİR.** Düğümün kendi maliyeti =
+kendi toplamı − çocukların toplamı. Bu çıkarma yapılmazsa "en pahalı düğüm"
+her zaman kök düğüm çıkar (çünkü kök altındaki her şeyi taşır) ve liste
+kullanıcıya hiçbir şey söylemez. Ölçüm gürültüsünde negatife düşmemesi için
+sıfırda kırpılıyor.
+
+**3. SAPMA YUKARI DOĞRU YAYILIR.** Alttaki tarama 10 yerine 200 bin satır
+döndürdüyse üstündeki her join de yanlış tahmin eder. Hepsini "sapmış" diye
+işaretlemek kullanıcıya 12 suçlu gösterir; asıl suçlu EN DERİNDEKİDİR. Kök
+neden ayrıca işaretleniyor ve öneri ona göre üretiliyor. Aynı derinlikte iki
+bağımsız sapma varsa ikisi de kök nedendir — birini seçmek keyfi olurdu.
+
+### Eşikler
+
+10x oran eşiği (PostgreSQL topluluğunda yaygın kullanılan değer: altındaki
+sapmalar planı nadiren değiştirir) VE 100 satır mutlak eşik birlikte aranıyor.
+Yalnızca orana bakmak, "1 yerine 15 satır" gibi hiçbir şeyi değiştirmeyen
+sapmaları uyarıya çevirir ve gerçek sapmaları gürültüde boğardı.
+
+Fazla tahmin de işaretleniyor: gereksiz hash join ve gereksiz sıralamaya yol
+açar. Yalnızca az tahmine bakmak sorunun yarısını görmezden gelmek olurdu.
+
+### Öneri — beş parçalı, en ucuz çözümden başlayarak
+
+Sıra bilinçli: **ANALYZE saniyeler sürer ve sapmaların çoğunu çözer.**
+Kullanıcıyı önce `CREATE STATISTICS`'e yollamak çoğu durumda gereksiz
+karmaşıklık olurdu.
+
+1. `pg_stat_user_tables` ile istatistik tazeliğini ölç (`n_mod_since_analyze`)
+2. `ANALYZE <tablo>`
+3. **Koşulda birden çok kolon varsa** → `CREATE STATISTICS ... (dependencies,
+   ndistinct)`. Planlayıcı kolonları BAĞIMSIZ varsayar ve seçicilikleri çarpar;
+   şehir/posta kodu gibi ilişkili kolonlarda bu korkunç bir az-tahmin üretir.
+4. **Koşulda ifade varsa** (`lower(email)`) → ifade istatistiği (PG 14+) ya da
+   ifade indeksi. Planlayıcı ifadeler için istatistik tutmaz, varsayılan
+   seçiciliğe düşer ve neredeyse her zaman yanılır.
+5. `ALTER COLUMN ... SET STATISTICS 500` — çarpık dağılımlar için
+
+Dikkat notlarında iki tuzak açıkça yazılı: `CREATE STATISTICS` **yalnızca
+ANALYZE sonrasında** etkili olur (bunu bilmeyen kullanıcı "işe yaramadı" diye
+vazgeçer), ve istatistik hedefini 1000'in üstüne çıkarmak nadiren işe yarar ama
+planlama süresini uzatır.
+
+Sapma yoksa öneri de YOK — sapmamış bir plan için "istatistiklerinizi
+güncelleyin" demek, olmayan bir sorunu varmış gibi göstermek olurdu.
+
+### Arayüz
+
+Plan ağacında her düğümde tahmini ve gerçek satır YAN YANA (`satır 10 →
+200.000`), döngü sayısı, düğümün kendi süresi ve süre payı gösteriliyor.
+Vurgular:
+
+- **Kök neden**: kırmızı şerit + "kök neden" rozeti (en güçlü vurgu — sapmış 12
+  düğüm arasında bakılacak tek yer)
+- **Sapmış düğüm**: turuncu şerit + "20.000x AZ tahmin" etiketi
+- **Sıcak düğüm**: süre payı %5'i geçenlerde arka plan vurgusu
+
+Renk tek başına bırakılmıyor: her vurgunun yanında metin etiketi var, renk
+körlüğünde de okunabilir.
+
+Gerçek satır yoksa (ANALYZE'siz plan ya da `log_analyze` kapalı) boş liste
+gösterilip susulmuyor — "sapma yok" demek, hiç ölçüm yapılmadığı hâlde her şeyin
+yolunda olduğunu iddia etmek olurdu.
+
+Analiz hem canlı EXPLAIN hem de auto_explain ile yakalanan planlar için
+üretiliyor; ikisi de HAM plan JSON'undan besleniyor çünkü `Actual Loops` ve
+koşul metinleri sadeleştirilmiş ağaçta yok.
+
+**Testler:** `tests/test_plan_analysis.py` (23 test). **Döngü çarpanı
+kaldırıldığında iki test düşüyor** — hatayı yakaladıkları doğrulandı. Toplam
+1092 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
