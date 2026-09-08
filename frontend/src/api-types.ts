@@ -727,6 +727,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{instance_id}/blocking": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Blocking Tree
+         * @description Kim kimi blokluyor — zincir hâlinde (Faz 26 İŞ 3).
+         *
+         *     "Kaç oturum bloklandı" bir sayıdır; bu bir cevaptır. Bloklanma bir ZİNCİRDİR ve müdahale
+         *     edilecek tek oturum zincirin BAŞINDAKİDİR; ağaç onu işaretliyor.
+         *
+         *     Canlı sorgu: kullanıcı bu ekranı açtığında çalışıyor, periyodik döngüde değil. Kilit
+         *     ayrıntısı (beklenen kilidin türü/nesnesi, tutulan kilit sayısı) aktivite anlık
+         *     görüntüsünden pahalı, o ekranı yavaşlatmamak için ayrı tutuldu.
+         */
+        get: operations["get_blocking_tree_api_instances__instance_id__blocking_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/{instance_id}/cluster-health": {
         parameters: {
             query?: never;
@@ -2025,6 +2052,110 @@ export interface components {
             wait_event: string | null;
             /** Wait Event Type */
             wait_event_type: string | null;
+        };
+        /**
+         * BlockingNodeOut
+         * @description Bloklama ağacındaki tek oturum.
+         */
+        BlockingNodeOut: {
+            /** Application */
+            application?: string | null;
+            /**
+             * Blocked Total
+             * @default 0
+             */
+            blocked_total: number;
+            /**
+             * Children
+             * @default []
+             */
+            children: components["schemas"]["BlockingNodeOut"][];
+            /**
+             * Depth
+             * @default 0
+             */
+            depth: number;
+            /**
+             * Held Locks
+             * @default 0
+             */
+            held_locks: number;
+            /**
+             * Is Idle In Transaction
+             * @default false
+             */
+            is_idle_in_transaction: boolean;
+            /**
+             * Is Root Blocker
+             * @default false
+             */
+            is_root_blocker: boolean;
+            /** Lock Mode */
+            lock_mode?: string | null;
+            /** Lock Object */
+            lock_object?: string | null;
+            /** Lock Type */
+            lock_type?: string | null;
+            /** Pid */
+            pid: number;
+            /**
+             * Query
+             * @default
+             */
+            query: string;
+            /** Query Seconds */
+            query_seconds?: number | null;
+            /** State */
+            state?: string | null;
+            /** Transaction Seconds */
+            transaction_seconds?: number | null;
+            /** Username */
+            username?: string | null;
+            /** Wait Seconds */
+            wait_seconds?: number | null;
+        };
+        /** BlockingTreeOut */
+        BlockingTreeOut: {
+            advice?: components["schemas"]["AdviceOut"] | null;
+            /**
+             * Blocked Sessions
+             * @default 0
+             */
+            blocked_sessions: number;
+            /**
+             * Collected At
+             * Format: date-time
+             */
+            collected_at: string;
+            /**
+             * Idle In Transaction
+             * @default []
+             */
+            idle_in_transaction: components["schemas"]["BlockingNodeOut"][];
+            /** Instance Id */
+            instance_id: number;
+            /**
+             * Long Transactions
+             * @default []
+             */
+            long_transactions: components["schemas"]["BlockingNodeOut"][];
+            /**
+             * Max Depth
+             * @default 0
+             */
+            max_depth: number;
+            /**
+             * Root Blockers
+             * @default 0
+             */
+            root_blockers: number;
+            /**
+             * Roots
+             * @default []
+             */
+            roots: components["schemas"]["BlockingNodeOut"][];
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
         };
         /**
          * BulkFindingStatusUpdate
@@ -6509,6 +6640,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActivityOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_blocking_tree_api_instances__instance_id__blocking_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BlockingTreeOut"];
                 };
             };
             /** @description Validation Error */

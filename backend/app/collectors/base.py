@@ -169,6 +169,14 @@ class BaseCollector(ABC):
         """
         return None
 
+    async def collect_blocking(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Bloklama ağacı için oturum ayrıntısı (Faz 26 İŞ 3).
+
+        Her satır: pid, kullanıcı, sorgu, süreler, `blocking_pids`, beklenen kilidin
+        türü/nesnesi ve tutulan kilit sayısı. Desteklemeyen motorlar boş liste döner.
+        """
+        return []
+
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         """Live session snapshot: sessions, wait events, blocking edges."""
         return {

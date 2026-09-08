@@ -5526,6 +5526,97 @@ koşul metinleri sadeleştirilmiş ağaçta yok.
 kaldırıldığında iki test düşüyor** — hatayı yakaladıkları doğrulandı. Toplam
 1092 test yeşil.
 
+## Faz 26 — İŞ 3a: Blocking hiyerarşisi (canlı ağaç ve sessiz bloklar)
+
+**"Kaç oturum bloklandı" bir sayıdır; "kim kimi blokluyor" bir cevaptır.**
+Bankada en sık sorulan soru ikincisiydi ve dbace onu cevaplayamıyordu.
+
+İŞ 3 büyük olduğu için ikiye bölündü (sıra bozulmadan): bu commit canlı ağaç ve
+sessiz blok tespiti; geçmiş kayıtları, deadlock yakalama ve rapor bölümü
+ardından geliyor.
+
+### Bloklanma bir ZİNCİRDİR
+
+A, B'yi bekler; B, C'yi bekler; C hiçbir şeyi beklemez ama kilidi tutar.
+Ekranda "3 oturum bloklandı" yazması hiçbir işe yaramaz — **müdahale edilecek
+tek oturum C'dir.** Zincirin ortasındaki B'yi sonlandırmak sorunu çözmez,
+yalnızca bekleyeni değiştirir.
+
+`services/blocking.py` kenar listesini ormana çeviriyor ve kök engelleyiciyi
+işaretliyor. Kararlar:
+
+- **`blocked_total` dolaylı kurbanları da sayıyor.** Yalnızca doğrudan
+  çocukları saymak, kök engelleyicinin etkisini olduğundan küçük gösterirdi;
+  zincirin tamamı onun yüzünden duruyor.
+- **Aynı oturum ağaçta bir kez görünüyor.** Çoklu kilitte bir oturumu birden
+  çok blokçu bekletebilir; aynı pid'i üç ayrı yerde göstermek zinciri okunamaz
+  kılardı.
+- **Anlık görüntüde olmayan blokçu için yer tutucu düğüm konuyor.** Blokçu
+  başka bir veritabanına bağlı olabilir; zinciri kesmek kullanıcıyı yanlış
+  oturuma yönlendirirdi.
+- **Bloklamaya karışmayan oturumlar ağaca girmiyor** — "kim kimi blokluyor"
+  sorusunun cevabında boşta oturumların yeri yok.
+- Kendi kendini bekleyen kayıt (anlık görüntü tutarsızlığı) yok sayılıyor,
+  zincir derinliği sert bir sınıra bağlı: sonsuz döngüye girmemek için.
+
+### Sessiz bloklama
+
+`idle in transaction` bir oturum **hiçbir sorgu çalıştırmaz**: CPU harcamaz,
+yavaş sorgu listesinde görünmez, aktivite ekranında dikkat çekmez — ama açık
+transaction'ıyla kilit tutar ve onlarca oturumu durdurabilir. Bu yüzden:
+
+- Kilit tutan ama bekletmeyen oturumlar da listeleniyor (henüz kimseyi
+  bekletmiyor olabilir, ama zaman bombasıdır).
+- Uzun süredir açık transaction'lar ayrı bir liste.
+- SQL Server'daki karşılığı (`sleeping` + açık transaction) ortak ada
+  çevriliyor ki bloklama mantığı iki motorda tek kod olsun.
+
+### Öneri kök engelleyicinin NE YAPTIĞINA göre değişiyor
+
+Bu ayrım kritik ve iki durum için aynı öneriyi vermek ikisinden birini her
+zaman yanlış yönlendirmek demek:
+
+| Kök engelleyici | Öneri |
+|---|---|
+| **Sorgu çalıştırmıyor** | "Sorun veritabanında DEĞİL, uygulamada." Sorguyu optimize etmek hiçbir şeyi değiştirmez. Doğrudan `pg_terminate_backend` (iptal anlamsız — beklemede sorgu yok), kalıcı çözüm `idle_in_transaction_session_timeout` |
+| **Uzun sorgu çalıştırıyor** | Önce `pg_cancel_backend` (oturum yaşar), sonra terminate. Sorgunun neden uzun sürdüğünü ölç |
+
+SQL Server için ayrı komut seti. Dikkat notunda bir tuzak özellikle yazılı:
+**KILL anında dönmez** — büyük bir transaction'ın geri alınması dakikalar
+sürebilir ve bekleme bu süre boyunca devam eder. Bunu bilmeyen DBA "işe
+yaramadı" der.
+
+Bloklanma yoksa öneri de YOK.
+
+### Toplama: canlı sorgu, periyodik değil
+
+`collect_blocking` `collect_activity`'den AYRI bir sorgu, çünkü sorulan soru
+daha pahalı: her oturum için beklediği kilidin türü/nesnesi (`pg_locks`,
+`granted = false`) ve tuttuğu kilit sayısı da gerekiyor. Bunları saniyede
+birkaç kez açılan aktivite ekranına eklemek onu gereksiz yavaşlatırdı; bloklama
+ekranı kullanıcı açtığında çalışıyor ve 10 saniyede bir tazeleniyor.
+
+Sorgu başarısız olursa **boş ağaç değil sebep** dönüyor: "bloklama yok" demek,
+ölçüm yapılmadığı hâlde her şeyin yolunda olduğunu iddia etmek olurdu.
+
+### Arayüz
+
+DPA'ya "Bloklama" sekmesi eklendi — Activity'nin hemen ardından, çünkü ikisi de
+"şu anda ne oluyor" sorusunu cevaplıyor ve bloklama onun bir adım derinleşmiş
+hâli. Sekme rozetinde bloklanan oturum sayısı görünüyor.
+
+Hiyerarşi görsel olarak da kuruluyor: kök engelleyici kırmızı şerit + rozet,
+sessiz bloklar turuncu, alt düğümler girintili ve sol çizgiyle bağlı. Dar
+ekranda girinti kaldırılıyor, hiyerarşiyi sol çizgi taşıyor.
+
+Her düğümde: oturum, kullanıcı, uygulama, sorgu, ne kadar süredir
+bekliyor/blokluyor, transaction'ın açık kalma süresi, tuttuğu kilit sayısı,
+beklenen kilidin türü ve nesnesi.
+
+**Testler:** `tests/test_blocking.py` (25 test). **Kök hesabı bozulduğunda
+(her düğüm kök yapıldığında) beş test düşüyor** — zincir mantığını gerçekten
+koruduğu doğrulandı. Toplam 1121 test yeşil, 16 kritik tarayıcı testi yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

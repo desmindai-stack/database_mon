@@ -24,6 +24,7 @@ from app.models import (
 )
 from app.schemas import (
     ActivityOut,
+    BlockingTreeOut,
     ClusterHealthOut,
     ClusterLogsOut,
     ConnectionTestResult,
@@ -48,6 +49,10 @@ from app.schemas import (
 from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
+from app.services.advice import advice_to_dict
+from app.services.blocking import build_blocking_tree, tree_to_dict
+from app.services.collection import connection_target_for
+from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
 from app.services.performance_insights import analyze_metrics
 from app.services.deletion import (
@@ -542,6 +547,58 @@ async def get_prediction_readiness(instance_id: int, db: AsyncSession = Depends(
         raise HTTPException(status_code=404, detail="Instance not found")
     results = await compute_prediction_readiness(db, instance_id, instance.engine)
     return [PredictionReadinessOut(**vars(r)) for r in results]
+
+
+@router.get("/{instance_id}/blocking", response_model=BlockingTreeOut)
+async def get_blocking_tree(
+    instance_id: int,
+    limit: int = Query(default=200, ge=10, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> BlockingTreeOut:
+    """Kim kimi blokluyor — zincir hâlinde (Faz 26 İŞ 3).
+
+    "Kaç oturum bloklandı" bir sayıdır; bu bir cevaptır. Bloklanma bir ZİNCİRDİR ve müdahale
+    edilecek tek oturum zincirin BAŞINDAKİDİR; ağaç onu işaretliyor.
+
+    Canlı sorgu: kullanıcı bu ekranı açtığında çalışıyor, periyodik döngüde değil. Kilit
+    ayrıntısı (beklenen kilidin türü/nesnesi, tutulan kilit sayısı) aktivite anlık
+    görüntüsünden pahalı, o ekranı yavaşlatmamak için ayrı tutuldu.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+
+    collected_at = datetime.now(UTC)
+    if instance.engine == "mongodb":
+        return BlockingTreeOut(
+            instance_id=instance_id,
+            collected_at=collected_at,
+            unavailable_reason=(
+                "MongoDB'de kilit bekleme zinciri PostgreSQL/SQL Server'daki gibi "
+                "sorgulanamıyor; bloklama ağacı bu motor için üretilmiyor."
+            ),
+        )
+
+    collector = get_collector(DatabaseEngine(instance.engine), connection_target_for(instance))
+    try:
+        rows = await collector.collect_blocking(limit=limit)
+    except Exception as exc:
+        # Boş ağaç dönmek "bloklama yok" demek olurdu; oysa sorgu hiç çalışmadı.
+        return BlockingTreeOut(
+            instance_id=instance_id,
+            collected_at=collected_at,
+            unavailable_reason=f"Bloklama görüntüsü alınamadı: {classify_connection_error(exc)}",
+        )
+
+    tree = build_blocking_tree(rows)
+    payload = tree_to_dict(tree)
+    advice = advice_for_blocking(tree, engine=instance.engine)
+    return BlockingTreeOut(
+        instance_id=instance_id,
+        collected_at=collected_at,
+        advice=advice_to_dict(advice) if advice else None,
+        **payload,
+    )
 
 
 @router.get("/{instance_id}/database-load", response_model=DatabaseLoadOut)

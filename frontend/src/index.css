@@ -3600,3 +3600,94 @@ td code,
 .plan-analysis-note {
   margin-bottom: var(--space-3);
 }
+
+/* --- Bloklama zinciri (Faz 26 İŞ 3) --------------------------------------- */
+/* Hiyerarşi GÖRSEL olarak da kurulmalı: kullanıcı zinciri okumadan önce şeklinden
+   anlamalı. Kök en güçlü vurgu, alt düğümler girintili ve sol çizgiyle bağlı. */
+
+.blocking-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.blocking-tree,
+.blocking-children {
+  list-style: none;
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.blocking-children {
+  border-left: 2px solid var(--border);
+  padding-left: var(--space-3);
+  margin-top: var(--space-2);
+}
+
+.blocking-node-body {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: var(--space-3);
+}
+
+.blocking-node-body.root {
+  border-left: 4px solid var(--danger, #ef4444);
+}
+
+.blocking-node-body.idle {
+  border-left: 4px solid var(--warn, #f59e0b);
+}
+
+.blocking-node-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.blocking-node-meta {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+  font-size: 0.85rem;
+  color: var(--muted, #8b9bb8);
+}
+
+.blocking-impact {
+  color: var(--danger, #ef4444);
+  font-weight: 600;
+}
+
+.blocking-badge {
+  border-radius: 3px;
+  padding: 0 var(--space-2);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #fff;
+}
+
+.blocking-badge.root {
+  background: var(--danger, #ef4444);
+}
+
+.blocking-badge.idle {
+  background: var(--warn, #f59e0b);
+  color: #111;
+}
+
+.blocking-state {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+@media (max-width: 720px) {
+  /* Dar ekranda girinti hızla taşıyor; hiyerarşiyi sol çizgi taşıyor, girinti değil. */
+  .blocking-node {
+    margin-left: 0 !important;
+  }
+}

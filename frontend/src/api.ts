@@ -347,6 +347,10 @@ export type InstanceDependencies = Gen["InstanceDependenciesOut"];
 export type CapturedPlan = Gen["CapturedPlanOut"];
 export type CapturedPlanList = Gen["CapturedPlanListOut"];
 
+// --- Blocking hiyerarşisi (Faz 26 İŞ 3) ---
+export type BlockingNode = Gen["BlockingNodeOut"];
+export type BlockingTree = Gen["BlockingTreeOut"];
+
 // --- Veritabanı yükü / bekleme analizi (Faz 25) ---
 //
 // Hepsi üretilen şemadan TÜRETİLİYOR: elle yazılan bir arayüz tipi, backend'e alan
@@ -1383,6 +1387,8 @@ export const api = {
     request<ClusterLogs>(`/api/instances/${id}/cluster-logs?service=${encodeURIComponent(service)}&lines=${lines}`),
   getSchemaHealth: (id: number) => request<SchemaHealth>(`/api/instances/${id}/schema-health`),
   getPrerequisites: (id: number) => request<PrerequisiteReport>(`/api/instances/${id}/prerequisites`),
+  /** Kim kimi blokluyor — zincir hâlinde (Faz 26 İŞ 3). Canlı sorgu, periyodik değil. */
+  getBlockingTree: (id: number) => request<BlockingTree>(`/api/instances/${id}/blocking`),
   /** auto_explain ile GERÇEK çalıştırmadan yakalanmış planlar (Faz 26 İŞ 1). */
   getCapturedPlans: (id: number, queryid?: string, limit = 20) =>
     request<CapturedPlanList>(

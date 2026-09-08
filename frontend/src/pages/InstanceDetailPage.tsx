@@ -46,6 +46,7 @@ import {
 import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../components/PageState";
 import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
+import BlockingTreePanel from "../components/BlockingTreePanel";
 import DatabaseLoadPanel from "../components/DatabaseLoadPanel";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
@@ -62,10 +63,10 @@ import { ChartRange, useChartRangeSelection } from "../components/useChartRangeS
 import TuningPanel from "../components/TuningPanel";
 import { useAuth } from "../auth";
 
-type Tab = "overview" | "metrics" | "load" | "queries" | "activity" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
+type Tab = "overview" | "metrics" | "load" | "queries" | "activity" | "blocking" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
 
-const TABS: Tab[] = ["overview", "metrics", "load", "queries", "activity", "cluster", "schema", "tuning", "alerts", "predictions"];
+const TABS: Tab[] = ["overview", "metrics", "load", "queries", "activity", "blocking", "cluster", "schema", "tuning", "alerts", "predictions"];
 const rangeLabel: Record<RangeHours, string> = { 1: "1 saat", 6: "6 saat", 24: "24 saat", 168: "7 gün" };
 
 /** Grafik ekseni etiketi. 24 saatten uzun aralıklarda gün de yazılır — aksi halde etiketler
@@ -904,6 +905,13 @@ export default function InstanceDetailPage() {
           label="Activity"
           badge={activity?.totals.blocked || activity?.totals.idle_in_transaction || 0}
         />
+        {/* Activity'nin hemen ardından: ikisi de "şu anda ne oluyor" sorusunu cevaplıyor,
+            Bloklama onun bir adım derinleşmiş hâli — "kim kimi bekletiyor". */}
+        <TabButton
+          value="blocking"
+          label="Bloklama"
+          badge={activity?.totals.blocked || 0}
+        />
         <TabButton
           value="cluster"
           label="Cluster"
@@ -1606,6 +1614,8 @@ export default function InstanceDetailPage() {
           onRefresh={loadActivity}
         />
       )}
+
+      {tab === "blocking" && <BlockingTreePanel instanceId={instanceId} />}
 
       {tab === "cluster" && (
         <ClusterHealthPanel

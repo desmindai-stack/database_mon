@@ -536,6 +536,95 @@ class PostgreSQLCollector(BaseCollector):
             )
         return {"sessions": sessions, "blocked": blocked, "has_query_id": has_query_id}
 
+    async def collect_blocking(self, limit: int = 200) -> list[dict[str, Any]]:
+        """Bloklama ağacını kurmak için gereken oturum ayrıntısı (Faz 26 İŞ 3).
+
+        `collect_activity`'den ayrı bir sorgu, çünkü sorulan soru farklı ve daha pahalı:
+        burada her oturum için BEKLEDİĞİ kilidin türü/nesnesi ve TUTTUĞU kilit sayısı da
+        gerekiyor. Bunları aktivite anlık görüntüsüne eklemek, saniyede birkaç kez açılan o
+        ekranı gereksiz yere pahalılaştırırdı; blocking ekranı ise kullanıcı açtığında
+        çalışıyor.
+
+        `idle in transaction` oturumları BİLEREK dahil: hiçbir sorgu çalıştırmıyorlar ama
+        açık transaction'larıyla kilit tutuyorlar — sessiz bloklamanın kaynağı bu.
+        """
+        conn = await self._connect()
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    a.pid,
+                    a.usename::text AS username,
+                    COALESCE(a.application_name, '') AS application,
+                    a.state::text AS state,
+                    LEFT(a.query, 2000) AS query,
+                    EXTRACT(EPOCH FROM (now() - a.query_start))::float AS query_seconds,
+                    EXTRACT(EPOCH FROM (now() - a.xact_start))::float AS transaction_seconds,
+                    EXTRACT(EPOCH FROM (now() - a.state_change))::float AS state_seconds,
+                    pg_blocking_pids(a.pid) AS blocking_pids,
+                    w.locktype::text AS lock_type,
+                    w.mode::text AS lock_mode,
+                    w.object_name AS lock_object,
+                    COALESCE(h.held, 0) AS held_locks
+                FROM pg_stat_activity a
+                -- BEKLENEN kilit: verilmemiş (granted = false) olan. Bir oturumun onlarca
+                -- kilidi olabilir ama beklediği yalnızca birdir; kullanıcıya gösterilecek
+                -- olan da o.
+                LEFT JOIN LATERAL (
+                    SELECT
+                        l.locktype,
+                        l.mode,
+                        CASE WHEN l.relation IS NOT NULL
+                             THEN l.relation::regclass::text
+                             ELSE NULL
+                        END AS object_name
+                    FROM pg_locks l
+                    WHERE l.pid = a.pid AND NOT l.granted
+                    LIMIT 1
+                ) w ON true
+                -- TUTULAN kilit sayısı: kök engelleyicinin etkisinin kaba ölçüsü.
+                LEFT JOIN LATERAL (
+                    SELECT count(*) AS held
+                    FROM pg_locks l2
+                    WHERE l2.pid = a.pid AND l2.granted
+                ) h ON true
+                WHERE a.pid <> pg_backend_pid()
+                  AND a.backend_type = 'client backend'
+                  AND (
+                        a.state <> 'idle'
+                     OR a.xact_start IS NOT NULL
+                  )
+                ORDER BY a.xact_start ASC NULLS LAST
+                LIMIT $1
+                """,
+                limit,
+            )
+            out: list[dict[str, Any]] = []
+            for row in rows:
+                out.append(
+                    {
+                        "pid": int(row["pid"]),
+                        "username": row["username"],
+                        "application": row["application"] or None,
+                        "state": row["state"],
+                        "query": row["query"] or "",
+                        "query_seconds": row["query_seconds"],
+                        "transaction_seconds": row["transaction_seconds"],
+                        # Bekleme süresi = mevcut durumda geçen süre. `state_change` bekleme
+                        # başlangıcının en iyi yaklaşımı; pg_stat_activity kilit bekleme
+                        # başlangıcını ayrıca tutmuyor.
+                        "wait_seconds": row["state_seconds"],
+                        "blocking_pids": list(row["blocking_pids"] or []),
+                        "lock_type": row["lock_type"],
+                        "lock_mode": row["lock_mode"],
+                        "lock_object": row["lock_object"],
+                        "held_locks": int(row["held_locks"] or 0),
+                    }
+                )
+            return out
+        finally:
+            await conn.close()
+
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()
         try:

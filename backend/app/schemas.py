@@ -1774,6 +1774,58 @@ class FindingDecisionOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# --- Blocking hiyerarşisi (Faz 26 İŞ 3) ---
+#
+# TANIM SIRASI: `BlockingNodeOut` kendine referans veriyor (children) ve `BlockingTreeOut`
+# ondan önce tanımlanamaz — yerel Python 3.14'te sessizce geçer, canlı 3.12'de NameError.
+
+
+class BlockingNodeOut(BaseModel):
+    """Bloklama ağacındaki tek oturum."""
+
+    pid: int
+    username: str | None = None
+    application: str | None = None
+    state: str | None = None
+    query: str = ""
+    query_seconds: float | None = None
+    # Transaction'ın ne kadar süredir AÇIK olduğu — sessiz blokların ölçüsü.
+    transaction_seconds: float | None = None
+    wait_seconds: float | None = None
+    lock_type: str | None = None
+    lock_mode: str | None = None
+    lock_object: str | None = None
+    held_locks: int = 0
+    # Zincirin başındaki oturum — müdahale edilecek TEK yer.
+    is_root_blocker: bool = False
+    # Hiçbir sorgu çalıştırmadan kilit tutuyor (aktif sorgu listelerinde görünmez).
+    is_idle_in_transaction: bool = False
+    # Altındaki toplam bloklanan oturum sayısı (dolaylı olanlar dahil) — etkinin ölçüsü.
+    blocked_total: int = 0
+    depth: int = 0
+    children: list["BlockingNodeOut"] = []
+
+
+BlockingNodeOut.model_rebuild()
+
+
+class BlockingTreeOut(BaseModel):
+    instance_id: int
+    collected_at: datetime
+    roots: list[BlockingNodeOut] = []
+    blocked_sessions: int = 0
+    root_blockers: int = 0
+    max_depth: int = 0
+    # Bloklama yapmasa bile risk taşıyanlar: sorgu çalıştırmadan kilit tutan oturumlar.
+    idle_in_transaction: list[BlockingNodeOut] = []
+    long_transactions: list[BlockingNodeOut] = []
+    # Ağaç kurulamadıysa NEDEN — boş ağaç göstermek "bloklama yok" demek olurdu, oysa
+    # sorgunun kendisi çalışmamış olabilir.
+    unavailable_reason: str | None = None
+    # Kök engelleyici sorgu çalıştırmıyorsa beş parçalı öneri; yoksa None.
+    advice: AdviceOut | None = None
+
+
 # --- Gürültü filtresi ayarları (Faz 18 İŞ 2) ---
 
 

@@ -125,6 +125,15 @@ ORDER BY r.start_time DESC
 """
 
 
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_odbc_connection_string(target: ConnectionTarget) -> str:
     opts = target.options or {}
     driver = opts.get("odbc_driver", "ODBC Driver 18 for SQL Server")
@@ -141,6 +150,54 @@ def build_odbc_connection_string(target: ConnectionTarget) -> str:
     if opts.get("auth_type") == "windows":
         return f"{base};Trusted_Connection=yes"
     return f"{base};UID={target.username};PWD={target.password}"
+
+
+# Bloklama ağacı için oturum ayrıntısı (Faz 26 İŞ 3).
+#
+# İKİ KAYNAK: `dm_exec_requests.blocking_session_id` isteğin kendi blokçusunu verir, ama
+# PARALEL bir planda blokçu görev (task) düzeyinde görünür ve istekte 0 kalır. Yalnızca
+# birincisine bakmak, paralel sorgulardaki bloklanmaları görünmez yapardı.
+#
+# `dm_exec_sessions` üzerinden gidiliyor (istekler değil), çünkü SESSİZ BLOKLAYANLAR açık
+# transaction'ı olan ama HİÇBİR İSTEK ÇALIŞTIRMAYAN oturumlardır — `dm_exec_requests`'te
+# hiç görünmezler.
+_BLOCKING_SQL = """
+SELECT TOP ({limit})
+    s.session_id                                   AS pid,
+    s.login_name                                   AS username,
+    s.program_name                                 AS application,
+    s.status                                       AS state,
+    SUBSTRING(ISNULL(t.text, ''), 1, 2000)         AS query,
+    DATEDIFF(second, r.start_time, GETDATE())      AS query_seconds,
+    DATEDIFF(second, tat.transaction_begin_time, GETDATE()) AS transaction_seconds,
+    r.wait_time / 1000.0                           AS wait_seconds,
+    COALESCE(NULLIF(r.blocking_session_id, 0), w.blocking_session_id, 0) AS blocking_session_id,
+    r.wait_type                                    AS lock_type,
+    w.resource_description                         AS lock_object,
+    ISNULL(lk.held, 0)                             AS held_locks
+FROM sys.dm_exec_sessions s
+LEFT JOIN sys.dm_exec_requests r ON r.session_id = s.session_id
+OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t
+LEFT JOIN sys.dm_tran_session_transactions tst ON tst.session_id = s.session_id
+LEFT JOIN sys.dm_tran_active_transactions tat ON tat.transaction_id = tst.transaction_id
+LEFT JOIN (
+    SELECT session_id,
+           MAX(blocking_session_id) AS blocking_session_id,
+           MAX(resource_description) AS resource_description
+    FROM sys.dm_os_waiting_tasks
+    WHERE blocking_session_id IS NOT NULL AND blocking_session_id <> 0
+    GROUP BY session_id
+) w ON w.session_id = s.session_id
+LEFT JOIN (
+    SELECT request_session_id, COUNT(*) AS held
+    FROM sys.dm_tran_locks
+    WHERE request_status = 'GRANT'
+    GROUP BY request_session_id
+) lk ON lk.request_session_id = s.session_id
+WHERE s.session_id <> @@SPID
+  AND s.session_id > 50
+  AND (r.session_id IS NOT NULL OR tst.transaction_id IS NOT NULL)
+"""
 
 
 class SqlServerCollector(BaseCollector):
@@ -379,6 +436,47 @@ class SqlServerCollector(BaseCollector):
         # SQL Server'da query_hash her zaman var (sürüme bağlı değil) — PostgreSQL'deki
         # `query_id` sürüm kısıtının karşılığı burada yok.
         return {"sessions": sessions, "blocked": blocked, "has_query_id": True}
+
+    async def collect_blocking(self, limit: int = 200) -> list[dict[str, Any]]:
+        conn = await self._connect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(_BLOCKING_SQL.format(limit=int(limit)))
+                columns = [c[0] for c in cur.description]
+                rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
+        finally:
+            await conn.close()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            blocker = int(row.get("blocking_session_id") or 0)
+            status = (row.get("state") or "").strip().lower()
+            transaction_seconds = row.get("transaction_seconds")
+            # SQL Server'da "sleeping" + açık transaction, PostgreSQL'deki
+            # `idle in transaction`ın karşılığıdır. Adı farklı, tehlikesi aynı — ortak ada
+            # çevriliyor ki bloklama mantığı iki motorda tek kod olsun.
+            if status == "sleeping" and transaction_seconds is not None:
+                state = "idle in transaction"
+            else:
+                state = row.get("state")
+            out.append(
+                {
+                    "pid": int(row["pid"]),
+                    "username": row.get("username"),
+                    "application": (row.get("application") or "").strip() or None,
+                    "state": state,
+                    "query": (row.get("query") or "").strip(),
+                    "query_seconds": _as_float(row.get("query_seconds")),
+                    "transaction_seconds": _as_float(transaction_seconds),
+                    "wait_seconds": _as_float(row.get("wait_seconds")),
+                    "blocking_pids": [blocker] if blocker else [],
+                    "lock_type": row.get("lock_type"),
+                    "lock_mode": None,
+                    "lock_object": row.get("lock_object"),
+                    "held_locks": int(row.get("held_locks") or 0),
+                }
+            )
+        return out
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()
