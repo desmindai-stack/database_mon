@@ -21,6 +21,7 @@ import NotFoundPage from "./pages/NotFoundPage";
 import PredictionsPage from "./pages/PredictionsPage";
 import ReportsPage from "./pages/ReportsPage";
 import ServersPage from "./pages/ServersPage";
+import { ADD_ACTIONS } from "./terminology";
 
 // Real navigation tree: Customer → Application → DatabaseGroup → Node (public mode) or
 // Application → DatabaseGroup → Node (private mode, customer level skipped since there's
@@ -118,7 +119,7 @@ function NavTreeBranch({ node, activePath, canWrite }: { node: NavTreeNode; acti
       );
     }
     return (
-      <span className="nav-tree-instance" style={{ opacity: 0.5, cursor: "default" }} title="Bağlı instance yok">
+      <span className="nav-tree-instance" style={{ opacity: 0.5, cursor: "default" }} title="Bağlı veritabanı yok">
         {node.name}
       </span>
     );
@@ -285,7 +286,7 @@ function MainNavTree({
               to={isPrivate && privateCustomerId != null ? `/customers/${privateCustomerId}/applications` : "/customers"}
               className="nav-tree-instance"
             >
-              {isPrivate ? "+ Uygulama ekle" : "+ Müşteri ekle"}
+              {isPrivate ? ADD_ACTIONS.application : ADD_ACTIONS.customer}
             </Link>
           )}
           {roots?.map((node) => (
@@ -364,7 +365,7 @@ function AppShell() {
             </NavLink>
           )}
           <NavLink to="/instances" end className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
-            Instances
+            Veritabanları
           </NavLink>
           <NavLink to="/reports" className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}>
             Raporlar

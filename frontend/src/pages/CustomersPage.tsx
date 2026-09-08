@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { api, Customer, CustomerType, errorMessage } from "../api";
 import { TableState } from "../components/PageState";
 import { useAuth } from "../auth";
+import { ADD_ACTIONS } from "../terminology";
 
 export default function CustomersPage() {
   const navigate = useNavigate();
@@ -98,7 +99,7 @@ export default function CustomersPage() {
         </div>
         {!isPrivate && canWrite && (
           <div className="header-actions">
-            <a href="#new-customer-form" className="btn btn-primary">+ Müşteri Ekle</a>
+            <a href="#new-customer-form" className="btn btn-primary">{ADD_ACTIONS.customer}</a>
           </div>
         )}
       </header>
@@ -126,7 +127,7 @@ export default function CustomersPage() {
                   detail={
                     canWrite
                       ? "İzlenecek veritabanları müşteri altında gruplanır. Aşağıdaki formdan ilk müşteriyi ekleyin."
-                      : "İzlenecek veritabanları müşteri altında gruplanır. Müşteri eklemek admin yetkisi gerektirir."
+                      : "İzlenen veritabanları müşteri altında gruplanır. Müşteri eklemek admin yetkisi gerektirir."
                   }
                 />
               ) : (

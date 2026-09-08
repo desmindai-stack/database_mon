@@ -15,6 +15,7 @@ import { useAuth } from "../auth";
 import { showField, topologyOf, type FieldContext, type FormTopology } from "../formFields";
 import { TableState } from "../components/PageState";
 import { Pagination, usePagination } from "../components/Pagination";
+import { ADD_ACTIONS } from "../terminology";
 
 const PG_SERVICES = ["etcd", "patroni", "postgresql", "keepalived", "haproxy"];
 
@@ -313,10 +314,10 @@ export default function InstancesPage() {
       {deleteDeps && (
         <>
           {deleteDeps.total_records === 0 && deleteDeps.linked_nodes.length === 0 ? (
-            <p>Bu instance'a bağlı hiçbir kayıt yok — güvenle silinebilir.</p>
+            <p>Bu veritabanına bağlı hiçbir kayıt yok — güvenle silinebilir.</p>
           ) : (
             <>
-              <p>Bu instance'a bağlı kayıtlar var. Silerseniz bunlar da silinir:</p>
+              <p>Bu veritabanına bağlı kayıtlar var. Silerseniz bunlar da silinir:</p>
               <ul className="dependency-list">
                 {Object.entries(deleteDeps.breakdown ?? {})
                   .filter(([table, count]) => count > 0 && table !== "nodes")
@@ -360,7 +361,7 @@ export default function InstancesPage() {
   const formPanel = (
     <div className="card">
       <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>
-        Instance düzenle
+        Veritabanı düzenle
       </h3>
       <form className="form-grid" onSubmit={onSubmit}>
         <label>
@@ -649,7 +650,7 @@ export default function InstancesPage() {
     <>
       <header className="page-header">
         <div>
-          <h2>Instances</h2>
+          <h2>Veritabanları</h2>
           <p>PostgreSQL, SQL Server ve MongoDB sunucularını kaydedin</p>
         </div>
         {/* Birincil eylem her sayfada aynı kapta: sağ üstte, .header-actions içinde
@@ -657,7 +658,7 @@ export default function InstancesPage() {
             sayfalardan farklıydı. */}
         {canWrite && (
           <div className="header-actions">
-            <Link to="/customers" className="btn btn-primary">+ Veritabanı Ekle</Link>
+            <Link to="/customers" className="btn btn-primary">{ADD_ACTIONS.database}</Link>
           </div>
         )}
       </header>
@@ -686,11 +687,11 @@ export default function InstancesPage() {
                   loading={!loaded}
                   error={listError}
                   onRetry={load}
-                  title="Kayıtlı instance yok"
+                  title="Kayıtlı veritabanı yok"
                   detail={
                     canWrite
-                      ? "Bir instance, bağlantı bilgileriyle izlenen tek bir veritabanıdır. Yukarıdaki formdan ilkini ekleyin; metrikler ilk toplama döngüsünden sonra görünür."
-                      : "Bir instance, bağlantı bilgileriyle izlenen tek bir veritabanıdır. Instance eklemek admin yetkisi gerektirir."
+                      ? "İzlenen her veritabanı bağlantı bilgileriyle burada listelenir. Yukarıdaki formdan ilkini ekleyin; metrikler ilk toplama döngüsünden sonra görünür."
+                      : "İzlenen her veritabanı, bağlantı bilgileriyle birlikte burada listelenir. Veritabanı eklemek admin yetkisi gerektirir."
                   }
                 />
               ) : (
@@ -726,9 +727,9 @@ export default function InstancesPage() {
         ) : (
           <div className="card" style={{ display: "grid", placeItems: "center", minHeight: 200 }}>
             <p style={{ color: "var(--muted)", textAlign: "center" }}>
-              Yeni instance eklemek için <Link to="/customers">Müşteriler</Link> → Uygulamalar →
+              Yeni veritabanı eklemek için <Link to="/customers">Müşteriler</Link> → Uygulamalar →
               bir veritabanı grubuna sihirbazla düğüm ekleyin. Burada listedeki{" "}
-              <strong>Düzenle</strong> butonuyla var olan instance'ları düzenleyebilirsiniz.
+              <strong>Düzenle</strong> butonuyla var olan veritabanlarını düzenleyebilirsiniz.
             </p>
           </div>
         )}

@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, ApiError, Application, DatabaseGroup, errorMessage, GroupEnvironment } from "../api";
 import { NotFoundState, PageError, PageSkeleton, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
+import { ADD_ACTIONS } from "../terminology";
 
 const ENV_LABELS: Record<GroupEnvironment, string> = {
   prod: "Prod",
@@ -127,7 +128,9 @@ export default function DatabaseGroupsPage() {
         </div>
         {canWrite && (
           <div className="header-actions">
-            <Link to={`/applications/${id}/groups/wizard`} className="btn btn-primary">+ Veritabanı Ekle</Link>
+            <Link to={`/applications/${id}/groups/wizard`} className="btn btn-primary">
+              {ADD_ACTIONS.database}
+            </Link>
           </div>
         )}
       </header>

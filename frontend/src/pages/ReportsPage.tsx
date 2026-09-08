@@ -444,7 +444,7 @@ export default function ReportsPage() {
             <option value="customer">Müşteri</option>
             <option value="application">Uygulama</option>
             <option value="group">Veritabanı grubu</option>
-            <option value="instance">Instance</option>
+            <option value="instance">Veritabanı</option>
           </select>
         </label>
         {scopeType !== "global" && (

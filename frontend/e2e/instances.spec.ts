@@ -11,7 +11,7 @@ test.use(authenticated);
 
 async function openInstances(page: import("@playwright/test").Page) {
   await page.goto("/instances");
-  await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Veritabanları" })).toBeVisible();
 }
 
 test.describe("instance yönetimi", () => {

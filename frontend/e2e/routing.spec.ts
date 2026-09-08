@@ -36,24 +36,24 @@ test.describe("gezinme", () => {
 
     await page.goto(`/instances/${instance.id}`);
 
-    await expect(page.getByRole("heading", { name: "Instance bulunamadı" })).toBeVisible();
-    await expect(page.getByRole("link", { name: /Instance listesine dön/ })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Veritabanı bulunamadı" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /Veritabanı listesine dön/ })).toBeVisible();
 
     await api.delete(`/api/instances/${guard.id}?cascade=true`);
   });
 
   test("sayısal olmayan instance adresi sonsuz yüklenmede takılmaz", async ({ page }) => {
     await page.goto("/instances/abc");
-    await expect(page.getByRole("heading", { name: "Instance bulunamadı" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Veritabanı bulunamadı" })).toBeVisible();
   });
 
   test("@critical derin adreste sayfa yenileme çalışır (SPA yönlendirmesi)", async ({ page }) => {
     // Canlıda bu 404 veriyordu: sunucu bilinmeyen yolu index.html ile karşılamıyordu.
     await page.goto("/instances");
-    await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Veritabanları" })).toBeVisible();
 
     await page.reload();
-    await expect(page.getByRole("heading", { name: "Instances" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Veritabanları" })).toBeVisible();
   });
 
   test("tarayıcı geri düğmesi sekmeyi geri alır", async ({ page, request }) => {
@@ -75,7 +75,7 @@ test.describe("gezinme", () => {
   test("kenar çubuğu bağlantıları hedef sayfaları açar", async ({ page }) => {
     await page.goto("/");
     for (const [link, heading] of [
-      ["Instances", "Instances"],
+      ["Veritabanları", "Veritabanları"],
       ["Raporlar", "Raporlar"],
       ["Predictions", "Tahminler"],
       ["Alerts", "Alerts"],

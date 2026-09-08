@@ -8,12 +8,11 @@ private'ta uygulama adı → veritabanı grubu eşlemesi (ör. "X Bank" →
 uygulama "boa" → SQL Server Always On 4 düğüm; uygulama "aapara" →
 PostgreSQL Patroni 3 düğüm).
 
-- **PostgreSQL**: standalone + Patroni cluster (2-3 düğüm + DR düğümü).
-  Düğüm başına postgresql/patroni/etcd/keepalived/haproxy servis durumu ve
-  logları, lider/replika rolü, replikasyon lag, etcd quorum, VIP sahipliği,
-  split-brain tespiti, parametre denetimi, index önerisi.
-- **SQL Server**: standalone + Always On AG (DR düğümü dahil). DMV tabanlı
-  collector, AG sağlık izleme, wait stats, yavaş sorgular.
+- **PostgreSQL**: standalone + Patroni cluster (2-3 düğüm + DR). Düğüm başına
+  servis durumu ve logları, lider/replika rolü, replikasyon lag, etcd quorum,
+  VIP sahipliği, split-brain tespiti, parametre denetimi, index önerisi.
+- **SQL Server**: standalone + Always On AG (DR dahil). DMV tabanlı collector,
+  AG sağlık izleme, wait stats, yavaş sorgular.
 
 Hedef kitle iki ayrı: **DBA** (derin, eyleme dönük, komutlu) ve **müşteri
 yöneticisi** (özet, güvence, risk + trend).
@@ -22,23 +21,20 @@ yöneticisi** (özet, güvence, risk + trend).
 
 Çalışan ana özellikler:
 
-- **Kimlik doğrulama**: JWT (access + refresh), admin/viewer rolleri. Viewer
-  salt-okunur — `require_write_access` router seviyesinde her mutasyonu
-  admin'e kapatıyor.
-- **Çok müşterili yapı**: Customer → Application → DatabaseGroup → Node,
-  ayrıca Server kayıtları. Sihirbazla grup/düğüm ekleme.
+- **Kimlik doğrulama**: JWT, admin/viewer. Viewer salt-okunur —
+  `require_write_access` her mutasyonu router seviyesinde kapatıyor.
+- **Çok müşterili yapı**: Customer → Application → DatabaseGroup → Node +
+  Server. Sihirbazla grup/düğüm ekleme.
 - **Cluster health**: Patroni/Always On, etcd quorum, split-brain, servis
-  durumu, host-agent üzerinden log tail.
-- **DPA (instance detay)**: metrik grafikleri (etkileşimli, sürükleyerek
-  aralık seçme), yavaş sorgular, EXPLAIN, index önerisi, şema sağlığı,
-  aktivite, ön koşul kontrolü, tuning.
-- **Parametre denetimi**: `pg_settings` ↔ Patroni `/config` karşılaştırması.
-- **Tahminler**: trend tabanlı kapasite/risk öngörüsü + adım adım playbook.
-- **Sağlık raporu**: aynı veriden iki rapor — teknik (DBA) ve yönetici
-  (müşteri). Zamanlanmış üretim, PDF/CSV dışa aktarma.
-- **Bulgu durum makinesi**: açık | yoksayıldı | ertelendi | risk_kabul |
-  planlandı | çözüldü_doğrulanacak | çözüldü. Not zorunlu, kapsam seçimi
-  (instance/grup/uygulama/müşteri/global), değişiklik geçmişi.
+  durumu, host-agent üzerinden log tail. Parametre sapması denetimi.
+- **DPA (veritabanı detayı)**: metrik grafikleri (sürükleyerek aralık seçme),
+  **veritabanı yükü (AAS) + bekleme kırılımı**, yavaş sorgular, EXPLAIN ve
+  **auto_explain ile yakalanan gerçek planlar**, **tahmini/gerçek satır sapması**,
+  **bloklama zinciri**, index önerisi, şema sağlığı, ön koşul kontrolü, tuning.
+- **Tahminler**: trend tabanlı öngörü + playbook + doğruluk geri beslemesi.
+- **Sağlık raporu**: aynı veriden teknik (DBA) ve yönetici (müşteri) raporu.
+  Zamanlanmış üretim, PDF/CSV. Bulgu durum makinesi (7 durum, not zorunlu,
+  kapsam seçimi, değişiklik geçmişi).
 - **Alarmlar**: varsayılan + özel kurallar, olay geçmişi.
 
 ### Canlı ortam
@@ -67,17 +63,17 @@ cd frontend && npm install && npm run dev
 
 ### Testler
 
-600 test (`backend/tests/`, 49 dosya), `pytest-asyncio` auto mode:
+1200+ test (`backend/tests/`), `pytest-asyncio` auto mode. Ayrıca Playwright
+ile tarayıcı testleri (`frontend/e2e/`, `npm run test:e2e`).
 
 ```bash
 cd backend && .venv/Scripts/python.exe -m pytest tests/ -q   # Windows
 ```
 
-Frontend'in kendi test koşucusu yok; frontend garantileri backend
-tarafındaki statik denetim testleriyle korunuyor:
-`test_navigation_integrity.py` (rota ↔ bağlantı eşleşmesi),
-`test_frontend_state_handling.py` (boş/hata durumu ayrımı, yutulan hata),
-`test_ui_consistency.py` (sayfalama, yetki ekranı, dar ekran),
+Frontend'in kendi birim test koşucusu yok; frontend garantileri backend
+tarafındaki statik denetim testleriyle korunuyor: `test_navigation_integrity.py`
+(rota ↔ bağlantı), `test_frontend_state_handling.py` (boş/hata durumu),
+`test_ui_consistency.py`, `test_ui_terminology.py` (terim tutarlılığı),
 `test_definition_order.py` (Python sürüm farkı — aşağıya bakın).
 
 ## Mimari
@@ -108,14 +104,16 @@ Servislerin sorumlulukları (yönünü bulmak için):
 | `parameter_audit.py` | Parametre sapması denetimi |
 | `slow_query_selection.py` | **Yavaş sorgu seçiminin tek gerçeklik kaynağı** — rapor ve DPA ikisi de buradan besleniyor |
 | `pgss.py`, `query_history.py`, `query_cache.py` | pg_stat_statements okuma, seri üretimi |
-| `explain_service.py`, `index_advisor.py`, `query_diagnostics.py` | Sorgu tanısı ve öneri |
+| `explain_service.py`, `index_advisor.py`, `query_diagnostics.py`, `plan_analysis.py` | Sorgu tanısı, plan analizi, index önerisi |
+| `sql_analysis.py` | **SQL ayrıştırmanın tek yeri** (sqlglot) — CTE/takma ad ayrımı, kesik metin tespiti, EXPLAIN stratejisi |
+| `wait_sampling.py`, `database_load.py`, `wait_advice.py` | Bekleme örneklemesi, AAS, bekleme tabanlı öneri |
+| `blocking.py`, `blocking_history.py`, `deadlocks.py` | Bloklama zinciri, geçmiş olaylar, deadlock |
+| `auto_explain.py`, `plan_capture.py` | Gerçek çalıştırma planlarının yakalanması |
 | `health_report.py` | Rapor motoru: bölüm kaydı, FindingDraft → ReportFinding, fingerprint, öncelik |
-| `report_sections.py` | 12 rapor bölümünün bulgu üretimi |
-| `executive_report.py` | Aynı veriden yönetici anlatımı |
-| `report_export.py`, `report_documents.py` | PDF (ReportLab) / CSV |
+| `report_sections.py` | Rapor bölümlerinin bulgu üretimi |
+| `executive_report.py`, `report_export.py` | Yönetici anlatımı, PDF/CSV |
 | `finding_status.py` | Bulgu durum makinesi, kapsam çözümü, geçmiş |
 | `advice.py` | Beş parçalı öneri yapısı (aşağıdaki kural) |
-| `noise_settings.py` | Gürültü eşikleri (AppSetting tabanlı) |
 | `prediction.py`, `forecasting.py`, `prediction_playbooks.py` | Tahmin ve aksiyon planı |
 | `prerequisites.py` | Ön koşul kontrolü ve yoksayma |
 | `alert_engine.py`, `custom_alert_rules.py` | Alarm değerlendirme |
@@ -125,18 +123,16 @@ Servislerin sorumlulukları (yönünü bulmak için):
 
 ```
 frontend/src/
-  App.tsx        Rota tablosu + kenar çubuğu gezinme ağacı
-  api.ts         Tüm API çağrıları + ApiError (status taşır)
-  auth.tsx       Oturum context'i
-  pages/         Rota başına bir sayfa
-  components/    PageState (yükleniyor/hata/bulunamadı/boş), Pagination,
-                 ErrorBoundary, rapor ve DPA panelleri
-  hooks/         useUrlTab / useUrlFilter — sekme ve filtre URL'de
+  App.tsx  rota tablosu + kenar çubuğu     api.ts  API çağrıları + ApiError
+  pages/   rota başına bir sayfa           auth.tsx  oturum context'i
+  components/  PageState (yükleniyor/hata/bulunamadı/boş), ErrorBoundary, paneller
+  hooks/   useUrlTab / useUrlFilter        terminology.ts  kullanıcıya görünen terimler
+  formFields.ts  engine/topoloji alan kuralları     e2e/  Playwright testleri
 ```
 
-Diğer: `supabase/migrations/` (29 SQL), `agents/host-agent/` (servis durumu
+Diğer: `supabase/migrations/` (36 SQL), `agents/host-agent/` (servis durumu
 ve log tail sağlayan ajan), `docs/` (MIMARI, CLUSTER_HEALTH,
-YASAM-DONGUSU), `deploy/`, `docker/`.
+YASAM-DONGUSU, AUTO_EXPLAIN), `deploy/`, `docker/`.
 
 ## Kurallar
 
@@ -172,6 +168,23 @@ yeşil olmalı; kırıksa düzeltmeden commit atma.
   dokunma.
 - `.env`, `data/`, `*.db`, keystore dosyalarını commit etme.
 - Kullanıcıya görünen metinler Türkçe, kod ve tanımlayıcılar İngilizce.
+
+## Terminoloji
+
+Kullanıcıya görünen terimler `frontend/src/terminology.ts`'den gelir; metni
+elle yazmayın (`TERMS`, `ADD_ACTIONS`).
+
+| Ekranda | Kodda / adreste |
+|---|---|
+| **Veritabanı** (izlenen tek veritabanı) | `Instance`, `/instances` |
+| **Düğüm** / **Veritabanı grubu** / **Sunucu** | `Node` / `DatabaseGroup` / `Server` |
+
+- **"Instance" ekranda geçmez** — teknik terim, müşteri yöneticisine hiçbir şey
+  ifade etmiyor. Kodda ve adreste kalıyor (adres değişimi kayıtlı bağlantıları
+  kırardı). Tek istisna SQL Server'ın kendi "named instance" kavramı.
+- **Aynı eyleme giden butonlar aynı metni taşır** (`ADD_ACTION_BY_TARGET`);
+  `tests/test_ui_terminology.py` doğruluyor.
+- Türkçede Title Case yok: "Veritabanı ekle", "Veritabanı Ekle" değil.
 
 ## Bilinen sınırlar
 

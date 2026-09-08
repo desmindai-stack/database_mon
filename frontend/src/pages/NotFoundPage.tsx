@@ -23,7 +23,7 @@ export default function NotFoundPage() {
           Dashboard'a dön
         </Link>
         <Link to="/instances" className="btn">
-          Instance listesi
+          Veritabanı listesi
         </Link>
       </div>
     </div>

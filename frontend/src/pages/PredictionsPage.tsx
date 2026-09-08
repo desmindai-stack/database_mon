@@ -52,7 +52,7 @@ export default function PredictionsPage() {
           <thead>
             <tr>
               <th>Zaman</th>
-              <th>Instance</th>
+              <th>Veritabanı</th>
               <th>Metrik</th>
               <th>Şimdi → Tahmin</th>
               <th>Önem</th>
@@ -69,7 +69,7 @@ export default function PredictionsPage() {
                 error={listError}
                 onRetry={load}
                 title="Açık tahmin yok"
-                detail="Tahminler geçmiş metriklerin trendinden üretilir; yeterli örnek biriktikçe burada görünür. Yeni eklenen bir instance için genelde birkaç saat gerekir."
+                detail="Tahminler geçmiş metriklerin trendinden üretilir; yeterli örnek biriktikçe burada görünür. Yeni eklenen bir veritabanı için genelde birkaç saat gerekir."
               />
             ) : (
               items.map((p) => (

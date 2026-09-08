@@ -758,14 +758,14 @@ export default function InstanceDetailPage() {
   if (!idIsValid || notFound) {
     return (
       <NotFoundState
-        title="Instance bulunamadı"
+        title="Veritabanı bulunamadı"
         detail={
           idIsValid
             ? `#${instanceId} numaralı instance yok — silinmiş olabilir ya da bağlantı eskimiş olabilir.`
             : `"${id}" geçerli bir instance numarası değil.`
         }
         backTo="/instances"
-        backLabel="Instance listesine dön"
+        backLabel="Veritabanı listesine dön"
       />
     );
   }
@@ -1673,7 +1673,7 @@ export default function InstanceDetailPage() {
             <h3 className="chart-title">Alarm kuralları</h3>
             {rules.length === 0 ? (
               <EmptyState
-                title="Bu instance için alarm kuralı yok"
+                title="Bu veritabanı için alarm kuralı yok"
                 detail="Varsayılan kurallar ilk toplama döngüsünde oluşturulur. Özel bir eşik izlemek isterseniz Alarmlar sayfasından kural ekleyebilirsiniz."
                 action={<Link to="/alerts/new" className="btn btn-xs">Kural ekle</Link>}
               />
@@ -1703,7 +1703,7 @@ export default function InstanceDetailPage() {
             {events.length === 0 ? (
               <EmptyState
                 title="Alarm olayı yok"
-                detail="Bu instance için henüz hiçbir kural tetiklenmedi — beklenen durum budur."
+                detail="Bu veritabanı için henüz hiçbir kural tetiklenmedi — beklenen durum budur."
               />
             ) : (
               <ul className="event-list">

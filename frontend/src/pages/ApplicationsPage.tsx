@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api, Application, Customer, errorMessage } from "../api";
 import { NotFoundState, PageError, PageSkeleton, TableState } from "../components/PageState";
 import { useAuth } from "../auth";
+import { ADD_ACTIONS } from "../terminology";
 
 export default function ApplicationsPage() {
   const { customerId } = useParams<{ customerId: string }>();
@@ -127,7 +128,7 @@ export default function ApplicationsPage() {
         </div>
         <div className="header-actions">
           <Link to={`/customers/${id}/servers`} className="btn">Sunucular</Link>
-          {canWrite && <a href="#new-application-form" className="btn btn-primary">+ Uygulama Ekle</a>}
+          {canWrite && <a href="#new-application-form" className="btn btn-primary">{ADD_ACTIONS.application}</a>}
         </div>
       </header>
 

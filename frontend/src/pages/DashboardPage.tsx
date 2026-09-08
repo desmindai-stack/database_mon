@@ -16,6 +16,7 @@ import { useUrlFilter } from "../hooks/useUrlState";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
+import { ADD_ACTIONS } from "../terminology";
 
 const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
   critical: "Kritik",
@@ -219,8 +220,12 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="header-actions">
-          <Link to="/instances" className="btn">Tüm instance’lar</Link>
-          {canWrite && <Link to="/customers" className="btn btn-primary">+ Yeni instance</Link>}
+          <Link to="/instances" className="btn">Tüm veritabanları</Link>
+          {canWrite && (
+            <Link to="/customers" className="btn btn-primary">
+              {ADD_ACTIONS.database}
+            </Link>
+          )}
         </div>
       </header>
 

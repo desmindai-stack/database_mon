@@ -21,12 +21,13 @@ import {
 import { NotFoundState, PageError, PageSkeleton } from "../components/PageState";
 import { useAuth } from "../auth";
 import { showField, topologyOf, type FieldContext } from "../formFields";
+import { ADD_ACTIONS, TERMS } from "../terminology";
 
 type TopologyPreset = "standalone" | "cluster-2" | "cluster-3" | "cluster-custom";
 type WizardMode = "create-group" | "add-node";
 
 const TOPOLOGY_CARDS: { preset: TopologyPreset; title: string; description: string }[] = [
-  { preset: "standalone", title: "Standalone", description: "Tek sunucu, tek instance." },
+  { preset: "standalone", title: "Standalone", description: "Tek sunucu, tek veritabanı." },
   { preset: "cluster-2", title: "Cluster — 2 düğüm", description: "Aynı veri merkezinde 2 düğüm." },
   { preset: "cluster-3", title: "Cluster — 3 düğüm", description: "2 düğüm ana DC + 1 düğüm disaster site." },
   { preset: "cluster-custom", title: "Cluster — özel", description: "2-8 arası düğüm, her biri için site seçilebilir." },
@@ -287,7 +288,7 @@ export default function DatabaseWizardPage() {
     }
     const list = [{ key: "topology", label: "Topoloji" }];
     if (isCluster) list.push({ key: "cluster", label: "Cluster bilgileri" });
-    list.push({ key: "nodes", label: isCluster ? "Düğümler" : "Sunucu ve instance" });
+    list.push({ key: "nodes", label: isCluster ? "Düğümler" : "Sunucu ve veritabanı" });
     list.push({ key: "summary", label: "Özet ve onay" });
     return list;
   }, [isCluster, mode]);
@@ -544,7 +545,7 @@ export default function DatabaseWizardPage() {
         title="Bu sayfa için yetkiniz yok"
         detail="Veritabanı sihirbazı admin yetkisi gerektirir; viewer rolü salt-okunurdur."
         backTo="/instances"
-        backLabel="Instance listesine dön"
+        backLabel="Veritabanı listesine dön"
       />
     );
   }
@@ -580,7 +581,9 @@ export default function DatabaseWizardPage() {
     <>
       <header className="page-header">
         <div>
-          <h2>{mode === "add-node" ? `Düğüm ekle — ${existingGroup?.name ?? ""}` : "Veritabanı ekle — sihirbaz"}</h2>
+          <h2>{mode === "add-node"
+            ? `${TERMS.node.singular} ekle — ${existingGroup?.name ?? ""}`
+            : `${TERMS.database.singular} ekle — sihirbaz`}</h2>
           <p>
             {/* Sihirbazdan çıkış yolu her durumda bulunmalı (Faz 19 İŞ 2). */}
             {mode === "add-node" ? (
@@ -658,7 +661,7 @@ export default function DatabaseWizardPage() {
               </label>
             )}
             <p className="muted-note" style={{ marginTop: "0.75rem" }}>
-              {preset === "standalone" && "Tek sunucu, tek instance oluşturulacak."}
+              {preset === "standalone" && "Tek sunucu, tek veritabanı oluşturulacak."}
               {preset === "cluster-2" && `2 düğümlü ${engine === "sqlserver" ? "Always On" : "Patroni"} cluster — aynı veri merkezi.`}
               {preset === "cluster-3" && `3 düğümlü ${engine === "sqlserver" ? "Always On" : "Patroni"} cluster — 2 ana DC + 1 disaster site.`}
               {preset === "cluster-custom" && `${nodes.length} düğümlü özel ${engine === "sqlserver" ? "Always On" : "Patroni"} cluster.`}
@@ -784,12 +787,14 @@ export default function DatabaseWizardPage() {
           <>
             <div className="activity-toolbar">
               <h3 className="chart-title" style={{ margin: 0 }}>
-                {mode === "add-node" ? "Yeni düğümler" : isCluster ? "Düğümler" : "Sunucu ve instance"}
+                {mode === "add-node" ? "Yeni düğümler" : isCluster ? "Düğümler" : "Sunucu ve veritabanı"}
               </h3>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <button type="button" className="btn" onClick={testAllNodes}>Tümünü test et</button>
                 {canAddNode && nodes.length < maxNewNodes && (
-                  <button type="button" className="btn btn-primary" onClick={addNode}>+ Düğüm ekle</button>
+                  <button type="button" className="btn btn-primary" onClick={addNode}>
+                    {ADD_ACTIONS.node}
+                  </button>
                 )}
               </div>
             </div>
@@ -963,7 +968,7 @@ export default function DatabaseWizardPage() {
                         <div className="form-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))" }}>
                           {showField("instance_name", fieldCtx) && (
                             <label>
-                              SQL Server instance adı
+                              SQL Server instance adı (named instance)
                               <input
                                 value={node.instance_name}
                                 onChange={(e) => updateNode(node.key, "instance_name", e.target.value)}

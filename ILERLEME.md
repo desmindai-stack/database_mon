@@ -5863,6 +5863,81 @@ kilitliyor ki gürültü sorunu başka bir kapıdan geri gelmesin.
 beklenmiyor — bu testin düşmesi, günde 86.400 satırın geri geldiği anlamına
 gelir. Toplam 1204 test yeşil.
 
+## Faz 27 — İŞ 3: Terminoloji tutarlılığı
+
+**Bildirilen hata:** ana ekranda sağ üstte "+ Yeni instance" yazıyordu; aynı
+hedefe (`/customers`) giden Veritabanları sayfasındaki buton "+ Veritabanı Ekle"
+diyordu. Aynı yere götüren iki buton, iki farklı şey yapıyormuş gibi
+görünüyordu.
+
+Tarama daha fazlasını çıkardı: büyük harf kullanımı bile tutarsızdı —
+"+ Uygulama ekle" ile "+ Uygulama Ekle", "+ Düğüm ekle" ile "+ Düğüm Ekle" aynı
+üründe yan yana duruyordu.
+
+### Karar: kullanıcı **veritabanı** ekliyor
+
+"Instance" teknik bir terim ve hedef kitlenin yarısı (müşteri yöneticisi) için
+hiçbir şey ifade etmiyor. En açık kanıt ürünün kendi metnindeydi: boş durum
+mesajı terimi TANIMLAMAK zorunda kalıyordu — *"Bir instance, bağlantı
+bilgileriyle izlenen tek bir veritabanıdır."* **Tanım gerektiren bir arayüz
+terimi yanlış terimdir.** Zaten CLAUDE.md kuralı da net: kullanıcıya görünen
+metinler Türkçe.
+
+| Ekranda | Kodda / adreste |
+|---|---|
+| **Veritabanı** | `Instance`, `/instances`, `/api/instances` |
+| **Düğüm**, **Veritabanı grubu**, **Sunucu** | `Node`, `DatabaseGroup`, `Server` |
+
+**Adresler değiştirilmedi.** `/instances` rotasını değiştirmek kullanıcıların
+kaydettiği bağlantıları kırardı ve terminoloji kazancı bunu karşılamaz.
+
+**Tek istisna: SQL Server'ın kendi "named instance" kavramı** ("Instance adı",
+"Instance portu"). Onu "veritabanı adı" diye çevirmek bambaşka bir şeyi
+kastederdi ve kullanıcıyı yanlış değeri girmeye yönlendirirdi.
+
+### Tek gerçeklik kaynağı
+
+`frontend/src/terminology.ts` eklendi: `TERMS` (tekil/çoğul biçimler),
+`ADD_ACTIONS` (buton metinleri) ve `ADD_ACTION_BY_TARGET` (hangi rotaya hangi
+metin). Metinler artık elle yazılmıyor.
+
+Büyük harf kuralı da orada sabit: **Türkçede Title Case yok**, cümle düzeni
+kullanılıyor (yalnızca ilk harf büyük).
+
+### Taranan ve düzeltilen yerler
+
+Buton metinleri, sayfa başlıkları (`Instances` → `Veritabanları`), kenar çubuğu,
+boş durum mesajları, "bulunamadı" ekranları, sihirbaz adım adları, açılır liste
+seçenekleri, tablo başlıkları, silme onayı metinleri. 12 dosya.
+
+E2E testleri de yeni terminolojiyi bekleyecek şekilde güncellendi.
+
+### Tutarlılığı kalıcı kılan test
+
+`tests/test_ui_terminology.py` (50 test):
+
+- **Aynı hedefe giden birincil butonlar ortak sabiti kullanıyor mu** — bu, tam
+  olarak kullanıcının bildirdiği hatayı yakalayan test.
+- Elle yazılmış hiçbir "+ ... Ekle" metni kalmamış mı.
+- Türkçe cümle düzeni korunuyor mu.
+- Her `.tsx` dosyası için ayrı ayrı: kullanıcıya görünen metinde "instance"
+  geçiyor mu (kod tanımlayıcıları, rota adresleri ve CSS sınıfları hariç
+  tutuluyor; SQL Server istisnası tanımlı).
+- Sözlük CLAUDE.md'ye yazılmış mı.
+
+### CLAUDE.md
+
+Terminoloji sözlüğü eklendi. Ayrıca güncelliğini yitirmiş iki yer düzeltildi:
+test sayısı (600 → 1200+, Playwright eklendi) ve servis tablosu (Faz 25-27'de
+eklenen 8 servis eksikti).
+
+**Not:** CLAUDE.md 212 satır, kuraldaki 200 sınırının 12 satır üstünde.
+Sıkıştırabildiğim kadar sıkıştırdım (özellik listesi, servis tablosu, dizin
+ağacı); daha fazlası içerik kaybı olurdu. Sınırı 220'ye çekmek ya da Mimari
+bölümünü `docs/MIMARI.md`'ye taşımak iki seçenek — karar sizin.
+
+Toplam 1254 backend testi yeşil, 33 tarayıcı testi yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

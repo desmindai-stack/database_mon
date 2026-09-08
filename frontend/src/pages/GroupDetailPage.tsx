@@ -21,6 +21,7 @@ import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../component
 import RecommendationHeader from "../components/RecommendationHeader";
 import { showField, topologyOf, type FieldContext } from "../formFields";
 import { useUrlTab } from "../hooks/useUrlState";
+import { ADD_ACTIONS } from "../terminology";
 
 type Tab = "nodes" | "parameters" | "alwayson";
 const TABS: readonly Tab[] = ["nodes", "parameters", "alwayson"];
@@ -185,7 +186,7 @@ export default function GroupDetailPage() {
     try {
       if (connMode === "existing") {
         if (!connInstanceId) {
-          setConnError("Önce bir instance seçin");
+          setConnError("Önce bir veritabanı seçin");
           return;
         }
         const result = await api.testExistingInstance(connInstanceId);
@@ -219,7 +220,7 @@ export default function GroupDetailPage() {
     try {
       if (connMode === "existing") {
         if (!connInstanceId) {
-          setConnError("Önce bir instance seçin");
+          setConnError("Önce bir veritabanı seçin");
           return;
         }
         await api.updateNode(node.id, { instance_id: connInstanceId });
@@ -356,7 +357,7 @@ export default function GroupDetailPage() {
         </div>
         {tab === "nodes" && canWrite && group && showField("add_node", fieldCtx) && (
           <div className="header-actions">
-            <Link to={`/groups/${id}/wizard`} className="btn btn-primary">+ Düğüm Ekle</Link>
+            <Link to={`/groups/${id}/wizard`} className="btn btn-primary">{ADD_ACTIONS.node}</Link>
           </div>
         )}
       </header>
@@ -599,7 +600,7 @@ export default function GroupDetailPage() {
                     {node.instance_id ? (
                       <p>
                         <Link to={`/instances/${node.instance_id}`} className="detail-link tuning">
-                          Instance detayı (metrikler, yavaş sorgular, index önerileri, explain)
+                          Veritabanı detayı (metrikler, yavaş sorgular, index önerileri, explain)
                         </Link>
                         {" · "}
                         <Link to={`/instances/${node.instance_id}?tab=tuning`} className="detail-link tuning">
@@ -628,7 +629,7 @@ export default function GroupDetailPage() {
                             }}
                           >
                             <option value="new">Yeni bağlantı bilgisi gir</option>
-                            <option value="existing">Mevcut instance'a bağla</option>
+                            <option value="existing">Mevcut veritabanına bağla</option>
                           </select>
                         </label>
                         {connMode === "new" ? (
@@ -656,7 +657,7 @@ export default function GroupDetailPage() {
                           </>
                         ) : (
                           <label>
-                            Instance
+                            Veritabanı
                             <select
                               value={connInstanceId}
                               onChange={(e) => setConnInstanceId(e.target.value ? Number(e.target.value) : "")}

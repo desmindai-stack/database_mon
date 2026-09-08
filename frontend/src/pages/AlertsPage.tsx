@@ -5,6 +5,7 @@ import { useAuth } from "../auth";
 import { TableState } from "../components/PageState";
 import { Pagination, usePagination } from "../components/Pagination";
 import { useUrlTab } from "../hooks/useUrlState";
+import { ADD_ACTIONS } from "../terminology";
 
 type Tab = "active" | "rules" | "history";
 const TABS: readonly Tab[] = ["active", "rules", "history"];
@@ -142,7 +143,7 @@ export default function AlertsPage() {
         </div>
         {canWrite && (
           <div className="header-actions">
-            <Link to="/alerts/new" className="btn btn-primary">+ Özel kural ekle</Link>
+            <Link to="/alerts/new" className="btn btn-primary">{ADD_ACTIONS.alertRule}</Link>
           </div>
         )}
       </header>

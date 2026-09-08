@@ -13,7 +13,7 @@ const STATUSES_WITH_DEADLINE: FindingStatus[] = ["deferred", "ignored"];
 const STATUSES_WITH_REFERENCE: FindingStatus[] = ["planned"];
 
 const SCOPE_LABELS: Record<DecisionScope, string> = {
-  instance: "Bu instance",
+  instance: "Bu veritabanı",
   group: "Bu grup",
   application: "Bu uygulama",
   customer: "Bu müşteri",

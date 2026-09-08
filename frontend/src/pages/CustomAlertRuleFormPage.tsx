@@ -154,19 +154,19 @@ export default function CustomAlertRuleFormPage() {
               value={targetKind}
               onChange={(e) => { setTargetKind(e.target.value as TargetKind); setTargetId(""); setTestResult(null); }}
             >
-              <option value="instance">Instance</option>
+              <option value="instance">Veritabanı</option>
               <option value="group">Database Group</option>
             </select>
           </label>
           <label>
-            {targetKind === "instance" ? "Instance" : "Grup"}
+            {targetKind === "instance" ? "Veritabanı" : "Grup"}
             <select
               value={targetId}
               onChange={(e) => { setTargetId(e.target.value); setTestResult(null); }}
               required={form.rule_type === "custom"}
             >
               <option value="">
-                {form.rule_type === "custom" ? "— seçin —" : targetKind === "instance" ? "Tüm instance'lar" : "— seçin —"}
+                {form.rule_type === "custom" ? "— seçin —" : targetKind === "instance" ? "Tüm veritabanları" : "— seçin —"}
               </option>
               {(targetKind === "instance" ? instances : groups).map((t) => (
                 <option key={t.id} value={t.id}>{t.name}</option>
