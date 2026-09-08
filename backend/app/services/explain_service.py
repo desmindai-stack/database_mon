@@ -11,6 +11,10 @@ import asyncpg
 from app.collectors.base import ConnectionTarget
 from app.services.advice import advice_to_dict
 from app.services.auto_explain import plan_source_caveat, plan_source_label
+from app.services.sql_analysis import (
+    humanize_postgres_error,
+    plan_explain_strategy,
+)
 from app.services.plan_analysis import (
     advice_for_analysis,
     analysis_to_dict,
@@ -56,6 +60,9 @@ class ExplainResult:
     plan: PlanNode | None
     insights: list[str]
     raw_plan: list[Any]
+    #: Planın alınma biçiminden doğan sınır (ör. GENERIC_PLAN kullanıldı) — kullanıcı
+    #: planın neye kadar güvenilir olduğunu bilmeli.
+    caveat: str | None = None
 
 
 def _strip_comments(sql: str) -> str:
@@ -170,6 +177,26 @@ def _plan_to_dict(node: PlanNode) -> dict[str, Any]:
     }
 
 
+def _merge_caveats(*parts: str | None) -> str | None:
+    filled = [p.strip() for p in parts if p and p.strip()]
+    return " ".join(filled) if filled else None
+
+
+async def _setting_or_none(conn, name: str):
+    """`SHOW <ayar>` — ayar yoksa hata yerine None."""
+    try:
+        return await conn.fetchval(f"SHOW {name}")
+    except Exception:
+        return None
+
+
+def _int_or_none(value) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 class PostgreSQLExplainService:
     def __init__(self, target: ConnectionTarget) -> None:
         self.target = target
@@ -189,34 +216,46 @@ class PostgreSQLExplainService:
 
     async def explain(self, query: str, *, analyze: bool = False) -> ExplainResult:
         cleaned = validate_explainable(query)
-        # ANALYZE executes the statement — keep disabled unless explicitly requested
-        # and still only for allowed read-only forms.
         use_analyze = bool(analyze)
 
         conn = await self._connect()
         try:
             await conn.execute("SET statement_timeout = '8000'")
-            if use_analyze:
-                sql = f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {cleaned}"
-            else:
-                sql = f"EXPLAIN (FORMAT JSON) {cleaned}"
+            version_num = int(
+                await conn.fetchval("SELECT current_setting('server_version_num')::int")
+            )
+            # Sunucunun KENDİ sınırını soruyoruz, varsayılanı varsaymıyoruz: kesilme tespiti
+            # bu sınıra göre yapılıyor ve yanlış bir sınır yanlış teşhis demek.
+            track_size = _int_or_none(
+                await _setting_or_none(conn, "track_activity_query_size")
+            )
 
+            # FAZ 27 İŞ 1: EXPLAIN'i DENEMEDEN ÖNCE karar veriliyor.
+            #
+            # Öncesinde her sorguya doğrudan EXPLAIN çalıştırılıyor, hata alınınca `$1`
+            # yer tutucuları `NULL` ile değiştirilip TEKRAR deneniyordu. İki sorunu vardı:
+            # (1) kesilmiş bir metin için üretilen hata sorguyla ilgisiz oluyordu
+            #     ("missing FROM-clause entry for table pn" — canlıda alınan hata),
+            # (2) `$1` yerine `NULL` koymak planlayıcıya BAŞKA bir sorgu sunuyordu; dönen
+            #     plan gerçek çalıştırmanın planı olmadığı hâlde öyleymiş gibi gösteriliyordu.
+            strategy = plan_explain_strategy(
+                cleaned,
+                server_version_num=version_num,
+                analyze=use_analyze,
+                track_activity_query_size=track_size,
+            )
+            if not strategy.can_explain:
+                message = strategy.reason or "Bu sorgu için plan alınamıyor."
+                if strategy.fix:
+                    message = f"{message}\n\n{strategy.fix}"
+                raise ValueError(message)
+
+            sql = f"EXPLAIN ({strategy.options}) {cleaned}"
             try:
                 row = await conn.fetchrow(sql)
             except Exception as exc:
-                # Parameterized ($1) queries often fail; try replacing with NULL
-                if "$" in cleaned:
-                    softened = re.sub(r"\$\d+", "NULL", cleaned)
-                    try:
-                        if use_analyze:
-                            row = await conn.fetchrow(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {softened}")
-                        else:
-                            row = await conn.fetchrow(f"EXPLAIN (FORMAT JSON) {softened}")
-                        cleaned = softened
-                    except Exception:
-                        raise ValueError(f"EXPLAIN başarısız: {exc}") from exc
-                else:
-                    raise ValueError(f"EXPLAIN başarısız: {exc}") from exc
+                # Ham PostgreSQL metni yerine ne olduğunu/ne yapılacağını söyleyen açıklama.
+                raise ValueError(humanize_postgres_error(str(exc))) from exc
 
             raw = row[0] if row else []
             if isinstance(raw, str):
@@ -232,6 +271,7 @@ class PostgreSQLExplainService:
             return ExplainResult(
                 query=cleaned,
                 analyzed=use_analyze,
+                caveat=strategy.caveat,
                 planning_time_ms=_f(root.get("Planning Time")) if isinstance(root, dict) else None,
                 execution_time_ms=_f(root.get("Execution Time")) if isinstance(root, dict) else None,
                 total_cost=plan.total_cost if plan else None,
@@ -266,7 +306,10 @@ class PostgreSQLExplainService:
             "raw_plan": result.raw_plan,
             "source": source,
             "source_label": plan_source_label(source),
-            "source_caveat": plan_source_caveat(source),
+            # Kaynak uyarısı ile stratejiden gelen uyarı BİRLEŞTİRİLİYOR: ikisi de planın
+            # neye kadar güvenilir olduğunu anlatıyor ve ayrı alanlarda göstermek kullanıcıyı
+            # aynı şeyi iki kez okumaya zorlardı.
+            "source_caveat": _merge_caveats(plan_source_caveat(source), result.caveat),
             "captured_at": None,
             "analysis": analysis_to_dict(analysis),
             "analysis_advice": advice_to_dict(advice_for_analysis(analysis)),

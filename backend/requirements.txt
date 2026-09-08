@@ -17,3 +17,9 @@ pyjwt>=2.9.0
 # Sağlık raporu PDF dışa aktarımı (Faz 17 İŞ 4). Saf Python — WeasyPrint'in aksine
 # cairo/pango gibi sistem kütüphanesi gerektirmez, bu yüzden Dockerfile'a dokunmadan çalışır.
 reportlab>=4.2.0
+
+# SQL ayrıştırma (Faz 27 İŞ 1). Elle yazılmış regex, CTE adlarını ve takma adları gerçek
+# tablo sanıp canlıda iki hataya yol açtı. sqlglot SAF PYTHON — pglast (libpg_query) daha
+# doğru olurdu ama C eklentisi derlenmesi gerekiyor ve Dockerfile'a dokunmak proje kuralıyla
+# yasak (gerekçe SORULAR.md'de).
+sqlglot>=25.0.0

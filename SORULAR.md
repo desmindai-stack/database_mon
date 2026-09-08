@@ -2109,3 +2109,60 @@ açardı. Alternatif (sorgu metnini kendimiz normalleştirip hash'lemek) reddedi
 pg_stat_statements'ınkinden farklı bir kimlik üretir ve iki liste birbirine
 bağlanamaz hale gelirdi — projede zaten kural olan "aynı veriyi gösteren
 yerler tek gerçeklik kaynağından beslensin" ilkesine aykırı.
+
+## Faz 27 İŞ 1: SQL ayrıştırıcı tercihi — sqlglot, pglast değil
+
+Elle yazılmış regex ile SQL ayrıştırmak canlıda iki hataya yol açtı
+(`'public.recurse' tablosu bulunamadı` — CTE adı tablo sanıldı;
+`missing FROM-clause entry for table "pn"` — kesilmiş metne EXPLAIN
+çalıştırıldı). Gerçek bir ayrıştırıcıya geçildi ve iki aday değerlendirildi.
+
+**pglast** — PostgreSQL'in KENDİ ayrıştırıcısının (libpg_query) Python
+bağlaması. Doğruluk açısından tartışmasız üstün: PostgreSQL ne kabul ediyorsa
+onu kabul eder, sürüm farklarını da taşır. **Seçilmedi**, çünkü bir C eklentisi
+ve derlenmesi gerekiyor:
+
+- Bu proje yerelde **Windows / Python 3.14**, canlıda **Linux / Python 3.12**
+  ile çalışıyor. pglast'in her iki ortam için de hazır tekerlek (wheel)
+  sunmadığı sürüm kombinasyonları var; olmadığında kaynaktan derleme gerekiyor.
+- Derleme gerekirse `Dockerfile.backend`'e derleyici eklemek gerekir — ama
+  Dockerfile'lara dokunmak **proje kuralıyla yasak** (CLAUDE.md).
+- Bu proje daha önce üç kez "yerelde yeşil, canlıda patlak" yaşadı. Platforma
+  bağlı bir derleme bağımlılığı, o listeye dördüncüyü eklemenin en kolay yolu
+  olurdu.
+
+**sqlglot** — saf Python, bağımlılıksız, PostgreSQL lehçesini destekliyor.
+Seçildi. Doğrulanan davranışlar: CTE adları, alt sorgu ve VALUES takma adları,
+küme döndüren fonksiyonlar (`generate_series`), şema nitelikli adlar ve `$1`
+yer tutucuları doğru çözülüyor.
+
+**Kabul edilen sınır:** sqlglot PostgreSQL'in tamamını desteklemiyor; egzotik
+bir sözdiziminde ayrıştırma başarısız olabilir. Bu durumda dbace **regex'e
+düşmüyor** — "sorgu çözümlenemedi" diyor ve sebebini yazıyor. Yanlış tablo adı
+üretmektense hiç üretmemek yeğdir; canlıdaki iki hatanın ortak kökü zaten
+"emin değilken tahmin etmek"ti.
+
+**Kapanması için gereken:** pglast'in hem Windows/3.14 hem Linux/3.12 için hazır
+tekerlek sunduğu doğrulanırsa (ya da yerel geliştirme 3.12'ye çekilirse) geçiş
+değerlendirilebilir. `sql_analysis.py` tek giriş noktası olduğu için değişim
+tek dosyayla sınırlı kalır.
+
+## Faz 27 İŞ 1: Yer tutuculu sorgularda plan, PostgreSQL 16 öncesinde alınamıyor
+
+pg_stat_statements sorguları normalleştirilmiş hâlde saklıyor (`WHERE id = $1`).
+Bu metne EXPLAIN çalıştırmak için parametre değeri gerekiyor ve dbace o değeri
+bilmiyor.
+
+Önceki davranış `$1` yerine `NULL` koyup denemekti. **Bu sessizce yanlıştı:**
+planlayıcıya başka bir sorgu sunuluyordu ve dönen plan, gerçek çalıştırmanın
+planı olmadığı hâlde öyleymiş gibi gösteriliyordu. Kaldırıldı.
+
+Artık: **PostgreSQL 16+** sunucularda `EXPLAIN (GENERIC_PLAN)` kullanılıyor —
+planlayıcı değerden bağımsız bir plan üretiyor ve bu, kullanıcıya uyarısıyla
+birlikte gösteriliyor. **16 öncesinde plan alınamıyor** ve sebebi yazılıyor;
+alternatif olarak auto_explain öneriliyor (gerçek çalıştırmanın planı).
+
+`EXPLAIN ANALYZE` yer tutuculu sorgularda **hiçbir sürümde** çalıştırılmıyor:
+ANALYZE sorguyu gerçekten çalıştırır ve uydurma değerlerle çalıştırmak hem
+yanıltıcı bir plan verir hem de izlenen veritabanında öngörülemez maliyet
+çıkarır.

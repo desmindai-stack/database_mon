@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 
 from app.collectors.base import ConnectionTarget
+from app.services.sql_analysis import analyze_query, detect_truncation
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +89,48 @@ class PostgreSQLIndexAdvisor:
                 "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'hypopg')"
             )
 
-            tables = self._extract_tables(query_text)
+            # KESİLMİŞ METİN ÖNCE KONTROL EDİLİYOR. Kesik bir sorgudan çıkarılan tablo ve
+            # kolon listesi eksiktir; ona göre üretilen index önerisi yanlış olur ve
+            # kullanıcı onu canlıda uygular. "Öneri üretemedim" demek, yanlış öneri
+            # vermekten iyidir.
+            truncation = detect_truncation(query_text)
+            if truncation.truncated:
+                return [], [
+                    NoAdviceReason(
+                        code="truncated_query",
+                        message=(
+                            "Sorgu metni eksik olduğu için index önerisi üretilemiyor. "
+                            + truncation.reason
+                        ),
+                        what_to_do=(
+                            "Sunucudaki sorgu metni sınırını artırın, sonra sorgu yeniden "
+                            "çalıştığında öneri üretilebilir:\n" + (truncation.fix or "")
+                        ),
+                    )
+                ]
+
+            analysis = analyze_query(query_text)
+            if analysis.parse_error:
+                return [], [
+                    NoAdviceReason(
+                        code="unparsable_query",
+                        message="Sorgu SQL olarak çözümlenemedi, tablolar güvenle çıkarılamıyor.",
+                        what_to_do=(
+                            analysis.parse_error
+                            + " Tahmin yürütmek yerine öneri üretilmiyor: yanlış bir tabloya "
+                            "index önermek, canlıda gereksiz bir index oluşturulması demek."
+                        ),
+                    )
+                ]
+
+            tables = [(t.alias, t.name, t.schema) for t in analysis.tables]
             candidates = self._extract_candidates(query_text)
+
+            # CTE ve alt sorgu adlarına yazılmış kolonlar gerçek bir tabloya ait değil;
+            # aday listesinden çıkarılıyorlar ki "bulunamadı" hatası üretmesinler.
+            for name in list(candidates):
+                if analysis.is_not_a_table(name):
+                    candidates.pop(name, None)
 
             # If only one table is referenced, unqualified columns likely belong to it.
             if len(tables) == 1 and "__unknown" in candidates:
@@ -102,9 +143,10 @@ class PostgreSQLIndexAdvisor:
                         code="no_query_data",
                         message="Sorgudan tablo/kolon çıkarılamadı.",
                         what_to_do=(
-                            "Sorgu bir FROM/JOIN içermiyor olabilir, ya da dbace'in regex tabanlı "
-                            "ayrıştırıcısı bu sorgu biçimini (CTE, alt sorgu, özel sözdizimi) "
-                            "tanımadı. EXPLAIN ile planı manuel inceleyin."
+                            "Sorgu gerçek bir tabloya dokunmuyor olabilir: yalnızca CTE'ler, "
+                            "alt sorgular, VALUES listeleri ya da fonksiyon çağrıları "
+                            "üzerinde çalışıyorsa index önerilecek bir tablo yoktur. "
+                            "Beklediğiniz bir tablo varsa EXPLAIN ile planı inceleyin."
                         ),
                     )
                 ]
@@ -140,8 +182,9 @@ class PostgreSQLIndexAdvisor:
                         "filtrelenen bir kolon tespit edilemedi.",
                         what_to_do=(
                             "Sorgu zaten filtresizse (ör. tüm tabloyu okuyorsa) index gerekmeyebilir. "
-                            "Filtre varsa dbace'in ayrıştırıcısı onu tanımamış olabilir — EXPLAIN ile "
-                            "planı manuel inceleyin."
+                            "Filtre varsa ifade içinde gizlenmiş olabilir (ör. lower(kolon) = ...); "
+                            "böyle bir filtre normal bir index'le değil ifade index'iyle "
+                            "karşılanır. EXPLAIN ile planı inceleyin."
                         ),
                     ),
                 )
@@ -163,22 +206,19 @@ class PostgreSQLIndexAdvisor:
             await conn.close()
 
     def _extract_tables(self, query: str) -> list[tuple[str, str, str]]:
-        # Find FROM / JOIN clauses. Very heuristic, good enough for normalized pg_stat_statements text.
-        results: list[tuple[str, str, str]] = []
-        pattern = re.compile(
-            r"\b(?:FROM|JOIN)\s+((?:[a-zA-Z_][a-zA-Z0-9_$]*\.)?[a-zA-Z_][a-zA-Z0-9_$]*)(?:\s+(?:AS\s+)?([a-zA-Z_][a-zA-Z0-9_$]*))?",
-            re.IGNORECASE,
-        )
-        for match in pattern.finditer(query):
-            full_name = match.group(1)
-            alias = match.group(2)
-            if "." in full_name:
-                schema_name, table_name = full_name.split(".", 1)
-            else:
-                schema_name, table_name = "public", full_name
-            alias = alias or table_name
-            results.append((alias, table_name, schema_name))
-        return results
+        """Sorgudaki GERÇEK tabloları döner: (takma ad, tablo adı, şema).
+
+        FAZ 27 İŞ 1: burası eskiden FROM/JOIN sonrasındaki adı yakalayan bir regex'ti ve
+        hataya yol açıyordu: `WITH RECURSIVE recurse AS (...) SELECT ... FROM recurse`
+        sorgusunda `recurse` bir CTE adıdır, tablo değil. Regex onu tablo sanıp katalogda
+        arıyor, bulamayınca "'public.recurse' tablosu bu veritabanında bulunamadı" diyor ve
+        index önerisi hiç üretilemiyordu.
+
+        Artık gerçek bir SQL ayrıştırıcısı kullanılıyor (services/sql_analysis.py): CTE'ler,
+        alt sorgu takma adları, VALUES listeleri ve fonksiyon çağrıları tablo sayılmıyor.
+        """
+        analysis = analyze_query(query)
+        return [(t.alias, t.name, t.schema) for t in analysis.tables]
 
     def _extract_candidates(self, query: str) -> dict[str, dict[str, dict[str, Any]]]:
         """Map table-alias/table-name -> column -> {'type': eq|range|sort|join}.

@@ -5711,6 +5711,102 @@ tahmini, kapanış; PostgreSQL log ayrıştırma (kurban/kazanan/döngü kenarla
 pid'den bağımsız parmak izi, tekrar yazmama), SQL Server XML ayrıştırma ve bozuk
 XML'in tüm turu düşürmemesi. Toplam 1141 test yeşil.
 
+## Faz 27 — İŞ 1: EXPLAIN ve index önerisi çalışmıyordu
+
+Canlıdan bildirilen iki hata:
+
+```
+EXPLAIN başarısız: missing FROM-clause entry for table "pn"
+Index önerisi: 'public.recurse' tablosu bu veritabanında bulunamadı
+```
+
+İkisi de aynı kök nedenin iki yüzü: **emin değilken tahmin etmek.** Sorgular
+elle yazılmış bir regex ile ayrıştırılıyordu (`\b(?:FROM|JOIN)\s+(ad)`) ve o
+regex takma adları, CTE'leri, alt sorguları birbirinden ayıramıyordu.
+
+### Hata 1 — `recurse` bir CTE, tablo değil
+
+`WITH RECURSIVE recurse AS (...) SELECT ... FROM recurse` sorgusunda regex
+`FROM recurse` görüp gerçek tablo sandı, katalogda aradı, bulamadı. Kullanıcının
+bildirdiği **"index önerisi bugüne kadar hiç üretilemedi"** durumunun sebebi
+buydu: gerçek tablolara (`person`, `orders`) hiç sıra gelmiyordu.
+
+### Hata 2 — `pn` bir takma ad, sorun ise KESİLMİŞ metin
+
+`pn` diye bir tablo aranması kullanıcıyı yanlış yere götürüyordu. Asıl sebep
+başka: pg_stat_statements sorgu metnini `track_activity_query_size` sınırında
+KESER. FROM yan tümcesi kırpılınca geriye `pn.kolon` referansları kalıyor ve
+EXPLAIN haklı olarak "böyle bir tablo yok" diyor. Yani hata sorguda değil,
+elimizdeki metnin eksikliğindeydi.
+
+### Gerçek bir SQL ayrıştırıcı
+
+`services/sql_analysis.py` eklendi; **sqlglot** kullanılıyor. pglast
+(PostgreSQL'in kendi ayrıştırıcısı) daha doğru olurdu ama C eklentisi derlenmesi
+gerekiyor ve Dockerfile'a dokunmak proje kuralıyla yasak — tam gerekçe
+SORULAR.md'de. Doğrulanan davranışlar: CTE adları, alt sorgu ve VALUES takma
+adları, küme döndüren fonksiyonlar (`generate_series`), şema nitelikli adlar,
+`$1` yer tutucuları.
+
+**Ayrıştırma başarısız olursa regex'e DÜŞÜLMÜYOR.** "Sorgu çözümlenemedi" denip
+sebebi yazılıyor: yanlış bir tabloya index önermek, kullanıcının canlıda
+gereksiz bir index oluşturması demek.
+
+### Kesilmiş metin — EXPLAIN denenmeden reddediliyor
+
+Üç sinyal, güçlüden zayıfa:
+
+1. Metin `...` ile bitiyor (pg_stat_statements'ın kırpma işareti)
+2. Kapanmamış parantez — dizgi sabitleri ve tırnaklı tanımlayıcılar sayımdan
+   çıkarılıyor, yoksa `'yarim(parantez'` gibi meşru bir sabit yanlış alarm
+   üretirdi
+3. Uzunluk sınıra dayanmış VE metin ayrıştırılamıyor (tek başına uzunluk
+   yeterli değil: tam sınıra denk gelen geçerli bir sorgu da olabilir)
+
+Kesikse EXPLAIN hiç denenmiyor; kullanıcıya sebebi ve `ALTER SYSTEM SET
+track_activity_query_size = 4096;` komutu veriliyor.
+
+### Yer tutuculu metinde plan
+
+Önceki davranış `$1` yerine `NULL` koyup denemekti. **Sessizce yanlıştı:**
+planlayıcıya BAŞKA bir sorgu sunuluyor ve dönen plan, gerçek çalıştırmanın planı
+olmadığı hâlde öyleymiş gibi gösteriliyordu. Kaldırıldı.
+
+| Durum | Davranış |
+|---|---|
+| PostgreSQL 16+ | `EXPLAIN (GENERIC_PLAN)` — değerden bağımsız plan, uyarısıyla birlikte |
+| 16 öncesi | Plan alınamıyor; sebebi ve auto_explain alternatifi yazılıyor |
+| ANALYZE + yer tutucu | **Hiçbir sürümde** çalıştırılmıyor — ANALYZE sorguyu gerçekten çalıştırır, uydurma değerlerle çalıştırmak izlenen veritabanında öngörülemez maliyet çıkarır |
+
+GENERIC_PLAN uyarısı plan kaynağı uyarısıyla birleştirilip tek yerde
+gösteriliyor (Faz 26'da eklenen `source_caveat` alanı).
+
+### Hata mesajları Türkçe ve eyleme dönük
+
+Yedi yaygın PostgreSQL hatası çevriliyor: ne oldu, neden oldu, ne yapılmalı.
+Örnek — `missing FROM-clause entry for table "pn"` artık şunu diyor: *"Sorguda
+'pn' takma adına başvuruluyor ama onu tanımlayan FROM/JOIN yan tümcesi metinde
+yok. Bu neredeyse her zaman sorgu metninin KESİLMİŞ olmasından kaynaklanır..."*
+
+Eşleşmeyen hatalarda **ham metin korunuyor** — uydurma bir açıklama yazmaktansa
+ham hatayı göstermek yeğdir, en azından aranabilir.
+
+### Index önerisinde yeni "üretilemedi" sebepleri
+
+`truncated_query` ve `unparsable_query` eklendi; ikisi de düzeltme komutuyla
+birlikte. Mevcut sebep metinlerindeki "regex tabanlı ayrıştırıcı" ifadesi de
+gerçeğe göre güncellendi.
+
+**Testler:** `tests/test_sql_analysis.py` (37 test) ve
+`tests/test_index_advisor_parsing.py` (9 test). **Eski regex geri konduğunda
+CTE ve takma ad testleri düşüyor** — hatayı yakaladıkları doğrulandı. Uçtan uca
+test, canlıda hiç öneri üretemeyen sorgunun artık `person` için index önerdiğini
+gösteriyor. Toplam 1188 test yeşil.
+
+Bir not: uçtan uca testin eski regex'le de geçtiğini fark ettim — çünkü
+`advise()` ayrıştırmayı doğrudan yapıyor, `_extract_tables` üzerinden değil.
+Bunu test dosyasındaki yoruma yanlış yazmıştım, düzelttim.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
