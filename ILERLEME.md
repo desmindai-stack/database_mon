@@ -5938,6 +5938,83 @@ bölümünü `docs/MIMARI.md`'ye taşımak iki seçenek — karar sizin.
 
 Toplam 1254 backend testi yeşil, 33 tarayıcı testi yeşil.
 
+## Faz 27 — İŞ 4: Desteklenmeyen metrikler için alternatif kaynak
+
+**Bildirilen eksik:** DPA ekranında şu yazıyordu —
+
+> `buffers_backend_per_sec` — PostgreSQL 17+ sürümünde `pg_stat_bgwriter`'dan
+> kaldırıldı; doğrudan bir karşılığı yok.
+
+**Bu eksikti: karşılığı VAR.** PostgreSQL 17 sütunu kaldırdı ama aynı bilgi
+`pg_stat_io` içinde `backend_type` ve `context` bazında duruyor. Metrik
+toplanamıyor değildi; sadece başka yerden alınması gerekiyordu.
+
+"Desteklenmiyor" demek, kullanıcının ekranında bir eksiklik bırakmak ve onu
+başka bir araca yönlendirmektir. Alternatifi varken bunu söylemek yanlıştır.
+
+### Sürüm yetenek matrisi — tek kaynak
+
+`app/domain/pg_capabilities.py` eklendi. Her metrik bir **kaynak öncelik
+listesi** taşıyor; sürüme uyan ilk kaynak kullanılıyor, hiçbiri uymuyorsa
+NEDENİ yazılıyor.
+
+Öncesinde sürüm eşikleri `collectors/postgresql.py` içinde sabit olarak
+yazılıydı, her dal kendi "desteklenmiyor" metnini üretiyordu ve biri yanlıştı.
+Yeni bir sürüm çıktığında nereye bakılacağı belli değildi.
+
+| Metrik | PG 12-16 | PG 17-18 |
+|---|---|---|
+| checkpoint sayaç ve süreleri | `pg_stat_bgwriter` | `pg_stat_checkpointer` |
+| `buffers_clean`, `buffers_alloc` | `pg_stat_bgwriter` | `pg_stat_bgwriter` (taşınmadı) |
+| **`buffers_backend`, `buffers_backend_fsync`** | `pg_stat_bgwriter` | **`pg_stat_io`** |
+| `io_*` | 16+ `pg_stat_io`; öncesinde gerçekten yok | `pg_stat_io` |
+
+PG 17+ sorgusu:
+
+```sql
+SELECT SUM(writes), SUM(fsyncs) FROM pg_stat_io
+WHERE object = 'relation' AND context = 'normal'
+  AND backend_type NOT IN ('checkpointer', 'background writer');
+```
+
+Arka plan süreçlerini dışlamak eski `buffers_backend`'in tam karşılığı —
+o sütun da zaten "backend'lerin doğrudan yazdığı buffer sayısı"ydı.
+
+### Ayrım korundu: her "yok" yanlış değil
+
+`io_*` metriklerinin PG 16 öncesinde **gerçekten** karşılığı yok. Orada
+"desteklenmiyor" demek doğru — ama mesaj artık en yakın alternatifi de
+söylüyor (cache hit oranı, `shared_blks` sayaçları). Sürüm numarası da
+okunabilir biçimde geçiyor: `150004` değil `15.4`.
+
+### Kaynak kullanıcıya gösteriliyor
+
+Aynı metrik sürüme göre farklı yerden gelebildiği için kullanıcı sayının
+nereden geldiğini bilmeli. `Instance.metric_sources` (metrik → view) ve
+`server_version_num` saklanıyor; DPA'da "Metrik kaynakları" başlığı altında
+katlanabilir bir liste olarak görünüyor.
+
+`server_version_num` ayrıca İŞ 5'in temeli: sürüme bağlı her karar (yetenek
+matrisi, ön koşullar, EXPLAIN stratejisi) bu sayıya bakıyor ve her seferinde
+sunucuya yeniden sormak gereksiz bir round trip.
+
+### Yan düzeltme: `Instance` tipi de elle yazılmıştı
+
+Frontend'deki `Instance` arayüzü yeni alanları bilmiyordu ve derleme hata
+verdi. Üretilen şemadan türetildi (`engine` ve `options` daraltmaları
+korunarak), `MUST_BE_DERIVED` listesine eklendi. Bu, aynı hatanın üçüncü
+tekrarı — Faz 24 `InstanceDependencies`, Faz 26 `ExplainResult`, şimdi
+`Instance`.
+
+**Testler:** `tests/test_pg_capabilities.py` (36 test) — sürüm sahteleyerek her
+metriğin her sürümdeki kaynağı, kaynak aralıklarının çakışmadığı, her metriğin
+ya kaynağı ya sebebi olduğu (ikisi birden değil), sürüm biçimlendirme ve destek
+aralığı uyarıları. `test_postgresql_version_adapt.py`'deki PG 17 testi
+**eski yanlış davranışı doğruluyordu** — güncellendi: artık `buffers_backend`'in
+toplandığını ve "desteklenmiyor" denmediğini doğruluyor.
+
+README'ye sürüm yetenek matrisi tablo hâlinde yazıldı. Toplam 1290 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

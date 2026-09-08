@@ -122,6 +122,8 @@ MUST_BE_DERIVED = [
     # Faz 26: elle yazılmış hâli `source`/`source_caveat`/`captured_at` alanlarını bilmiyordu.
     "ExplainResult",
     "ExplainPlanNode",
+    # Faz 27: elle yazılmış hâli `metric_sources`/`server_version_num` alanlarını bilmiyordu.
+    "Instance",
 ]
 
 # Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler

@@ -135,7 +135,13 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     if server_version:
         instance.server_version = server_version
     instance.unsupported_metrics = metrics.pop("_unsupported_metrics", None) or None
-    metrics.pop("_server_version_num", None)
+    instance.metric_sources = metrics.pop("_metric_sources", None) or None
+    # Sürüm NUMARASI da saklanıyor (Faz 27 İŞ 5): sürüme bağlı her karar — yetenek matrisi,
+    # ön koşul kontrolleri, EXPLAIN stratejisi — buna bakıyor ve her seferinde sunucuya
+    # yeniden sormak gereksiz bir round trip demek.
+    server_version_num = metrics.pop("_server_version_num", None)
+    if server_version_num:
+        instance.server_version_num = int(server_version_num)
 
     sample = MetricSample(instance_id=instance.id)
     _apply_metrics_to_sample(sample, metrics)

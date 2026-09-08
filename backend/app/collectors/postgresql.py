@@ -12,6 +12,11 @@ from app.collectors.base import (
     classify_connection_error,
     resolve_uses_pooler,
 )
+from app.domain.pg_capabilities import (
+    capability_matrix,
+    source_for,
+    unavailable_reason,
+)
 from app.domain.waits import classify_postgres_wait
 from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
 
@@ -270,11 +275,36 @@ class PostgreSQLCollector(BaseCollector):
                             "buffers_clean_per_sec": _rate(buffers_clean, "buffers_clean"),
                             "buffers_alloc_per_sec": _rate(buffers_alloc, "buffers_alloc"),
                         })
-                    unsupported["buffers_backend_per_sec"] = (
-                        "PostgreSQL 17+ sürümünde pg_stat_bgwriter'dan kaldırıldı; doğrudan bir "
-                        "karşılığı yok (backend I/O artık pg_stat_io içinde context bazlı raporlanıyor)."
+                    # FAZ 27 İŞ 4: buffers_backend "desteklenmiyor" DEĞİL, BAŞKA YERDEN
+                    # alınıyor. PostgreSQL 17 sütunu pg_stat_bgwriter'dan kaldırdı ama aynı
+                    # bilgi pg_stat_io'da duruyor: arka plan süreçleri (checkpointer,
+                    # background writer) DIŞINDAKİ yazmalar, eski buffers_backend'in tam
+                    # karşılığı. Öncesinde ekranda "doğrudan bir karşılığı yok" yazıyordu ve
+                    # bu kullanıcıyı eksik bir ölçümle bırakıyordu.
+                    backend_io = await conn.fetchrow(
+                        """
+                        -- backend_io: pg_stat_io'ya iki ayrı sorgu gidiyor (biri toplam I/O,
+                        -- biri backend yazmaları). Etiket sorgunun davranışını değiştirmiyor;
+                        -- testlerdeki sahte bağlantı ikisini ayırt edebilsin diye var —
+                        -- `-- ext:<ad>` etiketiyle aynı kalıp.
+                        SELECT
+                            COALESCE(SUM(writes), 0) AS writes,
+                            COALESCE(SUM(fsyncs), 0) AS fsyncs
+                        FROM pg_stat_io
+                        WHERE object = 'relation'
+                          AND context = 'normal'
+                          AND backend_type NOT IN ('checkpointer', 'background writer')
+                        """
                     )
-                    unsupported["buffers_backend_fsync_per_sec"] = unsupported["buffers_backend_per_sec"]
+                    if backend_io:
+                        buffers_backend = int(backend_io["writes"] or 0)
+                        backend_fsync = int(backend_io["fsyncs"] or 0)
+                        metrics.update({
+                            "buffers_backend_per_sec": _rate(buffers_backend, "buffers_backend"),
+                            "buffers_backend_fsync_per_sec": _rate(
+                                backend_fsync, "buffers_backend_fsync"
+                            ),
+                        })
                 else:
                     bgwriter = await conn.fetchrow(
                         """
@@ -348,14 +378,39 @@ class PostgreSQLCollector(BaseCollector):
                     for key in ("io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec", "io_op_bytes"):
                         unsupported.setdefault(key, f"Toplama hatası: {exc}")
             else:
-                reason = f"pg_stat_io PostgreSQL 16+ gerektirir (bu sunucu: {version_num})."
+                # Sebep metni yetenek matrisinden geliyor (Faz 27 İŞ 4): sürüm eşiği ve
+                # açıklama tek yerde dursun, iki yerde ayrışmasın.
                 for key in ("io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec", "io_op_bytes"):
-                    unsupported[key] = reason
-                logger.debug("pg_stat_io skipped: %s", reason)
+                    reason = unavailable_reason(key, version_num)
+                    if reason:
+                        unsupported[key] = reason
+                logger.debug("pg_stat_io atlandı (sürüm %s)", version_num)
+
+            # DESTEKLENMEYEN METRİK LİSTESİ TEK KAYNAKTAN (Faz 27 İŞ 4/İŞ 5).
+            #
+            # Öncesinde her dal kendi "desteklenmiyor" metnini yazıyordu ve biri yanlıştı
+            # ("buffers_backend'in karşılığı yok" — oysa vardı). Artık sebep sürüm yetenek
+            # matrisinden geliyor: bir metriğin bu sürümde KAYNAĞI VARSA, toplanamamış olsa
+            # bile "desteklenmiyor" denmiyor (o zaman toplama hatası yazılıyor, ki farklı bir
+            # sorundur ve farklı bir çözüm ister).
+            for metric_key in capability_matrix(version_num):
+                reason = unavailable_reason(metric_key, version_num)
+                if reason:
+                    unsupported[metric_key] = reason
+                elif metric_key in unsupported and metric_key in metrics:
+                    # Kaynağı var ve değer de toplandı: eski "desteklenmiyor" kaydı yanlış.
+                    unsupported.pop(metric_key, None)
 
             metrics["_server_version"] = version_string
             metrics["_server_version_num"] = version_num
             metrics["_unsupported_metrics"] = unsupported
+            # Hangi metriğin nereden alındığı — arayüz kaynağı gösteriyor ki kullanıcı
+            # "bu sayı nereden geliyor" sorusunu ekrandan cevaplayabilsin.
+            metrics["_metric_sources"] = {
+                key: info["source"]
+                for key, info in capability_matrix(version_num).items()
+                if info["source"]
+            }
 
             state = {
                 "xact_total": xact_commit + xact_rollback,

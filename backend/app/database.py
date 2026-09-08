@@ -201,6 +201,8 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "slow_query_samples", "exec_sys_time", "exec_sys_time FLOAT")
         await _sqlite_add_column_if_missing(conn, "instances", "server_version", "server_version VARCHAR(255)")
         await _sqlite_add_column_if_missing(conn, "instances", "unsupported_metrics", "unsupported_metrics JSON")
+        await _sqlite_add_column_if_missing(conn, "instances", "metric_sources", "metric_sources JSON")
+        await _sqlite_add_column_if_missing(conn, "instances", "server_version_num", "server_version_num INTEGER")
         await _sqlite_add_column_if_missing(
             conn, "instances", "collect_interval_seconds", "collect_interval_seconds INTEGER"
         )

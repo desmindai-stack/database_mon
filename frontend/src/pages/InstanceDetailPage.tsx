@@ -940,10 +940,30 @@ export default function InstanceDetailPage() {
             ))}
           </div>
 
+          {/* METRİK KAYNAKLARI (Faz 27 İŞ 4). Aynı metrik sürüme göre farklı view'dan
+              gelebiliyor: `buffers_backend` PostgreSQL 17'den itibaren pg_stat_bgwriter
+              yerine pg_stat_io'dan alınıyor. Kullanıcı ekrandaki sayının nereden geldiğini
+              görebilmeli — öncesinde "bu metriğin karşılığı yok" yazıyordu, oysa vardı. */}
+          {instance.metric_sources && Object.keys(instance.metric_sources).length > 0 && (
+            <details className="card metric-sources-note">
+              <summary className="muted-note">
+                Metrik kaynakları ({Object.keys(instance.metric_sources).length} metrik
+                {instance.server_version_num ? ` — sunucu sürümü ${instance.server_version_num}` : ""})
+              </summary>
+              <ul>
+                {Object.entries(instance.metric_sources).map(([key, view]) => (
+                  <li key={key}>
+                    <code>{key}</code> ← <code>{view}</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
           {instance.unsupported_metrics && Object.keys(instance.unsupported_metrics).length > 0 && (
             <div className="card unsupported-metrics-note">
               <p className="muted-note">
-                Bu sunucu sürümünde desteklenmeyen metrikler ({Object.keys(instance.unsupported_metrics).length}):
+                Bu sunucu sürümünde alınamayan metrikler ({Object.keys(instance.unsupported_metrics).length}):
               </p>
               <ul>
                 {Object.entries(instance.unsupported_metrics).map(([key, reason]) => (

@@ -51,10 +51,14 @@ def _collector() -> PostgreSQLCollector:
     )
 
 
-async def test_pg17_uses_checkpointer_view_and_marks_buffers_backend_unsupported():
-    """This is the exact reported bug: on PG17, the old pg_stat_bgwriter query for
-    checkpoints_timed/etc. would raise "column does not exist" and crash the whole collector.
-    The fix must use pg_stat_checkpointer instead and keep collecting everything else."""
+async def test_pg17_uses_checkpointer_view_and_reads_backend_io_from_pg_stat_io():
+    """PG17'de eski pg_stat_bgwriter sorgusu "column does not exist" verip tüm collector'ı
+    düşürüyordu; düzeltme pg_stat_checkpointer'a geçmekti.
+
+    FAZ 27 İŞ 4 — BU TEST GÜNCELLENDİ: `buffers_backend` daha önce "karşılığı yok" diye
+    işaretleniyordu ve test o davranışı doğruluyordu. Karşılığı VAR: PostgreSQL 17 sütunu
+    pg_stat_bgwriter'dan kaldırdı ama aynı bilgi pg_stat_io'da, arka plan süreçleri dışındaki
+    yazmalar olarak duruyor. Artık toplanıyor ve "desteklenmiyor" DENMİYOR."""
     responses = _base_responses(170_000, "PostgreSQL 17.0 on x86_64-pc-linux-gnu")
     responses["FROM pg_stat_checkpointer"] = {
         "num_timed": 5,
@@ -64,6 +68,8 @@ async def test_pg17_uses_checkpointer_view_and_marks_buffers_backend_unsupported
         "buffers_written": 1000,
     }
     responses["FROM pg_stat_bgwriter"] = {"buffers_clean": 50, "buffers_alloc": 80}
+    # İki ayrı pg_stat_io sorgusu: biri toplam I/O, biri backend yazmaları (etiketle ayrılıyor).
+    responses["-- backend_io"] = {"writes": 40, "fsyncs": 3}
     responses["FROM pg_stat_io"] = {"reads": 10, "writes": 20, "extends": 1, "op_bytes": 8192}
     conn = FakeAsyncConnection(responses)
     collector = _collector()
@@ -78,11 +84,15 @@ async def test_pg17_uses_checkpointer_view_and_marks_buffers_backend_unsupported
     assert metrics["_server_version_num"] == 170_000
     assert metrics["_server_version"].startswith("PostgreSQL 17")
 
-    # buffers_backend genuinely doesn't exist on PG17 anymore — must be absent from the
-    # numeric metrics, not silently zero, and explained in _unsupported_metrics.
-    assert "buffers_backend_per_sec" not in metrics
-    assert "buffers_backend_per_sec" in metrics["_unsupported_metrics"]
-    assert "17" in metrics["_unsupported_metrics"]["buffers_backend_per_sec"]
+    # BİLDİRİLEN EKSİĞİN DÜZELTMESİ: buffers_backend artık pg_stat_io'dan toplanıyor ve
+    # "desteklenmiyor" listesinde YER ALMIYOR. Alternatifi varken "yok" demek, kullanıcıyı
+    # ekranında bir eksiklikle ve başka bir araca yönlenmekle baş başa bırakıyordu.
+    assert "buffers_backend_per_sec" in metrics
+    assert "buffers_backend_per_sec" not in metrics["_unsupported_metrics"]
+    assert "buffers_backend_fsync_per_sec" in metrics
+    # Kaynak da bildiriliyor: kullanıcı sayının nereden geldiğini görebilmeli.
+    assert metrics["_metric_sources"]["buffers_backend_per_sec"] == "pg_stat_io"
+    assert metrics["_metric_sources"]["checkpoints_timed"] == "pg_stat_checkpointer"
 
     # Other metrics collected fine — a checkpoint-stats surprise must not take down the rest.
     assert metrics["active_connections"] == 12

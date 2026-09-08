@@ -42,31 +42,17 @@ export interface ClusterServiceOptions {
   replica_set?: string | null;
 }
 
-export interface Instance {
-  id: number;
-  name: string;
+// Elle yazılmıştı; Faz 27'de üretilen şemadan TÜRETİLDİ. Elle yazılan hâli backend'e
+// eklenen `metric_sources` ve `server_version_num` alanlarını bilmiyordu — Faz 24'te
+// `InstanceDependencies`, Faz 26'da `ExplainResult` ile yaşanan senaryonun aynısı.
+//
+// İki daraltma korunuyor (OpenAPI bunları ifade edemiyor):
+//   - `engine`: serbest `string` yerine literal birleşim,
+//   - `options`: serbest JSON yerine `ClusterServiceOptions` şekli.
+export type Instance = Omit<Gen["InstanceOut"], "engine" | "options"> & {
   engine: DbEngine;
-  host: string;
-  port: number;
-  database: string;
-  username: string;
-  enabled: boolean;
-  created_at: string;
-  customer_name: string | null;
-  environment: string;
-  application: string | null;
-  cluster_name: string | null;
-  role: string | null;
-  services: string[] | null;
-  group_id: number | null;
   options?: ClusterServiceOptions | null;
-  // Null = app-wide default (see RefreshInterval-adjacent settings) — set to sample a
-  // lower-priority instance less often.
-  collect_interval_seconds: number | null;
-  // Collector-derived, read-only — null until the first successful metric collection.
-  server_version: string | null;
-  unsupported_metrics: Record<string, string> | null;
-}
+};
 
 export interface MetricSample {
   id: number;

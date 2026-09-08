@@ -279,6 +279,51 @@ tracked entries (and the bookkeeping overhead per execution) without adding
 anything dbace's slow-query view uses. Only switch to `all` if you're
 debugging inside a specific function and plan to switch back afterward.
 
+## PostgreSQL sürüm yetenek matrisi
+
+PostgreSQL sistem katalogları sürümden sürüme değişiyor: sütunlar taşınıyor, yeniden
+adlandırılıyor, kaldırılıyor. dbace bu farkları **tek yerden** yönetiyor —
+`backend/app/domain/pg_capabilities.py`. Sürüm eşiği koda dağılmıyor.
+
+**Kural: bir metriğin alternatif kaynağı varsa "desteklenmiyor" DENMEZ.** Alternatifi
+varken öyle demek, kullanıcıyı ekranında bir eksiklikle ve başka bir araca yönlenmekle baş
+başa bırakır.
+
+| Metrik | PG 12-16 | PG 17-18 |
+|---|---|---|
+| `checkpoints_timed`, `checkpoints_req` | `pg_stat_bgwriter` | `pg_stat_checkpointer` (`num_timed`, `num_requested`) |
+| `checkpoint_write_time_ms`, `checkpoint_sync_time_ms` | `pg_stat_bgwriter` | `pg_stat_checkpointer` |
+| `buffers_checkpoint_per_sec` | `pg_stat_bgwriter` | `pg_stat_checkpointer` (`buffers_written`) |
+| `buffers_clean_per_sec`, `buffers_alloc_per_sec` | `pg_stat_bgwriter` | `pg_stat_bgwriter` (taşınmadı) |
+| **`buffers_backend_per_sec`** | `pg_stat_bgwriter` | **`pg_stat_io`** (arka plan süreçleri dışındaki yazmalar) |
+| **`buffers_backend_fsync_per_sec`** | `pg_stat_bgwriter` | **`pg_stat_io`** (`fsyncs`) |
+| `io_reads/writes/extends_per_sec` | 16+ `pg_stat_io`; öncesinde **yok** | `pg_stat_io` |
+
+PostgreSQL 17, `buffers_backend` sütununu `pg_stat_bgwriter`'dan kaldırdı. dbace önceden
+"doğrudan bir karşılığı yok" diyordu — yanlıştı. Aynı bilgi `pg_stat_io` içinde duruyor:
+
+```sql
+SELECT SUM(writes), SUM(fsyncs)
+FROM pg_stat_io
+WHERE object = 'relation' AND context = 'normal'
+  AND backend_type NOT IN ('checkpointer', 'background writer');
+```
+
+Sorgu tarafında da sürüm dallanması var:
+
+| Özellik | Gereken sürüm | Yoksa ne oluyor |
+|---|---|---|
+| `pg_stat_activity.query_id` (bekleme → sorgu eşleşmesi) | 14+ | Bekleme kırılımı üretiliyor, sorgu bazında ayrıştırılamıyor |
+| `EXPLAIN (GENERIC_PLAN)` (yer tutuculu sorgu planı) | 16+ | Plan alınamıyor; sebebi ve auto_explain alternatifi yazılıyor |
+| `pg_stat_statements` `total_exec_time` (vs `total_time`) | 13+ | 13 öncesinde eski sütun adları kullanılıyor |
+
+Desteklenen aralık **PostgreSQL 12-18**. Altındaki sunucuya yine bağlanılıyor (en yakın
+davranış + uyarı) — reddetmek, çalışabilecek bir kurulumu boşuna engellerdi. Üstündeki
+sürümlerde en yeni dal kullanılıyor: PostgreSQL katalog değişiklikleri neredeyse her zaman
+eklemeli olduğu için bu, toplamayı durdurmaktan güvenli.
+
+Arayüzde her metriğin kaynağı **Veritabanı detayı → Metrik kaynakları** altında görünüyor.
+
 ## Monitoring load (izleme yükü)
 
 dbace is designed so the *cost of being monitored* stays close to zero on a

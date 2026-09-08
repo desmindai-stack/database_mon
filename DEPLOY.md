@@ -94,6 +94,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 34 | `20260910090000_wait_event_sampling.sql` | **YENİ** — bekleme analizi tabloları: active_session_minutes, wait_sample_minutes, wait_query_signatures (aktif oturum örnekleyicisi). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 | 35 | `20260911090000_captured_plans.sql` | **YENİ** — captured_plans tablosu (auto_explain ile yakalanan gerçek çalıştırma planları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 | 36 | `20260912090000_blocking_history.sql` | **YENİ** — blocking_episodes + deadlock_events (bloklama geçmişi ve deadlock kayıtları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
+| 37 | `20260913090000_metric_sources.sql` | **YENİ** — instances.metric_sources + server_version_num (metrik kaynağı ve sürüm numarası). CONCURRENTLY YOK |
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 

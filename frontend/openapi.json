@@ -4823,6 +4823,20 @@
             "title": "Id",
             "type": "integer"
           },
+          "metric_sources": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Sources"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -4864,6 +4878,17 @@
               }
             ],
             "title": "Server Version"
+          },
+          "server_version_num": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Version Num"
           },
           "services": {
             "anyOf": [

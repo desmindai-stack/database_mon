@@ -3512,6 +3512,10 @@ export interface components {
             host: string;
             /** Id */
             id: number;
+            /** Metric Sources */
+            metric_sources?: {
+                [key: string]: string;
+            } | null;
             /** Name */
             name: string;
             /** Options */
@@ -3524,6 +3528,8 @@ export interface components {
             role: string | null;
             /** Server Version */
             server_version?: string | null;
+            /** Server Version Num */
+            server_version_num?: number | null;
             /** Services */
             services: string[] | null;
             /** Unsupported Metrics */

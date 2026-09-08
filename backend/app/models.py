@@ -164,6 +164,13 @@ class Instance(Base):
     # collectors/postgresql.py, collectors/sqlserver_mongodb.py).
     server_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
     unsupported_metrics: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+    # Faz 27 İŞ 4: hangi metriğin hangi sistem view'ından alındığı. Arayüz bunu gösteriyor —
+    # aynı metrik sürüme göre farklı kaynaktan gelebiliyor (buffers_backend 17'den itibaren
+    # pg_stat_bgwriter yerine pg_stat_io) ve kullanıcı sayının nereden geldiğini bilmeli.
+    metric_sources: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+    # Faz 27 İŞ 5: sürüm NUMARASI (170004). Metin sürüm ("PostgreSQL 17.4 on x86_64...")
+    # karşılaştırma için elverişsiz; sürüme bağlı her karar bu sayıya bakıyor.
+    server_version_num: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     customer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     environment: Mapped[str] = mapped_column(String(32), default="public", nullable=False)

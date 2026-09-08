@@ -476,6 +476,10 @@ class InstanceOut(BaseModel):
     # collect_metrics() run for this instance.
     server_version: str | None = None
     unsupported_metrics: dict[str, str] | None = None
+    # Faz 27 İŞ 4: metrik → kaynak view. Aynı metrik sürüme göre farklı kaynaktan gelebiliyor;
+    # kullanıcı ekrandaki sayının nereden geldiğini görebilmeli.
+    metric_sources: dict[str, str] | None = None
+    server_version_num: int | None = None
 
     model_config = {"from_attributes": True}
 
