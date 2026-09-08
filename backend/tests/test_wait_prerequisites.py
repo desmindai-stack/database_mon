@@ -235,3 +235,58 @@ async def test_sqlserver_unexpected_failure_is_unknown_not_unauthorized(monkeypa
     await _patch_mssql(monkeypatch, conn)
     check = _by_key(await check_sqlserver_prerequisites(_sqlserver_target()), "wait_visibility")
     assert check.status == "unknown"
+
+
+# --- Sürüme göre doğru kontroller (Faz 27 İŞ 5) --------------------------------------------
+
+
+async def test_generic_plan_is_reported_as_available_on_pg16_and_later(monkeypatch):
+    """Kullanıcı "neden plan gelmiyor" sorusunu tek tek sorgularda değil, ön koşul
+    ekranında tek bir yerde cevaplayabilmeli."""
+    for version in (160000, 170000, 180000):
+        conn = FakeAsyncConnection(_pg_responses(**{"server_version_num": version}))
+        await _patch_pg(monkeypatch, conn)
+        check = _by_key(await check_postgresql_prerequisites(_pg_target()), "generic_plan")
+        assert check.status == "ok", f"sürüm {version}"
+
+
+async def test_generic_plan_is_reported_missing_before_pg16_with_alternatives(monkeypatch):
+    conn = FakeAsyncConnection(_pg_responses(**{"server_version_num": 150004}))
+    await _patch_pg(monkeypatch, conn)
+    check = _by_key(await check_postgresql_prerequisites(_pg_target()), "generic_plan")
+
+    assert check.status == "missing"
+    # Önem derecesi DÜŞÜK: bu bir bozukluk değil, sürümün getirmediği bir yetenek.
+    assert check.severity == "low"
+    assert "15.4" in check.impact
+    assert "auto_explain" in check.fix
+
+
+async def test_a_supported_version_is_reported_ok(monkeypatch):
+    conn = FakeAsyncConnection(_pg_responses(**{"server_version_num": 170004}))
+    await _patch_pg(monkeypatch, conn)
+    check = _by_key(await check_postgresql_prerequisites(_pg_target()), "server_version")
+    assert check.status == "ok"
+    assert check.detail == "17.4"
+
+
+async def test_an_out_of_range_version_is_flagged_but_not_refused(monkeypatch):
+    """Reddetmek, çalışabilecek bir kurulumu boşuna engellerdi — uyarı yeterli."""
+    conn = FakeAsyncConnection(_pg_responses(**{"server_version_num": 110000}))
+    await _patch_pg(monkeypatch, conn)
+    checks = await check_postgresql_prerequisites(_pg_target())
+    check = _by_key(checks, "server_version")
+    assert check.status == "partial"
+    assert "en düşük" in check.impact
+    # Diğer kontroller yine üretilmiş olmalı: sürüm uyarısı denetimi durdurmuyor.
+    assert len(checks) > 5
+
+
+async def test_version_numbers_are_shown_readably_not_raw(monkeypatch):
+    """Ham 150004 kullanıcıya hiçbir şey söylemiyor."""
+    conn = FakeAsyncConnection(_pg_responses(**{"server_version_num": 130009}))
+    await _patch_pg(monkeypatch, conn)
+    checks = await check_postgresql_prerequisites(_pg_target())
+    blob = " ".join((c.impact or "") + (c.detail or "") for c in checks)
+    assert "13.9" in blob
+    assert "130009" not in blob

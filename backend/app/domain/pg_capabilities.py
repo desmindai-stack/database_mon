@@ -174,10 +174,30 @@ CAPABILITIES: dict[str, MetricCapability] = {
         (MetricSource(_STAT_IO, PG_16),),
         "pg_stat_io PostgreSQL 16 ile geldi; bu sunucuda ({version}) yok.",
     ),
+    # PostgreSQL 18, `op_bytes` sütununu KALDIRDI ve yerine gerçek bayt sayaçları koydu
+    # (read_bytes / write_bytes / extend_bytes). Eski sütunu sormaya devam etmek, PG 18'de
+    # pg_stat_io sorgusunun TAMAMINI düşürürdü — yani io_reads/io_writes de kaybolurdu.
+    # Sürüm aralığı bu yüzden 16-17 ile sınırlı.
     "io_op_bytes": MetricCapability(
         "io_op_bytes",
-        (MetricSource(_STAT_IO, PG_16),),
-        "pg_stat_io PostgreSQL 16 ile geldi; bu sunucuda ({version}) yok.",
+        (MetricSource(_STAT_IO, PG_16, removed_in=PG_18),),
+        "pg_stat_io.op_bytes yalnızca PostgreSQL 16-17'de var (bu sunucu: {version}). "
+        "16 öncesinde pg_stat_io hiç yok; 18'den itibaren sütun kaldırıldı ve yerine gerçek "
+        "bayt sayaçları geldi — dbace onları io_read_bytes_per_sec / io_write_bytes_per_sec "
+        "olarak topluyor.",
+    ),
+    # PostgreSQL 18'in getirdiği gerçek bayt sayaçları. `op_bytes` bir işlem BAŞINA bayt
+    # veriyordu (çarpma gerekiyordu); bunlar doğrudan toplam bayt — daha kullanışlı.
+    "io_read_bytes_per_sec": MetricCapability(
+        "io_read_bytes_per_sec",
+        (MetricSource(_STAT_IO, PG_18, note="PostgreSQL 18 ile geldi (op_bytes'ın yerine)."),),
+        "Gerçek bayt sayaçları PostgreSQL 18 ile geldi (bu sunucu: {version}). "
+        "16-17'de yaklaşık değer io_reads × io_op_bytes ile hesaplanabilir.",
+    ),
+    "io_write_bytes_per_sec": MetricCapability(
+        "io_write_bytes_per_sec",
+        (MetricSource(_STAT_IO, PG_18, note="PostgreSQL 18 ile geldi (op_bytes'ın yerine)."),),
+        "Gerçek bayt sayaçları PostgreSQL 18 ile geldi (bu sunucu: {version}).",
     ),
 }
 

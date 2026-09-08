@@ -97,7 +97,7 @@ def test_metrics_that_stayed_on_bgwriter_are_not_moved(key):
 
 
 @pytest.mark.parametrize(
-    "key", ["io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec", "io_op_bytes"]
+    "key", ["io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec"]
 )
 def test_pg_stat_io_metrics_are_genuinely_unavailable_before_pg16(key):
     """Bu metriklerin 16 öncesinde GERÇEKTEN karşılığı yok — orada "desteklenmiyor" demek
@@ -108,6 +108,28 @@ def test_pg_stat_io_metrics_are_genuinely_unavailable_before_pg16(key):
         assert reason and "16" in reason
     for version in (PG_16, PG_17, PG_18):
         assert source_for(key, version) is not None
+
+
+def test_op_bytes_exists_only_between_pg16_and_pg17():
+    """PostgreSQL 18 `op_bytes` sütununu KALDIRDI. Bu, kod tarafında gerçek bir kırılmaydı:
+    eski sütunu sormaya devam etmek PG 18'de pg_stat_io sorgusunun TAMAMINI düşürürdü —
+    tek bir sütun yüzünden io_reads ve io_writes de kaybolurdu."""
+    assert source_for("io_op_bytes", PG_15) is None
+    assert source_for("io_op_bytes", PG_16).view == "pg_stat_io"
+    assert source_for("io_op_bytes", PG_17).view == "pg_stat_io"
+    assert source_for("io_op_bytes", PG_18) is None
+    reason = unavailable_reason("io_op_bytes", PG_18)
+    assert reason and "kaldırıldı" in reason
+
+
+@pytest.mark.parametrize("key", ["io_read_bytes_per_sec", "io_write_bytes_per_sec"])
+def test_real_byte_counters_arrive_with_pg18(key):
+    """`op_bytes` işlem BAŞINA bayt veriyordu (çarpma gerekiyordu); PG 18'in sayaçları
+    doğrudan toplam bayt."""
+    for version in (PG_15, PG_16, PG_17):
+        assert source_for(key, version) is None
+        assert "18" in unavailable_reason(key, version)
+    assert source_for(key, PG_18).view == "pg_stat_io"
 
 
 def test_the_unavailable_reason_names_the_version_readably():

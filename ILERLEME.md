@@ -6015,6 +6015,87 @@ toplandığını ve "desteklenmiyor" denmediğini doğruluyor.
 
 README'ye sürüm yetenek matrisi tablo hâlinde yazıldı. Toplam 1290 test yeşil.
 
+## Faz 27 — İŞ 5: PostgreSQL 15-18 tam destek
+
+İŞ 4'te kurulan sürüm yetenek matrisi (`app/domain/pg_capabilities.py`) bu işin
+temeliydi; burada kapsamı 15-18 aralığına genişletildi ve **gerçek bir kırılma**
+bulundu.
+
+### Bulunan kırılma: PG 18'de `pg_stat_io.op_bytes` yok
+
+PostgreSQL 18 `op_bytes` sütununu kaldırdı ve yerine gerçek bayt sayaçlarını
+koydu (`read_bytes`, `write_bytes`, `extend_bytes`).
+
+dbace'in sorgusu `COALESCE(MAX(op_bytes), 0)` içeriyordu. PG 18'de bu sorgu
+"column does not exist" verip **tüm `pg_stat_io` sorgusunu düşürürdü** — yani
+tek bir sütun yüzünden `io_reads`, `io_writes` ve `io_extends` de kaybolurdu.
+Sorgu artık sürüme göre farklı sütun listesi kuruyor.
+
+`op_bytes` bir işlem BAŞINA bayt veriyordu (kullanmak için çarpmak
+gerekiyordu); PG 18'in sayaçları doğrudan toplam bayt — daha kullanışlı ve
+`io_read_bytes_per_sec` / `io_write_bytes_per_sec` olarak toplanıyor.
+
+### Sürüm bazlı yetenek matrisi tamamlandı
+
+| Metrik | 12-15 | 16 | 17 | 18 |
+|---|---|---|---|---|
+| checkpoint sayaç/süre | bgwriter | bgwriter | **checkpointer** | checkpointer |
+| `buffers_clean/alloc` | bgwriter | bgwriter | bgwriter | bgwriter |
+| `buffers_backend(_fsync)` | bgwriter | bgwriter | **pg_stat_io** | pg_stat_io |
+| `io_reads/writes/extends` | — | pg_stat_io | pg_stat_io | pg_stat_io |
+| `io_op_bytes` | — | pg_stat_io | pg_stat_io | **kaldırıldı** |
+| `io_read/write_bytes` | — | — | — | **pg_stat_io** |
+
+Sorgu tarafındaki dallanmalar da README'ye tablo hâlinde yazıldı:
+`pg_stat_activity.query_id` (14+), `EXPLAIN (GENERIC_PLAN)` (16+),
+`pg_stat_statements.total_exec_time` (13+).
+
+### Ön koşullar sürüme göre doğru kontrol yapıyor
+
+İki yeni kontrol:
+
+- **`server_version`**: sunucu desteklenen aralıkta mı. Aralık dışındaysa
+  `partial` (uyarı) — **reddedilmiyor**, çünkü çalışabilecek bir kurulumu boşuna
+  engellemek yanlış olurdu. Denetimin geri kalanı yine üretiliyor.
+- **`generic_plan`**: yer tutuculu sorguların planı alınabiliyor mu (16+).
+  Alınamıyorsa önem derecesi **düşük** — bu bir bozukluk değil, sürümün
+  getirmediği bir yetenek. Mesaj auto_explain alternatifini gösteriyor.
+
+Sabit sürüm sayıları (`140_000`) yetenek modülündeki adlandırılmış eşiklerle
+değiştirildi.
+
+Bir test ham sürüm numarası sızıntısı yakaladı: `compute_query_id` kontrolünün
+`detail` alanı `130009` yazıyordu. Kullanıcıya hiçbir şey söylemeyen bu sayı
+`13.9` olarak biçimlendirildi.
+
+### Testler
+
+`test_pg_capabilities.py` 40 teste çıktı; `test_postgresql_version_adapt.py`'ye
+PG 18 ve PG 15 dalları eklendi. PG 18 testi gönderilen SORGUYU denetliyor:
+`MAX(op_bytes)` istenmemeli, `read_bytes` istenmeli. **Sürüm dallanması
+kaldırıldığında bu test düşüyor** — kırılmayı gerçekten yakaladığı doğrulandı.
+`test_wait_prerequisites.py`'ye 5 sürüm testi eklendi.
+
+Toplam 1299 test yeşil.
+
+### Doğrulanmayan varsayımlar (SORULAR.md'ye işlendi)
+
+Matris PostgreSQL sürüm notlarına ve katalog belgelerine dayanıyor; **hiçbir
+sürüme karşı gerçek bir bağlantıyla test edilmedi** — bu ortamda PostgreSQL yok.
+Testler sürüm numarasını sahteleyerek hangi sorgunun gönderildiğini kanıtlıyor;
+kanıtlanmayan şey, o sorgunun ilgili sürümde gerçekten çalıştığı.
+
+En riskli üç varsayım (PG 18 sütun adları, PG 17 backend I/O eşleştirmesi,
+`pg_stat_checkpointer` sütun adları) SORULAR.md'de tek tek yazılı, kapanma
+koşuluyla birlikte: her sürüm için bir kap ayağa kaldırıp `collect_metrics`
+çalıştırmak ve `_unsupported_metrics`'in boş geldiğini görmek. Bir sürümde
+varsayım yanlışsa ilgili metrik grubu boş gelir, **çökme olmaz** — her sorgu
+kendi try/except'inde.
+
+PG 18'in yeni vacuum süre sayaçları (`total_vacuum_time` vb.) bilerek
+eklenmedi: yeni metrik eklemek katalog + saklama + arayüz değişikliği demek ve
+İŞ 5 sürüm UYUMU işiydi. Gerekçe ve nasıl ekleneceği SORULAR.md'de.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

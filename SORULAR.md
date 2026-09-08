@@ -2166,3 +2166,42 @@ alternatif olarak auto_explain öneriliyor (gerçek çalıştırmanın planı).
 ANALYZE sorguyu gerçekten çalıştırır ve uydurma değerlerle çalıştırmak hem
 yanıltıcı bir plan verir hem de izlenen veritabanında öngörülemez maliyet
 çıkarır.
+
+## Faz 27 İŞ 5: PG 15-18 davranışı GERÇEK sunucularda doğrulanmadı
+
+Sürüm yetenek matrisi (`backend/app/domain/pg_capabilities.py`) PostgreSQL'in
+sürüm notlarına ve katalog belgelerine dayanıyor; **hiçbir sürüme karşı gerçek
+bir bağlantıyla test edilmedi.** Bu geliştirme ortamında PostgreSQL yok (Docker
+kapalı, psql kurulu değil) — bu sınır Faz 25'ten beri açık.
+
+Testler sürüm numarasını SAHTELEYEREK hangi sorgunun gönderildiğini doğruluyor;
+yani "PG 18'de op_bytes istenmiyor" kanıtlanmış durumda. Doğrulanmayan şey,
+gönderilen sorgunun o sürümde gerçekten çalıştığı.
+
+**En yüksek riskli varsayımlar** (biri yanlışsa o sürümde ilgili metrik grubu
+boş gelir, çökme olmaz — her sorgu kendi try/except'inde):
+
+- PG 18'de `pg_stat_io` sütunlarının `read_bytes` / `write_bytes` /
+  `extend_bytes` olarak adlandırıldığı ve `op_bytes`'ın kaldırıldığı.
+- PG 17'de `buffers_backend`'in karşılığının `pg_stat_io`'da, arka plan
+  süreçleri (`checkpointer`, `background writer`) dışlanarak elde edildiği.
+- `pg_stat_checkpointer` sütun adları (`num_timed`, `num_requested`,
+  `write_time`, `sync_time`, `buffers_written`).
+
+**Kapanması için gereken:** her sürüm için bir kap (container) ayağa kaldırıp
+`collect_metrics` çalıştırmak ve `_unsupported_metrics` çıktısının boş olduğunu
+görmek. CI'da matris job'u olarak kurulabilir (`postgres:15` … `postgres:18`
+servisleriyle); bu turda kapsam dışı bırakıldı çünkü CI süresi ve Docker
+bağımlılığı ayrı bir karar.
+
+## Faz 27 İŞ 5: PG 18'in yeni vacuum süre sayaçları kullanılmıyor
+
+PostgreSQL 18, `pg_stat_all_tables`'a toplam vacuum/analyze süresi sütunları
+ekledi (`total_vacuum_time`, `total_autovacuum_time`, `total_analyze_time`,
+`total_autoanalyze_time`). Bunlar şema sağlığı bölümünde değerli olurdu:
+"autovacuum bu tabloda ne kadar zaman harcıyor" sorusu bugün cevapsız.
+
+Bu turda EKLENMEDİ. Sebep kapsam: yeni bir metrik eklemek metrik kataloğunu,
+saklama şemasını ve arayüz gösterimini birlikte değiştirmeyi gerektiriyor; İŞ 5
+sürüm UYUMU işiydi, yeni özellik değil. Yetenek matrisi bu metrikleri eklemeye
+hazır — `MetricSource(_STAT_ALL_TABLES, PG_18)` satırı yeterli.

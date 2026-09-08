@@ -298,6 +298,8 @@ başa bırakır.
 | **`buffers_backend_per_sec`** | `pg_stat_bgwriter` | **`pg_stat_io`** (arka plan süreçleri dışındaki yazmalar) |
 | **`buffers_backend_fsync_per_sec`** | `pg_stat_bgwriter` | **`pg_stat_io`** (`fsyncs`) |
 | `io_reads/writes/extends_per_sec` | 16+ `pg_stat_io`; öncesinde **yok** | `pg_stat_io` |
+| `io_op_bytes` | 16-17 `pg_stat_io.op_bytes` | **18'de kaldırıldı** |
+| `io_read_bytes/write_bytes_per_sec` | **yok** | 18+ `pg_stat_io` (gerçek bayt sayaçları) |
 
 PostgreSQL 17, `buffers_backend` sütununu `pg_stat_bgwriter`'dan kaldırdı. dbace önceden
 "doğrudan bir karşılığı yok" diyordu — yanlıştı. Aynı bilgi `pg_stat_io` içinde duruyor:
@@ -308,6 +310,11 @@ FROM pg_stat_io
 WHERE object = 'relation' AND context = 'normal'
   AND backend_type NOT IN ('checkpointer', 'background writer');
 ```
+
+PostgreSQL 18 `op_bytes` sütununu kaldırıp yerine gerçek bayt sayaçlarını koydu. Bu kod
+tarafında **gerçek bir kırılmaydı**: eski sütunu sormaya devam etmek PG 18'de `pg_stat_io`
+sorgusunun tamamını düşürürdü — tek bir sütun yüzünden `io_reads` ve `io_writes` de
+kaybolurdu. Sorgu artık sürüme göre farklı sütun seçiyor.
 
 Sorgu tarafında da sürüm dallanması var:
 

@@ -122,8 +122,80 @@ async def test_pg16_uses_bgwriter_view_with_full_columns_and_supports_io():
 
     assert metrics["checkpoints_timed"] == 7
     assert "buffers_backend_per_sec" in metrics  # still present pre-17
-    assert metrics["_unsupported_metrics"] == {}
+    # PG 16'da PostgreSQL 18'in gerçek bayt sayaçları GERÇEKTEN yok — ve bu, sebebiyle
+    # birlikte bildiriliyor (Faz 27 İŞ 5). Bu sürüme ait diğer hiçbir metrik eksik değil.
+    assert set(metrics["_unsupported_metrics"]) == {
+        "io_read_bytes_per_sec",
+        "io_write_bytes_per_sec",
+    }
+    assert "18" in metrics["_unsupported_metrics"]["io_read_bytes_per_sec"]
     assert "io_reads_per_sec" in metrics  # PG16 boundary is inclusive
+
+
+async def test_pg18_uses_the_new_byte_counters_and_does_not_ask_for_op_bytes():
+    """FAZ 27 İŞ 5 — GERÇEK BİR KIRILMA. PostgreSQL 18 `pg_stat_io.op_bytes` sütununu
+    kaldırdı. Eski sorguyu göndermeye devam etmek "column does not exist" verip pg_stat_io
+    sorgusunun TAMAMINI düşürürdü: tek bir sütun yüzünden io_reads ve io_writes de
+    kaybolurdu."""
+    responses = _base_responses(180_000, "PostgreSQL 18.0 on x86_64-pc-linux-gnu")
+    responses["FROM pg_stat_checkpointer"] = {
+        "num_timed": 3, "num_requested": 1, "write_time": 10.0, "sync_time": 1.0,
+        "buffers_written": 500,
+    }
+    responses["FROM pg_stat_bgwriter"] = {"buffers_clean": 20, "buffers_alloc": 30}
+    responses["-- backend_io"] = {"writes": 15, "fsyncs": 2}
+    responses["FROM pg_stat_io"] = {
+        "reads": 100, "writes": 200, "extends": 5,
+        "read_bytes": 819_200, "write_bytes": 1_638_400, "op_bytes": 0,
+    }
+    conn = FakeAsyncConnection(responses)
+    collector = _collector()
+    collector._connect = _fake_connect(conn)  # type: ignore[method-assign]
+
+    metrics = await collector.collect_metrics(previous=None)
+
+    # Gönderilen sorguda `op_bytes` İSTENMEMELİ — istenirse PG 18'de sorgu patlar.
+    io_queries = [q for q in conn.queries if "FROM pg_stat_io" in q and "backend_io" not in q]
+    assert io_queries, "pg_stat_io sorgusu hiç gönderilmedi"
+    assert "MAX(op_bytes)" not in io_queries[0]
+    assert "read_bytes" in io_queries[0]
+
+    assert "io_reads_per_sec" in metrics
+    assert "io_writes_per_sec" in metrics
+    assert "io_read_bytes_per_sec" in metrics
+    assert "io_write_bytes_per_sec" in metrics
+    # 18'de op_bytes yok: değer üretilmiyor ve sebebi yazılıyor.
+    assert "io_op_bytes" not in metrics
+    assert "io_op_bytes" in metrics["_unsupported_metrics"]
+
+    # 17'de gelen backend I/O yolu 18'de de geçerli.
+    assert metrics["_metric_sources"]["buffers_backend_per_sec"] == "pg_stat_io"
+    assert metrics["_metric_sources"]["checkpoints_timed"] == "pg_stat_checkpointer"
+
+
+async def test_pg15_takes_the_pre16_path_with_no_pg_stat_io():
+    """PG 15 desteklenen aralığın ortasında ve hiçbir yeni view'a sahip değil: eski
+    pg_stat_bgwriter yolu, pg_stat_io yok."""
+    responses = _base_responses(150_004, "PostgreSQL 15.4 on x86_64-pc-linux-gnu")
+    responses["FROM pg_stat_bgwriter"] = {
+        "checkpoints_timed": 9, "checkpoints_req": 3, "checkpoint_write_time": 20.0,
+        "checkpoint_sync_time": 2.0, "buffers_checkpoint": 400, "buffers_clean": 40,
+        "buffers_backend": 60, "buffers_backend_fsync": 1, "buffers_alloc": 70,
+    }
+    conn = FakeAsyncConnection(responses)
+    collector = _collector()
+    collector._connect = _fake_connect(conn)  # type: ignore[method-assign]
+
+    metrics = await collector.collect_metrics(previous=None)
+
+    assert metrics["checkpoints_timed"] == 9
+    assert "buffers_backend_per_sec" in metrics
+    assert metrics["_metric_sources"]["buffers_backend_per_sec"] == "pg_stat_bgwriter"
+    assert metrics["_metric_sources"]["checkpoints_timed"] == "pg_stat_bgwriter"
+    # pg_stat_io hiç sorgulanmamalı — view yok.
+    assert not [q for q in conn.queries if "FROM pg_stat_io" in q]
+    for key in ("io_reads_per_sec", "io_op_bytes", "io_read_bytes_per_sec"):
+        assert key in metrics["_unsupported_metrics"]
 
 
 async def test_pg12_falls_back_to_bgwriter_and_skips_pg_stat_io_with_reason():

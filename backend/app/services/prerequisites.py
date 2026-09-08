@@ -12,6 +12,12 @@ from typing import Any
 
 from app.collectors.base import ConnectionTarget
 from app.domain.engines import DatabaseEngine
+from app.domain.pg_capabilities import (
+    PG_14,
+    PG_16,
+    format_version,
+    version_support_note,
+)
 from app.services.pgss import PgStatStatementsProbe, probe_pg_stat_statements
 
 # status: "ok" | "partial" | "missing" | "unauthorized" | "unknown"
@@ -340,6 +346,31 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
         # Sürüm numarası: aşağıdaki bekleme kontrolleri sürüme bağlı (query_id 14+ ile geldi).
         version_num = int(await conn.fetchval("SELECT current_setting('server_version_num')::int"))
 
+        # 0. SÜRÜM ARALIĞI (Faz 27 İŞ 5). Destek aralığının dışındaki bir sunucuda bazı
+        # kontroller anlamsız sonuç verir; kullanıcı önce bunu bilmeli. Reddetmiyoruz —
+        # çalışabilecek bir kurulumu boşuna engellemek yanlış olurdu.
+        support_note = version_support_note(version_num)
+        if support_note:
+            checks.append(
+                _partial(
+                    "server_version",
+                    "PostgreSQL sürümü",
+                    "medium",
+                    support_note,
+                    detail=format_version(version_num),
+                )
+            )
+        else:
+            checks.append(
+                _ok(
+                    "server_version",
+                    "PostgreSQL sürümü",
+                    f"PostgreSQL {format_version(version_num)} — dbace'in test edilmiş "
+                    "aralığında (12-18).",
+                    detail=format_version(version_num),
+                )
+            )
+
         # 1-5. pg_stat_statements ailesi — hepsi TEK probe'dan (services/pgss.py) türetiliyor.
         # Daha önce bu blok kendi katalog sorgusunu yapıyordu ve DPA'nın "yavaş sorgu yok"
         # mesajı bambaşka bir kontrole dayanıyordu; ikisi çelişebiliyordu. Artık aynı kaynak.
@@ -451,6 +482,39 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                     detail=track_io,
                 )
             )
+        # 12b. EXPLAIN (GENERIC_PLAN) — yer tutuculu sorguların planı (Faz 27 İŞ 5).
+        #
+        # pg_stat_statements sorguları normalleştirilmiş saklıyor ($1). Bu metne EXPLAIN
+        # çalıştırmak için 16+ gerekiyor; öncesinde dbace plan üretmiyor ve NEDENİNİ söylüyor.
+        # Bunu ön koşul ekranında göstermek önemli: kullanıcı "neden plan gelmiyor" sorusunu
+        # tek tek sorgularda değil, tek bir yerde cevaplayabilsin.
+        if version_num >= PG_16:
+            checks.append(
+                _ok(
+                    "generic_plan",
+                    "EXPLAIN (GENERIC_PLAN)",
+                    "Destekleniyor — pg_stat_statements'tan gelen yer tutuculu ($1) sorguların "
+                    "planı, değer uydurmadan alınabiliyor.",
+                    detail=format_version(version_num),
+                )
+            )
+        else:
+            checks.append(
+                _missing(
+                    "generic_plan",
+                    "EXPLAIN (GENERIC_PLAN)",
+                    "low",
+                    f"PostgreSQL 16 ile geldi; bu sunucuda ({format_version(version_num)}) yok. "
+                    "Yavaş sorgu listesindeki normalleştirilmiş sorguların ($1 içeren) planı "
+                    "alınamıyor — değer uydurmak yanlış bir plan üretirdi. Sorgu metnine gerçek "
+                    "değer yazarak elle EXPLAIN alabilirsiniz.",
+                    "-- Seçenek 1: PostgreSQL 16+ sürümüne yükseltin.\n"
+                    "-- Seçenek 2: auto_explain ile gerçek çalıştırmanın planını yakalayın\n"
+                    "--            (docs/AUTO_EXPLAIN.md).",
+                    detail=format_version(version_num),
+                )
+            )
+
         # 13-16. auto_explain — GERÇEK çalıştırmanın planını yakalama (Faz 26 İŞ 1).
         #
         # Dört ayrı kontrol, çünkü "auto_explain kurulu" tek başına hiçbir şey söylemiyor:
@@ -649,7 +713,7 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
             )
 
         # compute_query_id — beklemeyi SORGUYA bağlayan tek alan.
-        if version_num >= 140_000:
+        if version_num >= PG_14:
             compute_query_id = await conn.fetchval("SHOW compute_query_id")
             # 'auto' = pg_stat_statements yüklüyse açık. Yüklü olup olmadığını yukarıdaki
             # probe zaten biliyor; burada onu tekrar sorgulamak yerine ondan yararlanıyoruz.
@@ -685,11 +749,12 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                     "compute_query_id",
                     "compute_query_id (PostgreSQL 14+)",
                     "low",
-                    f"Sunucu sürümü {version_num} — pg_stat_activity.query_id PostgreSQL 14 ile "
+                    f"Sunucu sürümü {format_version(version_num)} — pg_stat_activity.query_id "
+                    "PostgreSQL 14 ile "
                     "geldi. Bekleme kırılımı çalışıyor ama sorgu bazında ayrıştırma bu sürümde "
                     "mümkün değil. Sürüm yükseltmesi dışında yapılabilecek bir şey yok.",
                     "-- Sunucu sürümü yükseltmesi gerekir (PostgreSQL 14+).",
-                    detail=str(version_num),
+                    detail=format_version(version_num),
                 )
             )
     finally:

@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 PG_VERSION_STAT_STATEMENTS_EXEC_TIME = 130_000  # 13+: pg_stat_statements.total_exec_time/mean_exec_time
 PG_VERSION_STAT_IO = 160_000  # 16+: pg_stat_io view exists
 PG_VERSION_CHECKPOINTER = 170_000  # 17+: pg_stat_checkpointer split out of pg_stat_bgwriter
+# 18+: pg_stat_io'da `op_bytes` KALDIRILDI, yerine read_bytes/write_bytes/extend_bytes geldi.
+# Eski sütunu sormaya devam etmek PG 18'de tüm pg_stat_io sorgusunu düşürürdü.
+PG_VERSION_STAT_IO_BYTES = 180_000
 PG_MIN_SUPPORTED_VERSION = 120_000
 
 # Every query this collector runs is either an in-memory cumulative-counter view
@@ -352,13 +355,29 @@ class PostgreSQLCollector(BaseCollector):
             io_reads = io_writes = io_extends = 0
             if version_num >= PG_VERSION_STAT_IO:
                 try:
+                    # SÜRÜME GÖRE SÜTUN SEÇİMİ (Faz 27 İŞ 5). PostgreSQL 18 `op_bytes`'ı
+                    # kaldırdı ve yerine gerçek bayt sayaçları koydu. Eski sütunu sormaya
+                    # devam etmek, PG 18'de bu sorgunun TAMAMINI düşürürdü — io_reads ve
+                    # io_writes de kaybolurdu, yani tek bir sütun yüzünden üç metrik birden.
+                    if version_num >= PG_VERSION_STAT_IO_BYTES:
+                        byte_columns = (
+                            "COALESCE(SUM(read_bytes), 0) AS read_bytes,\n"
+                            "                            COALESCE(SUM(write_bytes), 0) AS write_bytes,\n"
+                            "                            0 AS op_bytes"
+                        )
+                    else:
+                        byte_columns = (
+                            "0 AS read_bytes,\n"
+                            "                            0 AS write_bytes,\n"
+                            "                            COALESCE(MAX(op_bytes), 0) AS op_bytes"
+                        )
                     io_stats = await conn.fetchrow(
-                        """
+                        f"""
                         SELECT
                             COALESCE(SUM(reads), 0) AS reads,
                             COALESCE(SUM(writes), 0) AS writes,
                             COALESCE(SUM(extends), 0) AS extends,
-                            COALESCE(MAX(op_bytes), 0) AS op_bytes
+                            {byte_columns}
                         FROM pg_stat_io
                         WHERE context = 'normal' AND object = 'relation'
                         """
@@ -371,11 +390,24 @@ class PostgreSQLCollector(BaseCollector):
                             "io_reads_per_sec": _rate(io_reads, "io_reads"),
                             "io_writes_per_sec": _rate(io_writes, "io_writes"),
                             "io_extends_per_sec": _rate(io_extends, "io_extends"),
-                            "io_op_bytes": int(io_stats["op_bytes"] or 0),
                         })
+                        if version_num >= PG_VERSION_STAT_IO_BYTES:
+                            metrics.update({
+                                "io_read_bytes_per_sec": _rate(
+                                    int(io_stats["read_bytes"] or 0), "io_read_bytes"
+                                ),
+                                "io_write_bytes_per_sec": _rate(
+                                    int(io_stats["write_bytes"] or 0), "io_write_bytes"
+                                ),
+                            })
+                        else:
+                            metrics["io_op_bytes"] = int(io_stats["op_bytes"] or 0)
                 except Exception as exc:
                     logger.warning("pg_stat_io collection failed (PG %s): %s", version_num, exc)
-                    for key in ("io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec", "io_op_bytes"):
+                    for key in (
+                        "io_reads_per_sec", "io_writes_per_sec", "io_extends_per_sec",
+                        "io_op_bytes", "io_read_bytes_per_sec", "io_write_bytes_per_sec",
+                    ):
                         unsupported.setdefault(key, f"Toplama hatası: {exc}")
             else:
                 # Sebep metni yetenek matrisinden geliyor (Faz 27 İŞ 4): sürüm eşiği ve
