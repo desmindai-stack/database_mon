@@ -33,6 +33,8 @@ from app.domain.waits import (
     is_load_bearing,
 )
 from app.models import ActiveSessionMinute, Instance, WaitQuerySignature, WaitSampleMinute
+from app.services.advice import Advice, advice_to_dict
+from app.services.wait_advice import advice_for_wait_category
 
 #: Grafikte hedeflenen nokta sayısı. Daha fazlası hem ağdan boşuna geçer hem de ekranda
 #: piksel başına birden çok noktaya düşerek okunaksızlaşır.
@@ -99,6 +101,9 @@ class DatabaseLoadReport:
     dominant_share_pct: float = 0.0
     dominant_verdict: str = ""
     query_attribution_available: bool = True
+    # Faz 25 İŞ 4: baskın bekleme tipine göre beş parçalı eylem planı. Ölçüm tek başına bir
+    # bilgi; onu eyleme çeviren bu alan. Üretilemiyorsa NEDENİ dolu gelir, hiç boş dönmez.
+    advice: Advice | None = None
     unavailable_reason: str | None = None
 
 
@@ -255,6 +260,8 @@ async def build_database_load(
     report.blocked_aas = round(sum(blocked_by_bucket.values()) / total_samples, 3)
     report.categories = _category_shares(window_category_samples, total_samples)
 
+    report.top_queries = await _top_queries(session, instance.id, window_start, window_end, total_samples)
+
     if report.categories:
         top = report.categories[0]
         report.dominant_share_pct = top.share_pct
@@ -269,8 +276,14 @@ async def build_database_load(
                 f"{top.label.lower()}. Yük birden çok kaynağa dağılmış durumda; tek bir "
                 "değişiklikle toparlanması beklenmemeli."
             )
-
-    report.top_queries = await _top_queries(session, instance.id, window_start, window_end, total_samples)
+        # Öneri, en çok yük üreten sorgunun metnini alıyor: "EXPLAIN <sorgu>" adımı somut bir
+        # komut oluyor, kullanıcının kendi başına doldurması gereken bir şablon değil.
+        report.advice = advice_for_wait_category(
+            top.category,
+            top.share_pct,
+            engine=instance.engine,
+            top_query=report.top_queries[0].query if report.top_queries else None,
+        )
     if not report.top_queries and total_category_samples > 0:
         report.query_attribution_available = False
 
@@ -465,6 +478,7 @@ def report_to_dict(report: DatabaseLoadReport) -> dict[str, Any]:
         "dominant_share_pct": report.dominant_share_pct,
         "dominant_verdict": report.dominant_verdict,
         "query_attribution_available": report.query_attribution_available,
+        "advice": advice_to_dict(report.advice),
         "unavailable_reason": report.unavailable_reason,
     }
 

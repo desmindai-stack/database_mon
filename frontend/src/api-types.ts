@@ -2411,6 +2411,7 @@ export interface components {
         };
         /** DatabaseLoadOut */
         DatabaseLoadOut: {
+            advice?: components["schemas"]["AdviceOut"] | null;
             /** Average Aas */
             average_aas: number;
             /** Blocked Aas */

@@ -1772,5 +1772,8 @@ class DatabaseLoadOut(BaseModel):
     # PostgreSQL 14 öncesinde pg_stat_activity'de query_id yok: bekleme kırılımı var ama
     # sorguya bağlanamıyor. Arayüz bunu söylemeli, boş liste gösterip susmamalı.
     query_attribution_available: bool = True
+    # Baskın bekleme tipine göre beş parçalı eylem planı (Faz 25 İŞ 4). Rapor, dashboard, DPA
+    # ve tahminlerle AYNI yapı — arayüzde aynı `AdviceCard` bileşeni gösteriyor.
+    advice: AdviceOut | None = None
     # Veri yetersizse NEDEN yetersiz olduğu — boş grafik gösterip susmak yasak.
     unavailable_reason: str | None = None

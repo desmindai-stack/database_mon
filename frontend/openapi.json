@@ -2388,6 +2388,16 @@
       },
       "DatabaseLoadOut": {
         "properties": {
+          "advice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AdviceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "average_aas": {
             "title": "Average Aas",
             "type": "number"

@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, DatabaseLoad, QueryLoad } from "../api";
+import AdviceCard from "./AdviceCard";
 import { EmptyState, PageError, PageSkeleton } from "./PageState";
 import { ChartRange, useChartRangeSelection } from "./useChartRangeSelection";
 
@@ -240,6 +241,11 @@ export default function DatabaseLoadPanel({ instanceId, rangeHours, customRange 
           <p>{report.dominant_verdict}</p>
         </div>
       )}
+
+      {/* Beş parçalı öneri — rapor, dashboard ve tahminlerle AYNI bileşen. Ölçümün hemen
+          altında duruyor ki "yükün %78'i disk g/ç" ile "ne yapmalıyım" arasında sayfa
+          değiştirmek gerekmesin. */}
+      {report.advice && <AdviceCard advice={report.advice} defaultOpen={false} />}
 
       <div className="card chart-card db-load-chart">
         <h3 className="chart-title">Veritabanı yükü — bekleme tipine göre</h3>

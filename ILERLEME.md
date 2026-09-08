@@ -5170,6 +5170,73 @@ tarayıcıdan doğrulanıyor. 33 e2e testi yeşil, konsol temiz.
 
 Toplam 958 backend testi yeşil.
 
+## Faz 25 — İŞ 4: Bekleme tipine göre öneri
+
+Bekleme analizinin değeri ölçümde değil, ölçümün EYLEME dönüşmesinde. "Yükün
+%78'i disk g/ç" tek başına bir bilgi; "shared_buffers'ı RAM'in %25'ine
+çıkarın, komutu şu, riski şu, doğrulaması şu" bir eylem.
+
+`services/wait_advice.py`, baskın bekleme kategorisine göre CLAUDE.md'deki
+beş parçalı standarda uyan öneri üretiyor: neden (iş etkisiyle) → numaralı
+adımlar → adım başına komut → dikkat notları (kilit/süre/bakım
+penceresi/geri alma) → doğrulama sorgusu. Öneri, `DatabaseLoadOut.advice`
+olarak dönüyor ve arayüzde rapor/dashboard/tahminlerle AYNI `AdviceCard`
+bileşeniyle gösteriliyor — grafiğin hemen altında, "ne yapmalıyım" için sayfa
+değiştirmek gerekmesin diye.
+
+### Kategori bazında ne öneriliyor
+
+| Baskın kategori | Önerinin özü |
+|---|---|
+| **IO** | Önce cache oranını ölç, sonra en çok disk okuyan tabloyu bul, planına bak: Seq Scan varsa index (CONCURRENTLY), Index Scan'de hâlâ okuyorsa bellek |
+| **Lock** | Kimin kimi beklettiğini gör, `idle in transaction` süresini ölç, `idle_in_transaction_session_timeout` ile kalıcı çözüm, acil durumda önce cancel sonra terminate |
+| **LWLock** | Ayrı ele alındı: kullanıcı kilidi değil iç çekişme. Çözüm bağlantı havuzu — **`max_connections` artırmak sorunu BÜYÜTÜR** |
+| **CPU** | Plan incele (Rows Removed by Filter), sıralamayı index'le kaldır, istatistik tazeliğini kontrol et |
+| **Client** | **Veritabanında yapılacak bir şey yok** — uygulama tarafına yönlendir |
+| **IPC** | Paralellik ayarları; Workers Planned/Launched farkına bak |
+| **Memory** | work_mem, ama çarpım uyarısıyla |
+
+SQL Server için ayrı komut seti (`sys.dm_*`, `UPDATE STATISTICS`,
+`READ_COMMITTED_SNAPSHOT`). PostgreSQL komutunu SQL Server'a önermek,
+kullanıcının kopyalayıp yapıştırdığında hata alması demekti — çalışmayan
+öneri, öneri değildir.
+
+### En değerli cevap: "sorun burada değil"
+
+`client` baskınsa öneri açıkça "veritabanı sorunu DEĞİLDİR; index eklemek,
+parametre değiştirmek ya da donanım büyütmek bu süreyi kısaltmaz" diyor ve
+dikkat notunda "bu tabloyu görüp veritabanı parametreleriyle oynamak zaman
+kaybıdır" uyarısı var. Bunu gizleyip yerine genel bir "sorgularınızı gözden
+geçirin" önerisi üretmek, ölçümü çöpe atmak ve ekibi haftalarca yanlış yerde
+arattırmak olurdu.
+
+### Öneri üretilemeyen durumlar
+
+- **Baskın kategori yoksa** (%40 eşiğinin altı): "en yüksek pay %35, bu orana
+  göre eylem önermek yükün yarısından azını hedefleyen bir işe yönlendirmek
+  olurdu" deniyor. Eşik `database_load.py` ve `query_diagnostics.py` ile
+  aynı sabit.
+- **Kategori tanınmıyorsa / motor desteklenmiyorsa / o kategori için hazır
+  plan yoksa**: nereye bakılacağı yazılıyor (pg_stat_activity'nin wait_event
+  değeri, `sys.dm_os_wait_stats`), genel geçer bir cümle uydurulmuyor.
+
+En çok yük üreten sorgunun metni `EXPLAIN` adımına GÖMÜLÜYOR: adım somut bir
+komut oluyor, kullanıcının doldurması gereken bir şablon değil.
+
+**Testler:** `tests/test_wait_advice.py` (80 test, çoğu parametrik). Her
+kategori × her motor için beş parçalı standardın tamamı kontrol ediliyor;
+ayrıca komut sızıntısı testi var (PostgreSQL önerisinde `sys.dm_` geçemez,
+SQL Server önerisinde `pg_stat_activity` geçemez).
+
+Bir tuzak testin kendisinde çıktı ve not edilmeye değer: Python'ın
+`str.lower()`'ı Türkçe "İ"yi "i" + birleşen nokta olarak veriyor, yani
+`"DEĞİLDİR".lower() != "değildir"`. Öneri metinleri vurgu için büyük harf
+kullandığından, karşılaştırma normalize edilmeden yapılsaydı test yeşil
+görünürken hiçbir şeyi kontrol etmiyor olurdu. `_says()` yardımcısı bunu
+Türkçeye uygun şekilde normalize ediyor.
+
+Toplam 1039 backend testi yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
