@@ -690,3 +690,92 @@ class DailyStateSnapshot(Base):
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ActiveSessionMinute(Base):
+    """Bekleme örnekleyicisinin dakikalık PAYDASI (Faz 25 İŞ 1).
+
+    AAS (Average Active Sessions) = o dakikada görülen aktif oturum toplamı / alınan örnek
+    sayısı. Payda SABİT VARSAYILAMAZ: örnekleyici bir saniyede gecikirse, worker yeniden
+    başlarsa ya da hedef sunucu kısa süre erişilemezse o dakikada 60 değil 43 örnek alınmış
+    olur. `60/aralık` diye hesaplamak bu dakikaları olduğundan sakin gösterirdi — yani tam da
+    sorunun yaşandığı anları.
+
+    Bu yüzden alınan örnek sayısı ölçülüp saklanıyor; `WaitSampleMinute` satırlarının toplamı
+    da `active_sessions_sampled` ile birebir tutarlı (ikisi aynı örneklerden üretiliyor).
+    """
+
+    __tablename__ = "active_session_minutes"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "minute", name="uq_active_session_minute"),
+        Index("ix_active_session_minutes_instance_minute", "instance_id", "minute"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    samples_taken: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_sessions_sampled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_sessions_sampled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WaitSampleMinute(Base):
+    """Bekleme örneklerinin dakikalık KIRILIMI (Faz 25 İŞ 1).
+
+    HAM ÖRNEK SAKLANMIYOR — bilerek. 1 saniyelik örnekleme, aktif oturum başına saniyede bir
+    satır demek: orta yüklü tek bir instance'ta günde milyonlarca satır, `slow_query_samples`'ta
+    yaşanan 337 binlik birikmenin katbekat üstü. Örnekler süreç belleğinde dakikalık kovalarda
+    toplanıp buraya TEK satır olarak yazılıyor: (dakika, sorgu, kategori, olay) başına bir satır.
+
+    Çözünürlük kaybı analiz için önemsiz: bekleme analizi zaten oransal bir sorudur ("yükün
+    yüzde kaçı kilit bekliyordu"), saniye saniye hangi pid'in ne beklediği değil. Anlık
+    ayrıntı gerektiğinde Activity sekmesi canlı görüntüyü zaten veriyor.
+    """
+
+    __tablename__ = "wait_sample_minutes"
+    __table_args__ = (
+        UniqueConstraint(
+            "instance_id", "minute", "queryid", "wait_category", "wait_event",
+            name="uq_wait_sample_minute",
+        ),
+        Index("ix_wait_sample_minutes_instance_minute", "instance_id", "minute"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    minute: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # PostgreSQL 14+ `pg_stat_activity.query_id`, SQL Server `query_hash`. Boş dizgi =
+    # "sorgu kimliği alınamadı" (sürüm eski ya da compute_query_id kapalı) — NULL yerine boş
+    # dizgi kullanılıyor çünkü NULL, UNIQUE kısıtında her satırı benzersiz yapar ve dakikalık
+    # toplama işlevini bozardı.
+    queryid: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    wait_category: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Kategorinin altındaki ayrıntı ("DataFileRead", "LCK_M_X"). Kategori "ne tür bir bekleme"
+    # sorusunu, bu alan "tam olarak hangi bekleme" sorusunu cevaplıyor.
+    wait_event: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WaitQuerySignature(Base):
+    """queryid → sorgu metni sözlüğü (Faz 25 İŞ 1).
+
+    `WaitSampleMinute` yalnızca queryid tutuyor; metni her satıra yazmak tabloyu on katına
+    çıkarırdı. Metni `slow_query_samples`'tan okumak da yetmiyor: bekleme örnekleyicisi
+    pg_stat_statements'ın EN PAHALI 20 sorgusunu değil, o anda ÇALIŞAN her sorguyu görüyor —
+    yük üreten bir sorgu o listede hiç olmayabilir (tek tek ucuz, ama binlerce kez çalışan bir
+    sorgu gibi). O yüzden ayrı ve küçük bir sözlük: distinct queryid başına tek satır.
+    """
+
+    __tablename__ = "wait_query_signatures"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "queryid", name="uq_wait_query_signature"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    queryid: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

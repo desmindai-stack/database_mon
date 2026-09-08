@@ -7,7 +7,16 @@ from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import SessionLocal
-from app.models import AlertEvent, AppSetting, MetricSample, PredictionInsight, SlowQuerySample
+from app.models import (
+    ActiveSessionMinute,
+    AlertEvent,
+    AppSetting,
+    MetricSample,
+    PredictionInsight,
+    SlowQuerySample,
+    WaitQuerySignature,
+    WaitSampleMinute,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +65,8 @@ async def get_retention_status(session: AsyncSession) -> dict:
 
 
 async def run_retention_cleanup() -> int:
-    """Deletes MetricSample/SlowQuerySample/AlertEvent/PredictionInsight rows older than the
-    configured retention window (Faz 15 İŞ 2). Runs daily via the collector scheduler and can
+    """Saklama penceresinden eski satırları siler (Faz 15 İŞ 2; Faz 25'te bekleme örnekleri
+    eklendi). Runs daily via the collector scheduler and can
     also be triggered on demand from the admin screen. Records its own last-run time/count in
     AppSetting so the admin screen can show them without a dedicated audit table."""
     async with SessionLocal() as session:
@@ -69,6 +78,15 @@ async def run_retention_cleanup() -> int:
             (SlowQuerySample, SlowQuerySample.collected_at),
             (AlertEvent, AlertEvent.triggered_at),
             (PredictionInsight, PredictionInsight.created_at),
+            # Faz 25 İŞ 1: bekleme örnekleri. Dakikalık toplandığı için ham örneklerden çok
+            # daha küçük, ama SINIRSIZ değil — instance başına dakikada onlarca satır, ayda
+            # yüz binler. Saklama politikasının dışında bırakmak, `slow_query_samples`'ta
+            # yaşanan birikmenin (tek instance için 337 bin satır) tekrarı olurdu.
+            (WaitSampleMinute, WaitSampleMinute.minute),
+            (ActiveSessionMinute, ActiveSessionMinute.minute),
+            # Sözlük satırı, o sorgu artık hiç görülmüyorsa anlamsız kalıyor — `last_seen_at`
+            # üzerinden aynı pencereye tabi.
+            (WaitQuerySignature, WaitQuerySignature.last_seen_at),
         ):
             result = await session.execute(delete(model).where(ts_column < cutoff))
             total_deleted += result.rowcount or 0

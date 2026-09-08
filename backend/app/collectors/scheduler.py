@@ -17,6 +17,7 @@ from app.services.rollup import run_daily_rollup
 from app.services.health_report import run_scheduled_reports
 from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
 from app.services.prediction_accuracy import evaluate_due_outcomes
+from app.services.wait_sampling import sampling_tick, shutdown_sampling
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ RETENTION_JOB_ID = "retention_cleanup"
 DAILY_ROLLUP_JOB_ID = "daily_rollup"
 PREDICTION_ACCURACY_JOB_ID = "prediction_accuracy"
 HEALTH_REPORT_JOB_ID = "daily_health_report"
+WAIT_SAMPLING_JOB_ID = "wait_event_sampling"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -120,6 +122,13 @@ async def daily_health_report_tick() -> None:
         logger.exception("Zamanlanmış sağlık raporu başarısız")
 
 
+async def wait_sampling_tick() -> None:
+    try:
+        await sampling_tick()
+    except Exception:
+        logger.exception("Bekleme örneklemesi turu başarısız")
+
+
 async def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -194,6 +203,30 @@ async def start_scheduler() -> None:
         next_run_time=datetime.now(),
         coalesce=True,
     )
+    if settings.wait_sampling_enabled:
+        # BEKLEME ÖRNEKLEMESİ — kendi işi, toplama döngüsünden ayrı (Faz 25 İŞ 1).
+        #
+        # `max_instances=1`: bir tur (yavaş sunucu, ağ gecikmesi) 1 saniyeyi aşarsa APScheduler
+        # varsayılan olarak İKİNCİ bir turu paralel başlatır. Örnekleyici kalıcı bağlantıları ve
+        # bellek kovalarını paylaştığı için bu, aynı bağlantı üzerinde iki eşzamanlı sorgu ve
+        # bozuk sayaçlar demek. Tek tur garantisi bunu engelliyor.
+        #
+        # `coalesce=True`: kesintiden sonra birikmiş tetiklemeler tek turda toplanır — geçmişe
+        # dönük 300 örnek almanın anlamı yok, örnekleme ANLIK durumu ölçüyor.
+        #
+        # `next_run_time=now`: ilk tur hemen; IntervalTrigger'ın "now + interval" varsayılanı
+        # burada da geçerli (retention/rollup işlerinde canlıda yaşanan sorunun aynısı).
+        scheduler.add_job(
+            wait_sampling_tick,
+            "interval",
+            seconds=max(1, settings.wait_sample_interval_seconds),
+            id=WAIT_SAMPLING_JOB_ID,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(),
+        )
+
     scheduler.add_job(
         daily_health_report_tick,
         "cron",
@@ -235,3 +268,16 @@ def reschedule_health_report(hour: int) -> None:
 def stop_scheduler() -> None:
     if scheduler.running:
         scheduler.shutdown(wait=False)
+
+
+async def stop_scheduler_async() -> None:
+    """Kapanış: zamanlayıcıyı durdurur VE örnekleyicinin yarım kalan dakikasını yazar.
+
+    `stop_scheduler()` senkron olduğu için bekleme kovalarını yazamıyor; onları kaybetmek
+    kapanış anındaki (yani genelde en ilginç) dakikayı silmek demekti.
+    """
+    stop_scheduler()
+    try:
+        await shutdown_sampling()
+    except Exception:
+        logger.exception("Örnekleyici kapatılırken hata")

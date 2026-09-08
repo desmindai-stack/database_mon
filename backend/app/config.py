@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # 0 = sınırsız. Kaçak bir sorgunun isteği süresiz asılı bırakmasını (ve gateway'in 502
     # döndürmesini) engelleyen son savunma hattı; izlenen hedef veritabanlarını ETKİLEMEZ
     # (onların kendi sınırı collectors/postgresql.py içinde).
+    # Bekleme (wait event) örnekleyicisi — Faz 25 İŞ 1. Toplama döngüsünden AYRI ve çok daha
+    # sık: kümülatif sayaç okumak 15 saniyede yeterli, ama "sistem şu an ne bekliyor" sorusu
+    # anlık durumun sık fotoğrafını ister. 1 saniye, DPA sınıfı araçların standart aralığı.
+    # Daha seyrek örnekleme kısa süreli kilit fırtınalarını kaçırır; daha sık örnekleme
+    # izlenen sunucuya gereksiz yük bindirir.
+    wait_sampling_enabled: bool = True
+    wait_sample_interval_seconds: int = 1
     db_statement_timeout_seconds: int = 120
     dashboard_refresh_interval_seconds: int = 60
     api_host: str = "0.0.0.0"

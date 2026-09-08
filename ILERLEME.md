@@ -4901,6 +4901,118 @@ denetim de sıkılaştırıldı:
 **Durum:** 32 e2e testi ~29 saniyede yeşil, backend 907 test yeşil
 (1 skip), `npm run build` yeşil.
 
+## Faz 25 — İŞ 1: Aktif oturum örnekleyicisi (bekleme analizi altyapısı)
+
+**Eksik olan neydi:** pg_stat_statements'ın kümülatif toplamları "bu sorgu
+206 ms sürdü" diyor ama bu sürenin NEREDE geçtiğini söylemiyor — disk
+okuyarak mı, kilit bekleyerek mi, CPU'da mı. Bu ayrım olmadan öneri de
+üretilemiyor: "index ekleyin" ile "uzun transaction'ı kısaltın" bambaşka
+teşhisler.
+
+### Neden ayrı bir döngü
+
+Mevcut toplama döngüsü 15 saniyede bir çalışıyor ve KÜMÜLATİF sayaç okuyor.
+Bekleme analizi bunun tersini ister: anlık durumun SIK tekrarlanan fotoğrafı.
+15 saniyede bir bakmak, 200 ms süren bir kilit fırtınasını hiç görmemek
+demek. Bu yüzden örnekleyici kendi işinde (`wait_event_sampling`), kendi
+aralığında (varsayılan 1 sn) ve kendi KALICI bağlantısında çalışıyor.
+
+### İzlenen sunucuya yük bindirmemek için yapılanlar
+
+- **Kalıcı tek bağlantı**, turlar arasında yeniden kullanılıyor. Saniyede bir
+  bağlantı açıp kapatmak (TCP + TLS el sıkışması + backend fork), ölçmeye
+  çalıştığımız yükün kendisini üretirdi.
+- **Tek sorgu, tek round trip**, filtre sunucu tarafında (`state='active'`) —
+  binlerce boşta oturum ağdan geçmiyor.
+- **`statement_timeout = 1000ms`** (toplama döngüsünün 5000 ms'inden sıkı):
+  saniyede bir çalışan bir sorgunun asılı kalması, sıradaki turları da
+  geciktirir ve ölçümde delik açar.
+- **`pg_blocking_pids()` yalnızca kilit bekleyen satırlarda** çağrılıyor. Bu
+  fonksiyon lock manager'ı dolaşır; her satır için çağrılsaydı örnekleme
+  sorgusunun en pahalı parçası olurdu, oysa cevabı sadece `Lock`
+  beklemesinde anlamlı.
+- **`max_instances=1`**: bir tur 1 saniyeyi aşarsa APScheduler ikinci turu
+  paralel başlatırdı — aynı bağlantı üzerinde iki eşzamanlı sorgu ve bozuk
+  sayaçlar demekti.
+- Instance'lar **paralel** örnekleniyor: erişilemeyen tek bir sunucu
+  diğerlerinin örneklemesini geciktirmiyor.
+- `WAIT_SAMPLING_ENABLED=false` ile tamamen kapatılabiliyor — o zaman hedefe
+  hiç bağlantı açılmıyor.
+
+README'nin "İzleme yükü" bölümüne yeni bir alt bölüm eklendi. Depolama
+maliyeti ÖLÇÜLDÜ (satır başına 192 bayt, indeksler dahil); izlenen sunucudaki
+sorgu maliyeti bu ortamda ölçülemedi (PostgreSQL/psql/Docker yok) — bunun
+yerine kullanıcının kendi sunucusunda çalıştırabileceği ölçüm sorgusu
+yazıldı ve sınır SORULAR.md'ye işlendi.
+
+### Ham örnek saklanmıyor — dakikalık toplama
+
+1 saniyelik örnekleme, aktif oturum başına saniyede bir satır demek: 10
+eşzamanlı aktif oturumlu bir sunucuda günde ~864 bin satır. Örnekler süreç
+belleğinde dakikalık kovalarda toplanıp dakika kapandığında yazılıyor:
+`(dakika, queryid, kategori, olay)` başına TEK satır. Ölçülen küçülme ~40 kat.
+
+Üç tablo:
+
+| Tablo | Ne tutuyor |
+|---|---|
+| `active_session_minutes` | Dakikalık PAYDA: alınan örnek sayısı, aktif oturum toplamı, bloklanan oturum toplamı |
+| `wait_sample_minutes` | Dakikalık KIRILIM: (queryid, kategori, olay) başına örnek sayısı |
+| `wait_query_signatures` | queryid → sorgu metni sözlüğü (distinct queryid başına tek satır) |
+
+**Payda neden ölçülüyor, varsayılmıyor:** AAS = aktif oturum toplamı / alınan
+örnek sayısı. Örnek sayısını `60/aralık` diye sabit varsaymak, örnekleyicinin
+geciktiği, worker'ın yeniden başladığı ya da sunucunun erişilemediği
+dakikaları beşte bir yüke sahipmiş gibi gösterirdi — yani tam da incelenmesi
+gereken dakikaları sakinleştirirdi.
+
+**Aynı dakikaya ikinci kova EKLENİYOR, üzerine yazılmıyor:** worker dakika
+ortasında yeniden başlarsa iki yarım kova aynı dakikayı temsil eder ve
+toplamları o dakikanın gerçeğidir.
+
+### Bekleme taksonomisi tek yerde
+
+`app/domain/waits.py`, PostgreSQL `wait_event_type` ve SQL Server `wait_type`
+sözlüklerini ORTAK bir kategori kümesine indirger (cpu, io, lock, lwlock,
+client, ipc, timeout, buffer_pin, activity, extension, memory, other).
+Grafik, öneri üretimi ve rapor aynı kategorileri konuşuyor — iki modülün aynı
+beklemeyi farklı sınıflandırması, projede daha önce yaşanan "aynı veriyi iki
+yerde ayrı hesaplama" tuzağının aynısı olurdu.
+
+İki eşleme kararı özellikle önemli:
+
+- **Beklemenin YOKLUĞU da veridir.** `wait_event_type IS NULL` + `state=active`
+  = oturum CPU'da çalışıyor. Bu satırları atmak, veritabanı yükünün genellikle
+  en büyük bileşenini görünmez yapar ve grafiği "sistem hep bekliyor" diye
+  yalancı hâle getirirdi.
+- **`SOS_SCHEDULER_YIELD` bir bekleme değil CPU baskısıdır.** Adı bekleme gibi
+  görünse de anlamı "CPU kotasını doldurdu, sıraya girdi". IO ya da kilit
+  saymak, CPU sorununu tamamen yanlış yerde arattırırdı.
+
+Ayrıca paralel işçiler (`backend_type='parallel worker'`) DAHİL sayılıyor:
+yalnızca lideri saymak, 8 işçiyle çalışan paralel bir sorgunun yükünü 1
+gösterir ve ölçüyü anlamsız kılardı.
+
+### Saklama ve silme
+
+Üç tablo da saklama politikasına dahil (`services/retention.py`) — dakikalık
+toplansa da sınırsız değil. `wait_query_signatures` `last_seen_at` üzerinden
+temizleniyor: artık hiç görülmeyen sorgunun imzası anlamsız.
+
+Instance silme akışı bu tabloları KENDİLİĞİNDEN gördü: Faz 23'te bağımlılık
+listesi elle yazılan bir listeden SQLAlchemy metadata'sından türetmeye
+çevrilmişti. Üç yeni tablo hiçbir şey yapmadan bağımlılık sayımına ve
+cascade'e girdi — o turda yapılan işin karşılığı. Arayüzdeki etiket haritasına
+Türkçe adları eklendi.
+
+**Testler:** `tests/test_wait_sampling.py` (14 test) — 60 örneğin tek satıra
+indiği, paydanın ölçüldüğü, dakika dönüşü, yeniden başlatmada kovaların
+toplandığı, sorgu metninin sözlükte tek kez durduğu, bağlantı koptuğunda
+önceki örneklerin kaybolmadığı, MongoDB/kapalı instance'ların
+örneklenmediği, ve taksonomi kararları. **Kova toplama yerine üzerine yazma
+konulduğunda ilgili test düşüyor** — hatayı yakaladığı doğrulandı. Toplam
+923 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

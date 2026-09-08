@@ -299,6 +299,9 @@ export default function InstancesPage() {
     metric_rollup_daily: "Günlük metrik özeti",
     schema_object_daily_samples: "Şema nesnesi örneği",
     daily_state_snapshots: "Günlük durum fotoğrafı",
+    wait_sample_minutes: "Bekleme örneği (dakikalık)",
+    active_session_minutes: "Aktif oturum özeti (dakikalık)",
+    wait_query_signatures: "Sorgu imzası",
     nodes: "Düğüm bağlantısı",
   };
 

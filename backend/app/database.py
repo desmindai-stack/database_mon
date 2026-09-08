@@ -258,6 +258,9 @@ async def migrate_schema() -> None:
 _COMPOSITE_INDEXES = (
     ("ix_metric_samples_instance_collected", "metric_samples", "instance_id, collected_at"),
     ("ix_slow_query_samples_instance_collected", "slow_query_samples", "instance_id, collected_at"),
+    # Faz 25: bekleme analizinin her sorgusu "şu instance'ın şu zaman aralığı" biçiminde.
+    ("ix_wait_sample_minutes_instance_minute", "wait_sample_minutes", "instance_id, minute"),
+    ("ix_active_session_minutes_instance_minute", "active_session_minutes", "instance_id, minute"),
 )
 
 

@@ -6,7 +6,7 @@ import asyncio
 import logging
 import signal
 
-from app.collectors.scheduler import start_scheduler, stop_scheduler
+from app.collectors.scheduler import start_scheduler, stop_scheduler_async
 from app.config import settings
 from app.database import init_db
 
@@ -30,7 +30,9 @@ async def _run() -> None:
         loop.add_signal_handler(sig, _handle_sig)
 
     await stop.wait()
-    stop_scheduler()
+    # Async kapanış: zamanlayıcıyı durdurmanın yanında bekleme örnekleyicisinin yarım
+    # kalan dakikasını da yazar ve kalıcı bağlantıları kapatır.
+    await stop_scheduler_async()
 
 
 def main() -> None:

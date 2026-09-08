@@ -38,7 +38,13 @@ def last_collected_at(instance_id: int) -> datetime | None:
     return _previous_state.get(instance_id, {}).get("collected_at")
 
 
-def _target_for(instance: Instance) -> ConnectionTarget:
+def connection_target_for(instance: Instance) -> ConnectionTarget:
+    """Instance kaydından bağlantı hedefi (şifre çözülmüş).
+
+    Faz 25'te public yapıldı: bekleme örnekleyicisi (services/wait_sampling.py) da aynı hedefi
+    kuruyor. İki yerde ayrı ayrı kurmak, şifre çözme ya da seçenek (ssl_mode, pooler) mantığı
+    değiştiğinde birinin geride kalması demekti.
+    """
     return ConnectionTarget(
         host=instance.host,
         port=instance.port,
@@ -47,6 +53,10 @@ def _target_for(instance: Instance) -> ConnectionTarget:
         password=decrypt_secret(instance.password),
         options=instance.options or {},
     )
+
+
+#: Eski (private) ad — mevcut testler bunu kullanıyor.
+_target_for = connection_target_for
 
 
 def _apply_metrics_to_sample(sample: MetricSample, metrics: dict) -> None:
@@ -85,7 +95,7 @@ def _should_collect_slow_queries(instance_id: int, now: datetime) -> bool:
 
 async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     engine = DatabaseEngine(instance.engine)
-    collector = get_collector(engine, _target_for(instance))
+    collector = get_collector(engine, connection_target_for(instance))
     interval = effective_collect_interval(instance)
 
     now = datetime.now(UTC)

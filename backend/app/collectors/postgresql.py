@@ -5,7 +5,14 @@ from typing import Any
 
 import asyncpg
 
-from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error, resolve_uses_pooler
+from app.collectors.base import (
+    BaseCollector,
+    ConnectionTarget,
+    SamplingConnection,
+    classify_connection_error,
+    resolve_uses_pooler,
+)
+from app.domain.waits import classify_postgres_wait
 from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
 
 logger = logging.getLogger(__name__)
@@ -26,6 +33,16 @@ PG_MIN_SUPPORTED_VERSION = 120_000
 # every collect_interval_seconds, 15s by default) if something is unexpectedly slow (lock
 # contention, an overloaded server) rather than letting the query run indefinitely.
 COLLECTOR_STATEMENT_TIMEOUT_MS = 5_000
+
+# 14+: pg_stat_activity.query_id — bekleme örneğini pg_stat_statements'taki sorguya bağlayan
+# tek alan. Daha eski sürümlerde bekleme kırılımı yine toplanıyor ama SORGU BAZINDA
+# ayrıştırılamıyor; API bunu açıkça söylüyor (sessizce boş liste dönmek yerine).
+PG_VERSION_ACTIVITY_QUERY_ID = 140_000
+
+# Örnekleme saniyede bir çalışıyor: bir turun asılı kalması sıradaki turları da geciktirir
+# ve ölçüm deliği açar. Toplama döngüsünün 5 saniyelik tavanı burada fazlasıyla geniş —
+# pg_stat_activity bellekten okunan bir görünüm, 1 saniyede bitmiyorsa zaten sorun var.
+SAMPLER_STATEMENT_TIMEOUT_MS = 1_000
 
 
 class PostgreSQLCollector(BaseCollector):
@@ -452,6 +469,72 @@ class PostgreSQLCollector(BaseCollector):
         finally:
             if owns_conn:
                 await conn.close()
+
+    async def open_sampling_connection(self) -> SamplingConnection | None:
+        conn = await self._connect()
+        # Örnekleyicinin kendi tavanı: toplama döngüsünün 5 sn'si yerine 1 sn.
+        await conn.execute(f"SET statement_timeout = '{SAMPLER_STATEMENT_TIMEOUT_MS}ms'")
+        version_num, _ = await self._detect_version(conn)
+        return SamplingConnection(
+            raw=conn,
+            capabilities={
+                "server_version_num": version_num,
+                "has_query_id": version_num >= PG_VERSION_ACTIVITY_QUERY_ID,
+            },
+        )
+
+    async def sample_active_sessions(self, conn: SamplingConnection) -> dict[str, Any] | None:
+        """pg_stat_activity'nin tek fotoğrafı: o an ne çalışıyor ve ne bekliyor.
+
+        Tasarım kararları (hepsi ölçüm yükünü düşük tutmak için):
+        - Tek sorgu, tek round trip, WHERE ile sunucu tarafında filtre — binlerce boşta oturumu
+          ağdan geçirmek yerine yalnızca aktif olanlar geliyor.
+        - `pg_blocking_pids()` SADECE kilit bekleyen satırlar için çağrılıyor. Bu fonksiyon
+          lock manager'ı dolaşır ve her satır için çağrılırsa örnekleme sorgusunun en pahalı
+          parçası olur; oysa cevabı yalnızca `Lock` beklemesinde anlamlı.
+        - Sorgu metni 400 karaktere kırpılıyor: metin sözlüğe (WaitQuerySignature) tek kez
+          yazılıyor, her örnekte taşınmasının anlamı yok.
+        """
+        has_query_id = bool(conn.capabilities.get("has_query_id"))
+        queryid_expr = "a.query_id::text" if has_query_id else "NULL::text"
+        rows = await conn.raw.fetch(
+            f"""
+            SELECT
+                {queryid_expr} AS queryid,
+                a.wait_event_type::text AS wait_event_type,
+                a.wait_event::text AS wait_event,
+                LEFT(a.query, 400) AS query,
+                CASE
+                    WHEN a.wait_event_type = 'Lock'
+                    THEN cardinality(pg_blocking_pids(a.pid))
+                    ELSE 0
+                END AS blocker_count
+            FROM pg_stat_activity a
+            WHERE a.pid <> pg_backend_pid()
+              AND a.state = 'active'
+              -- Paralel işçiler de DAHİL: gerçekten CPU/IO harcayan oturumlar onlar da.
+              -- Yalnızca lideri saymak, paralel bir sorgunun 8 işçiyle ürettiği yükü 1
+              -- gösterir ve "veritabanı yükü" ölçüsünü anlamsız kılar.
+              AND a.backend_type IN ('client backend', 'parallel worker')
+            """
+        )
+
+        sessions: list[dict[str, Any]] = []
+        blocked = 0
+        for row in rows:
+            blocker_count = int(row["blocker_count"] or 0)
+            if blocker_count:
+                blocked += 1
+            sessions.append(
+                {
+                    "queryid": row["queryid"] or "",
+                    "query": row["query"] or "",
+                    "wait_category": str(classify_postgres_wait(row["wait_event_type"])),
+                    "wait_event": row["wait_event"] or "",
+                    "blocked": blocker_count > 0,
+                }
+            )
+        return {"sessions": sessions, "blocked": blocked, "has_query_id": has_query_id}
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()

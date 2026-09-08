@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import func, select
 
-from app.collectors.scheduler import start_scheduler, stop_scheduler
+from app.collectors.scheduler import start_scheduler, stop_scheduler_async
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample, User
@@ -41,7 +41,7 @@ async def lifespan(_: FastAPI):
         await start_scheduler()
     yield
     if settings.run_mode in ("worker", "all"):
-        stop_scheduler()
+        await stop_scheduler_async()
 
 
 app = FastAPI(title=settings.app_name, version="0.2.0", lifespan=lifespan)

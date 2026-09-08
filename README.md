@@ -310,6 +310,71 @@ guarded with `SET LOCK_TIMEOUT 5000` (SQL Server has no direct client-side
 `statement_timeout` equivalent — see `SORULAR.md` for why LOCK_TIMEOUT was
 chosen over guessing at an ODBC-driver-specific query-timeout attribute).
 
+### Wait-event sampler — every `wait_sample_interval_seconds` (default 1s)
+
+Separate from the collection loop, and much more frequent: cumulative counters
+are fine to read every 15s, but "what is the system waiting on *right now*"
+needs frequent snapshots of instantaneous state. A 15s cadence would miss a
+200ms lock storm entirely.
+
+**One persistent connection per instance**, reused across ticks — reconnecting
+every second would cost more (TCP + TLS handshake + backend fork) than the
+sample query itself. `statement_timeout = 1000ms` (tighter than the collection
+loop's 5000ms: a sampling query that takes over a second is already broken).
+
+| Query / source | What it reads | Cost |
+|---|---|---|
+| `pg_stat_activity`, filtered to `state='active'` server-side | in-memory view, one row per backend | negligible — no disk access, no catalog scan |
+| `pg_blocking_pids(pid)` | lock manager walk | **only called for rows already waiting on a `Lock`** — a `CASE` guard keeps it off every other row; the answer is meaningless anywhere else |
+| SQL Server: `dm_exec_requests` + `dm_os_waiting_tasks` + `dm_exec_sql_text` | DMVs / plan-cache lookup | low; active requests are few by definition, and `TOP` caps the worst case |
+
+One query, one round trip, per instance per tick. Instances are sampled
+concurrently, so one slow server does not delay the others, and the scheduler
+job runs with `max_instances=1` so ticks never overlap.
+
+**Measuring the cost on your own server** (the sampler's query shows up in
+`pg_stat_statements` like any other):
+
+```sql
+SELECT calls,
+       round(total_exec_time::numeric, 1) AS total_ms,
+       round(mean_exec_time::numeric, 3)  AS mean_ms
+FROM pg_stat_statements
+WHERE query LIKE '%pg_stat_activity%'
+  AND query LIKE '%parallel worker%'
+ORDER BY total_exec_time DESC;
+```
+
+`mean_ms` is the per-sample cost on *your* hardware and workload. This is the
+number to look at before enabling the sampler on a busy production server; the
+target-side cost has not been measured on a real production instance by the
+project itself (see `SORULAR.md`).
+
+**Storage cost on dbace's own database** (this *is* measured):
+
+Raw samples are never stored. At 1s sampling, one row per active session per
+second means ~864,000 rows/day for a server with 10 concurrently active
+sessions. Instead, samples are accumulated in memory and written once per
+minute as one row per `(minute, queryid, wait category, wait event)`
+combination.
+
+Measured at **192 bytes/row including indexes** (SQLite, 200k rows, realistic
+queryid cardinality):
+
+| Distinct combinations per minute | Rows/day per instance | Per month (30d retention) |
+|---|---|---|
+| 5 (quiet, few distinct queries) | 7,200 | ~41 MB |
+| 15 (typical mixed workload) | 21,600 | ~124 MB |
+| 50 (very diverse workload) | 72,000 | ~415 MB |
+
+That is a ~40× reduction versus storing raw samples, and all three tables are
+covered by the retention policy (`services/retention.py`) — unlike
+`slow_query_samples`, which accumulated 337k rows for a single instance before
+retention was fixed in Faz 21.
+
+Turn the sampler off entirely with `WAIT_SAMPLING_ENABLED=false`: no
+connection is opened and no query is sent to the target at all.
+
 ### Dashboard refresh loop — every `dashboard_refresh_interval_seconds` (default 60s, as low as 10s)
 
 Per Patroni-topology group, against its target node:

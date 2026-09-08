@@ -2075,3 +2075,37 @@ Faz 23'teki silme hatası tam olarak böyle bir farktan doğmuştu (SQLite'ta
 foreign key denetimi varsayılan kapalı). O sınıf hata için koruma
 tarayıcı testinde değil, `conftest.py`'de FK denetimini açan ön koşulda
 ve `test_delete_dependencies.py`'de.
+
+## Faz 25 İŞ 1: Örnekleme yükü gerçek bir sunucuda ÖLÇÜLMEDİ
+
+README'nin "İzleme yükü" bölümünde bekleme örnekleyicisinin maliyeti iki
+parçaya ayrıldı ve ikisi farklı güvenilirlikte:
+
+- **dbace'in kendi veritabanındaki depolama maliyeti ÖLÇÜLDÜ**: 200 bin
+  satırlık gerçekçi bir tablo kurulup dosya boyutu okundu, satır başına 192
+  bayt (indeksler dahil). Oradaki tablo bu ölçümden türetilmiş hesap.
+- **İzlenen sunucudaki sorgu maliyeti ÖLÇÜLMEDİ.** Bu geliştirme ortamında ne
+  çalışan bir PostgreSQL ne de `psql` var (Docker da kapalı); "1 ms'den az
+  sürer" gibi bir sayı yazmak uydurma olurdu. Bunun yerine tasarım
+  gerekçeleri (tek kalıcı bağlantı, tek round trip, sunucu tarafında filtre,
+  `pg_blocking_pids` yalnızca kilit bekleyen satırlarda) ve **kullanıcının
+  kendi sunucusunda ölçebileceği çalıştırılabilir sorgu** yazıldı —
+  örnekleyicinin sorgusu `pg_stat_statements`'ta diğerleri gibi görünüyor.
+
+**Kapanması için gereken:** yük altındaki gerçek bir PostgreSQL'de
+örnekleyiciyi bir saat çalıştırıp yukarıdaki `pg_stat_statements` sorgusunun
+`mean_ms` değerini README'ye ölçüm olarak işlemek.
+
+## Faz 25 İŞ 1: PostgreSQL 14 öncesinde bekleme SORGU BAZINDA ayrıştırılamıyor
+
+`pg_stat_activity.query_id` PostgreSQL 14 ile geldi. Daha eski sürümlerde
+(dbace 12'yi destekliyor) örnekleyici beklemeleri yine topluyor — "sistem
+neyi bekliyor" grafiği çalışıyor — ama beklemeyi SORGUYA bağlayamıyor, yani
+"bu sorgu süresinin yüzde kaçını kilitte geçirdi" sorusu cevapsız kalıyor.
+
+Bu durumda satırlar boş `queryid` ile yazılıyor ve API bunu açıkça
+bildiriyor; sessizce boş liste dönmek, kullanıcının "sorgu yok" sanmasına yol
+açardı. Alternatif (sorgu metnini kendimiz normalleştirip hash'lemek) reddedildi:
+pg_stat_statements'ınkinden farklı bir kimlik üretir ve iki liste birbirine
+bağlanamaz hale gelirdi — projede zaten kural olan "aynı veriyi gösteren
+yerler tek gerçeklik kaynağından beslensin" ilkesine aykırı.

@@ -4,7 +4,13 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from app.collectors.base import BaseCollector, ConnectionTarget, classify_connection_error
+from app.collectors.base import (
+    BaseCollector,
+    ConnectionTarget,
+    SamplingConnection,
+    classify_connection_error,
+)
+from app.domain.waits import classify_sqlserver_wait
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +21,38 @@ SQLSERVER_MIN_SUPPORTED_MAJOR = 13
 
 # See _connect()'s docstring comment — bounds lock-wait time on every collector query.
 COLLECTOR_LOCK_TIMEOUT_MS = 5_000
+# Örnekleyicinin kendi tavanı — saniyede bir çalışan bir sorgunun 5 saniye kilit beklemesi
+# ölçümde beş saniyelik delik açar.
+SAMPLER_LOCK_TIMEOUT_MS = 1_000
+
+# Aktif oturum fotoğrafı (Faz 25 İŞ 1).
+#
+# `dm_exec_requests` ÇALIŞAN istekleri verir (boşta oturumlar yok — zaten istediğimiz bu).
+# `dm_os_waiting_tasks` ikinci kaynak olarak duruyor: paralel plan çalıştıran bir istekte
+# bloklayan oturum isteğin kendisinde değil, GÖREV (task) düzeyinde görünür; yalnızca
+# `r.blocking_session_id`'ye bakmak paralel sorgularda bloklanmaları görünmez yapardı.
+#
+# `dm_exec_sql_text` plan cache'ten okuyan bir bellek aramasıdır; aktif istek sayısı doğası
+# gereği küçük olduğu için (yüzlerce değil, onlarca) saniyelik örneklemede kabul edilebilir.
+# TOP sınırı, patolojik bir durumda (bağlantı fırtınası) örnekleme maliyetinin patlamasını
+# engelliyor.
+_ACTIVE_SESSION_SAMPLE_SQL = """
+SELECT TOP ({limit})
+    CONVERT(VARCHAR(34), r.query_hash, 1) AS queryid,
+    r.wait_type AS wait_type,
+    COALESCE(NULLIF(r.blocking_session_id, 0), w.blocking_session_id, 0) AS blocking_session_id,
+    SUBSTRING(t.text, 1, 400) AS query_text
+FROM sys.dm_exec_requests r
+LEFT JOIN (
+    SELECT session_id, MAX(blocking_session_id) AS blocking_session_id
+    FROM sys.dm_os_waiting_tasks
+    WHERE blocking_session_id IS NOT NULL AND blocking_session_id <> 0
+    GROUP BY session_id
+) w ON w.session_id = r.session_id
+OUTER APPLY sys.dm_exec_sql_text(r.sql_handle) t
+WHERE r.session_id <> @@SPID
+  AND r.session_id > 50
+"""
 
 _PERF_COUNTER_QUERY = """
 SELECT RTRIM(counter_name), cntr_value
@@ -304,6 +342,43 @@ class SqlServerCollector(BaseCollector):
         finally:
             if owns_conn:
                 await conn.close()
+
+    async def open_sampling_connection(self) -> SamplingConnection | None:
+        conn = await self._connect()
+        async with conn.cursor() as cur:
+            await cur.execute(f"SET LOCK_TIMEOUT {SAMPLER_LOCK_TIMEOUT_MS}")
+        major, _ = await self._detect_version(conn)
+        return SamplingConnection(raw=conn, capabilities={"product_major_version": major})
+
+    async def sample_active_sessions(
+        self, conn: SamplingConnection, limit: int = 200
+    ) -> dict[str, Any] | None:
+        async with conn.raw.cursor() as cur:
+            await cur.execute(_ACTIVE_SESSION_SAMPLE_SQL.format(limit=int(limit)))
+            columns = [c[0] for c in cur.description]
+            rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
+
+        sessions: list[dict[str, Any]] = []
+        blocked = 0
+        for row in rows:
+            wait_type = row.get("wait_type")
+            is_blocked = bool(row.get("blocking_session_id"))
+            if is_blocked:
+                blocked += 1
+            sessions.append(
+                {
+                    # query_hash sıfır olabilir (ad-hoc toplu iş) — boş dizgi "kimlik yok"
+                    # demek ve dakikalık toplamada tek kovada birleşiyor.
+                    "queryid": (row.get("queryid") or "").strip() or "",
+                    "query": (row.get("query_text") or "").strip(),
+                    "wait_category": str(classify_sqlserver_wait(wait_type)),
+                    "wait_event": (wait_type or "").strip(),
+                    "blocked": is_blocked,
+                }
+            )
+        # SQL Server'da query_hash her zaman var (sürüme bağlı değil) — PostgreSQL'deki
+        # `query_id` sürüm kısıtının karşılığı burada yok.
+        return {"sessions": sessions, "blocked": blocked, "has_query_id": True}
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         conn = await self._connect()

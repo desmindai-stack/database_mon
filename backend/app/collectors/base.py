@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -102,6 +102,22 @@ def classify_connection_error(exc: Exception) -> str:
     return wrap("Bağlantı başarısız.")
 
 
+@dataclass
+class SamplingConnection:
+    """Bekleme örnekleyicisinin sakladığı kalıcı bağlantı + o sunucuda neyin OKUNABİLDİĞİ.
+
+    Yetenekler bağlantı açılırken BİR KEZ tespit ediliyor (sürüm, `query_id` sütununun varlığı
+    gibi) — saniyede bir çalışan örnekleyicinin her turda sürüm sorması, örneklemenin kendisini
+    iki katına çıkarırdı.
+    """
+
+    raw: Any
+    capabilities: dict[str, Any] = field(default_factory=dict)
+
+    async def close(self) -> None:
+        await self.raw.close()
+
+
 class BaseCollector(ABC):
     @abstractmethod
     async def test_connection(self) -> tuple[bool, str, dict[str, Any]]:
@@ -129,6 +145,29 @@ class BaseCollector(ABC):
 
     async def collect_slow_queries(self, limit: int = 20, conn: Any | None = None) -> list[dict[str, Any]]:
         return []
+
+    async def open_sampling_connection(self) -> Any | None:
+        """Bekleme örneklemesi (Faz 25 İŞ 1) için KALICI bağlantı açar.
+
+        Toplama döngüsünden ayrı: örnekleyici saniyede bir çalışıyor ve her seferinde bağlantı
+        açmak/kapatmak, ölçmeye çalıştığımız yükün kendisini üretirdi (TCP + TLS el sıkışması +
+        backend fork'u, örnek sorgusunun kendisinden kat kat pahalı). Bağlantı bir kez açılıp
+        `sample_active_sessions()` çağrıları arasında saklanıyor.
+
+        Desteklemeyen motorlar (MongoDB) None döner — örnekleyici o instance'ı atlar.
+        """
+        return None
+
+    async def sample_active_sessions(self, conn: Any) -> dict[str, Any] | None:
+        """O ANDA aktif olan oturumların tek bir fotoğrafı.
+
+        Dönen yapı: {"sessions": [{queryid, query, wait_category, wait_event, blocked_by}],
+        "blocked": int}. Desteklenmiyorsa None.
+
+        Sözleşme: BU ÇAĞRI UCUZ OLMAK ZORUNDA. Tek round trip, tek görünüm taraması, kısa
+        statement_timeout. İzleme aracının izlediği sunucuya yük bindirmesi kabul edilemez.
+        """
+        return None
 
     async def collect_activity(self, limit: int = 100) -> dict[str, Any]:
         """Live session snapshot: sessions, wait events, blocking edges."""

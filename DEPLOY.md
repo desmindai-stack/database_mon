@@ -91,6 +91,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 31 | `20260908100000_prediction_outcomes.sql` | **YENİ** — prediction_outcomes tablosu (tahmin doğruluğu geri besleme döngüsü) |
 | 32 | `20260908110000_prediction_method_transparency.sql` | **YENİ** — prediction_insights: method, sample_count, span_days, outliers_removed, fit_kind, fit_note, eta_days_min/max (tahmin yöntemi şeffaflığı) |
 | 33 | `20260909090000_hot_table_composite_indexes.sql` | **YENİ** — metric_samples + slow_query_samples (instance_id, collected_at) bileşik indeksleri. **CANLI 502 DÜZELTMESİ.** ⚠️ **psql gerekir** — CONCURRENTLY kullanıyor, SQL Editor'den çalıştırılamaz (bkz. aşağıdaki bölüm) |
+| 34 | `20260910090000_wait_event_sampling.sql` | **YENİ** — bekleme analizi tabloları: active_session_minutes, wait_sample_minutes, wait_query_signatures (aktif oturum örnekleyicisi). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 
@@ -230,6 +231,8 @@ karşılık gelir (pydantic-settings, case-insensitive).
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Opsiyonel | `60` | Eksikse 60 dakika. |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | Opsiyonel | `7` | Eksikse 7 gün. |
 | `COLLECT_INTERVAL_SECONDS` | Opsiyonel | `15` | Global toplama aralığı — instance bazında override edilebilir. |
+| `WAIT_SAMPLING_ENABLED` | Opsiyonel | `true` | Bekleme (wait event) örnekleyicisi. `false` yapmak veritabanı yükü grafiğini ve bekleme tabanlı önerileri kapatır; izlenen sunucuya bağlantı ve sorgu yükünü tamamen kaldırır. |
+| `WAIT_SAMPLE_INTERVAL_SECONDS` | Opsiyonel | `1` | Örnekleme aralığı. Artırmak yükü düşürür ama kısa süreli kilit/IO fırtınalarını kaçırma riskini artırır — 5 sn'nin üstü önerilmez. Yalnızca worker sürecinde etkili. |
 | `DASHBOARD_REFRESH_INTERVAL_SECONDS` | Opsiyonel | `60` | Dashboard/cluster health yenileme aralığı. |
 | `API_HOST` / `API_PORT` | Kullanılmıyor (Railway) | `0.0.0.0` / `8000` | `railway.toml`'daki startCommand Railway'in kendi `$PORT`'unu kullanıyor (`--port ${PORT:-8000}`) — bu iki değişken sadece Docker-dışı/yerel çalıştırmalar için, Railway'de ayarlamaya gerek yok. |
 | `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | **Kullanılmıyor** | yok | `Settings`'te tanımlı ama backend kodunun hiçbir yerinde okunmuyor (grep ile doğrulandı) — muhtemelen ileride Supabase Auth/Storage entegrasyonu için ayrılmış. Şu an ayarlanmasa da hiçbir fark etmez; DATABASE_URL yeterli. |
