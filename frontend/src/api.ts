@@ -330,6 +330,8 @@ export interface SlowQueryAvailability {
 export type InstanceDependencies = Gen["InstanceDependenciesOut"];
 
 // --- Yakalanan planlar (Faz 26 İŞ 1) ---
+/** Bakım penceresi (Faz 28 İŞ 3) — üretilen şemadan türetiliyor. */
+export type MaintenanceWindow = Gen["MaintenanceWindowOut"];
 export type CapturedPlan = Gen["CapturedPlanOut"];
 export type CapturedPlanList = Gen["CapturedPlanListOut"];
 
@@ -1441,6 +1443,15 @@ export const api = {
     q.set("limit", String(params.limit ?? 30));
     return request<HealthReportSummary[]>(`/api/reports?${q.toString()}`);
   },
+  listMaintenanceWindows: () =>
+    request<MaintenanceWindow[]>("/api/maintenance-windows"),
+  createMaintenanceWindow: (body: Record<string, unknown>) =>
+    request<MaintenanceWindow>("/api/maintenance-windows", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  deleteMaintenanceWindow: (id: number) =>
+    request<void>(`/api/maintenance-windows/${id}`, { method: "DELETE" }),
   getReport: (id: number) => request<HealthReport>(`/api/reports/${id}`),
   getExecutiveReport: (id: number) => request<ExecutiveReport>(`/api/reports/${id}/executive`),
   getLatestReport: (scope_type = "global", scope_id?: number | null) => {

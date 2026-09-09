@@ -3,8 +3,9 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import AlertEvent, AlertRule
+from app.models import AlertEvent, AlertRule, Instance
 from app.services.finding_dependencies import suppressed_alert_metrics
+from app.services.maintenance import is_in_maintenance
 
 CLUSTER_RULE_SPECS = [
     ("Patroni down", "patroni_down", ">", 0),
@@ -82,6 +83,16 @@ async def evaluate_alerts(session: AsyncSession, instance_id: int, metrics: dict
     # Grafik rapor tarafıyla AYNI yerden geliyor (services/finding_dependencies.py): alarm
     # tarafına ayrı bir liste yazmak, iki listenin zamanla ayrışması demekti.
     suppressed = suppressed_alert_metrics(metrics)
+
+    # BAKIM PENCERESİ (Faz 28 İŞ 3): pencere içinde alarm ÜRETİLMİYOR.
+    #
+    # Alternatif, alarmı üretip "bakımdaydı" diye işaretlemek olurdu; e-posta yine gider ve
+    # bakım gecelerinde nöbetçiyi uyandırmaya devam ederdi — istenen tam olarak bunun
+    # önlenmesi. Kesinti kaydı kaybolmuyor: erişilebilirlik bölümü onu "planlı" olarak
+    # ayrıca raporluyor.
+    instance = await session.get(Instance, instance_id)
+    if instance is not None and await is_in_maintenance(session, instance) is not None:
+        return
 
     for rule in rules:
         if rule.metric in suppressed:

@@ -1696,6 +1696,56 @@ class HealthReportScheduleOut(BaseModel):
     scope_mode_options: list[str]
 
 
+# --- Bakım pencereleri (Faz 28 İŞ 3) ---
+
+
+class MaintenanceWindowCreate(BaseModel):
+    """Yeni bakım penceresi.
+
+    `created_by` BURADA YOK: oturumdan yazılıyor. "Bu kesinti planlıydı" iddiasının
+    denetlenebilir olması bu alanın doğruluğuna bağlı ve istemcinin doldurduğu bir alan
+    denetlenebilir değildir.
+    """
+
+    scope_type: Literal["instance", "group", "application", "customer", "global"] = "instance"
+    scope_id: int | None = None
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    starts_at: datetime
+    ends_at: datetime
+    recurrence: Literal["none", "daily", "weekly", "monthly"] = "none"
+    recurrence_until: datetime | None = None
+    enabled: bool = True
+
+
+class MaintenanceWindowUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    recurrence: Literal["none", "daily", "weekly", "monthly"] | None = None
+    recurrence_until: datetime | None = None
+    enabled: bool | None = None
+
+
+class MaintenanceWindowOut(BaseModel):
+    id: int
+    scope_type: str
+    scope_id: int | None
+    title: str
+    description: str | None
+    starts_at: datetime
+    ends_at: datetime
+    recurrence: str
+    recurrence_until: datetime | None
+    enabled: bool
+    created_by: str
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class HealthReportScheduleUpdate(BaseModel):
     hour: int | None = Field(default=None, ge=0, le=23)
     enabled: bool | None = None

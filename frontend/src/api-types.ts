@@ -1003,6 +1003,65 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/maintenance-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Windows */
+        get: operations["list_windows_api_maintenance_windows_get"];
+        put?: never;
+        /** Create Window */
+        post: operations["create_window_api_maintenance_windows_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/maintenance-windows/upcoming": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Upcoming Occurrences
+         * @description Önümüzdeki N gün içindeki somut bakım örnekleri.
+         *
+         *     Tekrar KURALI saklandığı için "önümüzdeki bakımlar" ancak genişletilerek görülebiliyor;
+         *     kullanıcının takvimde göreceği şey bu.
+         */
+        get: operations["upcoming_occurrences_api_maintenance_windows_upcoming_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/maintenance-windows/{window_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Window */
+        delete: operations["delete_window_api_maintenance_windows__window_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Window */
+        patch: operations["update_window_api_maintenance_windows__window_id__patch"];
+        trace?: never;
+    };
     "/api/metrics/{instance_id}": {
         parameters: {
             query?: never;
@@ -3753,6 +3812,106 @@ export interface components {
             password: string;
             /** Username */
             username: string;
+        };
+        /**
+         * MaintenanceWindowCreate
+         * @description Yeni bakım penceresi.
+         *
+         *     `created_by` BURADA YOK: oturumdan yazılıyor. "Bu kesinti planlıydı" iddiasının
+         *     denetlenebilir olması bu alanın doğruluğuna bağlı ve istemcinin doldurduğu bir alan
+         *     denetlenebilir değildir.
+         */
+        MaintenanceWindowCreate: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /**
+             * Recurrence
+             * @default none
+             * @enum {string}
+             */
+            recurrence: "none" | "daily" | "weekly" | "monthly";
+            /** Recurrence Until */
+            recurrence_until?: string | null;
+            /** Scope Id */
+            scope_id?: number | null;
+            /**
+             * Scope Type
+             * @default instance
+             * @enum {string}
+             */
+            scope_type: "instance" | "group" | "application" | "customer" | "global";
+            /**
+             * Starts At
+             * Format: date-time
+             */
+            starts_at: string;
+            /** Title */
+            title: string;
+        };
+        /** MaintenanceWindowOut */
+        MaintenanceWindowOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Description */
+            description: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Ends At
+             * Format: date-time
+             */
+            ends_at: string;
+            /** Id */
+            id: number;
+            /** Recurrence */
+            recurrence: string;
+            /** Recurrence Until */
+            recurrence_until: string | null;
+            /** Scope Id */
+            scope_id: number | null;
+            /** Scope Type */
+            scope_type: string;
+            /**
+             * Starts At
+             * Format: date-time
+             */
+            starts_at: string;
+            /** Title */
+            title: string;
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /** MaintenanceWindowUpdate */
+        MaintenanceWindowUpdate: {
+            /** Description */
+            description?: string | null;
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Ends At */
+            ends_at?: string | null;
+            /** Recurrence */
+            recurrence?: ("none" | "daily" | "weekly" | "monthly") | null;
+            /** Recurrence Until */
+            recurrence_until?: string | null;
+            /** Starts At */
+            starts_at?: string | null;
+            /** Title */
+            title?: string | null;
         };
         /** MetricDefinitionOut */
         MetricDefinitionOut: {
@@ -7225,6 +7384,168 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectionTestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_windows_api_maintenance_windows_get: {
+        parameters: {
+            query?: {
+                scope_type?: string | null;
+                scope_id?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindowOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_window_api_maintenance_windows_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaintenanceWindowCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindowOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    upcoming_occurrences_api_maintenance_windows_upcoming_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_window_api_maintenance_windows__window_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                window_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_window_api_maintenance_windows__window_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                window_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MaintenanceWindowUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MaintenanceWindowOut"];
                 };
             };
             /** @description Validation Error */

@@ -191,17 +191,43 @@ def _section_data_blocks(key: str, data: dict[str, Any]) -> list[Block]:
     blocks: list[Block] = []
 
     if key == "availability" and data.get("instances"):
+        # Faz 28 İŞ 3: planlı/plansız ayrımı tabloda. Teknik raporun okuyucusu DBA ve onun
+        # ilk sorusu "bu kesinti bizim bakımımız mıydı" — cevabı ayrı sütun olmadan
+        # veremiyorduk.
         rows = [
             [
                 r.get("instance", "—"),
                 "—" if r.get("uptime_pct") is None else f"%{r['uptime_pct']}",
                 str(r.get("outage_count", 0)),
-                _fmt_duration(r.get("outage_seconds", 0)),
+                _fmt_duration(r.get("unplanned_outage_seconds", r.get("outage_seconds", 0))),
+                _fmt_duration(r.get("planned_outage_seconds", 0)),
                 _fmt_duration(r.get("longest_outage_seconds", 0)),
             ]
             for r in data["instances"]
         ]
-        blocks.append(table(["Veritabanı", "Erişilebilirlik", "Kesinti", "Toplam süre", "En uzun"], rows))
+        blocks.append(
+            table(
+                ["Veritabanı", "Erişilebilirlik", "Kesinti", "Plansız süre", "Planlı bakım", "En uzun"],
+                rows,
+            )
+        )
+        # Kesinti dökümü: ne zaman, ne kadar, planlı mı. İstenen "teknik raporda kesinti
+        # dökümü" bu.
+        breakdown: list[list[str]] = []
+        for row in data["instances"]:
+            for outage in (row.get("outages") or [])[:10]:
+                breakdown.append(
+                    [
+                        row.get("instance", "—"),
+                        str(outage.get("start", ""))[:16].replace("T", " "),
+                        _fmt_duration(outage.get("seconds", 0)),
+                        "Planlı" if outage.get("kind") == "planned" else "Plansız",
+                        "sürüyor" if outage.get("ongoing") else "kapandı",
+                    ]
+                )
+        if breakdown:
+            blocks.append(heading("Kesinti dökümü", 3))
+            blocks.append(table(["Veritabanı", "Başlangıç", "Süre", "Tür", "Durum"], breakdown))
         if data.get("method"):
             blocks.append(note(data["method"], "neutral"))
 

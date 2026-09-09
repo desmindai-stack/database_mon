@@ -6561,6 +6561,86 @@ alarm ve dashboard bastırması, uçtan uca rapor üretimi.
 Ayrıca `test_outage_that_is_still_ongoing_at_period_end_is_detected` sonda kalan
 boşluk hatasını kalıcı olarak kapatıyor. Tüm arka uç: **1431 geçti, 1 atlandı**.
 
+## Faz 28 — İŞ 3a: Bakım pencereleri ve planlı/plansız kesinti ayrımı
+
+Bakım penceresi olmadan erişilebilirlik sayıları **dürüst değildi**: planlı bir
+bakım için alınan 40 dakikalık kesinti, plansız bir arızayla aynı kefeye girip
+aylık %99.9 hedefini tek başına deliyordu. Müşteriye "bu ay SLA'yı
+tutturamadınız" demek, o kesintiyi müşterinin kendisi onayladıysa yanlış bir
+suçlama.
+
+İŞ 3 büyük olduğu için ikiye bölündü: **3a pencereler ve ayrım**, 3b SLA tanımı
+ve takibi.
+
+### Ters yön de aynı ölçüde önemli
+
+Her kesintiyi "planlıydı" diye etiketlemek sayıyı yalancı yapar. Buna karşı üç
+koruma var:
+
+- **Pencere önceden tanımlanmış olmalı.** Tekrar kuralı **geriye doğru
+  genişletilmiyor**; pencere tanımlanmadan önceki kesintileri geçmişe dönük
+  planlı saymak, sayıyı istediğin gibi düzeltebilmek demek olurdu.
+- **`created_by` oturumdan yazılıyor**, istemciden alınmıyor. "Bu kesinti
+  planlıydı" iddiasının denetlenebilir olması bu alanın doğruluğuna bağlı ve
+  istemcinin doldurduğu bir alan denetlenebilir değildir.
+- **Pencere süresi tekrar aralığından kısa olmalı.** 25 saatlik günlük bir
+  pencere üst üste biner ve fiilen "hep bakımdayız" demektir — her kesintiyi
+  planlı göstermenin en kolay yolu. Doğrulama bunu reddediyor.
+
+### Tekrar kuralı saklanıyor, örnekler değil
+
+Altı aylık haftalık bir bakımı 26 satır olarak açmak, biri değiştiğinde hepsini
+düzeltmek demekti. Kural saklanıyor ve sorgu anında genişletiliyor.
+
+**İleri sarma şart oldu:** kural iki yıl önce tanımlanmış olabilir ("her gün
+02:00"). Örnekleri baştan tek tek üretmek `MAX_OCCURRENCES` sınırına bugüne
+*varmadan* takılırdı — yani eski bir bakım penceresi sessizce hiç uygulanmazdı.
+Sınır artık ilerleme aracı değil, yalnızca bozuk veriye karşı güvenlik.
+
+**Aylık tekrarda kayma düzeltildi:** 31 Ocak'ta tanımlı bir bakım şubatta 29'a
+çekiliyor ama martta yine 31 olmalı. Zincirleme eklemek 29 Mart üretirdi ve
+bakım her ay bir gün öne kayardı; ay indeksi her zaman tanımdan sayılıyor.
+
+### Kesinti bütün olarak damgalanmıyor, örtüşme ölçülüyor
+
+Bakım 02:00-04:00 iken 03:30'da başlayıp 06:00'a kadar süren bir kesinti yarı
+planlı yarı plansızdır. Hepsini planlı saymak arızayı gizler, hepsini plansız
+saymak onaylanmış bakımı ceza olarak yazar.
+
+5 dakikalık tolerans var: bakım 02:00'de başlıyorsa servis 01:59'da durmuş
+olabilir. Tolerans bilinçli olarak dar — geniş bir tolerans, pencere dışındaki
+gerçek bir arızayı planlı göstermeye başlar.
+
+### Sonuçlar
+
+- **Erişilebilirlik yüzdesi plansız süreye göre.** Planlı süre kaybolmuyor,
+  ayrı alan olarak raporlanıyor.
+- **Tamamen planlı kesintiler bulguya dönüşmüyor**: onaylanmış bir bakımı her
+  raporda bulgu olarak göstermek, bulgu listesini takvim haline getirirdi.
+- **Bakım sırasında alarm üretilmiyor.** Alarmı üretip "bakımdaydı" diye
+  işaretlemek yetmezdi: e-posta yine gider ve bakım gecelerinde nöbetçiyi
+  uyandırmaya devam ederdi.
+- **Süregelen kesinti bakım penceresindeyse kritik değil, bilgi.** Susturulmuyor
+  — bakımın sürdüğünü bilmek de bilgi.
+- **Teknik rapora kesinti dökümü** eklendi: ne zaman, ne kadar, planlı mı,
+  sürüyor mu.
+
+### Arayüz
+
+Bakım pencereleri Yönetim sayfasına yeni bir sekme olarak eklendi (kendi üst
+seviye sayfası yerine: bu bir yapılandırma). "Ayın ilk pazarı" gibi kurallar
+bilinçli olarak yok — arayüz karmaşıklığı kazanılan esnekliğe değmiyor ve yanlış
+anlaşılan bir kural, olmayan bir bakım penceresi demek.
+
+### Testler
+
+`tests/test_maintenance_windows.py` — 20 test. Testler aynı SQLite dosyasını
+paylaştığı için global kapsamlı pencereler sızıyordu; her test artık temiz
+tabloyla başlıyor. Ayrıca yoğun örnekleme yardımcısı eklendi: seyrek örnekler
+kesinti tespitini eşiğin sınırına oturtup testin ne ölçtüğünü belirsizleştiriyordu.
+
+Tüm arka uç: **1457 geçti, 1 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

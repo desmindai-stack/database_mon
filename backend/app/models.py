@@ -1000,3 +1000,43 @@ class BackupProbe(Base):
     # Yöntem başına hata (yetki yok, araç kurulu değil, agent yok).
     errors: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class MaintenanceWindow(Base):
+    """Planlı bakım penceresi (Faz 28 İŞ 3).
+
+    NEDEN GEREKLİ: bakım penceresi olmadan erişilebilirlik sayıları dürüst değil. Planlı bir
+    bakım için alınan 40 dakikalık kesinti, plansız bir arızayla aynı kefeye giriyor ve aylık
+    %99.9 hedefini tek başına deliyor. Müşteriye "bu ay SLA'yı tutturamadınız" demek, o
+    kesintiyi müşterinin kendisi onayladıysa yanlış bir suçlama.
+
+    Ters yönü de aynı ölçüde önemli: her kesintiyi "planlıydı" diye etiketlemek sayıyı
+    yalancı yapar. Bu yüzden pencere ÖNCEDEN tanımlanmış olmak zorunda (geriye dönük
+    genişletme yapılmıyor, bkz. domain/maintenance.py) ve `created_by` kaydediliyor.
+
+    Kapsam bulgu kararlarıyla aynı hiyerarşi: instance / group / application / customer /
+    global. Aynı kavramın iki farklı kapsam modeli olması, ikisini de yanlış hatırlamaya yol
+    açardı.
+    """
+
+    __tablename__ = "maintenance_windows"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="instance", index=True)
+    # global kapsamda NULL.
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # none | daily | weekly | monthly — tekrar KURALI saklanıyor, tek tek örnekler değil.
+    # Altı aylık haftalık bir bakımı 26 satır olarak açmak, biri değiştiğinde hepsini
+    # düzeltmek demekti.
+    recurrence: Mapped[str] = mapped_column(String(16), nullable=False, default="none")
+    # Tekrar bu tarihten sonra üretilmiyor (boşsa süresiz).
+    recurrence_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Kim tanımladı: "kesinti planlıydı" iddiasının denetlenebilir olması için zorunlu.
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

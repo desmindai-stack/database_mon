@@ -33,6 +33,7 @@ from app.models import (
     SlowQuerySample,
 )
 from app.domain.engines import DatabaseEngine
+from app.domain.maintenance import OUTAGE_KIND_LABELS, OutageKind
 from app.services.backup_health import assess_instance
 from app.services.collection import effective_collect_interval
 from app.services.advice import Advice, AdviceStep
@@ -47,6 +48,7 @@ from app.services.finding_status import (
 )
 from app.config import settings
 from app.services.blocking_history import recent_episodes
+from app.services.maintenance import annotate_outages, occurrences_for_instance
 from app.services.health_report import (
     FindingDraft,
     ReportContext,
@@ -286,6 +288,13 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
 
     for instance in ctx.instances:
         outages = await _outages_for_instance(ctx, instance)
+        # PLANLI/PLANSIZ AYRIMI (Faz 28 İŞ 3). Bakım penceresi olmadan erişilebilirlik
+        # sayıları dürüst değil: onaylanmış bir bakım, plansız bir arızayla aynı kefeye
+        # girip aylık hedefi tek başına deliyordu.
+        occurrences = await occurrences_for_instance(
+            ctx.session, instance, ctx.period_start, ctx.period_end
+        )
+        outages = annotate_outages(outages, occurrences)
         first_sample = (
             await ctx.session.execute(
                 select(MetricSample.collected_at)
@@ -341,12 +350,17 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
             continue
 
         total_down = sum(o["seconds"] for o in outages)
+        planned_down = sum(o.get("planned_seconds", 0.0) for o in outages)
+        unplanned_down = max(total_down - planned_down, 0.0)
         # Dönemin tamamı için değil, İZLENEBİLDİĞİ süre için yüzde hesaplanıyor: instance
         # dönemin ortasında eklendiyse ondan önceki zamanı "kesinti" saymak yanlış olurdu.
         observed_seconds = max(
             (ctx.period_end - max(as_utc(first_sample), ctx.period_start)).total_seconds(), 1.0
         )
-        uptime_pct = max(0.0, min(100.0, (1 - total_down / observed_seconds) * 100))
+        # ERİŞİLEBİLİRLİK YÜZDESİ PLANSIZ SÜREYE GÖRE. Planlı bakımı kesinti saymak,
+        # müşteriyi kendi onayladığı bir çalışma yüzünden cezalandırmak olurdu. Planlı süre
+        # kaybolmuyor: ayrı alan olarak raporlanıyor ve teknik dökümde görünüyor.
+        uptime_pct = max(0.0, min(100.0, (1 - unplanned_down / observed_seconds) * 100))
         longest = max((o["seconds"] for o in outages), default=0.0)
 
         per_instance.append(
@@ -356,6 +370,11 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
                 "uptime_pct": round(uptime_pct, 3),
                 "outage_count": len(outages),
                 "outage_seconds": round(total_down, 1),
+                "planned_outage_seconds": round(planned_down, 1),
+                "unplanned_outage_seconds": round(unplanned_down, 1),
+                "planned_outage_count": sum(
+                    1 for o in outages if o.get("kind") == str(OutageKind.PLANNED)
+                ),
                 "longest_outage_seconds": round(longest, 1),
                 "observed_seconds": round(observed_seconds, 1),
                 "outages": outages[:20],
@@ -364,6 +383,10 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
         )
 
         ongoing = next((o for o in outages if o.get("ongoing")), None)
+        # Bakım penceresi içindeki süregelen kesinti bir arıza DEĞİL: beklenen bir durum.
+        # Bulguyu tamamen susturmuyoruz — bakımın hâlâ sürdüğünü bilmek de bir bilgi — ama
+        # kritik olarak göstermek gece nöbetçisini boşuna ayağa kaldırırdı.
+        ongoing_planned = bool(ongoing and ongoing.get("kind") == str(OutageKind.PLANNED))
         if ongoing is not None:
             # KÖK SEBEP BULGUSU (Faz 28 İŞ 2): dönem sonunda toplama hâlâ durmuş.
             #
@@ -374,12 +397,22 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
             findings.append(
                 FindingDraft(
                     section="availability",
-                    severity="critical",
-                    title=f"{instance.name}: veri toplama durmuş, sürüyor",
+                    severity="info" if ongoing_planned else "critical",
+                    title=(
+                        f"{instance.name}: bakım penceresinde, veri toplanmıyor"
+                        if ongoing_planned
+                        else f"{instance.name}: veri toplama durmuş, sürüyor"
+                    ),
                     detail=(
                         f"{instance.name} için son ölçüm {_fmt_duration(ongoing['seconds'])} önce "
                         "alındı ve dönem sonunda hâlâ veri gelmiyordu. Bu veritabanı hakkındaki "
                         "diğer analizler canlı veriye değil, saklanmış eski fotoğraflara dayanır."
+                        + (
+                            " Kesinti tanımlı bir bakım penceresine denk geliyor; beklenen bir "
+                            "durum olarak işaretlendi."
+                            if ongoing_planned
+                            else ""
+                        )
                     ),
                     facts=[
                         fact("Son ölçümden bu yana", _fmt_duration(ongoing["seconds"]), "bad"),
@@ -449,7 +482,14 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
         # Süregelen kesinti ayrı bulguya çıktığı için buradaki "dönem içinde N kesinti"
         # bulgusu yalnızca KAPANMIŞ kesintileri anlatıyor; ikisini aynı bulguda toplamak
         # "geçmişte oldu" ile "şu anda sürüyor"u aynı cümleye sıkıştırırdı.
-        closed = [o for o in outages if not o.get("ongoing")]
+        # Tamamen planlı kesintiler bulguya DÖNÜŞMÜYOR: onaylanmış bir bakımı her raporda
+        # bulgu olarak göstermek, bulgu listesini takvim haline getirirdi. Sayısı ve süresi
+        # bölüm verisinde ve teknik dökümde duruyor.
+        closed = [
+            o
+            for o in outages
+            if not o.get("ongoing") and o.get("kind") != str(OutageKind.PLANNED)
+        ]
         if closed:
             worst = max(closed, key=lambda o: o["seconds"])
             closed_total = sum(o["seconds"] for o in closed)
@@ -527,6 +567,8 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
     measured = [p for p in per_instance if p["uptime_pct"] is not None]
     overall_uptime = round(sum(p["uptime_pct"] for p in measured) / len(measured), 3) if measured else None
     total_outages = sum(p["outage_count"] for p in per_instance)
+    planned_outages = sum(p.get("planned_outage_count", 0) for p in per_instance)
+    unplanned_outages = total_outages - planned_outages
 
     if not measured:
         status = "unknown"
@@ -534,11 +576,21 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
     elif total_outages == 0:
         status = "ok"
         summary = f"{len(measured)} veritabanının tamamından kesintisiz veri toplandı."
+    elif unplanned_outages == 0:
+        # Yalnızca planlı bakım: durum "sorunsuz" ama sessiz değil — bakımın yapıldığı
+        # söyleniyor, çünkü müşteri sayının neden %100 olmadığını sorabilir.
+        status = "ok"
+        summary = (
+            f"{planned_outages} planlı bakım kesintisi dışında kesinti yok; "
+            f"erişilebilirlik %{overall_uptime}."
+        )
     else:
         worst_uptime = min(p["uptime_pct"] for p in measured)
         status = "critical" if worst_uptime < 99.0 else "warning"
         summary = (
-            f"{total_outages} kesinti dönemi tespit edildi; ortalama erişilebilirlik %{overall_uptime}."
+            f"{unplanned_outages} plansız kesinti tespit edildi"
+            + (f" ({planned_outages} planlı bakım hariç)" if planned_outages else "")
+            + f"; ortalama erişilebilirlik %{overall_uptime}."
         )
 
     return SectionResult(
@@ -550,11 +602,16 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
         data={
             "overall_uptime_pct": overall_uptime,
             "total_outages": total_outages,
+            "planned_outages": planned_outages,
+            "unplanned_outages": unplanned_outages,
+            "outage_kind_labels": dict(OUTAGE_KIND_LABELS),
             "instances": per_instance,
             "no_data_instances": no_data,
             "method": (
                 "Erişilebilirlik, toplanan metrik örnekleri arasındaki boşluklardan türetilir "
-                f"(toplama aralığının {OUTAGE_GAP_MULTIPLIER} katından uzun boşluk = kesinti)."
+                f"(toplama aralığının {OUTAGE_GAP_MULTIPLIER} katından uzun boşluk = kesinti). "
+                "Tanımlı bakım penceresine denk gelen süre PLANLI sayılır ve yüzdeye "
+                "girmez; planlı süre ayrıca raporlanır."
             ),
         },
         unknown_reason=None if measured else "Dönem içinde hiç metrik örneği yok.",

@@ -11,10 +11,11 @@ import {
 import { formatTime } from "../api";
 import { useAuth } from "../auth";
 import { NotFoundState, TableState } from "../components/PageState";
+import MaintenanceWindowsPanel from "../components/MaintenanceWindowsPanel";
 import { useUrlTab } from "../hooks/useUrlState";
 
-type Tab = "retention" | "users" | "settings";
-const TABS: readonly Tab[] = ["retention", "users", "settings"];
+type Tab = "retention" | "users" | "settings" | "maintenance";
+const TABS: readonly Tab[] = ["retention", "users", "settings", "maintenance"];
 
 const RETENTION_LABELS: Record<number, string> = {
   7: "7 gün",
@@ -232,7 +233,14 @@ export default function AdminPage() {
         <button className={`tab-btn${tab === "settings" ? " active" : ""}`} onClick={() => setTab("settings")}>
           Genel ayarlar
         </button>
+        <button className={`tab-btn${tab === "maintenance" ? " active" : ""}`} onClick={() => setTab("maintenance")}>
+          Bakım pencereleri
+        </button>
       </div>
+
+      {/* Faz 28 İŞ 3: bakım pencereleri bir yapılandırma; kendi üst seviye sayfası yerine
+          Yönetim altında duruyor. */}
+      {tab === "maintenance" && <MaintenanceWindowsPanel canWrite={currentUser?.role === "admin"} />}
 
       {tab === "retention" && (
         <div className="card" style={{ marginTop: "1rem", maxWidth: 520 }}>
