@@ -95,6 +95,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 35 | `20260911090000_captured_plans.sql` | **YENİ** — captured_plans tablosu (auto_explain ile yakalanan gerçek çalıştırma planları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 | 36 | `20260912090000_blocking_history.sql` | **YENİ** — blocking_episodes + deadlock_events (bloklama geçmişi ve deadlock kayıtları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 | 37 | `20260913090000_metric_sources.sql` | **YENİ** — instances.metric_sources + server_version_num (metrik kaynağı ve sürüm numarası). CONCURRENTLY YOK |
+| 38 | `20260914090000_backup_monitoring.sql` | **YENİ** — backup_records + backup_probes (yedek izleme). CONCURRENTLY YOK |
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 
@@ -238,6 +239,8 @@ karşılık gelir (pydantic-settings, case-insensitive).
 | `WAIT_SAMPLE_INTERVAL_SECONDS` | Opsiyonel | `1` | Örnekleme aralığı. Artırmak yükü düşürür ama kısa süreli kilit/IO fırtınalarını kaçırma riskini artırır — 5 sn'nin üstü önerilmez. Yalnızca worker sürecinde etkili. |
 | `PLAN_CAPTURE_ENABLED` | Opsiyonel | `true` | auto_explain planlarının host-agent log'undan toplanması. Hedef veritabanına bağlanmaz, yalnızca agent'a HTTP isteği atar. |
 | `PLAN_CAPTURE_INTERVAL_SECONDS` | Opsiyonel | `300` | Log çekim aralığı (en az 60). Sık çekmenin kazancı yok: her çekim log'un son satırlarını yeniden okuyor. |
+| `BACKUP_MONITORING_ENABLED` | Opsiyonel | `true` | Yedek izleme sondası. Kapatmak yedek yaşı/başarısızlık bulgularını da kapatır. |
+| `BACKUP_CHECK_INTERVAL_SECONDS` | Opsiyonel | `900` | Yedek sondası aralığı (en az 60). Yedekler saatler mertebesinde bir olay; sık sorgulamanın kazancı yok. |
 | `LOG_LEVEL` | Opsiyonel | `INFO` | Log seviyesi (`DEBUG`/`INFO`/`WARNING`/`ERROR`). `INFO` ve üstünde APScheduler'ın tur başına iki satırı susturuluyor — bekleme örnekleyicisi saniyede bir çalıştığı için bu tek başına günde ~172 bin satır gürültü demekti. `DEBUG`'da susturma uygulanmıyor. Tanınmayan bir değer `INFO`'ya düşer ve uyarı yazar (yanlış yazım yüzünden log'un tamamen susmaması için). |
 | `DASHBOARD_REFRESH_INTERVAL_SECONDS` | Opsiyonel | `60` | Dashboard/cluster health yenileme aralığı. |
 | `API_HOST` / `API_PORT` | Kullanılmıyor (Railway) | `0.0.0.0` / `8000` | `railway.toml`'daki startCommand Railway'in kendi `$PORT`'unu kullanıyor (`--port ${PORT:-8000}`) — bu iki değişken sadece Docker-dışı/yerel çalıştırmalar için, Railway'de ayarlamaya gerek yok. |

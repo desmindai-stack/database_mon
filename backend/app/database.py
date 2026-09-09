@@ -266,6 +266,7 @@ _COMPOSITE_INDEXES = (
     ("ix_captured_plans_instance_captured", "captured_plans", "instance_id, captured_at"),
     ("ix_blocking_episodes_instance_started", "blocking_episodes", "instance_id, started_at"),
     ("ix_deadlock_events_instance_detected", "deadlock_events", "instance_id, detected_at"),
+    ("ix_backup_records_instance_started", "backup_records", "instance_id, started_at"),
 )
 
 

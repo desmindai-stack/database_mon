@@ -905,3 +905,77 @@ class DeadlockEvent(Base):
     participants: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     raw_detail: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BackupRecord(Base):
+    """Tek bir yedek olayı (Faz 28 İŞ 1).
+
+    Kaynak motora göre değişiyor: SQL Server'da `msdb.dbo.backupset` satırları, PostgreSQL'de
+    pgBackRest/Barman/WAL-G çıktısı ya da devam eden `pg_basebackup`. Hepsi ortak alanlara
+    indirgeniyor ki eşik ve anomali mantığı tek yerde yazılsın.
+
+    `external_id` tekrar yazmayı engelliyor: aynı yedek her sondada yeniden görülüyor
+    (msdb geçmişi kalıcı, pgBackRest listesi kalıcı). Kaynağın kendi kimliği (backupset
+    `media_set_id`, pgBackRest etiketi) anahtar olarak kullanılıyor.
+    """
+
+    __tablename__ = "backup_records"
+    __table_args__ = (
+        Index("ix_backup_records_instance_started", "instance_id", "started_at"),
+        UniqueConstraint("instance_id", "source", "external_id", name="uq_backup_record"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    # full | differential | log | wal_archive | base_backup
+    backup_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    # SQL Server veritabanı başına yedek alıyor; PostgreSQL küme (cluster) geneli. Boşsa
+    # küme geneli demek — bu ayrım rapora da yansıyor.
+    database_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Devam eden yedekte NULL. "Bitmedi" durumunu ayrı bir bayrakla değil bu alanla temsil
+    # etmek, iki alanın çelişmesini imkânsız kılıyor (BlockingEpisode ile aynı kalıp).
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    size_bytes: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # success | failed | running
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="success")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BackupProbe(Base):
+    """Bir instance için son yedek sondasının SONUCU (Faz 28 İŞ 1).
+
+    NEDEN AYRI BİR TABLO: "yedek kaydı yok" ile "yedek arayamadık" farklı şeyler ve ikisini
+    ayırt edebilmek için sondanın KENDİSİNİ kaydetmek gerekiyor. Bu tablo hangi yöntemlerin
+    denendiğini, hangilerinin cevap verdiğini ve neyin engellediğini tutuyor.
+
+    Yedek alındığını VARSAYMAK yasak: bulunamadığında kullanıcıya "yedek yok" değil,
+    "şu yöntemlere baktık, bulamadık, şöyle yapılandırılır" deniyor.
+
+    Instance başına TEK satır (üzerine yazılıyor): bu bir durum, olay değil.
+    """
+
+    __tablename__ = "backup_probes"
+    __table_args__ = (UniqueConstraint("instance_id", name="uq_backup_probe_instance"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    probed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # Denenen ve cevap veren yöntemler — kullanıcıya "nereye baktık" olarak gösteriliyor.
+    methods_checked: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    methods_found: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # pg_stat_archiver anlık durumu: archived_count, failed_count, last_archived_time,
+    # last_failed_time. Arşivleme DURMUŞSA bu kritik ve sayaçlardan değil zaman
+    # damgalarından anlaşılıyor.
+    archiver: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Replikasyon slotları: kullanılmayan bir slot WAL biriktirip diski doldurur.
+    slots: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # Yöntem başına hata (yetki yok, araç kurulu değil, agent yok).
+    errors: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

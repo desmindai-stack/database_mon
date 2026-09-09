@@ -6265,6 +6265,105 @@ dosyaya yönlendirmek, bilgiyi taşımaktan beter: okuyucu arar ve bulamaz).
 Mimari bölümü geri konduğunda iki test düşüyor — korumanın çalıştığı
 doğrulandı.
 
+## Faz 28 — İŞ 1a: Yedek izleme toplama altyapısı
+
+dbace'te yedek izleme **hiç yoktu**. Bir DBA aracında bu temel direklerden
+biri; bankada bir olay sonrası ilk sorulan soru "son yedek ne zaman alındı" ve
+dbace bu soruya cevap veremiyordu.
+
+İŞ 1 büyük olduğu için ikiye bölündü: **1a toplama**, 1b değerlendirme ve
+raporlama.
+
+### Yön veren tek kural
+
+> **YEDEK ALINDIĞI VARSAYILMAZ.**
+
+Kayıt bulunamadığında "yedek yok" denmiyor. `backup_probes` tablosu **hangi
+yöntemlere bakıldığını, nelerin bulunduğunu ve neyin engellediğini** tutuyor,
+çünkü "yedek yok" ile "dbace bulamadı" çok farklı iki şey: birincisini
+ikincisi gibi sunmak gerçekten yedeği olan kurumu paniğe, ikincisini birincisi
+gibi sunmak yedeği olmayanı sahte güvene sürükler. İkinci hata daha pahalı.
+
+### Kaynaklar motora göre bambaşka
+
+| Motor | Kaynak | Nereden |
+|---|---|---|
+| SQL Server | `msdb.dbo.backupset` (90 gün, D/I/L) | Veritabanının kendisi |
+| PostgreSQL | `pg_stat_archiver`, replikasyon slotları, devam eden taban yedek | Veritabanının kendisi |
+| PostgreSQL | pgBackRest / Barman / WAL-G | Host-agent üzerinden araç çıktısı |
+
+PostgreSQL'in `msdb` gibi merkezi bir yedek geçmişi yok; gerçek yedekler
+neredeyse her zaman harici bir araçla alınıyor ve durumları yalnızca o aracın
+komut çıktısında. Bu yüzden host-agent'a `/v1/backup` ucu eklendi.
+
+### Agent'ta komut çalıştırma DEĞİL, sabit izin listesi
+
+`BACKUP_TOOLS` üç komutu ad→argüman listesi olarak sabitliyor. Genel bir
+"komut çalıştır" ucu çok daha esnek olurdu ve **agent'ı ele geçiren herkese
+müşteri sunucusunu teslim ederdi**. Agent müşteri sunucusunda root'a yakın
+yetkiyle çalışıyor; esneklik burada kabul edilebilir bir bedel değil.
+
+Aracın kurulu olmaması (çıkış kodu 127) **hata değil**: çoğu kurulumda üç
+araçtan yalnızca biri var, diğer ikisinin "bulunamadı" demesi normal. Hata
+diye raporlamak kullanıcıyı olmayan bir sorunu aramaya yollardı.
+
+**Ayrıştırma agent'ta değil dbace tarafında** (`services/backup_tools.py`):
+agent müşteri sunucusunda ve güncellenmesi zor. Araç çıktı biçimini
+değiştirdiğinde yalnızca dbace'i güncellemek yetsin diye ham metin taşınıyor.
+
+Ayrıştırılamayan çıktı için **boş liste** dönüyor, tahmin yürütülmüyor —
+yanlış ayrıştırılmış bir tarih "yedek 40 gün eski" gibi sahte bir kritik bulgu
+üretirdi ve bu, hiç göstermemekten kötü.
+
+### Süre anomalisinde statik taban ŞART
+
+`DURATION_ANOMALY_MULTIPLIER = 2.0` ile birlikte
+`DURATION_ANOMALY_MIN_SECONDS = 900` var. Yalnızca son 5 yedeğin ortalamasına
+bakmak, süreler küçükken sürekli yanlış alarm üretir: 4 saniyelik yedeklerin
+8 saniye sürmesi oran olarak %100 sapma ama pratikte hiçbir şey değil.
+
+### Devam eden yedek sonsuza kadar "devam ediyor" kalmıyor
+
+`store_backup_records` var olan kaydı **güncelliyor**. Yalnızca "yoksa ekle"
+yapsaydık, sonda sırasında yakalanan çalışan bir yedek bittikten sonra da
+`running` görünürdü ve süre anomalisi mantığı çöpe giderdi.
+
+### Saklama politikası izlemenin kendisini bozuyordu
+
+Genel saklama penceresi 7 güne kadar inebiliyor. **Haftalık tam yedek alan bir
+kurumda bu, en son tam yedeği silmek demek** — ve dbace o zaman "hiç yedek
+bulunamadı" derdi. Yani saklama politikası, izlemeyi bozardı.
+
+`BACKUP_MIN_RETENTION_DAYS = 60` ile yedek kayıtlarına ayrı ve daha uzun
+pencere verildi; `test_backup_retention_is_longer_than_the_general_window` bunu
+koruyor.
+
+### Replikaya özel tuzak
+
+Slot sorgusundaki `pg_current_wal_lsn()`, **replikada hata veriyor**. Sorgu
+`CASE WHEN pg_is_in_recovery() THEN NULL` ile korundu — korunmasaydı Patroni
+replikalarında yedek sondasının tamamı düşerdi.
+
+### Ne yapılmadı ve neden (SORULAR.md'de)
+
+- **msdb saat dilimi taşımıyor**: naive değerler UTC varsayılıyor. Tam yedek
+  eşiği gün mertebesinde olduğu için önemsiz, ama **log eşiği 1 saat** — orada
+  yanlış kritik üretebilir. Varsayım tek fonksiyonda (`_parse_dt`) duruyor.
+- **msdb başarısız yedeği kaydetmiyor**: satır yalnızca yedek başarıyla
+  bittiğinde yazılıyor. Uydurma bir `failed` kaydı üretmek yanlış olurdu; SQL
+  Server'da başarısızlık ancak Agent iş geçmişinden görülebilir (ayrı kapsam).
+- **Barman JSON vermiyor**: metin deseniyle okunuyor ve kırılgan.
+
+### Testler
+
+`tests/test_backup_collection.py` — 28 test: eşikler ve instance başına
+ayarlar, ters çevrilmiş eşiğin düzeltilmesi, üç araç ayrıştırıcısı, tekrar
+yazmama, devam eden → bitmiş güncellemesi, sonda kaydı, MongoDB'nin
+desteklenmediğinin **sessizce atlanmayıp kaydedilmesi**, collector hatasının
+yutulmayıp yazılması, saklama penceresi koruması.
+
+Tüm arka uç: **1358 geçti, 1 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

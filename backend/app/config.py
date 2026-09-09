@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # tur başına iki satırı) INFO ve üstünde susturuluyor; DEBUG'da susturma uygulanmıyor
     # çünkü DEBUG'a çeken kişi gürültüyü de istiyordur.
     log_level: str = "INFO"
+    # Yedek izleme (Faz 28 İŞ 1). Yedek kayıtları sık değişmiyor — en agresif politikada
+    # bile saatte bir log yedeği alınıyor — o yüzden 15 dakika hem gecikmeyi fark etmeye
+    # yeter hem msdb'ye gereksiz yük bindirmez.
+    backup_monitoring_enabled: bool = True
+    backup_check_interval_seconds: int = 900
     plan_capture_enabled: bool = True
     plan_capture_interval_seconds: int = 300
     db_statement_timeout_seconds: int = 120

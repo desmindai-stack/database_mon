@@ -17,6 +17,7 @@ from app.services.rollup import run_daily_rollup
 from app.services.health_report import run_scheduled_reports
 from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
 from app.services.prediction_accuracy import evaluate_due_outcomes
+from app.services.backup_collection import backup_collection_tick
 from app.services.plan_capture import capture_plans_tick
 from app.services.wait_sampling import sampling_tick, shutdown_sampling
 
@@ -31,6 +32,7 @@ PREDICTION_ACCURACY_JOB_ID = "prediction_accuracy"
 HEALTH_REPORT_JOB_ID = "daily_health_report"
 WAIT_SAMPLING_JOB_ID = "wait_event_sampling"
 PLAN_CAPTURE_JOB_ID = "auto_explain_plan_capture"
+BACKUP_JOB_ID = "backup_monitoring"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -149,6 +151,23 @@ async def plan_capture_tick() -> None:
         logger.exception("Plan yakalama turu başarısız")
 
 
+async def backup_tick() -> None:
+    """Faz 28 İŞ 1: yedek durumu sondası.
+
+    Hedef veritabanına bağlanıyor (msdb / pg_stat_archiver) ve varsa host-agent'tan yedek
+    aracı çıktısı alıyor. Seyrek çalışıyor: yedekler saatler mertebesinde bir olay.
+    """
+    try:
+        totals = await backup_collection_tick()
+        if totals.get("records"):
+            logger.info(
+                "Yedek sondası: %s instance, %s yeni/güncellenen kayıt",
+                totals["instances"], totals["records"],
+            )
+    except Exception:
+        logger.exception("Yedek sondası turu başarısız")
+
+
 async def start_scheduler() -> None:
     if scheduler.running:
         return
@@ -253,6 +272,18 @@ async def start_scheduler() -> None:
             "interval",
             seconds=max(60, settings.plan_capture_interval_seconds),
             id=PLAN_CAPTURE_JOB_ID,
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            next_run_time=datetime.now(),
+        )
+
+    if settings.backup_monitoring_enabled:
+        scheduler.add_job(
+            backup_tick,
+            "interval",
+            seconds=max(60, settings.backup_check_interval_seconds),
+            id=BACKUP_JOB_ID,
             replace_existing=True,
             max_instances=1,
             coalesce=True,

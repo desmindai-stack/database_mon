@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import SessionLocal
 from app.models import (
     ActiveSessionMinute,
+    BackupRecord,
     BlockingEpisode,
     CapturedPlan,
     DeadlockEvent,
@@ -30,6 +31,10 @@ RETENTION_LAST_DELETED_KEY = "retention_last_deleted_count"
 # Saklama süresi seçenekleri (gün): 1 hafta, 2 hafta, 1 ay (varsayılan), 2 ay, 3 ay.
 ALLOWED_RETENTION_DAYS: list[int] = [7, 14, 30, 60, 90]
 DEFAULT_RETENTION_DAYS = 30
+
+#: Yedek kayıtları en az bu kadar saklanıyor — genel pencere daha kısa olsa bile.
+#: Gerekçe yukarıda: kısa pencere en son yedeği silip izlemeyi bozuyor.
+BACKUP_MIN_RETENTION_DAYS = 60
 
 
 async def get_retention_days(session: AsyncSession) -> int:
@@ -75,6 +80,13 @@ async def run_retention_cleanup() -> int:
     async with SessionLocal() as session:
         days = await get_retention_days(session)
         cutoff = datetime.now(UTC) - timedelta(days=days)
+        # YEDEK KAYITLARI İÇİN AYRI VE DAHA UZUN PENCERE (Faz 28 İŞ 1).
+        #
+        # Genel saklama penceresi 7 güne kadar inebiliyor. Haftalık tam yedek alan bir
+        # kurumda bu, EN SON tam yedeği silmek demek — ve dbace o zaman "hiç yedek bulunamadı"
+        # der. Yani saklama politikası, izlemenin kendisini bozar. Yedek yaşı eşiklerinin en
+        # gevşeği 14 gün olduğu için taban ondan geniş tutuluyor.
+        backup_cutoff = datetime.now(UTC) - timedelta(days=max(days, BACKUP_MIN_RETENTION_DAYS))
         total_deleted = 0
         for model, ts_column in (
             (MetricSample, MetricSample.collected_at),
@@ -98,8 +110,14 @@ async def run_retention_cleanup() -> int:
             # tablo oluyor (slow_query_samples dersi).
             (BlockingEpisode, BlockingEpisode.started_at),
             (DeadlockEvent, DeadlockEvent.detected_at),
+            # Faz 28 İŞ 1: yedek kayıtları. DİKKAT — saklama penceresi yedek yaşı eşiğinden
+            # KISA olmamalı: haftalık tam yedek alan bir kurumda 7 günlük saklama, en son
+            # yedeği silip "hiç yedek yok" sonucunu üretirdi. `run_retention_cleanup` bunu
+            # ayrıca koruyor (aşağıya bakın).
+            (BackupRecord, BackupRecord.started_at),
         ):
-            result = await session.execute(delete(model).where(ts_column < cutoff))
+            window = backup_cutoff if model is BackupRecord else cutoff
+            result = await session.execute(delete(model).where(ts_column < window))
             total_deleted += result.rowcount or 0
 
         now_iso = datetime.now(UTC).isoformat()

@@ -2205,3 +2205,54 @@ Bu turda EKLENMEDİ. Sebep kapsam: yeni bir metrik eklemek metrik kataloğunu,
 saklama şemasını ve arayüz gösterimini birlikte değiştirmeyi gerektiriyor; İŞ 5
 sürüm UYUMU işiydi, yeni özellik değil. Yetenek matrisi bu metrikleri eklemeye
 hazır — `MetricSource(_STAT_ALL_TABLES, PG_18)` satırı yeterli.
+
+## Faz 28 İŞ 1: msdb yedek zamanları saat dilimi bilgisi taşımıyor
+
+`msdb.dbo.backupset` zaman damgaları sunucunun **yerel saatinde** ve saat dilimi
+bilgisi yok. dbace bunları naive kabul edip **UTC varsayıyor**
+(`services/backup_collection.py::_parse_dt`).
+
+Sunucu UTC'de değilse yedek YAŞI saat farkı kadar kayar. Pratik etkisi eşiğe
+göre değişiyor: tam yedek eşiği gün mertebesinde olduğu için 3 saatlik bir kayma
+önemsiz, ama **log yedeği eşiği 1 saat** — orada aynı kayma yanlış kritik bulgu
+üretebilir.
+
+Dürüst çözüm sunucunun saat dilimini de okuyup dönüştürmek olurdu
+(`SELECT CURRENT_TIMEZONE()` SQL Server 2019+; öncesinde
+`sys.time_zone_info` + kayıt defteri). Bu turda yapılmadı çünkü İŞ 1 toplama
+altyapısıydı; varsayım tek bir fonksiyonda ve yorumda açıkça duruyor.
+
+**Kapanması için gereken:** `collect_backups` sorgusuna sunucu saat dilimini
+ekleyip `_parse_dt`'ye taşımak, 2019 öncesi için UTC farkını
+`sys.time_zone_info`'dan çözmek.
+
+## Faz 28 İŞ 1: msdb başarısız yedekleri kaydetmiyor
+
+`msdb.dbo.backupset` satırı yalnızca yedek **başarıyla bittiğinde** yazılır.
+Başarısız bir yedek orada hiç iz bırakmaz — dolayısıyla dbace SQL Server
+tarafında "başarısız yedek" tespit edemiyor; yalnızca "yedek yaşı büyüdü"
+sinyalini görebiliyor.
+
+Uydurma bir `failed` kaydı üretmek yanlış olurdu, o yüzden `_backup_record`
+yalnızca `success` ve `running` üretiyor.
+
+Gerçek başarısızlık kaynağı **SQL Server Agent iş geçmişi**
+(`msdb.dbo.sysjobhistory` + `sysjobs`) ya da yedek aracının kendi log'u. Bu, iş
+zamanlayıcı entegrasyonu demek ve ayrı bir kapsam.
+
+pgBackRest ve Barman tarafında durum farklı: ikisi de başarısız yedeği listede
+işaretliyor ve dbace onu `failed` olarak kaydediyor.
+
+## Faz 28 İŞ 1: Barman çıktısı metin ayrıştırmayla okunuyor
+
+pgBackRest yerel JSON veriyor (`--output=json`), WAL-G sürüme göre JSON
+verebiliyor; **Barman'ın JSON çıktısı yok**. `barman list-backup` metni desenle
+ayrıştırılıyor ve bu kırılgan: Barman çıktı biçimini değiştirirse desen tutmaz.
+
+Bu durumda ayrıştırıcı **boş dönüyor**, tahmin yürütmüyor. Gerekçe: yanlış
+ayrıştırılmış bir tarih "yedek 40 gün eski" gibi sahte bir kritik bulgu üretir
+ve bu, hiç göstermemekten kötüdür.
+
+**Alternatif:** `barman diagnose` JSON veriyor ama tüm sunucu yapılandırmasını
+döken ağır bir komut. Barman kullanan bir kurulum ortaya çıkarsa oraya geçmek
+değerlendirilebilir.

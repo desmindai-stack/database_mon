@@ -124,3 +124,57 @@ async def logs(
         "lines": log_lines,
         "error": err if code != 0 and not log_lines else None,
     }
+
+
+# --- Yedek aracı durumu (Faz 28 İŞ 1) ------------------------------------------------------
+#
+# GÜVENLİK SINIRI: bu uç KEYFİ KOMUT ÇALIŞTIRMAZ. Yalnızca aşağıdaki sabit listedeki
+# komutlar çalıştırılabiliyor ve istemci yalnızca ARACIN ADINI seçebiliyor. Genel bir
+# "komut çalıştır" ucu, agent'ı ele geçiren birine sunucunun tamamını verirdi; izleme
+# aracının böyle bir kapı açması kabul edilemez.
+#
+# Komutlar salt-okunur durum sorgularıdır: hiçbiri yedek almıyor, silmiyor ya da
+# yapılandırma değiştirmiyor.
+BACKUP_TOOLS: dict[str, list[str]] = {
+    # pgBackRest yerel JSON çıktısı veriyor — ayrıştırma güvenilir.
+    "pgbackrest": ["pgbackrest", "info", "--output=json"],
+    # WAL-G'nin JSON desteği sürüme bağlı; JSON yoksa metin çıktısı da ayrıştırılıyor.
+    "wal_g": ["wal-g", "backup-list", "--json"],
+    # Barman'ın JSON çıktısı yok; metin listesi ayrıştırılıyor.
+    "barman": ["barman", "list-backup", "all"],
+}
+
+#: Yedek araçları büyük depolarda yavaş cevap verebiliyor (pgBackRest uzak depoyu
+#: sorguluyor). Log tail'in 8 saniyesi burada yetersiz kalır, ama sınırsız da bırakılamaz:
+#: asılı kalan bir istek agent'ın çalışan sürecini tutar.
+BACKUP_COMMAND_TIMEOUT = 25.0
+
+
+@app.get("/v1/backup")
+async def backup_status(
+    tool: str = Query(default="pgbackrest"),
+    x_agent_token: str | None = Header(default=None),
+) -> dict[str, Any]:
+    """Yedek aracının durum çıktısı — HAM olarak döner, ayrıştırma dbace tarafında.
+
+    Ayrıştırmayı agent'ta yapmamak bilinçli: agent müşteri sunucusunda çalışıyor ve
+    güncellenmesi zor. Araç çıktı biçimini değiştirdiğinde dbace'i güncellemek yeterli
+    olsun diye ham metin taşınıyor.
+    """
+    _authorize(x_agent_token)
+    command = BACKUP_TOOLS.get(tool)
+    if not command:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Bilinmeyen yedek aracı: {tool}. Desteklenenler: {', '.join(sorted(BACKUP_TOOLS))}",
+        )
+    code, out, err = _run(command, timeout=BACKUP_COMMAND_TIMEOUT)
+    return {
+        "tool": tool,
+        "installed": code != 127,
+        "exit_code": code,
+        "output": out,
+        # 127 = komut bulunamadı: araç kurulu değil. Bu bir HATA değil, bir gerçek —
+        # dbace bunu "bu sunucuda pgBackRest kullanılmıyor" diye yorumluyor.
+        "error": err if code not in (0, 127) else None,
+    }

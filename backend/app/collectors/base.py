@@ -169,6 +169,15 @@ class BaseCollector(ABC):
         """
         return None
 
+    async def collect_backups(self) -> dict[str, Any]:
+        """Veritabanının kendi içinden okunabilen yedek bilgisi (Faz 28 İŞ 1).
+
+        Motora göre bambaşka: SQL Server'da `msdb` merkezi bir geçmiş tutuyor, PostgreSQL'de
+        böyle bir tablo yok ve bilgi arşivleyici + harici araçlardan toplanıyor.
+        Desteklemeyen motorlar boş yapı döner.
+        """
+        return {"archiver": None, "slots": [], "running": [], "records": [], "errors": {}}
+
     async def collect_blocking(self, limit: int = 200, conn: Any | None = None) -> list[dict[str, Any]]:
         """Bloklama ağacı için oturum ayrıntısı (Faz 26 İŞ 3).
 

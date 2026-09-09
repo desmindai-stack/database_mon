@@ -135,6 +135,25 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _iso(value: Any) -> str | None:
+    """datetime → ISO metin. msdb saatleri SUNUCU YEREL saatinde; saat dilimi bilgisi yok
+    ve uydurulmuyor — çağıran taraf bunu naive kabul edip UTC varsayıyor (bkz.
+    services/backup_monitor.py)."""
+    if value is None:
+        return None
+    isoformat = getattr(value, "isoformat", None)
+    return isoformat() if callable(isoformat) else str(value)
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_odbc_connection_string(target: ConnectionTarget) -> str:
     opts = target.options or {}
     driver = opts.get("odbc_driver", "ODBC Driver 18 for SQL Server")
@@ -199,6 +218,64 @@ WHERE s.session_id <> @@SPID
   AND s.session_id > 50
   AND (r.session_id IS NOT NULL OR tst.transaction_id IS NOT NULL)
 """
+
+
+# Yedek geçmişi (Faz 28 İŞ 1) — `msdb.dbo.backupset`.
+#
+# SQL Server'ın PostgreSQL'e göre büyük avantajı: yedek geçmişi merkezi ve sorgulanabilir.
+# `type` sütunu: D = full, I = differential, L = log, F = file/filegroup, G/P/Q = kısmi.
+# Yalnızca D/I/L alınıyor; diğerleri yedek stratejisinin parçası olsa da yaş eşiği mantığına
+# oturmuyor ve karıştırmak yanıltıcı olurdu.
+#
+# `backup_finish_date` NULL ise yedek DEVAM EDİYOR demek — bu satırlar da alınıyor çünkü
+# "devam eden yedek ve süresi" ayrı bir gereksinim.
+#
+# LEFT JOIN backupmediafamily: fiziksel hedef (disk/URL) teşhis için değerli ama satır
+# olmayabiliyor; INNER JOIN kullanmak o yedekleri tamamen kaybettirirdi.
+_BACKUP_HISTORY_SQL = """
+SELECT TOP ({limit})
+    bs.backup_set_id                              AS external_id,
+    bs.database_name                              AS database_name,
+    bs.type                                       AS backup_type,
+    bs.backup_start_date                          AS started_at,
+    bs.backup_finish_date                         AS finished_at,
+    DATEDIFF(second, bs.backup_start_date,
+             ISNULL(bs.backup_finish_date, GETDATE())) AS duration_seconds,
+    bs.backup_size                                AS size_bytes,
+    bs.compressed_backup_size                     AS compressed_bytes,
+    bs.server_name                                AS server_name,
+    bs.is_copy_only                               AS is_copy_only,
+    mf.physical_device_name                       AS device_name
+FROM msdb.dbo.backupset bs
+LEFT JOIN msdb.dbo.backupmediafamily mf ON mf.media_set_id = bs.media_set_id
+WHERE bs.type IN ('D', 'I', 'L')
+  AND bs.backup_start_date >= DATEADD(day, -{days}, GETDATE())
+ORDER BY bs.backup_start_date DESC
+"""
+
+# Recovery model ile yedek stratejisi uyumu (Faz 28 İŞ 1).
+#
+# FULL recovery model'deki bir veritabanında log yedeği ALINMIYORSA transaction log dosyası
+# sınırsız büyür ve eninde sonunda diski doldurur. Bu, SQL Server'da en sık görülen
+# "disk doldu" sebebi ve tamamen önlenebilir bir hata — o yüzden ayrıca sorgulanıyor.
+_RECOVERY_MODEL_SQL = """
+SELECT
+    d.name                                        AS database_name,
+    d.recovery_model_desc                         AS recovery_model,
+    d.state_desc                                  AS state,
+    (SELECT MAX(bs.backup_finish_date)
+     FROM msdb.dbo.backupset bs
+     WHERE bs.database_name = d.name AND bs.type = 'D')   AS last_full_at,
+    (SELECT MAX(bs.backup_finish_date)
+     FROM msdb.dbo.backupset bs
+     WHERE bs.database_name = d.name AND bs.type = 'L')   AS last_log_at
+FROM sys.databases d
+WHERE d.database_id > 4          -- sistem veritabanları hariç
+  AND d.state_desc = 'ONLINE'
+"""
+
+#: SQL Server yedek türü kodları → ortak adlar.
+_BACKUP_TYPE_MAP = {"D": "full", "I": "differential", "L": "log"}
 
 
 class SqlServerCollector(BaseCollector):
@@ -481,6 +558,75 @@ class SqlServerCollector(BaseCollector):
                 }
             )
         return out
+
+    async def collect_backups(self, limit: int = 500, days: int = 90) -> dict[str, Any]:
+        """`msdb` yedek geçmişi + recovery model uyumu (Faz 28 İŞ 1).
+
+        `days` penceresi bilerek geniş (90 gün): yaş eşiği hesabı için EN SON yedeği bulmak
+        gerekiyor ve haftalık tam yedek alan bir kurumda dar bir pencere "hiç yedek yok"
+        sonucunu verirdi — ki bu tam olarak kaçınmamız gereken yanlış.
+        """
+        conn = await self._connect()
+        try:
+            result: dict[str, Any] = {
+                "archiver": None, "slots": [], "running": [], "records": [], "errors": {}
+            }
+
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(_BACKUP_HISTORY_SQL.format(limit=int(limit), days=int(days)))
+                    columns = [c[0] for c in cur.description]
+                    rows = [dict(zip(columns, row)) for row in await cur.fetchall()]
+                result["records"] = [self._backup_record(row) for row in rows]
+            except Exception as exc:
+                # Yetki yoksa ya da geçmiş temizlenmişse: sessizce boş dönmek "yedek yok"
+                # izlenimi verirdi. Sebep kaydediliyor ve kullanıcıya gösteriliyor.
+                result["errors"]["msdb"] = str(exc)
+
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(_RECOVERY_MODEL_SQL)
+                    columns = [c[0] for c in cur.description]
+                    result["recovery_models"] = [
+                        {
+                            "database_name": r["database_name"],
+                            "recovery_model": r["recovery_model"],
+                            "last_full_at": _iso(r["last_full_at"]),
+                            "last_log_at": _iso(r["last_log_at"]),
+                        }
+                        for r in (dict(zip(columns, row)) for row in await cur.fetchall())
+                    ]
+            except Exception as exc:
+                result["errors"]["recovery_model"] = str(exc)
+
+            return result
+        finally:
+            await conn.close()
+
+    @staticmethod
+    def _backup_record(row: dict[str, Any]) -> dict[str, Any]:
+        finished = row.get("finished_at")
+        return {
+            "external_id": str(row.get("external_id") or ""),
+            "database_name": row.get("database_name"),
+            "backup_type": _BACKUP_TYPE_MAP.get((row.get("backup_type") or "").strip(), "full"),
+            "started_at": _iso(row.get("started_at")),
+            "finished_at": _iso(finished),
+            "duration_seconds": _as_float(row.get("duration_seconds")),
+            "size_bytes": _as_float(row.get("size_bytes")),
+            # `backup_finish_date` NULL = yedek hâlâ sürüyor. msdb başarısız yedekleri
+            # KAYDETMEZ (satır yalnızca başarıda yazılır), bu yüzden burada "failed"
+            # üretilmiyor — başarısızlık ayrı bir kaynaktan (SQL Server Agent iş geçmişi)
+            # gelmeli ve o kapsamda değil. Uydurma bir "failed" yazmak yanlış olurdu.
+            "status": "running" if finished is None else "success",
+            "source": "msdb",
+            "detail": {
+                "server_name": row.get("server_name"),
+                "device_name": row.get("device_name"),
+                "compressed_bytes": _as_float(row.get("compressed_bytes")),
+                "is_copy_only": bool(row.get("is_copy_only")),
+            },
+        }
 
     async def collect_deadlocks(self, limit: int = 20) -> list[dict[str, Any]]:
         """system_health halka tamponundaki deadlock raporları (Faz 26 İŞ 3).

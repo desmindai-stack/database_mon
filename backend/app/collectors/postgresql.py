@@ -32,6 +32,11 @@ PG_VERSION_CHECKPOINTER = 170_000  # 17+: pg_stat_checkpointer split out of pg_s
 # 18+: pg_stat_io'da `op_bytes` KALDIRILDI, yerine read_bytes/write_bytes/extend_bytes geldi.
 # Eski sütunu sormaya devam etmek PG 18'de tüm pg_stat_io sorgusunu düşürürdü.
 PG_VERSION_STAT_IO_BYTES = 180_000
+# 13+: pg_stat_progress_basebackup — devam eden taban yedeği gösteren görünüm.
+PG_VERSION_PROGRESS_BASEBACKUP = 130_000
+# 13+: pg_replication_slots.safe_wal_size / wal_status. Öncesinde slotun ne kadar WAL
+# tuttuğu yalnızca LSN farkından hesaplanabiliyor.
+PG_VERSION_SLOT_WAL_STATUS = 130_000
 PG_MIN_SUPPORTED_VERSION = 120_000
 
 # Every query this collector runs is either an in-memory cumulative-counter view
@@ -51,6 +56,15 @@ PG_VERSION_ACTIVITY_QUERY_ID = 140_000
 # ve ölçüm deliği açar. Toplama döngüsünün 5 saniyelik tavanı burada fazlasıyla geniş —
 # pg_stat_activity bellekten okunan bir görünüm, 1 saniyede bitmiyorsa zaten sorun var.
 SAMPLER_STATEMENT_TIMEOUT_MS = 1_000
+
+
+def _as_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class PostgreSQLCollector(BaseCollector):
@@ -622,6 +636,155 @@ class PostgreSQLCollector(BaseCollector):
                 }
             )
         return {"sessions": sessions, "blocked": blocked, "has_query_id": has_query_id}
+
+    async def collect_backups(self) -> dict[str, Any]:
+        """Veritabanının KENDİ içinden okunabilen yedek bilgisi (Faz 28 İŞ 1).
+
+        PostgreSQL'de yedek durumu tek bir yerden okunamıyor — SQL Server'ın `msdb`'si gibi
+        merkezi bir geçmiş tablosu yok. Buradan alınabilenler:
+
+        - **WAL arşivleme sağlığı** (`pg_stat_archiver`): arşivleme sürekli yedeklemenin
+          temeli. Sayaçlar değil ZAMAN DAMGALARI belirleyici: `archived_count` artmıyorsa
+          bile son arşivleme zamanı eskiyse arşivleme durmuş demektir.
+        - **Replikasyon slotları**: kullanılmayan bir slot WAL'ı sonsuza kadar tutar ve diski
+          doldurur — PostgreSQL'de en sık görülen "disk doldu" sebeplerinden biri.
+        - **Devam eden taban yedek** (`pg_stat_progress_basebackup`, 13+).
+
+        pgBackRest/Barman/WAL-G çıktısı BURADAN OKUNAMAZ; onlar işletim sistemi araçları ve
+        host-agent üzerinden alınıyor (services/backup_tools.py).
+        """
+        conn = await self._connect()
+        try:
+            version_num, _ = await self._detect_version(conn)
+            result: dict[str, Any] = {
+                "archiver": None,
+                "slots": [],
+                "running": [],
+                "errors": {},
+            }
+
+            # --- WAL arşivleyici ---
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT
+                        archived_count,
+                        last_archived_wal,
+                        last_archived_time,
+                        failed_count,
+                        last_failed_wal,
+                        last_failed_time,
+                        stats_reset
+                    FROM pg_stat_archiver
+                    """
+                )
+                archive_mode = await conn.fetchval("SHOW archive_mode")
+                if row is not None:
+                    result["archiver"] = {
+                        "archive_mode": str(archive_mode or "off"),
+                        "archived_count": int(row["archived_count"] or 0),
+                        "last_archived_wal": row["last_archived_wal"],
+                        "last_archived_time": (
+                            row["last_archived_time"].isoformat() if row["last_archived_time"] else None
+                        ),
+                        "failed_count": int(row["failed_count"] or 0),
+                        "last_failed_wal": row["last_failed_wal"],
+                        "last_failed_time": (
+                            row["last_failed_time"].isoformat() if row["last_failed_time"] else None
+                        ),
+                        "stats_reset": row["stats_reset"].isoformat() if row["stats_reset"] else None,
+                    }
+            except Exception as exc:
+                result["errors"]["pg_stat_archiver"] = str(exc)
+
+            # --- Replikasyon slotları ---
+            #
+            # `pg_current_wal_lsn()` yalnızca PRIMARY'de çağrılabilir; replikada hata verir.
+            # Bu yüzden `pg_is_in_recovery()` ile dallanıyoruz — aksi halde her replikada
+            # slot bilgisi kaybolurdu.
+            try:
+                if version_num >= PG_VERSION_SLOT_WAL_STATUS:
+                    slot_rows = await conn.fetch(
+                        """
+                        SELECT
+                            slot_name,
+                            slot_type::text AS slot_type,
+                            active,
+                            wal_status::text AS wal_status,
+                            safe_wal_size,
+                            CASE
+                                WHEN pg_is_in_recovery() THEN NULL
+                                ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+                            END AS retained_bytes
+                        FROM pg_replication_slots
+                        """
+                    )
+                else:
+                    slot_rows = await conn.fetch(
+                        """
+                        SELECT
+                            slot_name,
+                            slot_type::text AS slot_type,
+                            active,
+                            NULL::text AS wal_status,
+                            NULL::bigint AS safe_wal_size,
+                            CASE
+                                WHEN pg_is_in_recovery() THEN NULL
+                                ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)
+                            END AS retained_bytes
+                        FROM pg_replication_slots
+                        """
+                    )
+                result["slots"] = [
+                    {
+                        "slot_name": r["slot_name"],
+                        "slot_type": r["slot_type"],
+                        "active": bool(r["active"]),
+                        "wal_status": r["wal_status"],
+                        "safe_wal_size": _as_int(r["safe_wal_size"]),
+                        "retained_bytes": _as_int(r["retained_bytes"]),
+                    }
+                    for r in slot_rows
+                ]
+            except Exception as exc:
+                result["errors"]["pg_replication_slots"] = str(exc)
+
+            # --- Devam eden taban yedek ---
+            if version_num >= PG_VERSION_PROGRESS_BASEBACKUP:
+                try:
+                    running = await conn.fetch(
+                        """
+                        SELECT
+                            pid,
+                            phase,
+                            backup_total,
+                            backup_streamed,
+                            EXTRACT(EPOCH FROM (now() - a.backend_start))::float AS elapsed_seconds
+                        FROM pg_stat_progress_basebackup p
+                        JOIN pg_stat_activity a ON a.pid = p.pid
+                        """
+                    )
+                    result["running"] = [
+                        {
+                            "pid": int(r["pid"]),
+                            "phase": r["phase"],
+                            "backup_total": _as_int(r["backup_total"]),
+                            "backup_streamed": _as_int(r["backup_streamed"]),
+                            "elapsed_seconds": float(r["elapsed_seconds"] or 0),
+                        }
+                        for r in running
+                    ]
+                except Exception as exc:
+                    result["errors"]["pg_stat_progress_basebackup"] = str(exc)
+            else:
+                result["errors"]["pg_stat_progress_basebackup"] = (
+                    f"pg_stat_progress_basebackup PostgreSQL 13 ile geldi "
+                    f"(bu sunucu: {version_num}); devam eden taban yedek görülemiyor."
+                )
+
+            return result
+        finally:
+            await conn.close()
 
     async def collect_blocking(
         self, limit: int = 200, conn: asyncpg.Connection | None = None
