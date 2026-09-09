@@ -6641,6 +6641,83 @@ kesinti tespitini eşiğin sınırına oturtup testin ne ölçtüğünü belirsi
 
 Tüm arka uç: **1457 geçti, 1 atlandı**.
 
+## Faz 28 — İŞ 3b: SLA tanımı ve takibi
+
+Hedef olmadan erişilebilirlik sayısı bir bilgi ama bir **karar** değil: %99.7 iyi
+mi kötü mü, ancak taahhüde göre söylenebilir.
+
+### Kesinti tespiti tek yere taşındı
+
+Kesinti pencereleri yalnızca rapor bölümünün içinde hesaplanıyordu. SLA da aynı
+sayıya ihtiyaç duyunca iki seçenek vardı: hesabı kopyalamak ya da tek yere
+taşımak. Kopyalamak, raporun "%99.95" derken SLA ekranının "%99.7" demesi
+demekti. `services/availability.py` artık tek gerçeklik kaynağı.
+
+### İki türev sayı çıplak yüzdeden değerli
+
+Ayın 3'ünde "%99.2" görmek yöneticiye hiçbir şey söylemiyor: ay dolmadı, sayı
+daha değişecek.
+
+- **En iyi durum** — kalan dönem kesintisiz geçerse ulaşılabilecek oran. Bu sayı
+  hedefin altındaysa **ay matematiksel olarak kaybedilmiştir** ve bunu ayın
+  3'ünde bilmek, 30'unda öğrenmekten bambaşka bir yönetim kararı üretir.
+- **Kalan kesinti bütçesi** — SLA'yı ihlal etmeden karşılanabilecek azami
+  kesinti. "47 dakikanız kaldı" cümlesi bakım planlamak için doğrudan
+  kullanılabilir; "%99.2" değildir.
+
+Bütçe negatife düştüğünde **negatif gösteriliyor**, sıfıra kırpılmıyor: aşımı
+gizlemek, ihlali gizlemek olurdu.
+
+### Ölçüm yokluğu %100 değildir
+
+Hiç ölçümü olmayan bir instance ortalamaya `None` olarak giriyor ve dışarıda
+bırakılıyor. Aksi halde **izlenmeyen bir sunucu SLA'yı kurtarır** hale gelirdi.
+Hiçbir instance ölçülemiyorsa durum "belirlenemedi" — "sistem ayaktaydı" değil.
+
+### Çok veritabanlı kapsamda toplama kararı ve bilinen sınırı
+
+"Uygulamanın erişilebilirliği" tek doğru cevabı olan bir soru değil: replikalı
+bir kümede bir düğümün düşmesi uygulama için kesinti değildir ama dbace bunu
+bilmiyor.
+
+Seçilen tanım **kapsamdaki veritabanlarının ortalaması**, çünkü erişilebilirlik
+bölümü zaten bunu kullanıyor. "Kalan bütçe" de aynı ortalamadan türetiliyor ki
+iki sayı çelişmesin — biri ortalamaya diğeri en kötü düğüme dayansaydı hangisine
+güvenileceği belirsiz kalırdı. Ortalamanın gizlediği düğüm için **en kötü
+veritabanı** ayrıca raporlanıyor.
+
+Bu tanım replikalı kümede SLA'yı **olduğundan kötü** gösterir. Ters yönde hata
+yapmamak bilinçli: SLA'yı olduğundan iyi göstermek çok daha pahalı bir yanlış.
+Sınır SORULAR.md'de kapanma koşuluyla yazılı.
+
+### Yıllık dönem yok
+
+`monthly` ve `quarterly` var; yıllık bilinçli olarak yok. Bir yılın ortasında
+"kalan kesinti bütçesi" o kadar büyük çıkıyor ki uyarı değeri kalmıyor.
+
+### Bulgular ve raporlar
+
+- **Kritik**: dönem matematiksel olarak kaybedildi; **kritik**: bütçe tükendi;
+  **uyarı**: bütçenin dörtte birinden azı kaldı.
+- Öneriler teknik değil **yönetsel**: SLA'yı kurtaran şey bir komut değil, kalan
+  dönemde risk almamak ve müşteriyle doğru zamanda konuşmak.
+- Yönetici raporuna "Hizmet seviyesi (SLA)" bölümü eklendi. Sunucu adı ("en kötü
+  veritabanı") oraya **girmiyor** — teknik raporda duruyor.
+- Aynı kapsam için ikinci bir hedef reddediliyor (409): iki hedef aynı kapsama
+  uygulanırsa "SLA tutuyor mu" sorusunun iki cevabı olurdu.
+
+### Testler
+
+`tests/test_sla.py` — 18 test: dönem sınırları (ay/çeyrek, yıl dönümü), planlı
+bakımın bütçeyi tüketmemesi, ölçüm yokluğunun %100 sayılmaması, en iyi durumun
+gerçekleşenden düşük olamaması, kaybedilmiş dönem tespiti, en kötü düğümün
+raporlanması, yönetici metninde teknik sızıntı olmaması.
+
+Bir test `global` kapsam kullanınca diğer test dosyalarının bıraktığı
+instance'ları içine aldı ve ne ölçtüğünü kaybetti; grup kapsamına çevrildi.
+
+Tüm arka uç: **1481 geçti, 1 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

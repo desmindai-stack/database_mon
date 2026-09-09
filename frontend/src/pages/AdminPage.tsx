@@ -12,6 +12,7 @@ import { formatTime } from "../api";
 import { useAuth } from "../auth";
 import { NotFoundState, TableState } from "../components/PageState";
 import MaintenanceWindowsPanel from "../components/MaintenanceWindowsPanel";
+import SlaTargetsPanel from "../components/SlaTargetsPanel";
 import { useUrlTab } from "../hooks/useUrlState";
 
 type Tab = "retention" | "users" | "settings" | "maintenance";
@@ -234,13 +235,21 @@ export default function AdminPage() {
           Genel ayarlar
         </button>
         <button className={`tab-btn${tab === "maintenance" ? " active" : ""}`} onClick={() => setTab("maintenance")}>
-          Bakım pencereleri
+          Bakım ve SLA
         </button>
       </div>
 
       {/* Faz 28 İŞ 3: bakım pencereleri bir yapılandırma; kendi üst seviye sayfası yerine
           Yönetim altında duruyor. */}
-      {tab === "maintenance" && <MaintenanceWindowsPanel canWrite={currentUser?.role === "admin"} />}
+      {tab === "maintenance" && (
+        <>
+          <MaintenanceWindowsPanel canWrite={currentUser?.role === "admin"} />
+          {/* SLA hedefleri bakım pencereleriyle aynı sekmede: ikisi aynı soruya
+              hizmet ediyor ("erişilebilirlik sayısı ne anlama geliyor") ve bakım
+              penceresi tanımlamadan SLA sayısı dürüst olmuyor. */}
+          <SlaTargetsPanel canWrite={currentUser?.role === "admin"} />
+        </>
+      )}
 
       {tab === "retention" && (
         <div className="card" style={{ marginTop: "1rem", maxWidth: 520 }}>

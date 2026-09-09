@@ -2256,3 +2256,43 @@ ve bu, hiç göstermemekten kötüdür.
 **Alternatif:** `barman diagnose` JSON veriyor ama tüm sunucu yapılandırmasını
 döken ağır bir komut. Barman kullanan bir kurulum ortaya çıkarsa oraya geçmek
 değerlendirilebilir.
+
+## Faz 28 İŞ 3b: SLA ölçümü veritabanı erişilebilirliğidir, uygulama erişilebilirliği değil
+
+Bir uygulamanın üç veritabanı varsa "uygulamanın erişilebilirliği" tek doğru
+cevabı olan bir soru değil: **replikalı bir kümede bir düğümün düşmesi uygulama
+için kesinti değildir**, çünkü trafik diğer düğüme geçer. dbace bunu bilmiyor —
+Patroni/Always On durumunu görüyor ama "uygulama o sırada gerçekten hizmet
+verebildi mi" sorusunu cevaplayamıyor.
+
+Seçilen tanım: **kapsamdaki veritabanlarının ortalaması.** Gerekçe, erişilebilirlik
+bölümünün zaten bu tanımı kullanması; iki yerin farklı sayı göstermesi güven
+kaybı olurdu. "Kalan kesinti bütçesi" de aynı ortalamadan türetiliyor ki iki sayı
+birbiriyle çelişmesin. Ortalamanın gizlediği düğümü göstermek için **en kötü
+veritabanı** ayrıca raporlanıyor.
+
+Bu tanım, replikalı bir kümede SLA'yı **olduğundan kötü** gösterir: bir replikanın
+düşmesi uygulamayı etkilemese de ortalamayı aşağı çeker. Ters yönde hata yapmamak
+bilinçli bir tercih — SLA'yı olduğundan iyi göstermek çok daha pahalı bir yanlış.
+
+**Kapanması için gereken:** uygulama seviyesinde bir erişilebilirlik sinyali —
+ya VIP/HAProxy üzerinden bir sağlık kontrolü, ya da "bu grupta en az bir yazılabilir
+düğüm ayaktaydı" bilgisinin küme anlık görüntülerinden türetilmesi. İkincisi
+mevcut veriyle yapılabilir görünüyor ama `GroupHealthSnapshot` grup başına TEK
+satır tuttuğu için dönemsel değil anlık; önce onun geçmişi tutulmalı.
+
+## Faz 28 İŞ 3: Bakım penceresi saat dilimi UTC
+
+Bakım pencereleri UTC saklanıyor ve arayüz tarayıcının yerel saatinde gösteriyor.
+Müşterinin bakım penceresi kendi saat diliminde tanımlıysa ve dbace'i kullanan
+kişi başka bir saat diliminde ise, girilen değer doğru ama **okunuşu** kafa
+karıştırıcı olabilir.
+
+Yaz saati uygulaması ayrıca bir risk: "her salı 02:00" kuralı UTC'de sabitlendiği
+için yerel saatte yılda iki kez bir saat kayar. Kurumsal bakım pencereleri
+genelde geniş (2 saat) olduğu için pratikte örtüşme kaybolmuyor, ama dar bir
+pencerede kayma bakımı pencere dışına düşürebilir.
+
+**Kapanması için gereken:** pencereye saat dilimi alanı eklemek ve tekrar
+genişletmesini o saat diliminde yapmak (`zoneinfo`). Bu turda yapılmadı çünkü
+kullanıcı arayüzüne saat dilimi seçimi eklemek İŞ 3'ün kapsamını genişletirdi.

@@ -330,6 +330,8 @@ export interface SlowQueryAvailability {
 export type InstanceDependencies = Gen["InstanceDependenciesOut"];
 
 // --- Yakalanan planlar (Faz 26 İŞ 1) ---
+/** SLA hedefi (Faz 28 İŞ 3b) — üretilen şemadan türetiliyor. */
+export type SlaTarget = Gen["SlaTargetOut"];
 /** Bakım penceresi (Faz 28 İŞ 3) — üretilen şemadan türetiliyor. */
 export type MaintenanceWindow = Gen["MaintenanceWindowOut"];
 export type CapturedPlan = Gen["CapturedPlanOut"];
@@ -1443,6 +1445,12 @@ export const api = {
     q.set("limit", String(params.limit ?? 30));
     return request<HealthReportSummary[]>(`/api/reports?${q.toString()}`);
   },
+  listSlaTargets: () => request<SlaTarget[]>("/api/sla/targets"),
+  getSlaStatus: () => request<Record<string, any>[]>("/api/sla/status"),
+  createSlaTarget: (body: Record<string, unknown>) =>
+    request<SlaTarget>("/api/sla/targets", { method: "POST", body: JSON.stringify(body) }),
+  deleteSlaTarget: (id: number) =>
+    request<void>(`/api/sla/targets/${id}`, { method: "DELETE" }),
   listMaintenanceWindows: () =>
     request<MaintenanceWindow[]>("/api/maintenance-windows"),
   createMaintenanceWindow: (body: Record<string, unknown>) =>

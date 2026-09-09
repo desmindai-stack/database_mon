@@ -1721,6 +1721,79 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sla/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Sla Status
+         * @description Tanımlı tüm hedeflerin güncel durumu (gerçekleşen, en iyi durum, kalan bütçe).
+         */
+        get: operations["sla_status_api_sla_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sla/status/{target_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Sla Status One */
+        get: operations["sla_status_one_api_sla_status__target_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sla/targets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Targets */
+        get: operations["list_targets_api_sla_targets_get"];
+        put?: never;
+        /** Create Target */
+        post: operations["create_target_api_sla_targets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sla/targets/{target_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Target */
+        delete: operations["delete_target_api_sla_targets__target_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Target */
+        patch: operations["update_target_api_sla_targets__target_id__patch"];
+        trace?: never;
+    };
     "/api/wizard/database-groups": {
         parameters: {
             query?: never;
@@ -3000,6 +3073,13 @@ export interface components {
             }[];
             /** Scope Label */
             scope_label: string;
+            /**
+             * Sla
+             * @default []
+             */
+            sla: {
+                [key: string]: unknown;
+            }[];
             /**
              * Trend
              * @default {}
@@ -4880,6 +4960,69 @@ export interface components {
             name?: string | null;
             os?: components["schemas"]["ServerOS"] | null;
             site?: components["schemas"]["NodeSite"] | null;
+        };
+        /**
+         * SlaTargetCreate
+         * @description Erişilebilirlik taahhüdü. `created_by` oturumdan yazılıyor, istemciden alınmıyor.
+         */
+        SlaTargetCreate: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Period
+             * @default monthly
+             * @enum {string}
+             */
+            period: "monthly" | "quarterly";
+            /** Scope Id */
+            scope_id?: number | null;
+            /**
+             * Scope Type
+             * @default customer
+             * @enum {string}
+             */
+            scope_type: "instance" | "group" | "application" | "customer" | "global";
+            /**
+             * Target Pct
+             * @default 99.9
+             */
+            target_pct: number;
+        };
+        /** SlaTargetOut */
+        SlaTargetOut: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Id */
+            id: number;
+            /** Period */
+            period: string;
+            /** Scope Id */
+            scope_id: number | null;
+            /** Scope Type */
+            scope_type: string;
+            /** Target Pct */
+            target_pct: number;
+            /** Updated At */
+            updated_at?: string | null;
+        };
+        /** SlaTargetUpdate */
+        SlaTargetUpdate: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Period */
+            period?: ("monthly" | "quarterly") | null;
+            /** Target Pct */
+            target_pct?: number | null;
         };
         /**
          * SlowQueryAvailabilityOut
@@ -8859,6 +9002,178 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectionTestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sla_status_api_sla_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    sla_status_one_api_sla_status__target_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_targets_api_sla_targets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlaTargetOut"][];
+                };
+            };
+        };
+    };
+    create_target_api_sla_targets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlaTargetCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlaTargetOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_target_api_sla_targets__target_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_target_api_sla_targets__target_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                target_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SlaTargetUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SlaTargetOut"];
                 };
             };
             /** @description Validation Error */

@@ -3193,6 +3193,15 @@
             "title": "Scope Label",
             "type": "string"
           },
+          "sla": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Sla",
+            "type": "array"
+          },
           "trend": {
             "additionalProperties": true,
             "default": {},
@@ -8518,6 +8527,170 @@
           }
         },
         "title": "ServerUpdate",
+        "type": "object"
+      },
+      "SlaTargetCreate": {
+        "description": "Erişilebilirlik taahhüdü. `created_by` oturumdan yazılıyor, istemciden alınmıyor.",
+        "properties": {
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "period": {
+            "default": "monthly",
+            "enum": [
+              "monthly",
+              "quarterly"
+            ],
+            "title": "Period",
+            "type": "string"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_type": {
+            "default": "customer",
+            "enum": [
+              "instance",
+              "group",
+              "application",
+              "customer",
+              "global"
+            ],
+            "title": "Scope Type",
+            "type": "string"
+          },
+          "target_pct": {
+            "default": 99.9,
+            "exclusiveMinimum": 0.0,
+            "maximum": 100.0,
+            "title": "Target Pct",
+            "type": "number"
+          }
+        },
+        "title": "SlaTargetCreate",
+        "type": "object"
+      },
+      "SlaTargetOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "period": {
+            "title": "Period",
+            "type": "string"
+          },
+          "scope_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope Id"
+          },
+          "scope_type": {
+            "title": "Scope Type",
+            "type": "string"
+          },
+          "target_pct": {
+            "title": "Target Pct",
+            "type": "number"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id",
+          "scope_type",
+          "scope_id",
+          "target_pct",
+          "period",
+          "enabled",
+          "created_by",
+          "created_at"
+        ],
+        "title": "SlaTargetOut",
+        "type": "object"
+      },
+      "SlaTargetUpdate": {
+        "properties": {
+          "enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabled"
+          },
+          "period": {
+            "anyOf": [
+              {
+                "enum": [
+                  "monthly",
+                  "quarterly"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Period"
+          },
+          "target_pct": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 100.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Pct"
+          }
+        },
+        "title": "SlaTargetUpdate",
         "type": "object"
       },
       "SlowQueryAvailabilityOut": {
@@ -15497,6 +15670,256 @@
         "summary": "Test Agent Existing",
         "tags": [
           "servers"
+        ]
+      }
+    },
+    "/api/sla/status": {
+      "get": {
+        "description": "Tanımlı tüm hedeflerin güncel durumu (gerçekleşen, en iyi durum, kalan bütçe).",
+        "operationId": "sla_status_api_sla_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Sla Status Api Sla Status Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sla Status",
+        "tags": [
+          "sla"
+        ]
+      }
+    },
+    "/api/sla/status/{target_id}": {
+      "get": {
+        "operationId": "sla_status_one_api_sla_status__target_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "title": "Target Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Sla Status One Api Sla Status  Target Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Sla Status One",
+        "tags": [
+          "sla"
+        ]
+      }
+    },
+    "/api/sla/targets": {
+      "get": {
+        "operationId": "list_targets_api_sla_targets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SlaTargetOut"
+                  },
+                  "title": "Response List Targets Api Sla Targets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Targets",
+        "tags": [
+          "sla"
+        ]
+      },
+      "post": {
+        "operationId": "create_target_api_sla_targets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlaTargetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlaTargetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Target",
+        "tags": [
+          "sla"
+        ]
+      }
+    },
+    "/api/sla/targets/{target_id}": {
+      "delete": {
+        "operationId": "delete_target_api_sla_targets__target_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "title": "Target Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Target",
+        "tags": [
+          "sla"
+        ]
+      },
+      "patch": {
+        "operationId": "update_target_api_sla_targets__target_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "target_id",
+            "required": true,
+            "schema": {
+              "title": "Target Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlaTargetUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlaTargetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Target",
+        "tags": [
+          "sla"
         ]
       }
     },

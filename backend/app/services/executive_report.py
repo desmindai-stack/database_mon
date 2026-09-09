@@ -106,6 +106,12 @@ _SECTION_TEMPLATES: dict[str, dict[str, str]] = {
         "impact": "Yapılandırma sapmaları performans ve veri güvenliği açısından risk oluşturabilir.",
         "recommendation": "Yapılandırmanın standartlara göre düzeltilmesi.",
     },
+    "sla": {
+        "area": "Hizmet seviyesi",
+        "statement": "{target} sistemi için taahhüt edilen erişilebilirlik hedefi bu dönemde risk altında.",
+        "impact": "Hedefin altında kalınması sözleşmesel taahhüdün karşılanmaması demektir; kesinti süresi doğrudan iş kaybına karşılık gelir.",
+        "recommendation": "Kalan dönemde riskli değişikliklerin ertelenmesi ve kesinti nedenlerinin giderilmesi.",
+    },
     "backup": {
         "area": "Yedek güvencesi",
         "statement": "{target} sisteminde yedek durumu dikkat gerektiriyor.",
@@ -170,11 +176,28 @@ class ExecutiveReport:
     # ölçü — yöneticinin sorduğu soru "sorun var mı" değil "yedeğim var mı" ve bu sorunun
     # cevabı yalnızca kötü haber olduğunda görünürse rapor güvence vermiyor demektir.
     backup: dict[str, Any] = field(default_factory=dict)
+    # Faz 28 İŞ 3b: SLA durumu. "Kalan kesinti bütçesi" yöneticiye çıplak yüzdeden çok daha
+    # anlamlı: "47 dakikanız kaldı" cümlesi bakım planlamak için doğrudan kullanılabilir.
+    sla: list[dict[str, Any]] = field(default_factory=list)
     recommendations: list[dict[str, Any]] = field(default_factory=list)
     # Ek İŞ A: "planlandı" ve "risk kabul" durumundaki konular. Biri ekibin çalıştığını,
     # diğeri bilinçli bir kararı gösterir — ikisi de yöneticinin bilmesi gereken şeyler.
     # "Yoksayıldı" BURAYA GİRMEZ: o, ekibin kendi iç gürültü yönetimi kararıdır.
     decisions: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _fmt_duration(seconds: float | None) -> str:
+    """Yönetici diliyle süre. Teknik birim yok, saniye/dakika/saat/gün."""
+    if seconds is None:
+        return "—"
+    value = abs(float(seconds))
+    if value < 90:
+        return f"{value:.0f} saniye"
+    if value < 5400:
+        return f"{value / 60:.0f} dakika"
+    if value < 172800:
+        return f"{value / 3600:.1f} saat"
+    return f"{value / 86400:.1f} gün"
 
 
 def _period_label(start: datetime, end: datetime) -> str:
@@ -391,6 +414,66 @@ def _backup_from_sections(sections: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _sla_from_sections(sections: dict[str, Any]) -> list[dict[str, Any]]:
+    """SLA özetini teknik bölümün VERİSİNDEN türetir — teknik detay taşımadan.
+
+    Yöneticiye giden alanlar bilinçli olarak dar: kapsam adı, hedef, gerçekleşen, kalan
+    bütçe ve "tutuyor mu". Sunucu adı ("en kötü veritabanı") DIŞARIDA bırakılıyor; teknik
+    raporda duruyor.
+    """
+    item = ((sections or {}).get("items") or {}).get("sla") or {}
+    rows = (item.get("data") or {}).get("targets") or []
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        if not row.get("measured"):
+            out.append(
+                {
+                    "scope_label": row.get("scope_label") or "İzlenen sistem",
+                    "period_label": row.get("period_label"),
+                    "target_pct": row.get("target_pct"),
+                    "achieved_pct": None,
+                    "met": None,
+                    "statement": "Bu dönem için erişilebilirlik ölçülemedi; hedefe uygunluk belirlenemiyor.",
+                }
+            )
+            continue
+        budget = row.get("remaining_budget_seconds")
+        if row.get("already_lost"):
+            statement = (
+                f"Hedef %{row['target_pct']}; kalan süre kesintisiz geçse bile "
+                f"en fazla %{row['best_case_pct']} olabilir — hedef bu dönem karşılanamayacak."
+            )
+        elif row.get("met"):
+            statement = (
+                f"Hedef %{row['target_pct']}, gerçekleşen %{row['achieved_pct']} — hedefe uygun."
+                + (
+                    f" Kalan kesinti bütçesi: {_fmt_duration(budget)}."
+                    if isinstance(budget, (int, float)) and budget > 0
+                    else ""
+                )
+            )
+        else:
+            statement = (
+                f"Hedef %{row['target_pct']}, gerçekleşen %{row['achieved_pct']} — hedefin altında."
+            )
+        out.append(
+            {
+                "scope_label": row.get("scope_label") or "İzlenen sistem",
+                "period_label": row.get("period_label"),
+                "target_pct": row.get("target_pct"),
+                "achieved_pct": row.get("achieved_pct"),
+                "best_case_pct": row.get("best_case_pct"),
+                "remaining_budget_seconds": budget,
+                "met": row.get("met"),
+                "already_lost": row.get("already_lost", False),
+                "planned_seconds": row.get("planned_seconds"),
+                "unplanned_seconds": row.get("unplanned_seconds"),
+                "statement": statement,
+            }
+        )
+    return out
+
+
 async def build_executive_report(session: AsyncSession, report: HealthReport) -> ExecutiveReport:
     findings = list(
         (
@@ -416,6 +499,7 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
 
     availability = _availability_from_sections(report.sections or {})
     backup = _backup_from_sections(report.sections or {})
+    sla = _sla_from_sections(report.sections or {})
     inventory = await _inventory(session, instances)
 
     # Uygulama bazında erişilebilirlik: teknik bölümün instance satırlarını uygulama adına
@@ -581,6 +665,7 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         grade_reason=grade_reason,
         availability=availability,
         backup=backup,
+        sla=sla,
         inventory=inventory,
         risks=risks,
         trend=trend,
@@ -600,6 +685,9 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         assert_no_technical_leak(recommendation["if_not_done"], "recommendation.if_not_done")
     assert_no_technical_leak(executive.grade_reason, "grade_reason")
     assert_no_technical_leak(executive.backup["statement"], "backup.statement")
+    for row in executive.sla:
+        assert_no_technical_leak(row["statement"], "sla.statement")
+        assert_no_technical_leak(row["scope_label"], "sla.scope_label")
     assert_no_technical_leak(executive.work_done["note"], "work_done.note")
     for decision in executive.decisions:
         assert_no_technical_leak(decision["statement"], "decision.statement")

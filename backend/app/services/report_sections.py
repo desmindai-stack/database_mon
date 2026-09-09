@@ -35,6 +35,13 @@ from app.models import (
 from app.domain.engines import DatabaseEngine
 from app.domain.maintenance import OUTAGE_KIND_LABELS, OutageKind
 from app.services.backup_health import assess_instance
+from app.services.availability import (
+    MIN_OUTAGE_SECONDS,
+    OUTAGE_GAP_MULTIPLIER,
+    as_utc,
+    first_sample_at,
+    outages_for_instance,
+)
 from app.services.collection import effective_collect_interval
 from app.services.advice import Advice, AdviceStep
 from app.services.explain_service import validate_explainable
@@ -49,6 +56,12 @@ from app.services.finding_status import (
 from app.config import settings
 from app.services.blocking_history import recent_episodes
 from app.services.maintenance import annotate_outages, occurrences_for_instance
+from app.services.sla import (
+    PERIOD_LABELS,
+    evaluate_target,
+    format_duration,
+    targets_for_instances,
+)
 from app.services.health_report import (
     FindingDraft,
     ReportContext,
@@ -61,12 +74,10 @@ from app.services.noise_settings import get_noise_settings
 from app.services.query_diagnostics import diagnose_query
 from app.services.slow_query_selection import select_slow_queries
 
-# Toplama aralığının kaç katı boşluk "kesinti" sayılır. 1 kaçırılan döngü ağ gecikmesi veya
-# yavaş bir sorgu yüzünden olabilir; 3 katı artık gerçek bir kopukluktur.
-OUTAGE_GAP_MULTIPLIER = 3
-# Bu süreden kısa boşluklar raporlanmaz — 15 sn'lik toplamada 45 sn'lik bir gecikme kesinti
-# değil gürültüdür.
-MIN_OUTAGE_SECONDS = 60.0
+# Kesinti eşikleri artık services/availability.py'de: SLA takibi de aynı sayıyı kullanıyor
+# ve iki ayrı hesap, raporun "%99.95" derken SLA ekranının "%99.7" demesi demekti.
+# İsimler geriye dönük uyumluluk için burada da görünür kalıyor (testler ve diğer bölümler
+# buradan içe aktarıyor).
 
 
 # --- Eşikler ---------------------------------------------------------------------------
@@ -92,6 +103,10 @@ TEMP_BYTES_WARN = 1_048_576.0
 SERVICE_DOWN_MIN_SAMPLES = 2
 # Büyüme trendi için gereken en az gün sayısı — tek fotoğraftan büyüme çıkarılamaz.
 SCHEMA_MIN_DAYS = 2
+#: Kalan kesinti bütçesi, dönemin toplam bütçesinin bu oranının altına düşerse uyarı.
+#: %25: bütçenin dörtte biri kaldığında hâlâ önlem alınabilir; daha düşük bir eşik
+#: uyarıyı fiilen 'bütçe bitti' bulgusuyla aynı ana taşırdı.
+SLA_BUDGET_WARNING_RATIO = 0.25
 # Yedek değerlendirmesi için instance başına taranan en fazla kayıt. Yaş, süre ve boyut
 # karşılaştırmaları son birkaç düzine kayıtla yapılıyor; tüm geçmişi belleğe almanın
 # faydası yok.
@@ -179,14 +194,6 @@ async def _samples_in_period(ctx: ReportContext, instance: Instance) -> list[Met
     return list(rows)
 
 
-def as_utc(value: datetime) -> datetime:
-    """SQLite naive datetime döndürür (TIMESTAMP tipi saat dilimi taşımaz); Postgres aware
-    döndürür. Rapor bölümleri iki motorda da aynı karşılaştırmayı yapabilsin diye tek noktada
-    UTC'ye sabitleniyor — aksi halde dev ortamında "can't compare offset-naive and
-    offset-aware datetimes" ile patlar."""
-    return value if value.tzinfo else value.replace(tzinfo=UTC)
-
-
 def _environment_of(instance: Instance) -> str:
     """Öncelik sıralaması için ortam etiketi. Grup ortamı varsa o, yoksa instance'ınki."""
     group = getattr(instance, "group", None)
@@ -201,65 +208,6 @@ def _fmt_duration(seconds: float) -> str:
     if seconds < 5400:
         return f"{seconds / 60:.0f} dk"
     return f"{seconds / 3600:.1f} sa"
-
-
-async def _outages_for_instance(ctx: ReportContext, instance: Instance) -> list[dict]:
-    """Toplama boşluklarından türetilen kesinti pencereleri.
-
-    ÖNEMLİ sınır: bu ölçüm "dbace bu instance'tan veri toplayamadı" demektir — veritabanının
-    gerçekten kapalı olduğunu KANITLAMAZ (dbace worker'ı durmuş, ağ kopmuş ya da kimlik
-    bilgisi geçersiz olmuş da olabilir). Rapor bunu olduğu gibi söyler; "veritabanı X dakika
-    kapalıydı" diye kesin bir iddiada bulunmaz.
-    """
-    rows = (
-        await ctx.session.execute(
-            select(MetricSample.collected_at)
-            .where(
-                MetricSample.instance_id == instance.id,
-                MetricSample.collected_at >= ctx.period_start,
-                MetricSample.collected_at <= ctx.period_end,
-            )
-            .order_by(MetricSample.collected_at.asc())
-        )
-    ).scalars().all()
-    if not rows:
-        return []
-
-    rows = [as_utc(r) for r in rows]
-    interval = effective_collect_interval(instance)
-    threshold = max(interval * OUTAGE_GAP_MULTIPLIER, MIN_OUTAGE_SECONDS)
-    outages: list[dict] = []
-    for previous, current in zip(rows, rows[1:]):
-        gap = (current - previous).total_seconds()
-        if gap >= threshold:
-            outages.append(
-                {
-                    "start": previous.isoformat(),
-                    "end": current.isoformat(),
-                    "seconds": round(gap, 1),
-                    "ongoing": False,
-                }
-            )
-
-    # SONDA KALAN BOŞLUK (Faz 28 İŞ 2). Buraya kadarki döngü yalnızca İKİ ÖLÇÜM ARASINDAKİ
-    # boşlukları görüyor; son ölçümden dönem sonuna kadar geçen süreyi hiç saymıyordu. Yani
-    # bir düğüm üç saat önce düşüp bir daha gelmediyse rapor HİÇ kesinti göstermiyordu — en
-    # kötü durum tam da görünmez olan durumdu.
-    #
-    # Ayrıca bu, bağımlılık bastırmasının doğru tetikleyicisi: "dönem sonunda toplama hâlâ
-    # durmuş" demek, o veritabanı hakkındaki diğer tüm analizlerin canlı veriye değil eski
-    # fotoğraflara dayandığı anlamına geliyor.
-    trailing = (ctx.period_end - rows[-1]).total_seconds()
-    if trailing >= threshold:
-        outages.append(
-            {
-                "start": rows[-1].isoformat(),
-                "end": ctx.period_end.isoformat(),
-                "seconds": round(trailing, 1),
-                "ongoing": True,
-            }
-        )
-    return outages
 
 
 #: Bloklama bulgusu için eşik. Tek bir oturumun kısa süre beklemesi normaldir; kilit
@@ -287,7 +235,9 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
     no_data: list[str] = []
 
     for instance in ctx.instances:
-        outages = await _outages_for_instance(ctx, instance)
+        outages = await outages_for_instance(
+            ctx.session, instance, ctx.period_start, ctx.period_end
+        )
         # PLANLI/PLANSIZ AYRIMI (Faz 28 İŞ 3). Bakım penceresi olmadan erişilebilirlik
         # sayıları dürüst değil: onaylanmış bir bakım, plansız bir arızayla aynı kefeye
         # girip aylık hedefi tek başına deliyordu.
@@ -295,14 +245,7 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
             ctx.session, instance, ctx.period_start, ctx.period_end
         )
         outages = annotate_outages(outages, occurrences)
-        first_sample = (
-            await ctx.session.execute(
-                select(MetricSample.collected_at)
-                .where(MetricSample.instance_id == instance.id)
-                .order_by(MetricSample.collected_at.asc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
+        first_sample = await first_sample_at(ctx.session, instance)
 
         if first_sample is None:
             no_data.append(instance.name)
@@ -615,6 +558,235 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
             ),
         },
         unknown_reason=None if measured else "Dönem içinde hiç metrik örneği yok.",
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 3b. SLA takibi (Faz 28 İŞ 3b)
+# --------------------------------------------------------------------------------------
+
+
+@register_section
+async def sla_section(ctx: ReportContext) -> SectionResult:
+    """SLA takibi — taahhüt tutuyor mu, ne kadar bütçe kaldı.
+
+    Erişilebilirlik bölümü "ne oldu" diyor; bu bölüm "taahhüde göre nerede duruyoruz"
+    diyor. İkisi ayrı çünkü hedef olmadan erişilebilirlik sayısı bir bilgi ama bir KARAR
+    değil: %99.7 iyi mi kötü mü, ancak taahhüde göre söylenebilir.
+    """
+    if not ctx.instances:
+        return SectionResult(
+            key="sla", title="SLA takibi", status="unknown",
+            summary="Bu kapsamda izlenen veritabanı yok.",
+            unknown_reason="Kapsama bağlı etkin instance bulunamadı.",
+        )
+
+    targets = await targets_for_instances(ctx.session, ctx.instances)
+    if not targets:
+        # "SLA tutuyor" DEMİYORUZ: hedef tanımlı değilse tutup tutmadığı bilinemez.
+        return SectionResult(
+            key="sla", title="SLA takibi", status="unknown",
+            summary="Bu kapsam için tanımlı SLA hedefi yok.",
+            unknown_reason=(
+                "Erişilebilirlik hedefi tanımlanmadan SLA takibi yapılamaz. Yönetim → SLA "
+                "hedefleri bölümünden müşteri ya da uygulama bazında hedef tanımlayın "
+                "(ör. %99.9, aylık)."
+            ),
+        )
+
+    findings: list[FindingDraft] = []
+    rows: list[dict] = []
+    for target in targets:
+        status_row = await evaluate_target(ctx.session, target, ctx.period_end)
+        rows.append(status_row.to_dict())
+        if not status_row.measured:
+            continue
+
+        budget = status_row.remaining_budget_seconds or 0.0
+        if status_row.already_lost:
+            # MATEMATİKSEL KAYIP: kalan süre kusursuz geçse bile hedef tutmuyor. Bunu dönem
+            # ortasında bilmek, dönem sonunda öğrenmekten bambaşka bir yönetim kararı üretir.
+            findings.append(
+                FindingDraft(
+                    section="sla",
+                    severity="critical",
+                    title=f"{status_row.scope_label}: SLA hedefi bu dönem tutturulamayacak",
+                    detail=(
+                        f"Hedef %{status_row.target_pct}, dönem sonuna kadar kalan süre "
+                        "kesintisiz geçse bile ulaşılabilecek en iyi oran "
+                        f"%{status_row.best_case_pct}. Yani hedef matematiksel olarak "
+                        "kaybedilmiş durumda."
+                    ),
+                    evidence={
+                        "metric": "sla_best_case_pct",
+                        "value": status_row.best_case_pct,
+                        "threshold": status_row.target_pct,
+                        "measured_at": ctx.period_end.isoformat(),
+                    },
+                    facts=[
+                        fact("Hedef", f"%{status_row.target_pct}"),
+                        fact("Gerçekleşen", f"%{status_row.achieved_pct}", "bad"),
+                        fact("En iyi durum", f"%{status_row.best_case_pct}", "bad"),
+                        fact("Plansız kesinti", format_duration(status_row.unplanned_seconds), "bad"),
+                        fact("En kötü veritabanı", status_row.worst_instance or "—"),
+                    ],
+                    recommendation=(
+                        "Kalan dönemde plansız kesinti riskini düşürün ve dönem sonu için "
+                        "müşteriye açıklama hazırlayın."
+                    ),
+                    advice=_sla_advice(status_row, lost=True),
+                    fingerprint_parts=("sla_lost", status_row.scope_type, str(status_row.scope_id or 0)),
+                    related_object_type=(
+                        status_row.scope_type if status_row.scope_type != "global" else None
+                    ),
+                    related_object_id=status_row.scope_id,
+                )
+            )
+        elif budget <= 0:
+            findings.append(
+                FindingDraft(
+                    section="sla",
+                    severity="critical",
+                    title=f"{status_row.scope_label}: kesinti bütçesi tükendi",
+                    detail=(
+                        f"Hedef %{status_row.target_pct}; bu dönem için ayrılan kesinti bütçesi "
+                        "tükendi. Bundan sonraki her plansız kesinti taahhüdü doğrudan ihlal "
+                        "eder."
+                    ),
+                    evidence={
+                        "metric": "sla_remaining_budget_seconds",
+                        "value": round(budget, 1),
+                        "threshold": 0,
+                        "measured_at": ctx.period_end.isoformat(),
+                    },
+                    facts=[
+                        fact("Hedef", f"%{status_row.target_pct}"),
+                        fact("Gerçekleşen", f"%{status_row.achieved_pct}", "bad"),
+                        fact("Kalan bütçe", format_duration(budget), "bad"),
+                    ],
+                    recommendation="Bakım planlarını dönem sonuna kadar erteleyin.",
+                    advice=_sla_advice(status_row, lost=False),
+                    fingerprint_parts=("sla_budget", status_row.scope_type, str(status_row.scope_id or 0)),
+                    related_object_type=(
+                        status_row.scope_type if status_row.scope_type != "global" else None
+                    ),
+                    related_object_id=status_row.scope_id,
+                )
+            )
+        elif budget < SLA_BUDGET_WARNING_RATIO * (
+            (status_row.period_end - status_row.period_start).total_seconds()
+            * (1 - status_row.target_pct / 100)
+        ):
+            findings.append(
+                FindingDraft(
+                    section="sla",
+                    severity="warning",
+                    title=f"{status_row.scope_label}: kesinti bütçesinin çoğu tüketildi",
+                    detail=(
+                        f"Hedef %{status_row.target_pct}; kalan kesinti bütçesi "
+                        f"{format_duration(budget)}. Planlanacak her bakım bu bütçeden düşer."
+                    ),
+                    evidence={
+                        "metric": "sla_remaining_budget_seconds",
+                        "value": round(budget, 1),
+                        "threshold": 0,
+                        "measured_at": ctx.period_end.isoformat(),
+                    },
+                    facts=[
+                        fact("Hedef", f"%{status_row.target_pct}"),
+                        fact("Gerçekleşen", f"%{status_row.achieved_pct}"),
+                        fact("Kalan bütçe", format_duration(budget), "bad"),
+                    ],
+                    recommendation="Kalan dönemde plansız kesinti riskini azaltın.",
+                    advice=_sla_advice(status_row, lost=False),
+                    fingerprint_parts=("sla_budget_low", status_row.scope_type, str(status_row.scope_id or 0)),
+                    related_object_type=(
+                        status_row.scope_type if status_row.scope_type != "global" else None
+                    ),
+                    related_object_id=status_row.scope_id,
+                )
+            )
+
+    measured_rows = [r for r in rows if r["measured"]]
+    if not measured_rows:
+        return SectionResult(
+            key="sla", title="SLA takibi", status="unknown",
+            summary="SLA hedefi tanımlı ama ölçüm yok.",
+            data={"targets": rows},
+            unknown_reason=(
+                "Dönem içinde hiç ölçüm alınmamış; erişilebilirlik hesaplanamıyor. Bu, "
+                "sistemin ayakta olduğu anlamına GELMEZ."
+            ),
+        )
+
+    breached = [r for r in measured_rows if r["met"] is False]
+    status = _worst_status([f.severity for f in findings]) if findings else ("warning" if breached else "ok")
+    summary = (
+        f"{len(breached)} hedef karşılanmıyor ({len(measured_rows)} hedef izleniyor)."
+        if breached
+        else f"{len(measured_rows)} SLA hedefinin tamamı karşılanıyor."
+    )
+    return SectionResult(
+        key="sla", title="SLA takibi", status=status, summary=summary,
+        findings=findings, data={"targets": rows},
+    )
+
+
+def _sla_advice(status_row, *, lost: bool) -> Advice:
+    """SLA bulgusu için beş parçalı öneri.
+
+    Öneriler teknik değil YÖNETSEL: SLA'yı kurtaran şey bir komut değil, kalan dönemde
+    risk almamak ve müşteriyle doğru zamanda konuşmak.
+    """
+    return Advice(
+        title=(
+            "Dönem sonu için müşteri iletişimini planlayın"
+            if lost
+            else "Kalan kesinti bütçesini koruyun"
+        ),
+        why=(
+            f"{status_row.scope_label} için taahhüt %{status_row.target_pct} "
+            f"({PERIOD_LABELS.get(status_row.period, status_row.period).lower()}). "
+            + (
+                "Kalan süre kesintisiz geçse bile hedefe ulaşılamıyor; sürpriz bir dönem sonu "
+                "raporu, sorunun kendisinden daha çok güven kaybettirir."
+                if lost
+                else f"Kalan bütçe {format_duration(status_row.remaining_budget_seconds or 0)}; "
+                "bu bütçe tükendikten sonra her kesinti doğrudan ihlal demek."
+            )
+        ),
+        steps=[
+            AdviceStep(
+                "Dönem içindeki plansız kesintilerin kök nedenlerini gözden geçirin; "
+                "tekrar edenler öncelikli."
+            ),
+            AdviceStep(
+                "Planlanmış bakımları dönem sonuna kadar erteleyin ya da bakım penceresi "
+                "tanımlayarak planlı hale getirin — planlı süre bütçeden düşmez."
+            ),
+            AdviceStep(
+                "Riskli değişiklikleri (sürüm yükseltme, şema göçü) bir sonraki döneme alın."
+            ),
+        ]
+        + (
+            [
+                AdviceStep(
+                    "Müşteriye dönem sonunu beklemeden bilgi verin; nedeni, alınan önlemi ve "
+                    "telafi planını birlikte sunun."
+                )
+            ]
+            if lost
+            else []
+        ),
+        cautions=[
+            "Bu ölçüm VERİTABANI erişilebilirliğidir, uygulama erişilebilirliği değil: "
+            "replikalı bir kümede bir düğümün düşmesi uygulama için kesinti olmayabilir.",
+            "Bakım penceresi geçmişe dönük tanımlanamaz; geçmiş bir kesintiyi sonradan "
+            "planlı yapmak mümkün değil.",
+        ],
+        verification=(
+            "Bir sonraki raporda 'kalan kesinti bütçesi' değerinin azalmaması gerekir."
+        ),
     )
 
 

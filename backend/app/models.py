@@ -1040,3 +1040,33 @@ class MaintenanceWindow(Base):
     created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SlaTarget(Base):
+    """Erişilebilirlik hedefi (Faz 28 İŞ 3b).
+
+    Müşteri ya da uygulama bazında "%99.9, aylık" gibi bir taahhüt. Hedef olmadan
+    erişilebilirlik sayısı bir bilgi ama bir KARAR değil: %99.7 iyi mi kötü mü, ancak
+    taahhüde göre söylenebilir.
+
+    Kapsam hiyerarşisi bulgu kararları ve bakım pencereleriyle aynı. Aynı kavramın üç farklı
+    kapsam modeli olması, üçünü de yanlış hatırlamaya yol açardı.
+    """
+
+    __tablename__ = "sla_targets"
+    __table_args__ = (
+        UniqueConstraint("scope_type", "scope_id", name="uq_sla_target_scope"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scope_type: Mapped[str] = mapped_column(String(16), nullable=False, default="customer", index=True)
+    scope_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # Hedef yüzde (ör. 99.9). Float: 99.95 gibi değerler yaygın.
+    target_pct: Mapped[float] = mapped_column(Float, nullable=False, default=99.9)
+    # monthly | quarterly — ölçüm dönemi. Yıllık bilinçli olarak yok: bir yılın ortasında
+    # "kalan kesinti bütçesi" sayısı o kadar büyük çıkıyor ki uyarı değeri kalmıyor.
+    period: Mapped[str] = mapped_column(String(16), nullable=False, default="monthly")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -30,6 +30,7 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
   const loose = (value: unknown): Record<string, any> => (value as Record<string, any>) || {};
   const availability = loose(data.availability);
   const backup = loose(data.backup);
+  const sla = (data.sla || []).map(loose);
   const inventory = loose(data.inventory);
   const trend = loose(data.trend);
   const risks = (data.risks || []).map(loose);
@@ -102,6 +103,41 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
               </div>
             )}
           </>
+        )}
+      </div>
+
+      {/*
+        Hizmet seviyesi (Faz 28 İŞ 3b). "Kalan kesinti bütçesi" çıplak yüzdeden çok daha
+        anlamlı: ayın 3'ünde "%99.2" görmek hiçbir şey söylemez, "47 dakikanız kaldı" ise
+        doğrudan bakım planlamak için kullanılabilir.
+      */}
+      <div className="card">
+        <h3 className="chart-title">Hizmet seviyesi (SLA)</h3>
+        {sla.length === 0 ? (
+          <p className="muted-note">
+            Tanımlı bir erişilebilirlik hedefi yok; hedefe uygunluk değerlendirilemiyor.
+          </p>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Kapsam</th>
+                  <th>Dönem</th>
+                  <th>Durum</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sla.map((row, i) => (
+                  <tr key={i}>
+                    <td>{row.scope_label}</td>
+                    <td>{row.period_label || "—"}</td>
+                    <td className={row.met === false ? "warn-text" : undefined}>{row.statement}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 

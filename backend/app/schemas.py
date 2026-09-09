@@ -1746,6 +1746,41 @@ class MaintenanceWindowOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# --- SLA hedefleri (Faz 28 İŞ 3b) ---
+
+
+class SlaTargetCreate(BaseModel):
+    """Erişilebilirlik taahhüdü. `created_by` oturumdan yazılıyor, istemciden alınmıyor."""
+
+    scope_type: Literal["instance", "group", "application", "customer", "global"] = "customer"
+    scope_id: int | None = None
+    target_pct: float = Field(default=99.9, gt=0, le=100)
+    # Yıllık bilinçli olarak yok: bir yılın ortasında "kalan kesinti bütçesi" o kadar büyük
+    # çıkıyor ki uyarı değeri kalmıyor.
+    period: Literal["monthly", "quarterly"] = "monthly"
+    enabled: bool = True
+
+
+class SlaTargetUpdate(BaseModel):
+    target_pct: float | None = Field(default=None, gt=0, le=100)
+    period: Literal["monthly", "quarterly"] | None = None
+    enabled: bool | None = None
+
+
+class SlaTargetOut(BaseModel):
+    id: int
+    scope_type: str
+    scope_id: int | None
+    target_pct: float
+    period: str
+    enabled: bool
+    created_by: str
+    created_at: datetime
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class HealthReportScheduleUpdate(BaseModel):
     hour: int | None = Field(default=None, ge=0, le=23)
     enabled: bool | None = None
@@ -1771,6 +1806,8 @@ class ExecutiveReportOut(BaseModel):
     # Faz 28 İŞ 1b: "son yedek X gün önce, hedefe uygun/uygun değil". `sla_ok` üç değerli —
     # None "belirlenemedi" demek ve "uygun değil" ile karıştırılmamalı.
     backup: dict[str, Any] = {}
+    # Faz 28 İŞ 3b: kapsam başına SLA durumu (hedef, gerçekleşen, kalan bütçe, tutuyor mu).
+    sla: list[dict[str, Any]] = []
     inventory: dict[str, Any] = {}
     risks: list[dict[str, Any]] = []
     trend: dict[str, Any] = {}

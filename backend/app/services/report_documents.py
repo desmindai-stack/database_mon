@@ -47,6 +47,7 @@ _STATUS_TONE = {"ok": "ok", "info": "info", "warning": "warning", "critical": "c
 EXECUTIVE_SECTION_KEYS = [
     "summary",
     "availability",
+    "sla",
     "backup",
     "inventory",
     "risks",
@@ -443,6 +444,43 @@ def build_executive_document(
             ]
             if rows:
                 doc.blocks.append(table(["Uygulama", "Erişilebilirlik", "Kesinti", "Toplam süre"], rows))
+
+    if _wanted("sla", selected):
+        # Faz 28 İŞ 3b: SLA bölümü. "Kalan kesinti bütçesi" çıplak yüzdeden çok daha anlamlı —
+        # "47 dakikanız kaldı" cümlesi bakım planlamak için doğrudan kullanılabilir.
+        doc.blocks.append(heading("Hizmet seviyesi (SLA)", 2))
+        if not executive.sla:
+            doc.blocks.append(
+                note(
+                    "Tanımlı bir erişilebilirlik hedefi yok; hedefe uygunluk "
+                    "değerlendirilemiyor.",
+                    "neutral",
+                )
+            )
+        else:
+            for row in executive.sla:
+                tone = "ok" if row.get("met") else ("critical" if row.get("met") is False else "neutral")
+                doc.blocks.append(
+                    note(f"{row['scope_label']} ({row.get('period_label') or '—'}): {row['statement']}", tone)
+                )
+            rows = [
+                [
+                    r["scope_label"],
+                    r.get("period_label") or "—",
+                    f"%{r['target_pct']}",
+                    "—" if r.get("achieved_pct") is None else f"%{r['achieved_pct']}",
+                    _fmt_duration(r.get("planned_seconds")),
+                    _fmt_duration(r.get("unplanned_seconds")),
+                    _fmt_duration(r.get("remaining_budget_seconds")),
+                ]
+                for r in executive.sla
+            ]
+            doc.blocks.append(
+                table(
+                    ["Kapsam", "Dönem", "Hedef", "Gerçekleşen", "Planlı bakım", "Plansız kesinti", "Kalan bütçe"],
+                    rows,
+                )
+            )
 
     if _wanted("backup", selected):
         # Faz 28 İŞ 1b: yönetici raporunda yedek güvencesi. Teknik detay YOK — kaynak adı,

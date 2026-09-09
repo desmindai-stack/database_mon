@@ -417,6 +417,7 @@ async def list_exportable_sections(report_id: int, view: str = Query(default="te
         labels = {
             "summary": "Genel değerlendirme",
             "availability": "Erişilebilirlik",
+            "sla": "Hizmet seviyesi (SLA)",
             "backup": "Yedek güvencesi",
             "inventory": "Sistem envanteri",
             "risks": "Risk özeti",
