@@ -3123,6 +3123,12 @@
             "title": "Availability",
             "type": "object"
           },
+          "backup": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Backup",
+            "type": "object"
+          },
           "decisions": {
             "default": [],
             "items": {

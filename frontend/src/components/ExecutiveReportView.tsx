@@ -22,9 +22,20 @@ function fmtDuration(seconds: number): string {
  * `ExecutiveReport` yapısını gösterir. Sızıntı riski böylece tek bir yerde (backend) kalır.
  */
 export default function ExecutiveReportView({ data }: { data: ExecutiveReport }) {
-  const availability = data.availability || {};
-  const inventory = data.inventory || {};
-  const trend = data.trend || {};
+  // `ExecutiveReport` üretilen şemadan türetiliyor ve bu alanlar orada serbest sözlük
+  // (`dict[str, Any]`) — üretilen tipte `unknown` değerli geliyor. Alan ADLARININ hizası
+  // derleyici tarafından korunuyor; sözlüklerin İÇİ zaten şemasız olduğu için burada tek
+  // seferlik gevşetiliyor. Gevşetme dört satırla sınırlı ve bileşenin geri kalanı okunur
+  // kalıyor.
+  const loose = (value: unknown): Record<string, any> => (value as Record<string, any>) || {};
+  const availability = loose(data.availability);
+  const backup = loose(data.backup);
+  const inventory = loose(data.inventory);
+  const trend = loose(data.trend);
+  const risks = (data.risks || []).map(loose);
+  const recommendations = (data.recommendations || []).map(loose);
+  const decisions = (data.decisions || []).map(loose);
+  const workDone = loose(data.work_done);
 
   return (
     <div className="executive-report">
@@ -94,6 +105,49 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
         )}
       </div>
 
+      {/*
+        Yedek güvencesi (Faz 28 İŞ 1b). Bulgu OLMASA DA gösteriliyor: yöneticinin sorduğu soru
+        "sorun var mı" değil "yedeğim var mı" ve bu sorunun cevabı yalnızca kötü haber
+        olduğunda görünürse rapor güvence vermiyor demektir.
+
+        Üç durum var, iki değil: uygun, uygun değil ve BELİRLENEMEDİ. Sonuncusunu "uygun
+        değil" göstermek yanlış alarm, "uygun" göstermek sahte güvence olurdu.
+      */}
+      <div className="card">
+        <h3 className="chart-title">Yedek güvencesi</h3>
+        <p className={backup.sla_ok === false ? "exec-backup-alert" : "muted-note"}>
+          {backup.statement || "Bu dönemde yedek durumu değerlendirilemedi."}
+        </p>
+        {backup.measured && (
+          <div className="stats-grid compact">
+            <div className="stat-tile">
+              <div className="stat-tile-label">Değerlendirilen veritabanı</div>
+              <div className="stat-tile-value">{backup.database_count ?? 0}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="stat-tile-label">Hedefe uygun</div>
+              <div className="stat-tile-value">{backup.protected_count ?? 0}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="stat-tile-label">Hedefin dışında</div>
+              <div className="stat-tile-value">{backup.breached_count ?? 0}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="stat-tile-label">Belirlenemedi</div>
+              <div className="stat-tile-value">{backup.unknown_count ?? 0}</div>
+            </div>
+            <div className="stat-tile">
+              <div className="stat-tile-label">En eski yedek</div>
+              <div className="stat-tile-value">
+                {backup.oldest_backup_days === null || backup.oldest_backup_days === undefined
+                  ? "—"
+                  : `${Math.round(backup.oldest_backup_days)} gün önce`}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
       <div className="card">
         <h3 className="chart-title">Sistem envanteri</h3>
         <div className="stats-grid compact">
@@ -127,11 +181,11 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
 
       <div className="card">
         <h3 className="chart-title">Risk özeti</h3>
-        {data.risks.length === 0 ? (
+        {risks.length === 0 ? (
           <p className="ok-text">Bu dönemde tespit edilmiş bir risk yok.</p>
         ) : (
           <div className="risk-list">
-            {data.risks.map((risk, i) => (
+            {risks.map((risk, i) => (
               <div key={i} className={`risk-item ${RISK_TONE[risk.level] || "info"}`}>
                 <div className="risk-head">
                   <span className={`insight-severity ${RISK_TONE[risk.level] || "info"}`}>
@@ -152,11 +206,11 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
           buraya HİÇ girmez — o, ekibin kendi iç gürültü yönetimi kararı. */}
       <div className="card">
         <h3 className="chart-title">Planlanan çalışmalar ve kabul edilen riskler</h3>
-        {(data.decisions || []).length === 0 ? (
+        {decisions.length === 0 ? (
           <p className="muted-note">Bu dönemde planlanmış çalışma ya da kabul edilmiş risk yok.</p>
         ) : (
           <div className="risk-list">
-            {data.decisions.map((item: any, i: number) => (
+            {decisions.map((item, i) => (
               <div key={i} className={`risk-item ${item.kind === "planned" ? "info" : "warning"}`}>
                 <div className="risk-head">
                   <span className={`insight-severity ${item.kind === "planned" ? "info" : "warning"}`}>
@@ -213,12 +267,12 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
 
       <div className="card">
         <h3 className="chart-title">Bu dönemde yapılanlar</h3>
-        <p>{data.work_done?.note}</p>
+        <p>{workDone.note}</p>
       </div>
 
       <div className="card">
         <h3 className="chart-title">Öneriler</h3>
-        {data.recommendations.length === 0 ? (
+        {recommendations.length === 0 ? (
           <p className="muted-note">Bu dönem için aksiyon gerektiren bir öneri yok.</p>
         ) : (
           <div className="table-wrap">
@@ -233,7 +287,7 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
                 </tr>
               </thead>
               <tbody>
-                {data.recommendations.map((rec, i) => (
+                {recommendations.map((rec, i) => (
                   <tr key={i}>
                     <td>
                       <span className={`insight-severity ${RISK_TONE[rec.priority] || "info"}`}>{rec.priority}</span>

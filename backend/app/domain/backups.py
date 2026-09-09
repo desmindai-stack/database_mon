@@ -140,6 +140,22 @@ SIZE_ANOMALY_RATIO = 0.5
 #: sonsuza kadar alarm üretirse alarm körlüğü yaratır, ama izi kaybolursa da denetim yapılamaz.
 FAILURE_STICKY_HOURS = 24.0
 
+def failure_sticky_hours(instance_options: dict | None) -> float:
+    """Başarısız yedek durumunun ne kadar süre "güncel" sayılacağı.
+
+    Instance başına ayarlanabiliyor (`options.backup_failure_sticky_hours`) çünkü yedek
+    sıklığı kuruma göre değişiyor: 15 dakikada bir log yedeği alan bir sistemde 24 saatlik
+    yapışkanlık çok uzun, haftalık yedek alan bir sistemde ise 24 saat çok kısa.
+    """
+    try:
+        value = float((instance_options or {}).get("backup_failure_sticky_hours", FAILURE_STICKY_HOURS))
+    except (TypeError, ValueError):
+        return FAILURE_STICKY_HOURS
+    # Sıfır ya da negatif bir değer, başarısızlığı hiç göstermemek demek olurdu — sessizce
+    # kabul etmek yerine varsayılana dönülüyor.
+    return value if value > 0 else FAILURE_STICKY_HOURS
+
+
 #: Replikasyon slotu bu kadar WAL biriktirdiyse disk riski var.
 #: Kullanılmayan bir slot WAL'ı sonsuza kadar tutar ve diski doldurur — bu, PostgreSQL'de
 #: en sık görülen "disk doldu" sebeplerinden biri.

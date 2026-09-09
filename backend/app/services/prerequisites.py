@@ -757,6 +757,66 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
                     detail=format_version(version_num),
                 )
             )
+        # --- Yedek görünürlüğü (Faz 28 İŞ 1b) ---------------------------------------
+        #
+        # PostgreSQL'de SQL Server'ın msdb'si gibi merkezi bir yedek geçmişi YOK. Gerçek
+        # yedekler neredeyse her zaman harici bir araçla (pgBackRest, Barman, WAL-G) alınıyor
+        # ve durumları yalnızca o aracın çıktısında — yani host-agent olmadan dbace bu
+        # sunucuda yedek olup olmadığını GÖREMEZ. Bu, ön koşul listesinde açıkça durmalı:
+        # aksi halde boş bir yedek bölümü "yedek yok" gibi okunur.
+        archive_mode = await _show_or_none(conn, "archive_mode")
+        if str(archive_mode or "off").lower() in ("on", "always"):
+            checks.append(
+                _ok(
+                    "wal_archiving",
+                    "WAL arşivleme (archive_mode)",
+                    "Açık — sürekli arşivleme durumu ve son arşivleme zamanı okunabiliyor, "
+                    "noktasal geri dönüş penceresi izlenebiliyor.",
+                    detail=str(archive_mode),
+                )
+            )
+        else:
+            checks.append(
+                _missing(
+                    "wal_archiving",
+                    "WAL arşivleme (archive_mode)",
+                    "medium",
+                    f"Değer '{archive_mode}' — sürekli arşivleme kapalı. Geri dönüş yalnızca "
+                    "son taban yedeğin alındığı ana yapılabilir; aradaki işlemler bir arıza "
+                    "anında kurtarılamaz. Yedekleme bilinçli olarak yalnızca anlık görüntüye "
+                    "dayanıyorsa bu kontrol yoksayılabilir.",
+                    "ALTER SYSTEM SET archive_mode = on;\n"
+                    "ALTER SYSTEM SET archive_command = '<arsiv_komutu>';\n"
+                    "-- archive_mode değişikliği yeniden başlatma gerektirir.",
+                    detail=str(archive_mode),
+                )
+            )
+
+        if (target.options or {}).get("agent_url"):
+            checks.append(
+                _ok(
+                    "backup_tool_visibility",
+                    "Yedek aracı görünürlüğü (host-agent)",
+                    "Host-agent tanımlı — pgBackRest / Barman / WAL-G durumu okunabiliyor.",
+                    detail=str((target.options or {}).get("agent_url")),
+                )
+            )
+        else:
+            checks.append(
+                _missing(
+                    "backup_tool_visibility",
+                    "Yedek aracı görünürlüğü (host-agent)",
+                    "high",
+                    "Host-agent tanımlı değil. PostgreSQL'de yedek geçmişi veritabanının "
+                    "içinden okunamıyor; pgBackRest / Barman / WAL-G durumu yalnızca agent "
+                    "üzerinden görülebiliyor. Bu sunucuda harici bir yedek aracı "
+                    "kullanılıyorsa dbace onu GÖREMEZ ve yedek durumu hakkında güvence "
+                    "veremez — bu, 'yedek yok' anlamına gelmez, 'bilinmiyor' anlamına gelir.",
+                    "-- Instance seçeneklerine agent_url (ve gerekiyorsa agent_token) ekleyin;\n"
+                    "-- host-agent'ın yedek aracıyla aynı sunucuda çalışması gerekir.",
+                )
+            )
+
     finally:
         await conn.close()
 
@@ -822,6 +882,47 @@ async def check_sqlserver_prerequisites(target: ConnectionTarget) -> list[Prereq
                     _unknown(
                         "dmv_query_stats",
                         "sys.dm_exec_query_stats erişimi",
+                        "high",
+                        f"Sorgu başarısız oldu, sebep belirsiz: {exc}",
+                    )
+                )
+
+        # 2b. msdb yedek geçmişi (Faz 28 İŞ 1b) — "son yedek ne zaman alındı" sorusunun
+        # tek yetkili kaynağı. Okunamıyorsa dbace yedek durumu hakkında hiçbir şey söyleyemez
+        # ve bunu "yedek yok" gibi sunmak yanlış olur.
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT TOP 1 backup_set_id FROM msdb.dbo.backupset")
+                await cur.fetchone()
+            checks.append(
+                _ok(
+                    "backup_history",
+                    "msdb yedek geçmişi",
+                    "Okunabiliyor — yedek yaşı, süresi ve boyutu izlenebiliyor.",
+                    severity="high",
+                )
+            )
+        except Exception as exc:
+            lower = str(exc).lower()
+            if "permission" in lower or "denied" in lower or "principal" in lower:
+                checks.append(
+                    _unauthorized(
+                        "backup_history",
+                        "msdb yedek geçmişi",
+                        "high",
+                        "Yedek geçmişi okunamıyor — dbace son yedeğin ne zaman alındığını "
+                        "GÖREMEZ. Yedek bölümü boş kalır ve bu, yedek alınmadığı anlamına "
+                        "gelmez.",
+                        "USE msdb;\n"
+                        "GRANT SELECT ON dbo.backupset TO [<login>];\n"
+                        "GRANT SELECT ON dbo.backupmediafamily TO [<login>];",
+                    )
+                )
+            else:
+                checks.append(
+                    _unknown(
+                        "backup_history",
+                        "msdb yedek geçmişi",
                         "high",
                         f"Sorgu başarısız oldu, sebep belirsiz: {exc}",
                     )

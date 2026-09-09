@@ -22,8 +22,13 @@ from app.services.prerequisites import (
 from tests.fakes import FakeAsyncConnection, FakeSqlServerConnection
 
 
-def _pg_target() -> ConnectionTarget:
-    return ConnectionTarget(host="pg.internal", port=5432, database="app", username="dbace", password="p")
+def _pg_target(**options) -> ConnectionTarget:
+    # Faz 28 İŞ 1b: PostgreSQL'de yedek durumu ancak host-agent üzerinden görülebiliyor, o
+    # yüzden "her şey yolunda" senaryosunda agent tanımlı.
+    return ConnectionTarget(
+        host="pg.internal", port=5432, database="app", username="dbace", password="p",
+        options={"agent_url": "http://agent.internal:8099", **options},
+    )
 
 
 def _sqlserver_target() -> ConnectionTarget:
@@ -52,6 +57,8 @@ def _pg_responses(**overrides) -> dict:
         "SHOW auto_explain.log_min_duration": "1s",
         "SHOW auto_explain.log_format": "json",
         "SHOW auto_explain.log_analyze": "on",
+        # Faz 28 İŞ 1b — yedek görünürlüğü.
+        "SHOW archive_mode": "on",
     }
     base.update(overrides)
     return base
@@ -198,6 +205,8 @@ def _sqlserver_responses(**overrides) -> dict:
         "sys.database_query_store_options": ([("READ_WRITE", "READ_WRITE")], [("actual", ""), ("desired", "")]),
         # Faz 25 İŞ 5 — bekleme örnekleyicisinin okuduğu DMV'ler.
         "sys.dm_os_waiting_tasks": ([(3,)], [("", "")]),
+        # Faz 28 İŞ 1b — msdb yedek geçmişi okunabiliyor.
+        "msdb.dbo.backupset": ([(1,)], [("backup_set_id",)]),
     }
     base.update(overrides)
     return base
@@ -262,3 +271,46 @@ async def test_sqlserver_dmv_permission_denied(monkeypatch):
 async def test_run_prerequisite_checks_rejects_unsupported_engine():
     with pytest.raises(ValueError):
         await run_prerequisite_checks(DatabaseEngine.MONGODB, _pg_target())
+
+
+# --- Yedek görünürlüğü (Faz 28 İŞ 1b) ----------------------------------------------------
+#
+# Yedek bilgisi okunamıyorsa dbace bunu SESSİZCE geçemez: boş bir yedek bölümü "yedek yok"
+# gibi okunur ve bu, gerçekten yedeği olan bir kurumu paniğe sürükler.
+
+
+async def test_postgresql_reports_disabled_wal_archiving(monkeypatch):
+    conn = FakeAsyncConnection(_pg_responses(**{"SHOW archive_mode": "off"}))
+    await _patch_asyncpg_connect(monkeypatch, conn)
+
+    check = _by_key(await check_postgresql_prerequisites(_pg_target()), "wal_archiving")
+    assert check.status == "missing"
+    assert "archive_mode" in (check.fix or "")
+
+
+async def test_postgresql_without_agent_says_backups_are_invisible_not_absent(monkeypatch):
+    """PostgreSQL'de gerçek yedekler harici araçlarla alınıyor; agent yoksa dbace kör."""
+    conn = FakeAsyncConnection(_pg_responses())
+    await _patch_asyncpg_connect(monkeypatch, conn)
+    target = ConnectionTarget(
+        host="pg.internal", port=5432, database="app", username="dbace", password="p", options={}
+    )
+
+    check = _by_key(await check_postgresql_prerequisites(target), "backup_tool_visibility")
+    assert check.status == "missing"
+    assert check.severity == "high"
+    assert "GÖREMEZ" in check.impact
+    assert "bilinmiyor" in check.impact
+
+
+async def test_sqlserver_reports_unreadable_backup_history(monkeypatch):
+    conn = FakeSqlServerConnection(
+        _sqlserver_responses(**{"msdb.dbo.backupset": PermissionError("SELECT permission denied")})
+    )
+    await _patch_aioodbc_connect(monkeypatch, conn)
+
+    check = _by_key(await check_sqlserver_prerequisites(_sqlserver_target()), "backup_history")
+    assert check.status == "unauthorized"
+    assert "backupset" in (check.fix or "")
+    # "Yedek yok" iddiası yok — yalnızca "göremiyoruz".
+    assert "gelmez" in check.impact

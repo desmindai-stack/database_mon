@@ -47,6 +47,7 @@ _STATUS_TONE = {"ok": "ok", "info": "info", "warning": "warning", "critical": "c
 EXECUTIVE_SECTION_KEYS = [
     "summary",
     "availability",
+    "backup",
     "inventory",
     "risks",
     "decisions",
@@ -173,6 +174,17 @@ def _finding_blocks(finding: ReportFinding) -> list[Block]:
     return blocks
 
 
+def _fmt_backup_age(hours: float | None) -> str:
+    """Yedek yaşı. `None` = "yok" DEĞİL, "bilinmiyor" — ikisini aynı göstermek yanıltıcı olurdu."""
+    if hours is None:
+        return "—"
+    if hours < 1:
+        return f"{hours * 60:.0f} dk önce"
+    if hours < 48:
+        return f"{hours:.1f} saat önce"
+    return f"{hours / 24:.1f} gün önce"
+
+
 def _section_data_blocks(key: str, data: dict[str, Any]) -> list[Block]:
     """Bölüme özgü tabloları üretir. Bilinmeyen bölümler sessizce atlanır (bölüm eklendiğinde
     tablo eklenmese de belge yine üretilir)."""
@@ -192,6 +204,42 @@ def _section_data_blocks(key: str, data: dict[str, Any]) -> list[Block]:
         blocks.append(table(["Veritabanı", "Erişilebilirlik", "Kesinti", "Toplam süre", "En uzun"], rows))
         if data.get("method"):
             blocks.append(note(data["method"], "neutral"))
+
+    elif key == "backup" and data.get("instances"):
+        # Teknik raporda "hangi yöntemlere bakıldı" sütunu ZORUNLU: yedek bulunamadığında
+        # DBA'nın ilk sorusu "nereye baktınız" oluyor ve cevap tabloda yoksa bulgu eyleme
+        # dönüşmüyor.
+        rows = []
+        for r in data["instances"]:
+            if r.get("sla_ok") is True:
+                sla = "Uygun"
+            elif r.get("sla_ok") is False:
+                sla = "Uygun değil"
+            else:
+                sla = "Belirlenemedi"
+            rows.append(
+                [
+                    r.get("instance_name", "—"),
+                    _fmt_backup_age(r.get("last_full_age_hours")),
+                    _fmt_backup_age(r.get("last_log_age_hours")),
+                    sla,
+                    ", ".join(r.get("methods_found") or []) or "—",
+                    ", ".join(r.get("methods_checked") or []) or "—",
+                ]
+            )
+        blocks.append(
+            table(
+                ["Veritabanı", "Son tam yedek", "Son log/WAL", "Eşiğe uygunluk", "Bulunan kaynak", "Bakılan kaynaklar"],
+                rows,
+            )
+        )
+        running = [
+            f"{r.get('instance_name')}: {len(r.get('running') or [])} devam eden yedek"
+            for r in data["instances"]
+            if r.get("running")
+        ]
+        if running:
+            blocks.append(bullets(running))
 
     elif key == "performance" and data.get("top_queries"):
         rows = [
@@ -369,6 +417,31 @@ def build_executive_document(
             ]
             if rows:
                 doc.blocks.append(table(["Uygulama", "Erişilebilirlik", "Kesinti", "Toplam süre"], rows))
+
+    if _wanted("backup", selected):
+        # Faz 28 İŞ 1b: yönetici raporunda yedek güvencesi. Teknik detay YOK — kaynak adı,
+        # sunucu adı, komut ya da eşik değeri geçmiyor; yalnızca "ne kadar eski" ve "uygun mu".
+        doc.blocks.append(heading("Yedek güvencesi", 2))
+        backup = executive.backup or {}
+        tone = {True: "ok", False: "critical"}.get(backup.get("sla_ok"), "neutral")
+        doc.blocks.append(note(backup.get("statement") or "Yedek durumu değerlendirilemedi.", tone))
+        if backup.get("measured"):
+            doc.blocks.append(
+                keyvalues(
+                    [
+                        ("Değerlendirilen veritabanı", str(backup.get("database_count", 0))),
+                        ("Hedefe uygun", str(backup.get("protected_count", 0))),
+                        ("Hedefin dışında", str(backup.get("breached_count", 0))),
+                        ("Belirlenemedi", str(backup.get("unknown_count", 0))),
+                        (
+                            "En eski yedek",
+                            f"{backup['oldest_backup_days']:.0f} gün önce"
+                            if backup.get("oldest_backup_days") is not None
+                            else "—",
+                        ),
+                    ]
+                )
+            )
 
     if _wanted("inventory", selected):
         inventory = executive.inventory

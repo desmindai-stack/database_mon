@@ -1705,6 +1705,9 @@ class ExecutiveReportOut(BaseModel):
     grade: str
     grade_reason: str
     availability: dict[str, Any] = {}
+    # Faz 28 İŞ 1b: "son yedek X gün önce, hedefe uygun/uygun değil". `sla_ok` üç değerli —
+    # None "belirlenemedi" demek ve "uygun değil" ile karıştırılmamalı.
+    backup: dict[str, Any] = {}
     inventory: dict[str, Any] = {}
     risks: list[dict[str, Any]] = []
     trend: dict[str, Any] = {}

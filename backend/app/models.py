@@ -976,6 +976,11 @@ class BackupProbe(Base):
     archiver: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Replikasyon slotları: kullanılmayan bir slot WAL biriktirip diski doldurur.
     slots: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # SQL Server recovery model + son tam/log yedeği (Faz 28 İŞ 1b). FULL recovery model'de
+    # log yedeği alınmıyorsa transaction log sınırsız büyür — SQL Server'da en sık görülen
+    # "disk doldu" sebebi ve tamamen önlenebilir. Kayıt satırlarından türetilemiyor çünkü
+    # bilgi sunucu yapılandırmasında, yedek geçmişinde değil.
+    recovery_models: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     # Yöntem başına hata (yetki yok, araç kurulu değil, agent yok).
     errors: Mapped[dict[str, str] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

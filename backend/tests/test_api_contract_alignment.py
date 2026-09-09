@@ -124,6 +124,9 @@ MUST_BE_DERIVED = [
     "ExplainPlanNode",
     # Faz 27: elle yazılmış hâli `metric_sources`/`server_version_num` alanlarını bilmiyordu.
     "Instance",
+    # Faz 28: elle yazılmış hâli `backup` alanını bilmiyordu — yönetici raporundaki yedek
+    # güvencesi bölümü sessizce boş kalırdı.
+    "ExecutiveReport",
 ]
 
 # Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler

@@ -2884,6 +2884,13 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Backup
+             * @default {}
+             */
+            backup: {
+                [key: string]: unknown;
+            };
+            /**
              * Decisions
              * @default []
              */

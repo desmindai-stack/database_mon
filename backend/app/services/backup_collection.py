@@ -126,12 +126,15 @@ async def probe_instance(session: AsyncSession, instance: Instance) -> dict:
     if engine == str(DatabaseEngine.MONGODB):
         # Sessizce atlamıyoruz: sonda kaydı yazılıyor ki arayüz "desteklenmiyor" diyebilsin.
         outcome["errors"]["mongodb"] = "MongoDB için yedek izleme desteklenmiyor."
-        await _write_probe(session, instance.id, outcome, archiver=None, slots=[])
+        await _write_probe(
+            session, instance.id, outcome, archiver=None, slots=[], recovery_models=[]
+        )
         return outcome
 
     collector = get_collector(DatabaseEngine(engine), connection_target_for(instance))
     archiver = None
     slots: list = []
+    recovery_models: list = []
     records: list[dict] = []
 
     # --- Veritabanının kendi içinden ---
@@ -144,6 +147,7 @@ async def probe_instance(session: AsyncSession, instance: Instance) -> dict:
         payload = await collector.collect_backups()
         archiver = payload.get("archiver")
         slots = payload.get("slots") or []
+        recovery_models = payload.get("recovery_models") or []
         records.extend(payload.get("records") or [])
         outcome["errors"].update(payload.get("errors") or {})
 
@@ -202,12 +206,19 @@ async def probe_instance(session: AsyncSession, instance: Instance) -> dict:
                     outcome["methods_found"].append(tool)
 
     outcome["records"] = await store_backup_records(session, instance.id, records)
-    await _write_probe(session, instance.id, outcome, archiver=archiver, slots=slots)
+    await _write_probe(
+        session,
+        instance.id,
+        outcome,
+        archiver=archiver,
+        slots=slots,
+        recovery_models=recovery_models,
+    )
     return outcome
 
 
 async def _write_probe(
-    session: AsyncSession, instance_id: int, outcome: dict, *, archiver, slots
+    session: AsyncSession, instance_id: int, outcome: dict, *, archiver, slots, recovery_models
 ) -> None:
     """Sonda sonucunu yazar (instance başına tek satır, üzerine yazılıyor)."""
     existing = (
@@ -219,6 +230,7 @@ async def _write_probe(
         "methods_found": outcome["methods_found"],
         "archiver": archiver,
         "slots": slots,
+        "recovery_models": recovery_models,
         "errors": outcome["errors"] or None,
     }
     if existing is None:

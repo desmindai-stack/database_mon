@@ -6364,6 +6364,105 @@ yutulmayıp yazılması, saklama penceresi koruması.
 
 Tüm arka uç: **1358 geçti, 1 atlandı**.
 
+## Faz 28 — İŞ 1b: Yedek durumu değerlendirmesi ve raporlanması
+
+İŞ 1a "ne toplandı"yı kurdu; 1b "toplanandan ne sonuç çıkarıldı"yı kuruyor:
+yaş eşikleri, süre ve boyut anomalisi, başarısız yedek, arşivleme sağlığı,
+slot birikimi, recovery model uyumu — ve hepsinin raporlara bağlanması.
+
+### Üç durum vardır, iki değil
+
+Değerlendirmenin tamamı tek bir ayrımın üzerine kurulu: **yedek var**, **yedek
+yok**, **dbace göremedi**. `sla_ok` bu yüzden üç değerli ve `None` hiçbir yerde
+`False` gibi işlenmiyor.
+
+`_detection_is_conclusive` kararı veriyor: dbace yalnızca **yetkili kaynağı
+gerçekten okuyabildiyse** "yedek yok" diyor.
+
+- **SQL Server**: tek yetkili kaynak `msdb`. Okunabildiyse ve boşsa gerçekten
+  yedek yok demektir → kritik.
+- **PostgreSQL**: tek yetkili kaynak **yok**. Gerçek yedekler harici araçlarla
+  alınıyor ve yalnızca host-agent üzerinden görülebiliyor. Agent yoksa dbace
+  kördür ve "yedek yok" **demez** — bu, PostgreSQL tarafında yapılabilecek en
+  kolay yanlış olurdu.
+
+Erişilemeyen kaynak "uyarı + belirlenemedi" üretiyor, "kritik + yedek yok"
+değil. Yedeği olan bir kuruma "yedeğiniz yok" demek gereksiz panik; olmayana
+sessiz kalmak felaket. İkisi de üretilmiyor.
+
+### Eşiklerin ve anomalilerin tasarımı
+
+**Yedek yaşı bitiş zamanından ölçülüyor.** Başlangıcı almak, 6 saat süren bir
+yedeği 6 saat daha taze gösterirdi.
+
+**Log eşiği yalnızca log zinciri VARSA uygulanıyor.** SIMPLE recovery ya da
+arşivlemesiz bir kurulumda saat başı kritik üretmek gürültüden başka bir şey
+olmazdı; "hiç log yedeği yok" durumu recovery model ve arşiv bulgularının işi.
+
+**Süre anomalisinde oran ve statik taban BİRLİKTE aranıyor.** Yalnızca oran:
+4 saniyelik yedeğin 9 saniyeye çıkması "2 kat yavaşladı" ama kimse bunun için
+uyandırılmamalı. Yalnızca statik taban: büyük veritabanlarında normal olan uzun
+süreler sürekli alarma dönerdi. Karşılaştıracak en az 3 geçmiş yedek yoksa
+bulgu üretilmiyor — tek bir öncekine göre "iki kat yavaşladı" demek ölçüm değil
+tahmin olurdu.
+
+**Boyut küçülmesi büyümeden daha ciddi** (kritik vs uyarı): yarıya inen bir
+yedek genelde eksik yedektir ve bu, geri dönüş anında — yapılabilecek hiçbir
+şeyin kalmadığı anda — fark edilir.
+
+**Başarısız yedek iki koşulla "güncel"**: yapışkanlık penceresi içinde olmalı
+VE sonrasında aynı türde başarılı bir yedek alınmamış olmalı. Yalnızca zamana
+bakmak, 15 dakika sonra düzelmiş bir sorunu 24 saat göstermek demekti; hiç
+zaman sınırı koymamak ise altı ay önceki hatayı sonsuza kadar kırmızı yakıp
+alarm körlüğü üretirdi. Pencere instance başına ayarlanabiliyor.
+
+**Arşivlemede sayaç değil zaman damgası belirleyici.** `failed_count`
+istatistik sıfırlanana kadar birikir; geçmişte bir kez hata almış olmak
+arşivlemenin bozuk olduğu anlamına gelmez. Bulgu ancak **son hata son başarılı
+arşivlemeden sonraysa** üretiliyor.
+
+### Bulunan ve kapatılan eksik: recovery_models atılıyordu
+
+İŞ 1a'da SQL Server collector'ı recovery model bilgisini zaten topluyordu ama
+`BackupProbe`'da saklanacak yer yoktu ve veri sessizce atılıyordu. Kolon
+eklendi (migration #39). Bilgi yedek kayıtlarından **türetilemez**: log yedeği
+hiç alınmamış bir veritabanının geçmişinde hiç satır olmaz, yani "kayıt yok"
+durumunun kendisi ancak sunucu yapılandırmasıyla birlikte okunabiliyor.
+
+### Yönetici raporunda yedek güvencesi
+
+İstenen cümle: "son yedek X gün önce, SLA'ya uygun/uygun değil".
+`_backup_from_sections` bunu teknik bölümün **sayılarından** türetiyor,
+metninden değil — teknik bölüm sunucu adı, kaynak adı ve komut içeriyor ve
+hiçbiri yönetici raporuna giremez. Üretilen cümle ayrıca `assert_no_technical_leak`
+taramasından geçiyor.
+
+**En eski yedek belirleyici, ortalama değil**: on veritabanından dokuzunun
+yedeği dünse ve birininki 40 günse ortalama "4 gün" der ve gerçek riski gizler.
+
+Bölüm bulgu **olmasa da** gösteriliyor. Yöneticinin sorduğu soru "sorun var mı"
+değil "yedeğim var mı"; bu sorunun cevabı yalnızca kötü haber olduğunda
+görünürse rapor güvence vermiyor demektir.
+
+### Ön koşullara eklendi
+
+- **PostgreSQL**: `archive_mode` durumu ve **host-agent gereksinimi**. Agent
+  yoksa kontrol "high" önem derecesiyle eksik işaretleniyor ve metni açıkça
+  "GÖREMEZ / bilinmiyor" diyor — "yedek yok" değil.
+- **SQL Server**: `msdb.dbo.backupset` okuma yetkisi, düzeltme komutuyla.
+
+### Dördüncü tip kayması yakalandı
+
+`ExecutiveReport` elle yazılmıştı ve yeni `backup` alanını bilmiyordu — alan
+sessizce kaybolurdu. `Instance`, `ExplainResult` ve `InstanceDependencies` ile
+aynı hata. Türetilmiş tipe çevrildi ve `MUST_BE_DERIVED` listesine eklendi;
+artık elle yazılmış hâline dönmesi testte düşüyor.
+
+### Testler
+
+`tests/test_backup_health.py` — 45 test. Ayrıca `test_prerequisites.py`'ye üç
+yeni test. Tüm arka uç: **1407 geçti, 1 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

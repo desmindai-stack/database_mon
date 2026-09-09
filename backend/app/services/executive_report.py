@@ -106,6 +106,12 @@ _SECTION_TEMPLATES: dict[str, dict[str, str]] = {
         "impact": "Yapılandırma sapmaları performans ve veri güvenliği açısından risk oluşturabilir.",
         "recommendation": "Yapılandırmanın standartlara göre düzeltilmesi.",
     },
+    "backup": {
+        "area": "Yedek güvencesi",
+        "statement": "{target} sisteminde yedek durumu dikkat gerektiriyor.",
+        "impact": "Güncel bir yedek olmadan, bir arıza anında en son yedekten bu yana yapılan tüm işlemler geri getirilemez.",
+        "recommendation": "Yedek alma düzeninin gözden geçirilmesi ve geri dönüş tatbikatı yapılması.",
+    },
     "prerequisites": {
         "area": "İzleme kapsamı",
         "statement": "{target} sisteminde bazı izleme özellikleri devre dışı.",
@@ -160,6 +166,10 @@ class ExecutiveReport:
     risks: list[dict[str, Any]] = field(default_factory=list)
     trend: dict[str, Any] = field(default_factory=dict)
     work_done: dict[str, Any] = field(default_factory=dict)
+    # Faz 28 İŞ 1b: yedek güvencesi. Erişilebilirlik gibi, bulgu OLMASA DA gösterilen bir
+    # ölçü — yöneticinin sorduğu soru "sorun var mı" değil "yedeğim var mı" ve bu sorunun
+    # cevabı yalnızca kötü haber olduğunda görünürse rapor güvence vermiyor demektir.
+    backup: dict[str, Any] = field(default_factory=dict)
     recommendations: list[dict[str, Any]] = field(default_factory=list)
     # Ek İŞ A: "planlandı" ve "risk kabul" durumundaki konular. Biri ekibin çalıştığını,
     # diğeri bilinçli bir kararı gösterir — ikisi de yöneticinin bilmesi gereken şeyler.
@@ -311,6 +321,76 @@ def _availability_from_sections(sections: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _backup_from_sections(sections: dict[str, Any]) -> dict[str, Any]:
+    """Yedek güvencesi özetini teknik bölümün VERİSİNDEN türetir.
+
+    Kullanıcının istediği cümle: "son yedek X gün önce, SLA'ya uygun/uygun değil". Bunun için
+    teknik bölümün metni değil yalnızca SAYILARI okunuyor — teknik bölüm sunucu adı, kaynak
+    adı ve komut içeriyor, hiçbiri yönetici raporuna giremez.
+
+    ÜÇÜNCÜ DURUM ÖNEMLİ: `sla_ok` üç değerli — uygun, uygun değil ve **belirlenemedi**.
+    Belirlenemedi'yi "uygun değil" saymak yanlış alarm, "uygun" saymak sahte güvence olurdu;
+    ikisi de yöneticiye yanlış bir karar verdirir.
+    """
+    item = ((sections or {}).get("items") or {}).get("backup") or {}
+    rows = (item.get("data") or {}).get("instances") or []
+    if not rows:
+        return {
+            "measured": False,
+            "statement": "Bu dönemde yedek durumu değerlendirilemedi.",
+            "sla_ok": None,
+            "database_count": 0,
+            "protected_count": 0,
+            "breached_count": 0,
+            "unknown_count": 0,
+            "oldest_backup_days": None,
+        }
+
+    protected = [r for r in rows if r.get("sla_ok") is True]
+    breached = [r for r in rows if r.get("sla_ok") is False]
+    unknown = [r for r in rows if r.get("sla_ok") is None]
+    ages = [
+        r["last_full_age_hours"] / 24.0
+        for r in rows
+        if isinstance(r.get("last_full_age_hours"), (int, float))
+    ]
+    # EN ESKİ yedek belirleyici, ortalama değil: on veritabanından dokuzunun yedeği dünse ve
+    # birininki 40 günse ortalama "4 gün" der ve gerçek riski gizler.
+    oldest = max(ages) if ages else None
+
+    if breached:
+        statement = (
+            f"{len(breached)} veritabanında en son yedek hedeflenen sıklığın dışında kaldı"
+            + (f"; en eskisi {oldest:.0f} gün önce alınmış." if oldest is not None else ".")
+        )
+        sla_ok: bool | None = False
+    elif not protected and unknown:
+        statement = (
+            f"{len(unknown)} veritabanının yedek durumu belirlenemedi; bu, yedek alınmadığı "
+            "anlamına gelmez ancak güvence de verilemez."
+        )
+        sla_ok = None
+    else:
+        statement = (
+            "Tüm veritabanlarında yedekler hedeflenen sıklıkta"
+            + (f"; en eskisi {oldest:.0f} gün önce alınmış." if oldest is not None else ".")
+        )
+        if unknown:
+            statement += f" {len(unknown)} veritabanında durum belirlenemedi."
+        sla_ok = True
+
+    return {
+        "measured": True,
+        "statement": statement,
+        "sla_ok": sla_ok,
+        "database_count": len(rows),
+        "protected_count": len(protected),
+        "breached_count": len(breached),
+        "unknown_count": len(unknown),
+        "oldest_backup_days": round(oldest, 1) if oldest is not None else None,
+    }
+
+
 async def build_executive_report(session: AsyncSession, report: HealthReport) -> ExecutiveReport:
     findings = list(
         (
@@ -335,6 +415,7 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
     )
 
     availability = _availability_from_sections(report.sections or {})
+    backup = _backup_from_sections(report.sections or {})
     inventory = await _inventory(session, instances)
 
     # Uygulama bazında erişilebilirlik: teknik bölümün instance satırlarını uygulama adına
@@ -499,6 +580,7 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         grade=grade,
         grade_reason=grade_reason,
         availability=availability,
+        backup=backup,
         inventory=inventory,
         risks=risks,
         trend=trend,
@@ -517,6 +599,7 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
         assert_no_technical_leak(recommendation["action"], "recommendation.action")
         assert_no_technical_leak(recommendation["if_not_done"], "recommendation.if_not_done")
     assert_no_technical_leak(executive.grade_reason, "grade_reason")
+    assert_no_technical_leak(executive.backup["statement"], "backup.statement")
     assert_no_technical_leak(executive.work_done["note"], "work_done.note")
     for decision in executive.decisions:
         assert_no_technical_leak(decision["statement"], "decision.statement")

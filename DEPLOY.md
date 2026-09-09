@@ -96,6 +96,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 36 | `20260912090000_blocking_history.sql` | **YENİ** — blocking_episodes + deadlock_events (bloklama geçmişi ve deadlock kayıtları). CONCURRENTLY YOK — SQL Editor'den çalıştırılabilir |
 | 37 | `20260913090000_metric_sources.sql` | **YENİ** — instances.metric_sources + server_version_num (metrik kaynağı ve sürüm numarası). CONCURRENTLY YOK |
 | 38 | `20260914090000_backup_monitoring.sql` | **YENİ** — backup_records + backup_probes (yedek izleme). CONCURRENTLY YOK |
+| 39 | `20260915090000_backup_recovery_models.sql` | **YENİ** — backup_probes.recovery_models (FULL recovery + log yedeği uyumu). CONCURRENTLY YOK |
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 

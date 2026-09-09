@@ -20,6 +20,8 @@ from sqlalchemy import select
 from app.models import (
     AlertEvent,
     AlertRule,
+    BackupProbe,
+    BackupRecord,
     DailyStateSnapshot,
     FindingAcknowledgement,
     GroupHealthSnapshot,
@@ -30,6 +32,8 @@ from app.models import (
     SchemaObjectDailySample,
     SlowQuerySample,
 )
+from app.domain.engines import DatabaseEngine
+from app.services.backup_health import assess_instance
 from app.services.collection import effective_collect_interval
 from app.services.advice import Advice, AdviceStep
 from app.services.explain_service import validate_explainable
@@ -86,6 +90,10 @@ TEMP_BYTES_WARN = 1_048_576.0
 SERVICE_DOWN_MIN_SAMPLES = 2
 # Büyüme trendi için gereken en az gün sayısı — tek fotoğraftan büyüme çıkarılamaz.
 SCHEMA_MIN_DAYS = 2
+# Yedek değerlendirmesi için instance başına taranan en fazla kayıt. Yaş, süre ve boyut
+# karşılaştırmaları son birkaç düzine kayıtla yapılıyor; tüm geçmişi belleğe almanın
+# faydası yok.
+BACKUP_RECORD_SCAN_LIMIT = 60
 
 _SEVERITY_RANK = {"critical": 3, "warning": 2, "info": 1, "ok": 0}
 _ENV_RANK = {"prod": 1.6, "production": 1.6, "preprod": 1.1, "test": 0.9, "dev": 0.8}
@@ -748,6 +756,233 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
         summary=summary,
         findings=findings,
         data={"instances": per_instance, "groups": group_rows},
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 4b. Yedek durumu (Faz 28 İŞ 1b)
+# --------------------------------------------------------------------------------------
+
+
+@register_section
+async def backup_section(ctx: ReportContext) -> SectionResult:
+    """Yedek durumu — "son yedek ne zaman alındı" sorusunun cevabı.
+
+    Bölüm sıralamada erişilebilirlik ve cluster'ın hemen ardında: bir olay sonrası sorulan
+    ilk üç sorudan biri bu ve cevabın raporun dibinde aranmaması gerekiyor.
+
+    DÜRÜSTLÜK KURALI: bulgu bulunamadığında "yedek alınıyor" varsayılmıyor. Bölüm üç ayrı
+    durumu ayırıyor — yedek var ve güncel, yedek yok, dbace göremedi. Üçüncüsünü ikincisi
+    gibi göstermek gerçekten yedeği olan kurumu paniğe sürükler; ikincisini birincisi gibi
+    göstermek ise felaket anında geri dönüşü olmayan bir sürprize.
+    """
+    instances = [i for i in ctx.instances if i.engine != str(DatabaseEngine.MONGODB)]
+    if not instances:
+        return SectionResult(
+            key="backup", title="Yedek durumu", status="unknown",
+            summary="Kapsamda yedek izlenebilen veritabanı yok.",
+            unknown_reason=(
+                "Kapsamdaki veritabanları MongoDB ya da kapsam boş. MongoDB için yedek izleme "
+                "desteklenmiyor: mongodump/Ops Manager yedekleri veritabanının kendi "
+                "kataloğunda iz bırakmıyor."
+            ),
+        )
+
+    if not settings.backup_monitoring_enabled:
+        # "Yedek yok" ile "yedek izleme kapalı" karıştırılamaz. Kapalıyken bölümü "sorunsuz"
+        # göstermek, izlemenin kapalı olduğunu bilmeyen birine sahte güvence verirdi.
+        return SectionResult(
+            key="backup", title="Yedek durumu", status="unknown",
+            summary="Yedek izleme kapalı.",
+            unknown_reason=(
+                "Yedek izleme kapalı (BACKUP_MONITORING_ENABLED=false). Bu, yedek alınmadığı "
+                "anlamına GELMEZ — dbace hiç bakmadı demektir."
+            ),
+        )
+
+    instance_ids = [i.id for i in instances]
+    probes = {
+        p.instance_id: p
+        for p in (
+            await ctx.session.execute(
+                select(BackupProbe).where(BackupProbe.instance_id.in_(instance_ids))
+            )
+        ).scalars().all()
+    }
+    # Kayıtlar instance başına sınırlanıyor: yaş, süre ve boyut karşılaştırmaları için son
+    # birkaç düzine kayıt yeterli, tüm geçmişi belleğe almanın faydası yok.
+    records: dict[int, list] = {i: [] for i in instance_ids}
+    rows = (
+        await ctx.session.execute(
+            select(BackupRecord)
+            .where(BackupRecord.instance_id.in_(instance_ids))
+            .order_by(BackupRecord.started_at.desc())
+            .limit(BACKUP_RECORD_SCAN_LIMIT * max(len(instance_ids), 1))
+        )
+    ).scalars().all()
+    for row in rows:
+        bucket = records.setdefault(row.instance_id, [])
+        if len(bucket) < BACKUP_RECORD_SCAN_LIMIT:
+            bucket.append(row)
+
+    findings: list[FindingDraft] = []
+    instance_rows: list[dict] = []
+    assessments: list = []
+
+    for instance in instances:
+        probe = probes.get(instance.id)
+        assessment = assess_instance(
+            instance, records.get(instance.id, []), probe, now=ctx.period_end
+        )
+        assessments.append(assessment)
+        instance_rows.append(
+            {
+                "instance_id": instance.id,
+                "instance_name": instance.name,
+                "engine": instance.engine,
+                "status": assessment.status,
+                "sla_ok": assessment.sla_ok,
+                "detected": assessment.detected,
+                "conclusive": assessment.conclusive,
+                "last_full_at": (
+                    assessment.last_full_at.isoformat() if assessment.last_full_at else None
+                ),
+                "last_full_age_hours": (
+                    round(assessment.last_full_age_hours, 2)
+                    if assessment.last_full_age_hours is not None
+                    else None
+                ),
+                "last_log_at": (
+                    assessment.last_log_at.isoformat() if assessment.last_log_at else None
+                ),
+                "last_log_age_hours": (
+                    round(assessment.last_log_age_hours, 2)
+                    if assessment.last_log_age_hours is not None
+                    else None
+                ),
+                "methods_checked": assessment.methods_checked,
+                "methods_found": assessment.methods_found,
+                "running": assessment.running,
+                # Always On: yedeği hangi replika alıyor. Birden fazla düğüm görünüyorsa
+                # geri dönüş anında hangi sunucudaki dosyanın gerekli olduğu belirsizleşir.
+                "backup_servers": assessment.backup_servers,
+                "issue_count": len(assessment.issues),
+                "probed_at": (
+                    as_utc(probe.probed_at).isoformat() if probe is not None and probe.probed_at else None
+                ),
+            }
+        )
+        for issue in assessment.issues:
+            findings.append(
+                FindingDraft(
+                    section="backup",
+                    severity=issue.severity,
+                    title=f"{instance.name}: {issue.title}",
+                    detail=issue.detail,
+                    evidence=issue.evidence,
+                    facts=issue.facts,
+                    recommendation=issue.advice.title,
+                    advice=issue.advice,
+                    # Fingerprint'e ölçülen değer GİRMİYOR (bkz. make_fingerprint): yedek yaşı
+                    # her gün değişir ve değer hash'e girseydi bulgu her gün "yeni" görünür,
+                    # "kaç gündür açık" sayacı hiç ilerlemezdi.
+                    fingerprint_parts=("backup", str(instance.id), issue.key),
+                    related_object_type="instance",
+                    related_object_id=instance.id,
+                    environment=_environment_of(instance),
+                )
+            )
+
+    # Yedeği birden fazla düğümden alan Always On grupları: teknik raporda bilgi notu.
+    for assessment in assessments:
+        if len(assessment.backup_servers) > 1:
+            findings.append(
+                FindingDraft(
+                    section="backup",
+                    severity="info",
+                    title=f"{assessment.instance_name}: yedekler birden fazla düğümden alınıyor",
+                    detail=(
+                        "Yedek kayıtları "
+                        + ", ".join(assessment.backup_servers)
+                        + " düğümlerinden geliyor. Always On'da yedek tercihinin bir replikaya "
+                        "sabitlenmesi olağandır; birden fazla düğümden yedek alınması geri "
+                        "dönüş anında hangi sunucudaki dosyanın gerektiğini belirsizleştirir."
+                    ),
+                    evidence={
+                        "metric": "backup_source_nodes",
+                        "value": len(assessment.backup_servers),
+                        "threshold": 1,
+                        "measured_at": ctx.period_end.isoformat(),
+                    },
+                    facts=[
+                        {"label": "Düğümler", "value": ", ".join(assessment.backup_servers), "tone": "neutral"},
+                    ],
+                    advice=Advice(
+                        title="Yedek tercihini tek bir replikaya sabitleyin",
+                        why=(
+                            "Yedeklerin hangi düğümden alındığı belirsizse geri dönüş anında "
+                            "dosyaların hangi sunucuda olduğu da belirsizdir; kurtarma süresi "
+                            "dosya aramakla uzar."
+                        ),
+                        steps=[
+                            AdviceStep(
+                                "Availability group'un yedek tercihini kontrol edin.",
+                                "SELECT name, automated_backup_preference_desc FROM sys.availability_groups;",
+                            ),
+                            AdviceStep(
+                                "Yedek işlerinde `sys.fn_hadr_backup_is_preferred_replica` "
+                                "kontrolünün kullanıldığını doğrulayın.",
+                                "SELECT sys.fn_hadr_backup_is_preferred_replica(N'<veritabani>');",
+                            ),
+                        ],
+                        cautions=[
+                            "Tercihi değiştirmek yedek zincirini etkilemez ama yedek dosyalarının "
+                            "yeni düğümden erişilebilir olduğunu doğrulayın.",
+                        ],
+                        verification=(
+                            "SELECT DISTINCT server_name FROM msdb.dbo.backupset "
+                            "WHERE backup_start_date > DATEADD(day, -7, GETDATE());"
+                        ),
+                    ),
+                    fingerprint_parts=("backup", str(assessment.instance_id), "multi_source_node"),
+                    related_object_type="instance",
+                    related_object_id=assessment.instance_id,
+                )
+            )
+
+    unknown = [a for a in assessments if a.status == "unknown"]
+    protected = [a for a in assessments if a.sla_ok is True]
+    breached = [a for a in assessments if a.sla_ok is False]
+
+    if len(unknown) == len(assessments):
+        # Hiçbiri belirlenemedi: bölümün tamamı "unknown". "ok" demek yalan olurdu.
+        return SectionResult(
+            key="backup", title="Yedek durumu", status="unknown",
+            summary=f"{len(unknown)} veritabanının yedek durumu belirlenemedi.",
+            findings=findings,
+            data={"instances": instance_rows},
+            unknown_reason=(
+                "Yedek kaynaklarına erişilemedi. Bu, yedek alınmadığı anlamına GELMEZ; "
+                "bulgulardaki adımlar kaynağın nasıl görünür hale getirileceğini anlatıyor."
+            ),
+        )
+
+    status = _worst_status([f.severity for f in findings]) if findings else "ok"
+    summary_parts = []
+    if protected:
+        summary_parts.append(f"{len(protected)} veritabanı eşiklere uygun")
+    if breached:
+        summary_parts.append(f"{len(breached)} veritabanında yedek eskimiş")
+    if unknown:
+        summary_parts.append(f"{len(unknown)} veritabanında durum belirlenemedi")
+
+    return SectionResult(
+        key="backup",
+        title="Yedek durumu",
+        status=status,
+        summary=", ".join(summary_parts) + "." if summary_parts else "Yedek durumu değerlendirildi.",
+        findings=findings,
+        data={"instances": instance_rows},
     )
 
 

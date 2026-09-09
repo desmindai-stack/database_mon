@@ -478,23 +478,15 @@ export interface HealthReport extends HealthReportSummary {
   findings: ReportFinding[];
 }
 
-export interface ExecutiveReport {
-  scope_label: string;
-  period_start: string;
-  period_end: string;
-  period_label: string;
-  generated_at: string;
-  grade: string;
-  grade_reason: string;
-  availability: Record<string, any>;
-  inventory: Record<string, any>;
-  risks: Record<string, any>[];
-  trend: Record<string, any>;
-  work_done: Record<string, any>;
-  recommendations: Record<string, any>[];
-  /** "Planlandı" / "risk kabul" konuları; yoksayılanlar bu listeye hiç girmez. */
-  decisions: Record<string, any>[];
-}
+/**
+ * Yönetici raporu. ÜRETİLEN ŞEMADAN TÜRETİLİYOR (Faz 28 İŞ 1b).
+ *
+ * Elle yazılmış hâli, backend'e eklenen `backup` alanını bilmiyordu ve alan sessizce
+ * kayboluyordu — `Instance`, `ExplainResult` ve `InstanceDependencies` ile aynı hata. Türetilmiş
+ * hâlde alan hizası derleme zamanında yakalanıyor; `test_api_contract_alignment.py` bu tipin
+ * elle yazılmış hâline dönmesini engelliyor.
+ */
+export type ExecutiveReport = Gen["ExecutiveReportOut"];
 
 export interface FindingAcknowledgement {
   id: number;
