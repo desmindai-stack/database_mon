@@ -75,6 +75,7 @@ from app.services.health_report import (
 from app.services.noise_settings import get_noise_settings
 from app.services.query_diagnostics import diagnose_query
 from app.services.slow_query_selection import select_slow_queries
+from app.services.work_done import collect_work_done, summarize
 
 # Kesinti eşikleri artık services/availability.py'de: SLA takibi de aynı sayıyı kullanıyor
 # ve iki ayrı hesap, raporun "%99.95" derken SLA ekranının "%99.7" demesi demekti.
@@ -3150,6 +3151,43 @@ async def executive_summary_section(ctx: ReportContext, results: list[SectionRes
             "scope": {"type": ctx.scope.scope_type, "id": ctx.scope.scope_id, "label": ctx.scope.label},
             "instance_count": len(ctx.instances),
         },
+    )
+
+
+@register_summary_section
+async def work_done_section(ctx: ReportContext, results: list[SectionResult]) -> SectionResult:
+    """Bu dönemde yapılanlar (Faz 28 İŞ 5).
+
+    Müşteriye DBA ekibinin çalıştığını gösteren şey bu. Rapor bugüne kadar yalnızca "şu anda
+    ne sorun var" diyordu; emeğin görünmemesi, hizmetin değerinin de görünmemesi demek.
+
+    Özet bölümü olarak kaydedildi çünkü raporda ÖNDE durması gerekiyor: "ne yapıldı" sorusu,
+    "ne kaldı" sorusundan önce cevaplanmalı.
+
+    Bulgu ÜRETMİYOR: yapılan iş bir sorun değil. Bulgu üretseydi "10 konu kapatıldı" satırı
+    kritik sayacına girerdi.
+    """
+    work = await collect_work_done(
+        ctx.session, ctx.instances, ctx.period_start, ctx.period_end
+    )
+    if not work["measured"]:
+        return SectionResult(
+            key="work_done", title="Bu dönemde yapılanlar", status="unknown",
+            summary="Bu dönem için hareket kaydı yok.",
+            data=work,
+            unknown_reason=(
+                "Dönem içinde tamamlanmış rapor ya da bulgu durumu değişikliği bulunamadı. "
+                "Bu, iş yapılmadığı anlamına GELMEZ — dbace yalnızca kendi üzerinden verilen "
+                "kararları ve kendi ürettiği bulguları görebiliyor."
+            ),
+        )
+
+    return SectionResult(
+        key="work_done",
+        title="Bu dönemde yapılanlar",
+        status="ok",
+        summary=summarize(work),
+        data=work,
     )
 
 

@@ -301,9 +301,49 @@ export default function ExecutiveReportView({ data }: { data: ExecutiveReport })
         )}
       </div>
 
+      {/*
+        Bu dönemde yapılanlar (Faz 28 İŞ 5). Müşteriye DBA ekibinin çalıştığını gösteren şey
+        bu — emeğin görünmemesi, hizmetin değerinin de görünmemesi demek.
+
+        Yönetici raporunda YALNIZCA sayılar ve kategoriler var; kim ne yaptı teknik raporda
+        kalıyor. Müşteriye giden bir belgede kişi adı, hizmetin değil bireyin
+        değerlendirilmesine dönüşür.
+      */}
       <div className="card">
         <h3 className="chart-title">Bu dönemde yapılanlar</h3>
         <p>{workDone.note}</p>
+        <div className="stats-grid compact">
+          <div className="stat-tile">
+            <div className="stat-tile-label">Açılan konu</div>
+            <div className="stat-tile-value">{workDone.opened_findings ?? 0}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-label">Kapatılan</div>
+            <div className="stat-tile-value">{workDone.closed_findings ?? 0}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-label">Çalışma planlanan</div>
+            <div className="stat-tile-value">{workDone.planned_findings ?? 0}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-label">Risk kabul edilen</div>
+            <div className="stat-tile-value">{workDone.risk_accepted_findings ?? 0}</div>
+          </div>
+          {/* Tekrar açılanlar saklanmıyor: uygulanan çözümün işe yaramadığını gizlemek,
+              raporu satış aracına çevirmek olurdu. */}
+          <div className="stat-tile">
+            <div className="stat-tile-label">Tekrar açılan</div>
+            <div className="stat-tile-value">{workDone.reopened_findings ?? 0}</div>
+          </div>
+          <div className="stat-tile">
+            <div className="stat-tile-label">Ortalama çözüm süresi</div>
+            <div className="stat-tile-value">
+              {workDone.average_resolution_days == null
+                ? "—"
+                : `${workDone.average_resolution_days} gün`}
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="card">

@@ -620,12 +620,28 @@ async def build_executive_report(session: AsyncSession, report: HealthReport) ->
                 "note": f"Önceki döneme göre genel durum {direction}.",
             }
 
+    # Faz 28 İŞ 5: "dönemde yapılanlar" artık durum GEÇMİŞİNDEN besleniyor, yalnızca bu
+    # raporda kapanmış bulgulardan değil. Yönetici raporunda YALNIZCA sayılar ve kategoriler
+    # var — kim ne yaptı teknik raporda kalıyor: müşteriye giden bir belgede kişi adı,
+    # hizmetin değil bireyin değerlendirilmesine dönüşür.
+    work_section = ((report.sections or {}).get("items") or {}).get("work_done") or {}
+    work_data = work_section.get("data") or {}
     work_done = {
-        "closed_findings": len(resolved),
+        "closed_findings": work_data.get("closed", len(resolved)),
+        "opened_findings": work_data.get("opened", 0),
+        "planned_findings": work_data.get("planned", 0),
+        "risk_accepted_findings": work_data.get("risk_accepted", 0),
+        # Tekrar açılanlar SAKLANMIYOR: uygulanan çözümün işe yaramadığını gizlemek, raporu
+        # satış aracına çevirmek olurdu.
+        "reopened_findings": work_data.get("reopened", 0),
+        "average_resolution_days": work_data.get("average_resolution_days"),
         "note": (
-            f"Bu dönemde {len(resolved)} konu kapatıldı."
-            if resolved
-            else "Bu dönemde kapatılan bir konu yok."
+            work_section.get("summary")
+            or (
+                f"Bu dönemde {len(resolved)} konu kapatıldı."
+                if resolved
+                else "Bu dönemde kapatılan bir konu yok."
+            )
         ),
     }
 

@@ -327,6 +327,59 @@ def _section_data_blocks(key: str, data: dict[str, Any]) -> list[Block]:
         if data.get("note"):
             blocks.append(note(data["note"], "neutral"))
 
+    elif key == "work_done" and data:
+        blocks.append(
+            keyvalues(
+                [
+                    ("Açılan konu", str(data.get("opened", 0))),
+                    ("Kapatılan", str(data.get("closed", 0))),
+                    ("Planlanan", str(data.get("planned", 0))),
+                    ("Risk kabul edilen", str(data.get("risk_accepted", 0))),
+                    ("Tekrar açılan", str(data.get("reopened", 0))),
+                    (
+                        "Ortalama çözüm süresi",
+                        f"{data['average_resolution_days']} gün"
+                        if data.get("average_resolution_days") is not None
+                        else "—",
+                    ),
+                ]
+            )
+        )
+        # KİM NE YAPTI yalnızca TEKNİK raporda: müşteriye giden bir belgede kişi adı,
+        # hizmetin değil bireyin değerlendirilmesine dönüşür.
+        events = data.get("events") or []
+        if events:
+            rows = [
+                [
+                    str(e.get("changed_at", ""))[:16].replace("T", " "),
+                    e.get("changed_by", "—"),
+                    e.get("status_label", e.get("to_status", "")),
+                    (e.get("finding_type") or "—"),
+                    (e.get("note") or "")[:80],
+                ]
+                for e in events[-20:]
+            ]
+            blocks.append(heading("Durum değişiklikleri", 3))
+            blocks.append(table(["Zaman", "Kim", "Yeni durum", "Bulgu tipi", "Not"], rows))
+        reopened = data.get("reopened_findings") or []
+        if reopened:
+            # Tekrar açılanlar AYRI: "çözüldü" denip yeniden tespit edilen bir bulgu,
+            # uygulanan çözümün işe yaramadığını söylüyor.
+            blocks.append(heading("Tekrar açılan konular", 3))
+            blocks.append(
+                table(
+                    ["Zaman", "Bulgu tipi", "Not"],
+                    [
+                        [
+                            str(r.get("changed_at", ""))[:16].replace("T", " "),
+                            r.get("finding_type") or "—",
+                            (r.get("note") or "")[:80],
+                        ]
+                        for r in reopened[-20:]
+                    ],
+                )
+            )
+
     elif key == "changes":
         for label, field_name in (("Yeni", "new"), ("Kötüleşen", "regressed"), ("Kapanan", "resolved"), ("Süregelen", "ongoing")):
             entries = data.get(field_name) or []

@@ -144,15 +144,20 @@ async def collect_work_done(
         )
 
     # --- Açılan bulgular ve çözüm süresi: dönem içindeki raporlardan --------------------
-    report_ids = (
+    #
+    # KAPSAM FİLTRESİ ŞART: kapsam süzülmeseydi bir müşterinin raporu, başka bir müşterinin
+    # raporunda açılan bulguları da sayardı — "bu dönemde 40 konu açıldı" cümlesi, o
+    # müşteriyle hiç ilgisi olmayan sunuculardan gelirdi.
+    report_rows = (
         await session.execute(
-            select(HealthReport.id).where(
+            select(HealthReport.id, HealthReport.scope_type, HealthReport.scope_id).where(
                 HealthReport.generated_at >= period_start,
                 HealthReport.generated_at <= period_end,
                 HealthReport.status == "done",
             )
         )
-    ).scalars().all()
+    ).all()
+    report_ids = [r.id for r in report_rows if (r.scope_type, r.scope_id) in keys]
 
     opened = 0
     resolution_days: list[int] = []

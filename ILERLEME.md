@@ -6811,6 +6811,70 @@ karıştırılabiliyor.
 `conftest.py` artık dosyayı oturum başında siliyor. Ölçüm: 682 saniye ve bir
 kırık test → **74 saniye ve tamamı yeşil**.
 
+## Faz 28 — İŞ 5: Rapora "dönemde yapılanlar" bölümü
+
+Müşteriye DBA ekibinin çalıştığını gösteren şey bu. Rapor bugüne kadar yalnızca
+"şu anda ne sorun var" diyordu; "bu dönemde ne yapıldı" sorusunun cevabı hiçbir
+yerde yoktu ve **emeğin görünmemesi, hizmetin değerinin de görünmemesi** demek.
+
+### İki ayrı kaynak, çünkü iki ayrı olay türü var
+
+- **Açılan bulgular** durum geçmişine yazılmaz: bir bulgu "açıldı" diye karar
+  verilmez, ilk kez tespit edilir. Dönem içindeki raporların `change_state="new"`
+  satırlarından sayılıyor.
+- **Kapatılan / planlanan / risk kabul edilen** kararlardır ve
+  `FindingStatusHistory`'de duruyor: kim, ne zaman, hangi durumdan hangisine.
+
+İkisini tek kaynaktan üretmeye çalışmak, ya kararları ya da tespitleri kaybetmek
+olurdu.
+
+### Yazarken bulunan hata: kapsam süzülmüyordu
+
+İlk hâlinde "açılan bulgu" sayısı dönem içindeki **tüm** raporlardan geliyordu.
+Yani bir müşterinin raporu, başka bir müşterinin raporunda açılan bulguları da
+sayardı — "bu dönemde 40 konu açıldı" cümlesi, o müşteriyle hiç ilgisi olmayan
+sunuculardan gelirdi. Test bunu yakaladı; rapor kapsamı artık karar kapsamıyla
+aynı anahtar kümesinden süzülüyor.
+
+### Tekrar açılanlar ayrı sayılıyor
+
+"Çözüldü" denip yeniden tespit edilen bir bulgu, hiç kapatılmamış bir bulgudan
+farklı bir şey söylüyor: **uygulanan çözüm işe yaramamış.** Kapatılanlarla aynı
+kefeye koymak ekibin başarısını olduğundan iyi gösterirdi — raporu satış aracına
+çevirmenin en kolay yolu. Özet cümlesinde de saklanmıyor.
+
+Ayrım dar tutuldu: yalnızca `çözüldü → açık` ve `çözüldü_doğrulanacak → açık`
+geçişleri sayılıyor. Ertelemesi dolan bir bulgunun açığa dönmesi "çözüm işe
+yaramadı" demek değil.
+
+### Kim ne yaptı yalnızca teknik raporda
+
+Yönetici raporunda sadece sayılar ve kategoriler var. Müşteriye giden bir belgede
+kişi adı, hizmetin değil **bireyin** değerlendirilmesine dönüşür.
+
+### Ortalama çözüm süresi
+
+Kapanan bulguların `open_since_days` değerinden hesaplanıyor — yani bulgunun
+gerçekten kaç gün açık kaldığından. Kapanan bulgu yoksa sayı **uydurulmuyor**,
+`None` dönüyor ve arayüzde "—" görünüyor.
+
+### Bölüm bulgu üretmiyor
+
+Yapılan iş bir sorun değil. Bulgu üretseydi "10 konu kapatıldı" satırı kritik
+sayacına girerdi. Bölüm özet bölümü olarak kaydedildi çünkü raporda önde durması
+gerekiyor: "ne yapıldı" sorusu "ne kaldı" sorusundan önce cevaplanmalı.
+
+Ayrıca "hareket yok" ile "iş yapılmadı" ayrımı korunuyor: dbace yalnızca kendi
+üzerinden verilen kararları ve kendi ürettiği bulguları görebiliyor.
+
+### Testler
+
+`tests/test_work_done.py` — 17 test. Bu dosyada da global kapsamlı kayıtların
+testler arasında sızdığı görüldü (global bir karar her kapsama uyuyor); fixture
+her testten önce geçmişi ve raporları temizliyor.
+
+Tüm arka uç: **1527 geçti, 1 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
