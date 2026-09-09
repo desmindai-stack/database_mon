@@ -193,6 +193,22 @@ async def _rollup_state_for_instance(session: AsyncSession, instance: Instance, 
         written += 1
 
     if instance.engine in ("postgresql", "sqlserver"):
+        # Faz 28 İŞ 4: düğümler arası karşılaştırma için daha GENİŞ parametre kümesi.
+        #
+        # `parameters` fotoğrafı baseline denetimi için 12 kritik parametre tutuyor;
+        # karşılaştırma ise failover davranışını etkileyen ~25 parametreye bakıyor. Aynı
+        # fotoğrafı genişletmek, baseline denetiminin anlamını bulanıklaştırırdı.
+        try:
+            from app.services.config_comparison import SNAPSHOT_KIND, collect_instance_config
+
+            payload = await collect_instance_config(instance)
+        except Exception as exc:  # noqa: BLE001
+            payload = {"error": str(exc)[:500]}
+            logger.warning("daily rollup: config probe failed for instance %s", instance.name)
+        await _upsert_state_snapshot(session, instance.id, day, SNAPSHOT_KIND, payload)
+        written += 1
+
+    if instance.engine in ("postgresql", "sqlserver"):
         try:
             from app.collectors.base import ConnectionTarget
             from app.domain.engines import DatabaseEngine

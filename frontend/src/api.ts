@@ -1445,6 +1445,8 @@ export const api = {
     q.set("limit", String(params.limit ?? 30));
     return request<HealthReportSummary[]>(`/api/reports?${q.toString()}`);
   },
+  getGroupConfigComparison: (groupId: number) =>
+    request<Record<string, any>>(`/api/groups/${groupId}/config-comparison`),
   listSlaTargets: () => request<SlaTarget[]>("/api/sla/targets"),
   getSlaStatus: () => request<Record<string, any>[]>("/api/sla/status"),
   createSlaTarget: (body: Record<string, unknown>) =>

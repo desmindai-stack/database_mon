@@ -11711,6 +11711,56 @@
         ]
       }
     },
+    "/api/groups/{group_id}/config-comparison": {
+      "get": {
+        "description": "Düğümler arası yapılandırma karşılaştırması (Faz 28 İŞ 4).\n\nCanlı: gruptaki her veritabanına o an bağlanıyor. Rapor bölümü aynı karşılaştırmayı\nsaklanmış günlük fotoğraflardan yapıyor — ikisi de `build_comparison`'dan geçiyor ki\nsekmede \"sapma yok\" derken raporda \"3 sapma\" yazmasın.",
+        "operationId": "get_group_config_comparison_api_groups__group_id__config_comparison_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "group_id",
+            "required": true,
+            "schema": {
+              "title": "Group Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Group Config Comparison Api Groups  Group Id  Config Comparison Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Group Config Comparison",
+        "tags": [
+          "database-groups"
+        ]
+      }
+    },
     "/api/groups/{group_id}/convert-to-cluster": {
       "post": {
         "description": "Standalone -> Always On/Patroni dönüşümü: mevcut düğüme dokunulmaz (ilk düğüm olarak\nkalır), yeni düğümler ayrıca POST /api/nodes ile eklenir.",

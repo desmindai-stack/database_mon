@@ -18,13 +18,14 @@ import {
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
 import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../components/PageState";
+import ConfigComparisonPanel from "../components/ConfigComparisonPanel";
 import RecommendationHeader from "../components/RecommendationHeader";
 import { showField, topologyOf, type FieldContext } from "../formFields";
 import { useUrlTab } from "../hooks/useUrlState";
 import { ADD_ACTIONS } from "../terminology";
 
-type Tab = "nodes" | "parameters" | "alwayson";
-const TABS: readonly Tab[] = ["nodes", "parameters", "alwayson"];
+type Tab = "nodes" | "parameters" | "alwayson" | "config";
+const TABS: readonly Tab[] = ["nodes", "parameters", "alwayson", "config"];
 
 const STATUS_TR: Record<string, string> = { up: "UP", down: "DOWN", unknown: "UNKNOWN", skipped: "SKIP" };
 
@@ -378,7 +379,13 @@ export default function GroupDetailPage() {
             Always On
           </button>
         )}
+        {/* Faz 28 İŞ 4: motor ayrımı yok — sapma hem PostgreSQL hem Always On için geçerli. */}
+        <button className={`tab-btn${tab === "config" ? " active" : ""}`} onClick={() => setTab("config")}>
+          Yapılandırma karşılaştırması
+        </button>
       </div>
+
+      {tab === "config" && Number.isFinite(id) && <ConfigComparisonPanel groupId={id} />}
 
       {tab === "nodes" && canWrite && group?.topology === "standalone" && (
         <div className="card" style={{ marginBottom: "1rem" }}>

@@ -23,6 +23,7 @@ from app.models import (
     BackupProbe,
     BackupRecord,
     DailyStateSnapshot,
+    DatabaseGroup,
     FindingAcknowledgement,
     GroupHealthSnapshot,
     DeadlockEvent,
@@ -43,6 +44,7 @@ from app.services.availability import (
     outages_for_instance,
 )
 from app.services.collection import effective_collect_interval
+from app.services.config_comparison import compare_group_from_snapshots
 from app.services.advice import Advice, AdviceStep
 from app.services.explain_service import validate_explainable
 from app.services.finding_status import (
@@ -2748,6 +2750,192 @@ async def parameters_section(ctx: ReportContext) -> SectionResult:
             f"{len(failed)} instance için parametre fotoğrafı alınamadı (bağlantı/yetki)."
             if failed
             else None
+        ),
+    )
+
+
+# --------------------------------------------------------------------------------------
+# 8b. Düğümler arası yapılandırma sapması (Faz 28 İŞ 4)
+# --------------------------------------------------------------------------------------
+
+
+@register_section
+async def config_drift_section(ctx: ReportContext) -> SectionResult:
+    """Düğümler arası yapılandırma sapması.
+
+    Parametre denetimi bölümü ZAMAN eksenli: "dünden beri ne değişti". Bu bölüm DÜĞÜMLER
+    ARASI: primary ile replika aynı mı. Cluster'da asıl arıza sebebi budur ve sapma normal
+    çalışmada hiçbir belirti vermez — tam olarak failover anında, yani en kötü anda ortaya
+    çıkar.
+
+    Rapor canlı probe yapmıyor: karşılaştırma günlük yapılandırma fotoğraflarından
+    üretiliyor (services/config_comparison.py).
+    """
+    grouped: dict[int, list[Instance]] = {}
+    for instance in ctx.instances:
+        if instance.group_id:
+            grouped.setdefault(instance.group_id, []).append(instance)
+    multi_node = {gid: rows for gid, rows in grouped.items() if len(rows) >= 2}
+
+    if not multi_node:
+        return SectionResult(
+            key="config_drift", title="Yapılandırma karşılaştırması", status="unknown",
+            summary="Karşılaştırılacak çok düğümlü grup yok.",
+            unknown_reason=(
+                "Yapılandırma karşılaştırması en az iki düğümlü gruplar için yapılıyor; "
+                "bu kapsamda öyle bir grup yok."
+            ),
+        )
+
+    findings: list[FindingDraft] = []
+    group_rows: list[dict] = []
+    measured_groups = 0
+
+    for group_id, instances in sorted(multi_node.items()):
+        group = await ctx.session.get(DatabaseGroup, group_id)
+        if group is None:
+            continue
+        comparison = await compare_group_from_snapshots(ctx.session, group, instances)
+        comparison["group_id"] = group_id
+        comparison["group_name"] = group.name
+        group_rows.append(comparison)
+
+        readable = [n for n in comparison["nodes"] if n not in (comparison.get("errors") or {})]
+        if len(readable) < 2:
+            # İki düğümün yapılandırması okunamadıysa "sapma yok" DEMİYORUZ; ölçüm eksikliğini
+            # uyum gibi sunmak, tam da görülmesi gereken sapmayı gizlerdi.
+            continue
+        measured_groups += 1
+
+        for row in comparison["rows"]:
+            if not row["diverged"] or row["severity"] not in ("critical", "warning"):
+                continue
+            value_text = ", ".join(
+                f"{node}: {value if value is not None else 'okunamadı'}"
+                for node, value in row["values"].items()
+            )
+            findings.append(
+                FindingDraft(
+                    section="config_drift",
+                    severity=row["severity"],
+                    title=f"{group.name}: düğümler arası {row['name']} farkı",
+                    detail=(
+                        f"`{row['name']}` düğümler arasında farklı: {value_text}. "
+                        + row["consequence"]
+                    ),
+                    evidence={
+                        "metric": f"config_drift.{row['name']}",
+                        "value": value_text[:200],
+                        "threshold": "tüm düğümlerde aynı",
+                        "measured_at": ctx.period_end.isoformat(),
+                    },
+                    facts=[
+                        fact("Sınıf", row["drift_class_label"],
+                             "bad" if row["severity"] == "critical" else "neutral"),
+                        *[
+                            fact(node, str(value) if value is not None else "okunamadı")
+                            for node, value in list(row["values"].items())[:4]
+                        ],
+                    ],
+                    note=(
+                        "Okunamayan düğümler: " + ", ".join(row["missing_nodes"])
+                        if row["missing_nodes"]
+                        else None
+                    ),
+                    recommendation=(
+                        f"`{row['name']}` değerini tüm düğümlerde eşitleyin."
+                    ),
+                    advice=_config_drift_advice(group, row),
+                    fingerprint_parts=("config_drift", str(group_id), row["name"]),
+                    related_object_type="group",
+                    related_object_id=group_id,
+                )
+            )
+
+    if not measured_groups:
+        return SectionResult(
+            key="config_drift", title="Yapılandırma karşılaştırması", status="unknown",
+            summary="Yapılandırma fotoğrafı yeterli değil.",
+            data={"groups": group_rows},
+            unknown_reason=(
+                "Karşılaştırma için en az iki düğümün yapılandırma fotoğrafı gerekiyor; "
+                "fotoğraflar günde bir kez alınıyor. " + needs_more_days(0, 1, "Karşılaştırma")
+            ),
+        )
+
+    total_diverged = sum(g["diverged_count"] for g in group_rows)
+    status = _worst_status([f.severity for f in findings]) if findings else "ok"
+    summary = (
+        f"{measured_groups} grupta {total_diverged} parametre farkı bulundu."
+        if total_diverged
+        else f"{measured_groups} grubun düğümleri arasında kayda değer fark yok."
+    )
+    return SectionResult(
+        key="config_drift", title="Yapılandırma karşılaştırması", status=status,
+        summary=summary, findings=findings, data={"groups": group_rows},
+    )
+
+
+def _config_drift_advice(group, row: dict) -> Advice:
+    """Sapma önerisi — iş etkisi FAILOVER RİSKİ olarak anlatılıyor.
+
+    "Değerleri eşitleyin" demek yetmiyor: sapmanın neden şimdi önemli olduğu, ancak
+    failover anında ne olacağı söylenerek anlaşılıyor.
+    """
+    must_match = row["drift_class"] == "must_match"
+    return Advice(
+        title=f"`{row['name']}` değerini tüm düğümlerde eşitleyin",
+        why=(
+            f"{group.name} grubunun düğümleri `{row['name']}` için farklı değerler taşıyor. "
+            + row["consequence"]
+            + " Sapma normal çalışmada hiçbir belirti vermez; tam olarak failover anında "
+            "ortaya çıkar — yani en kötü anda ve en az hazırlıklı olunan anda."
+        ),
+        steps=[
+            AdviceStep(
+                "Hangi değerin doğru olduğuna karar verin: kural, en yüksek yükü taşıyan "
+                "düğümün değeri değil, tüm düğümlerin kaldırabileceği değerdir."
+            ),
+            AdviceStep(
+                "Değeri sapma gösteren düğümlerde ayarlayın.",
+                "ALTER SYSTEM SET <parametre> = '<deger>';\nSELECT pg_reload_conf();"
+                if group.engine == "postgresql"
+                else "EXEC sp_configure '<parametre>', <deger>;\nRECONFIGURE;",
+            ),
+            AdviceStep(
+                "Yeniden başlatma gerektiren parametrelerde (shared_buffers, "
+                "max_connections, max_worker_processes) önce REPLİKALARI, en son "
+                "switchover ile primary'yi yeniden başlatın."
+                if group.engine == "postgresql"
+                else "Bellek ve MAXDOP ayarları anında geçerli olur; trace flag'ler için "
+                "başlangıç parametrelerini de güncelleyin, yoksa yeniden başlatmada kaybolur."
+            ),
+            AdviceStep(
+                "Yapılandırma yönetimi (Ansible/Puppet) kullanıyorsanız değeri ORADA "
+                "düzeltin; elle yapılan değişiklik bir sonraki dağıtımda geri alınır."
+            ),
+        ],
+        cautions=[
+            (
+                "Bu parametre PostgreSQL tarafından zorunlu tutuluyor: standby'daki değer "
+                "primary'dekinden küçükse kurtarma DURUR. Önce standby'ları yükseltin, "
+                "sonra primary'yi."
+                if must_match and group.engine == "postgresql"
+                else "Değişiklik öncesi mevcut değerleri kaydedin; geri alma bunu gerektirir."
+            ),
+            "Tüm düğümleri aynı anda yeniden başlatmayın — bakım penceresi tanımlayıp "
+            "sırayla ilerleyin.",
+        ],
+        estimated_duration="Yapılandırma dakikalar; yeniden başlatma gerekiyorsa düğüm başına kısa kesinti.",
+        rollback=(
+            "ALTER SYSTEM RESET <parametre>; SELECT pg_reload_conf();"
+            if group.engine == "postgresql"
+            else "EXEC sp_configure '<parametre>', <eski_deger>; RECONFIGURE;"
+        ),
+        verification=(
+            "SELECT name, setting FROM pg_settings WHERE name = '<parametre>';"
+            if group.engine == "postgresql"
+            else "SELECT name, value_in_use FROM sys.configurations WHERE name = '<parametre>';"
         ),
     )
 

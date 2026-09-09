@@ -6718,6 +6718,99 @@ instance'ları içine aldı ve ne ölçtüğünü kaybetti; grup kapsamına çev
 
 Tüm arka uç: **1481 geçti, 1 atlandı**.
 
+## Faz 28 — İŞ 4: Düğümler arası yapılandırma karşılaştırması
+
+Mevcut parametre denetimi **zaman eksenli**: "dünden beri ne değişti". Eksik olan
+**düğümler arası** sapmaydı — ve cluster'da asıl arıza sebebi budur, çünkü sapma
+normal çalışmada **hiçbir belirti vermez** ve tam olarak failover anında ortaya
+çıkar: yani en kötü anda, en az hazırlıklı olunan anda.
+
+### Sınıflandırma olmadan bu özellik gürültü olurdu
+
+"Bütün parametreler aynı olsun" demek işe yaramaz: replikada `hot_standby` açık,
+`primary_conninfo` dolu, gecikmeli replikada `recovery_min_apply_delay` bilerek
+farklıdır. Hepsini sapma saymak listeyi gürültüye boğar ve gerçek sapmayı
+görünmez yapardı — bastırma işinin (İŞ 2) tam tersi bir hata.
+
+Üç sınıf var ve ayrımın dayanağı **sonuç**, tercih değil:
+
+| Sınıf | Anlamı | Ciddiyet |
+|---|---|---|
+| Aynı olmalı | Farklıysa replikasyon bozulur ya da düğüm failover sonrası açılmaz | kritik |
+| Aynı olması beklenir | Çalışır ama failover sonrası başka türlü davranır | uyarı |
+| Farklı olabilir | Rol farkı; sapma bile sayılmaz | bilgi |
+
+"Aynı olmalı" sınıfı **tercih değil, motorun kuralı**: PostgreSQL standby'da
+`max_connections`, `max_worker_processes`, `max_wal_senders`,
+`max_prepared_transactions` ve `max_locks_per_transaction` değerlerinin
+primary'dekinden küçük olamayacağını belgelemiş; küçükse kurtarma duraklar ve
+düğüm hizmet veremez.
+
+"Aynı olması beklenir" sınıfının en iyi örneği `work_mem`: yarısı olan bir düğüme
+geçildiğinde sıralama ve hash işlemleri diske taşar. "Failover'dan sonra sistem
+yavaşladı" şikâyetinin en sık sebebi budur ve sebebi yapılandırmada aranmadığı
+için günlerce bulunamaz.
+
+### SQL Server: trace flag'ler ayrı bir kategori
+
+`sys.configurations`'da görünmezler ama planlayıcı davranışını kökten
+değiştirirler. `DBCC TRACESTATUS(-1)` ile okunuyor. Okunamadığında **"(yok)"
+yazılmıyor** — kapalı oldukları izlenimini verirdi; okunamadığı yazılıyor.
+
+MAXDOP ve `cost threshold for parallelism` de karşılaştırılıyor; Always On'da en
+sık gözden kaçan sapma bunlar.
+
+### Okunamayan değer "aynı" değildir
+
+Bir düğümden parametre alınamadıysa o düğüm `missing_nodes`'a yazılıyor ve
+karşılaştırmaya girmiyor. İki düğümün yapılandırması okunamadıysa rapor bölümü
+"sapma yok" **demiyor**, "belirlenemedi" diyor. Eksik veriyi uyum gibi sunmak,
+tam da görülmesi gereken sapmayı gizlerdi.
+
+### Canlı ve saklanmış yol aynı karşılaştırmadan geçiyor
+
+- **Canlı** (grup detay sekmesi): düğümlere o an bağlanıyor.
+- **Saklanmış** (rapor bölümü): günlük `DailyStateSnapshot` fotoğraflarından —
+  rapor canlı probe yapmıyor.
+
+İkisi de `build_comparison`'dan geçiyor; ayrı iki karşılaştırma yazmak, sekmede
+"sapma yok" derken raporda "3 sapma" demek olurdu.
+
+Karşılaştırma için `parameters` fotoğrafı yetmiyordu (12 kritik parametre
+tutuyor); **`config` adında ayrı bir günlük fotoğraf** eklendi (~25 parametre).
+Aynı fotoğrafı genişletmek, baseline denetiminin anlamını bulanıklaştırırdı.
+
+### Sıralama ve öneri
+
+Satırlar ciddiyete göre sıralanıyor; alfabetik olsaydı kritik bir sapma listenin
+ortasında kalır ve gözden kaçardı.
+
+Öneri, iş etkisini **failover riski** olarak anlatıyor. "Değerleri eşitleyin"
+demek yetmiyor — sapmanın neden şimdi önemli olduğu, ancak failover anında ne
+olacağı söylenerek anlaşılıyor. Adımlarda sıra da var: zorunlu parametrelerde
+önce replikalar, en son switchover ile primary.
+
+### Testler
+
+`tests/test_config_drift.py` — 23 test: sınıflandırmanın motorun kuralına
+uygunluğu, rol farklarının sapma sayılmaması, okunamayan değerin "aynı"
+sayılmaması, trace flag ayrımı, ciddiyete göre sıralama, saklanmış fotoğraftan
+karşılaştırma ve rapor bölümünün üç durumu (kritik / sorunsuz / belirlenemedi).
+
+### Yan bulgu: test veritabanı sınırsız büyüyordu
+
+Tam suite bu iş sırasında bir testte kırıldı: `test_manual_run_returns_queued_and_completes_in_background`
+15 saniyelik bütçesinde raporu bitiremiyordu. Sebep kodda değildi — **test
+veritabanı 1.16 GB'a şişmişti.** Dosya kalıcıydı ve hiçbir koşu onu temizlemiyordu;
+"global" kapsamlı rapor üreten testler her koşuda birikmiş veriyi de tarıyordu.
+
+Bu, yavaş bir suite'ten daha kötü bir sorun: zamana bağlı bir test bir gün eşiği
+aşıp kırılıyor ve **kodda hiçbir şey değişmemişken** gerçek bir gerilemeyle
+karıştırılabiliyor.
+
+`conftest.py` artık dosyayı oturum başında siliyor. Ölçüm: 682 saniye ve bir
+kırık test → **74 saniye ve tamamı yeşil**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

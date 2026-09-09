@@ -268,6 +268,35 @@ def _section_data_blocks(key: str, data: dict[str, Any]) -> list[Block]:
         if running:
             blocks.append(bullets(running))
 
+    elif key == "config_drift" and data.get("groups"):
+        for group in data["groups"]:
+            diverged = [r for r in (group.get("rows") or []) if r.get("diverged")]
+            if not diverged:
+                continue
+            blocks.append(heading(f"{group.get('group_name') or group.get('group_id')}", 3))
+            nodes = group.get("nodes") or []
+            rows = [
+                [
+                    r["name"],
+                    r.get("drift_class_label", ""),
+                    *[
+                        str(r["values"].get(node)) if r["values"].get(node) is not None else "okunamadı"
+                        for node in nodes
+                    ],
+                ]
+                for r in diverged
+            ]
+            blocks.append(table(["Parametre", "Sınıf", *nodes], rows))
+            if group.get("errors"):
+                # Okunamayan düğüm "aynı" DEĞİLDİR; belgede de açıkça yazıyor.
+                blocks.append(
+                    note(
+                        "Okunamayan düğümler: "
+                        + "; ".join(f"{k}: {v}" for k, v in group["errors"].items()),
+                        "warning",
+                    )
+                )
+
     elif key == "performance" and data.get("top_queries"):
         rows = [
             [

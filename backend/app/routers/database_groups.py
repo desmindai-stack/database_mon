@@ -21,6 +21,7 @@ from app.schemas import (
     ParameterAuditOut,
 )
 from app.services.alert_engine import ensure_group_alert_rules, evaluate_group_alerts
+from app.services.config_comparison import compare_group_live
 from app.services.alwayson_health import collect_alwayson_health
 from app.services.cluster_health import collect_group_health, group_health_metric_flags
 from app.services.credentials import redact_node_options
@@ -215,6 +216,23 @@ async def get_group_parameters(group_id: int, db: AsyncSession = Depends(get_db)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     return ParameterAuditOut.model_validate(report)
+
+
+@router.get("/{group_id}/config-comparison", response_model=dict)
+async def get_group_config_comparison(group_id: int, db: AsyncSession = Depends(get_db)) -> dict:
+    """Düğümler arası yapılandırma karşılaştırması (Faz 28 İŞ 4).
+
+    Canlı: gruptaki her veritabanına o an bağlanıyor. Rapor bölümü aynı karşılaştırmayı
+    saklanmış günlük fotoğraflardan yapıyor — ikisi de `build_comparison`'dan geçiyor ki
+    sekmede "sapma yok" derken raporda "3 sapma" yazmasın.
+    """
+    group = await db.get(DatabaseGroup, group_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Database group not found")
+    try:
+        return await compare_group_live(db, group)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
 
 
 @router.get("/{group_id}/alwayson", response_model=AlwaysOnHealthOut)

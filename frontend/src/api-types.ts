@@ -520,6 +520,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/groups/{group_id}/config-comparison": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Group Config Comparison
+         * @description Düğümler arası yapılandırma karşılaştırması (Faz 28 İŞ 4).
+         *
+         *     Canlı: gruptaki her veritabanına o an bağlanıyor. Rapor bölümü aynı karşılaştırmayı
+         *     saklanmış günlük fotoğraflardan yapıyor — ikisi de `build_comparison`'dan geçiyor ki
+         *     sekmede "sapma yok" derken raporda "3 sapma" yazmasın.
+         */
+        get: operations["get_group_config_comparison_api_groups__group_id__config_comparison_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/groups/{group_id}/convert-to-cluster": {
         parameters: {
             query?: never;
@@ -6688,6 +6712,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlwaysOnHealthOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_group_config_comparison_api_groups__group_id__config_comparison_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                group_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
