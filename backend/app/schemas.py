@@ -1590,6 +1590,11 @@ class ReportFindingOut(BaseModel):
     decision_reference: str | None = None
     decision_until: datetime | None = None
     advice: AdviceOut | None = None
+    # Faz 28 İŞ 2 — bağımlılık bastırma. `is_root_cause` bulgu listesinde en üstte ve
+    # işaretli gösteriliyor; `suppressed` olanlar kök sebebin altında katlanmış duruyor.
+    is_root_cause: bool = False
+    suppressed: bool = False
+    suppressed_by: str | None = None
 
     @field_validator("evidence", mode="before")
     @classmethod
@@ -1637,7 +1642,15 @@ class HealthReportSummaryOut(BaseModel):
 
 class HealthReportOut(HealthReportSummaryOut):
     sections: dict[str, Any] = {}
+    # Faz 28 İŞ 2: {"roots": [...], "suppressed_total": N} — "kök sebep nedeniyle N kontrol
+    # yapılamadı" satırının kaynağı.
+    suppression: dict[str, Any] = {}
     findings: list[ReportFindingOut] = []
+
+    @field_validator("suppression", mode="before")
+    @classmethod
+    def _suppression_never_null(cls, v):
+        return v or {}
 
     @field_validator("sections", mode="before")
     @classmethod

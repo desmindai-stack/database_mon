@@ -306,12 +306,17 @@ async def test_availability_section_derives_outages_from_collection_gaps():
             )
         await session.commit()
 
+        # Dönem, SON ÖLÇÜMDEN kısa süre sonra bitiyor. Faz 28 İŞ 2 ile "dönem sonunda toplama
+        # hâlâ durmuş" ayrı bir kök sebep bulgusuna çıktı; bu test kapanmış boşlukları
+        # ölçtüğü için dönemi son ölçüme yakın bitirip o davranışı dışarıda bırakıyor.
+        # (Süregelen boşluğun kendi testi aşağıda.)
+        period_end = now - timedelta(seconds=2385 - 30)
         ctx = hr.ReportContext(
             session=session,
             scope=_scope(),
             instances=[instance],
-            period_start=now - timedelta(hours=2),
-            period_end=now,
+            period_start=period_end - timedelta(hours=2),
+            period_end=period_end,
             previous=None,
             previous_findings={},
         )
@@ -345,3 +350,41 @@ async def test_customer_scope_includes_ungrouped_legacy_instances():
         found = await hr.resolve_scope_instances(session, ReportScope("customer", customer.id, name))
 
         assert legacy.id in [i.id for i in found]
+
+
+async def test_outage_that_is_still_ongoing_at_period_end_is_detected():
+    """Faz 28 İŞ 2 — sonda kalan boşluk.
+
+    Öncesinde kesinti tespiti yalnızca İKİ ÖLÇÜM ARASINDAKİ boşluklara bakıyordu: bir düğüm
+    üç saat önce düşüp bir daha gelmediyse rapor HİÇ kesinti göstermiyordu. En kötü durum tam
+    da görünmez olan durumdu.
+    """
+    from app.services.report_sections import availability_section
+
+    async with SessionLocal() as session:
+        instance = await _make_instance(session, "ongoing")
+        now = datetime.now(UTC)
+        # Düzenli ölçümler, sonra sessizlik: son ölçüm bir saat önce.
+        for offset in (7200, 7140, 7080, 3600):
+            session.add(
+                MetricSample(instance_id=instance.id, collected_at=now - timedelta(seconds=offset))
+            )
+        await session.commit()
+
+        ctx = hr.ReportContext(
+            session=session, scope=_scope(), instances=[instance],
+            period_start=now - timedelta(hours=3), period_end=now,
+            previous=None, previous_findings={},
+        )
+        result = await availability_section(ctx)
+
+    ongoing = [f for f in result.findings if f.fingerprint_parts[0] == "unreachable_now"]
+    assert len(ongoing) == 1
+    finding = ongoing[0]
+    assert finding.severity == "critical"
+    assert finding.evidence["value"] == pytest.approx(3600, abs=5)
+    # Dürüstlük: "veritabanı kapalı" iddiası yok.
+    assert "kanıtlamaz" in (finding.note or "")
+    # Süregelen kesinti erişilebilirlik yüzdesine de giriyor — eskiden hiç sayılmıyordu.
+    row = result.data["instances"][0]
+    assert row["outage_seconds"] >= 3600

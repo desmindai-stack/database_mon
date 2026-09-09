@@ -112,7 +112,7 @@ export default function ReportFindingCard({
     <div
       className={`finding-card ${finding.severity}${isOpenStatus ? "" : " decided"}${
         finding.verification_failed ? " verification-failed" : ""
-      }`}
+      }${finding.is_root_cause ? " root-cause" : ""}${finding.suppressed ? " suppressed" : ""}`}
     >
       <div className="finding-head">
         {canWrite && (
@@ -130,6 +130,12 @@ export default function ReportFindingCard({
           <span className="finding-title">{finding.title}</span>
         </button>
         <div className="finding-tags">
+          {/*
+            Kök sebep rozeti (Faz 28 İŞ 2): bu bulgu düzeltilince başkaları da kapanacak.
+            En görünür etiketlerden biri olmalı — 39 bulguyu doğuran şeyin sıradan bir satır
+            gibi görünmesi, bastırma işini yarısına kadar yapmak olurdu.
+          */}
+          {finding.is_root_cause && <span className="tag root-cause-tag">Kök sebep</span>}
           {/* Yanlış kapatma işareti — en görünür etiket olmalı. */}
           {finding.verification_failed && <span className="tag verification-tag">Çözüm doğrulanamadı</span>}
           {!isOpenStatus && (

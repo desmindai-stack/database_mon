@@ -235,8 +235,28 @@ async def _outages_for_instance(ctx: ReportContext, instance: Instance) -> list[
                     "start": previous.isoformat(),
                     "end": current.isoformat(),
                     "seconds": round(gap, 1),
+                    "ongoing": False,
                 }
             )
+
+    # SONDA KALAN BOŞLUK (Faz 28 İŞ 2). Buraya kadarki döngü yalnızca İKİ ÖLÇÜM ARASINDAKİ
+    # boşlukları görüyor; son ölçümden dönem sonuna kadar geçen süreyi hiç saymıyordu. Yani
+    # bir düğüm üç saat önce düşüp bir daha gelmediyse rapor HİÇ kesinti göstermiyordu — en
+    # kötü durum tam da görünmez olan durumdu.
+    #
+    # Ayrıca bu, bağımlılık bastırmasının doğru tetikleyicisi: "dönem sonunda toplama hâlâ
+    # durmuş" demek, o veritabanı hakkındaki diğer tüm analizlerin canlı veriye değil eski
+    # fotoğraflara dayandığı anlamına geliyor.
+    trailing = (ctx.period_end - rows[-1]).total_seconds()
+    if trailing >= threshold:
+        outages.append(
+            {
+                "start": rows[-1].isoformat(),
+                "end": ctx.period_end.isoformat(),
+                "seconds": round(trailing, 1),
+                "ongoing": True,
+            }
+        )
     return outages
 
 
@@ -343,18 +363,107 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
             }
         )
 
-        if outages:
-            worst = max(outages, key=lambda o: o["seconds"])
-            severity = "critical" if longest >= 300 or len(outages) >= 5 else "warning"
+        ongoing = next((o for o in outages if o.get("ongoing")), None)
+        if ongoing is not None:
+            # KÖK SEBEP BULGUSU (Faz 28 İŞ 2): dönem sonunda toplama hâlâ durmuş.
+            #
+            # Ayrı bir bulgu olması şart: "dönem içinde 3 kesinti oldu" ile "şu anda hâlâ
+            # erişilemiyor" çok farklı iki durum ve ikincisi bugün müdahale gerektiriyor.
+            # Bu bulgu, o veritabanına ait diğer bölümlerin bastırılmasını da tetikliyor
+            # (services/finding_dependencies.py).
+            findings.append(
+                FindingDraft(
+                    section="availability",
+                    severity="critical",
+                    title=f"{instance.name}: veri toplama durmuş, sürüyor",
+                    detail=(
+                        f"{instance.name} için son ölçüm {_fmt_duration(ongoing['seconds'])} önce "
+                        "alındı ve dönem sonunda hâlâ veri gelmiyordu. Bu veritabanı hakkındaki "
+                        "diğer analizler canlı veriye değil, saklanmış eski fotoğraflara dayanır."
+                    ),
+                    facts=[
+                        fact("Son ölçümden bu yana", _fmt_duration(ongoing["seconds"]), "bad"),
+                        fact("Son ölçüm", ongoing["start"][11:16]),
+                        fact("Durum", "sürüyor", "bad"),
+                    ],
+                    evidence={
+                        "metric": "metric_sample_trailing_gap",
+                        "value": round(ongoing["seconds"], 1),
+                        "threshold": max(
+                            effective_collect_interval(instance) * OUTAGE_GAP_MULTIPLIER,
+                            MIN_OUTAGE_SECONDS,
+                        ),
+                        "measured_at": ctx.period_end.isoformat(),
+                    },
+                    note=(
+                        "Bu ölçüm 'dbace veri toplayamıyor' demektir; veritabanının kapalı "
+                        "olduğunu tek başına kanıtlamaz (worker duruşu, ağ kopması ya da "
+                        "kimlik bilgisi sorunu da aynı sonucu verir)."
+                    ),
+                    fingerprint_parts=("unreachable_now", str(instance.id)),
+                    recommendation=(
+                        "Bağlantıyı test edin ve worker'ın çalıştığını doğrulayın; bu düzelmeden "
+                        "bu veritabanı için üretilen diğer bulgular güncel değildir."
+                    ),
+                    advice=Advice(
+                        title="Veri toplamayı yeniden çalışır hale getirin",
+                        why=(
+                            "Toplama durduğu sürece dbace bu veritabanı hakkında hiçbir güncel şey "
+                            "söyleyemez: performans, yedek, kapasite ve parametre bulgularının hepsi "
+                            "eski fotoğraftan üretilir. Ayrıca gerçekten bir kesinti yaşanıyorsa "
+                            "uygulama da aynı anda etkileniyor demektir."
+                        ),
+                        steps=[
+                            AdviceStep(
+                                "Bağlantıyı dbace üzerinden test edin (Veritabanları → Düzenle → "
+                                "Bağlantı testi); hata mesajı sorunun ağ mı, kimlik bilgisi mi, "
+                                "servis mi olduğunu söyler."
+                            ),
+                            AdviceStep(
+                                "Sunucuda veritabanı servisinin durumuna bakın.",
+                                "systemctl status postgresql\njournalctl -u postgresql --since '2 hours ago' | tail -50",
+                            ),
+                            AdviceStep(
+                                "Servis ayaktaysa dbace worker'ının çalıştığını doğrulayın — boşluk "
+                                "izleme tarafından da kaynaklanabilir."
+                            ),
+                        ],
+                        cautions=[
+                            "Bu bulgu veritabanının kapalı olduğunu kanıtlamaz; önce izleme "
+                            "tarafını elemek daha hızlı sonuç verir.",
+                            "Bu bulgu açıkken aynı veritabanı için üretilen diğer bulgular "
+                            "bastırılır — düzeldiğinde tekrar değerlendirilecekler.",
+                        ],
+                        verification=(
+                            "-- Bir sonraki toplama turunda ölçüm gelmeye başlamalı; "
+                            "instance detay sayfasında 'son toplama' zamanı güncellenir."
+                        ),
+                    ),
+                    related_object_type="instance",
+                    related_object_id=instance.id,
+                    link_hint=f"/instances/{instance.id}?tab=overview",
+                    environment=_environment_of(instance),
+                )
+            )
+
+        # Süregelen kesinti ayrı bulguya çıktığı için buradaki "dönem içinde N kesinti"
+        # bulgusu yalnızca KAPANMIŞ kesintileri anlatıyor; ikisini aynı bulguda toplamak
+        # "geçmişte oldu" ile "şu anda sürüyor"u aynı cümleye sıkıştırırdı.
+        closed = [o for o in outages if not o.get("ongoing")]
+        if closed:
+            worst = max(closed, key=lambda o: o["seconds"])
+            closed_total = sum(o["seconds"] for o in closed)
+            closed_longest = max(o["seconds"] for o in closed)
+            severity = "critical" if closed_longest >= 300 or len(closed) >= 5 else "warning"
             findings.append(
                 FindingDraft(
                     section="availability",
                     severity=severity,
-                    title=f"{instance.name}: veri toplanamayan {len(outages)} dönem",
-                    detail=f"{instance.name} için dönem içinde {len(outages)} kez veri toplanamadı.",
+                    title=f"{instance.name}: veri toplanamayan {len(closed)} dönem",
+                    detail=f"{instance.name} için dönem içinde {len(closed)} kez veri toplanamadı.",
                     facts=[
-                        fact("Toplam kesinti", _fmt_duration(total_down), "bad"),
-                        fact("En uzunu", _fmt_duration(longest), "bad"),
+                        fact("Toplam kesinti", _fmt_duration(closed_total), "bad"),
+                        fact("En uzunu", _fmt_duration(closed_longest), "bad"),
                         fact("En uzun kesintinin başlangıcı", worst["start"][11:16]),
                         fact("Erişilebilirlik", f"%{uptime_pct:.2f}", "bad" if uptime_pct < 99 else "good"),
                     ],
@@ -365,9 +474,10 @@ async def availability_section(ctx: ReportContext) -> SectionResult:
                     ),
                     evidence={
                         "metric": "metric_sample_gap",
-                        "outage_count": len(outages),
-                        "total_seconds": round(total_down, 1),
-                        "longest_seconds": round(longest, 1),
+                        # Süregelen kesinti ayrı bulguda; buradaki sayılar KAPANMIŞ kesintilere ait.
+                        "outage_count": len(closed),
+                        "total_seconds": round(closed_total, 1),
+                        "longest_seconds": round(closed_longest, 1),
                         "gap_threshold_seconds": max(
                             effective_collect_interval(instance) * OUTAGE_GAP_MULTIPLIER, MIN_OUTAGE_SECONDS
                         ),
@@ -2537,10 +2647,31 @@ async def executive_summary_section(ctx: ReportContext, results: list[SectionRes
     seçip listeler. Aksi halde aynı sorun iki kez (hem özet hem asıl bölüm) bulgu olarak
     sayılır, kritik sayısı şişerdi.
     """
-    drafts = _all_drafts(results)
+    # BASTIRILMIŞ BULGULAR ÖZETE GİRMEZ (Faz 28 İŞ 2). Bir düğüm düştüğünde özet "40 kritik"
+    # derse "kritik" kelimesi anlamını yitirir; asıl söylenmesi gereken tek şey düğümün
+    # erişilemez olduğu. Bastırılanlar kaybolmuyor, ayrı sayılıyor.
+    plan = ctx.suppression
+    all_drafts = _all_drafts(results)
+    if plan is not None:
+        drafts = [
+            d
+            for d in all_drafts
+            if not plan.is_suppressed(ctx.draft_fingerprints.get(id(d), ""))
+        ]
+    else:
+        drafts = all_drafts
+
+    def _is_root(draft) -> bool:
+        return plan is not None and plan.is_root(ctx.draft_fingerprints.get(id(draft), ""))
+
     ranked = sorted(
         drafts,
-        key=lambda d: (_SEVERITY_RANK.get(d.severity, 0), _ENV_RANK.get(d.environment, 1.0)),
+        key=lambda d: (
+            # Kök sebep en üstte: 39 bulguyu doğuran şey, özetin ilk maddesi olmalı.
+            1 if _is_root(d) else 0,
+            _SEVERITY_RANK.get(d.severity, 0),
+            _ENV_RANK.get(d.environment, 1.0),
+        ),
         reverse=True,
     )
     highlights = [
@@ -2551,6 +2682,7 @@ async def executive_summary_section(ctx: ReportContext, results: list[SectionRes
             "detail": d.detail[:400],
             "related_object_type": d.related_object_type,
             "related_object_id": d.related_object_id,
+            "is_root_cause": _is_root(d),
         }
         for d in ranked[:5]
         if d.severity in ("critical", "warning")
@@ -2559,15 +2691,28 @@ async def executive_summary_section(ctx: ReportContext, results: list[SectionRes
     unknown_sections = [r.title for r in results if r.status == "unknown"]
     critical = sum(1 for d in drafts if d.severity == "critical")
     warning = sum(1 for d in drafts if d.severity == "warning")
+    suppressed_rows = plan.summary_rows() if plan is not None else []
+    suppressed_total = sum(r["suppressed_count"] for r in suppressed_rows)
+    suppressed_note = (
+        " Ayrıca kök sebep nedeniyle "
+        f"{suppressed_total} kontrol yapılamadı; bulguları kök sebebin altında listelendi."
+        if suppressed_total
+        else ""
+    )
 
     if critical:
-        status, summary = "critical", f"{critical} kritik, {warning} uyarı bulgusu var."
+        status, summary = "critical", f"{critical} kritik, {warning} uyarı bulgusu var.{suppressed_note}"
     elif warning:
-        status, summary = "warning", f"Kritik bulgu yok; {warning} uyarı var."
+        status, summary = "warning", f"Kritik bulgu yok; {warning} uyarı var.{suppressed_note}"
     elif unknown_sections:
-        status, summary = "info", "Bulgu yok, ancak bazı bölümler yeterli veri olmadığı için değerlendirilemedi."
+        status, summary = "info", (
+            "Bulgu yok, ancak bazı bölümler yeterli veri olmadığı için değerlendirilemedi."
+            + suppressed_note
+        )
     else:
-        status, summary = "ok", "Bu dönemde dikkat gerektiren bir bulgu tespit edilmedi."
+        status, summary = "ok", (
+            "Bu dönemde dikkat gerektiren bir bulgu tespit edilmedi." + suppressed_note
+        )
 
     return SectionResult(
         key="executive_summary",
@@ -2578,6 +2723,9 @@ async def executive_summary_section(ctx: ReportContext, results: list[SectionRes
             "highlights": highlights,
             "critical_count": critical,
             "warning_count": warning,
+            # "Kök sebep nedeniyle N kontrol yapılamadı" satırları — arayüz bunları
+            # açılabilir bir blok olarak gösteriyor.
+            "suppression": {"roots": suppressed_rows, "suppressed_total": suppressed_total},
             # Dürüstlük: değerlendirilemeyen bölümler özet seviyesinde de görünür, "sorunsuz"
             # izlenimi yaratılmaz (Faz 17 İŞ 6).
             "unknown_sections": unknown_sections,

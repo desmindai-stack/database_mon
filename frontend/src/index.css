@@ -1074,6 +1074,14 @@ td code,
 }
 
 .finding-card.critical { border-left-color: var(--danger); }
+
+/* Faz 28 İŞ 2 — bağımlılık bastırma.
+   Kök sebep vurgulanıyor (39 bulguyu doğuran şey sıradan bir satır gibi görünmemeli);
+   bastırılmış bulgular soluk ve katlanmış duruyor ama SİLİNMİYOR. */
+.finding-card.root-cause { border-left-width: 5px; box-shadow: 0 0 0 1px var(--danger) inset; }
+.tag.root-cause-tag { background: rgba(239, 68, 68, 0.15); color: var(--danger); font-weight: 600; }
+.finding-card.suppressed { opacity: 0.65; }
+.suppressed-block { margin-top: 0.5rem; }
 .finding-card.warning { border-left-color: #f59e0b; }
 .finding-card.info { border-left-color: var(--accent); }
 .finding-card.ok { border-left-color: var(--success); }

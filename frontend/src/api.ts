@@ -475,6 +475,12 @@ export interface ReportSectionItem {
 
 export interface HealthReport extends HealthReportSummary {
   sections: { order?: string[]; items?: Record<string, ReportSectionItem> };
+  /**
+   * Faz 28 İŞ 2 — bağımlılık bastırma özeti:
+   * `{ roots: [{ root_label, root_title, suppressed_count, reason, ... }], suppressed_total }`.
+   * "Kök sebep nedeniyle N kontrol yapılamadı" satırının kaynağı.
+   */
+  suppression: Record<string, any>;
   findings: ReportFinding[];
 }
 

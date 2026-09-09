@@ -70,6 +70,9 @@ async def _counts(db: AsyncSession, report_ids: list[int]) -> dict[int, tuple[in
                 # ya da kapanan bulgular kritik sayısını şişirmez.
                 ReportFinding.report_id.in_(report_ids),
                 ReportFinding.status.in_(list(COUNTED_STATUSES)),
+                # Faz 28 İŞ 2: bastırılmış bulgular sayaca girmiyor. Bir düğüm düştüğünde
+                # liste ekranında "40 kritik" görmek, kritik kelimesini anlamsızlaştırır.
+                ReportFinding.suppressed.is_(False),
             )
             .group_by(ReportFinding.report_id, ReportFinding.severity)
         )

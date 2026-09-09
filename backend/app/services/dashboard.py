@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Application, Customer, DatabaseGroup, GroupHealthSnapshot, Node
+from app.services.finding_dependencies import suppressed_alert_metrics
 
 _ENV_RANK = {"prod": 0, "preprod": 1, "test": 2, "dev": 3}
 _SEVERITY_RANK = {"critical": 0, "high": 1, "warning": 2, "medium": 3, "low": 4, "info": 5}
@@ -38,10 +39,20 @@ async def _group_context(session: AsyncSession) -> dict[int, dict[str, Any]]:
     return {g.id: {"group": g, "application": a, "customer": c} for g, a, c in rows}
 
 
-def _issue(ctx: dict[str, Any], severity: str, message: str, checked_at: datetime | None, node: str | None = None) -> dict[str, Any]:
+def _issue(
+    ctx: dict[str, Any],
+    severity: str,
+    message: str,
+    checked_at: datetime | None,
+    node: str | None = None,
+    metric: str | None = None,
+) -> dict[str, Any]:
     group = ctx["group"]
     return {
         "severity": severity,
+        # Faz 28 İŞ 2: bağımlılık grafiğiyle eşleşen metrik adı. Bastırma kararı bu ada göre
+        # veriliyor; mesaj metnine bakarak eşleştirmek kırılgan olurdu.
+        "metric": metric,
         "customer": ctx["customer"].name,
         "application": ctx["application"].name,
         "group": group.name,
@@ -61,25 +72,54 @@ def _issues_from_group_health(ctx: dict[str, Any], report: dict[str, Any], check
 
     if report.get("split_brain"):
         nodes_str = ", ".join(report.get("split_brain_nodes") or [])
-        issues.append(_issue(ctx, "critical", f"Split-brain şüphesi: VIP'i tutan düğümler — {nodes_str}", checked_at, node=nodes_str))
+        issues.append(_issue(ctx, "critical", f"Split-brain şüphesi: VIP'i tutan düğümler — {nodes_str}", checked_at, node=nodes_str, metric="split_brain"))
 
     etcd = report.get("etcd_quorum") or {}
-    if etcd.get("total") and not etcd.get("has_quorum", True):
-        issues.append(_issue(ctx, "critical", f"etcd quorum kaybedildi ({etcd.get('up')}/{etcd.get('total')})", checked_at))
+    quorum_lost = bool(etcd.get("total")) and not etcd.get("has_quorum", True)
+    if quorum_lost:
+        issues.append(_issue(ctx, "critical", f"etcd quorum kaybedildi ({etcd.get('up')}/{etcd.get('total')})", checked_at, metric="etcd_quorum_lost"))
 
     down_nodes = report.get("down_nodes") or []
     if down_nodes:
         names = ", ".join(f"{d['node_name']} ({d['site']})" for d in down_nodes)
-        issues.append(_issue(ctx, "critical", f"{len(down_nodes)} düğüm erişilemez: {names}", checked_at, node=names))
+        issues.append(_issue(ctx, "critical", f"{len(down_nodes)} düğüm erişilemez: {names}", checked_at, node=names, metric="node_down"))
 
     cluster = report.get("cluster")
     if cluster is not None and not cluster.get("has_leader", True):
-        issues.append(_issue(ctx, "critical", "Cluster lider yok (no leader)", checked_at))
+        issues.append(_issue(ctx, "critical", "Cluster lider yok (no leader)", checked_at, metric="cluster_has_leader"))
 
     if report.get("overall") == "warning" and not issues:
         issues.append(_issue(ctx, "warning", "Servis durumu warning (bazı servisler doğrulanamadı)", checked_at))
 
-    return issues
+    # BAĞIMLILIK BASTIRMASI (Faz 28 İŞ 2), rapor ve alarmlarla AYNI grafikten.
+    #
+    # Dashboard'da bastırılan satır listeden çıkarılıyor ama SAYISI kök sebebin mesajına
+    # ekleniyor: "quorum kaybı" satırının yanında "1 bağlı kontrol bastırıldı" yazması,
+    # kullanıcının bir şeyin gizlendiğini bilmesini sağlıyor. Sessizce yok etmek, bastırma
+    # kuralı yanlış olduğunda kimsenin fark edememesi demekti.
+    flags = {
+        "split_brain": 1 if report.get("split_brain") else 0,
+        "etcd_quorum_lost": 1 if quorum_lost else 0,
+        "node_down": len(down_nodes),
+    }
+    suppressed_metrics = suppressed_alert_metrics(flags)
+    if not suppressed_metrics:
+        return issues
+
+    kept: list[dict[str, Any]] = []
+    suppressed_count = 0
+    for issue in issues:
+        if issue.get("metric") in suppressed_metrics:
+            suppressed_count += 1
+            continue
+        kept.append(issue)
+    if suppressed_count:
+        for issue in kept:
+            if issue.get("metric") in ("etcd_quorum_lost", "node_down", "split_brain"):
+                issue["message"] += f" — {suppressed_count} bağlı kontrol bastırıldı"
+                issue["suppressed_count"] = suppressed_count
+                break
+    return kept
 
 
 async def collect_dashboard_summary(session: AsyncSession) -> dict[str, Any]:

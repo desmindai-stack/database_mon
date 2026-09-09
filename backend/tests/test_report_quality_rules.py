@@ -331,10 +331,20 @@ async def test_findings_are_stored_ordered_by_impact_times_urgency():
     severities = [r["severity"] for r in ranked if r["change_state"] != "resolved"]
     # En yüksek öncelikli bulgu kritik olmalı; öncelik alfabetik ya da rastgele olamaz.
     assert severities[0] == "critical"
-    # Aynı listede daha düşük ciddiyette bir bulgu daha yüksek önceliğe sahip olmamalı.
-    critical_min = min((r["priority"] for r in rows if r["severity"] == "critical"), default=0)
-    info_max = max((r["priority"] for r in rows if r["severity"] == "info"), default=0)
+
+    # Sıralama kuralı BASTIRILMAMIŞ bulgular arasında geçerli (Faz 28 İŞ 2). Bastırılmış bir
+    # kritik bulgu bilerek dibe iniyor: kök sebep düzelmeden o bulgunun doğru olup olmadığı
+    # bilinmiyor ve listenin başında durması, asıl sorunu gölgelemek olurdu.
+    visible = [r for r in rows if not r["suppressed"]]
+    critical_min = min((r["priority"] for r in visible if r["severity"] == "critical"), default=0)
+    info_max = max((r["priority"] for r in visible if r["severity"] == "info"), default=0)
     assert critical_min > info_max
+
+    suppressed = [r for r in rows if r["suppressed"]]
+    if suppressed:
+        assert max(r["priority"] for r in suppressed) < min(
+            r["priority"] for r in visible if r["severity"] in ("critical", "warning")
+        )
 
 
 async def test_executive_summary_never_adds_its_own_findings():

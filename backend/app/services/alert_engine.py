@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import AlertEvent, AlertRule
+from app.services.finding_dependencies import suppressed_alert_metrics
 
 CLUSTER_RULE_SPECS = [
     ("Patroni down", "patroni_down", ">", 0),
@@ -73,7 +74,18 @@ async def evaluate_alerts(session: AsyncSession, instance_id: int, metrics: dict
     )
     rules = result.scalars().all()
 
+    # BAĞIMLILIK BASTIRMASI (Faz 28 İŞ 2). Bir düğüm düştüğünde ya da Patroni kapandığında
+    # ona bağlı eşik alarmları da tetikleniyor ve 40 e-posta gidiyordu. Kök sebep alarmının
+    # KENDİSİ bastırılmıyor — bastırılsaydı hiç haber gitmezdi ki bu, 40 e-postadan çok daha
+    # kötü olurdu.
+    #
+    # Grafik rapor tarafıyla AYNI yerden geliyor (services/finding_dependencies.py): alarm
+    # tarafına ayrı bir liste yazmak, iki listenin zamanla ayrışması demekti.
+    suppressed = suppressed_alert_metrics(metrics)
+
     for rule in rules:
+        if rule.metric in suppressed:
+            continue
         raw = metrics.get(rule.metric)
         if raw is None:
             continue
@@ -134,8 +146,13 @@ async def evaluate_group_alerts(session: AsyncSession, group_id: int, metrics: d
         )
     )
     rules = result.scalars().all()
+    # Grup seviyesinde de aynı grafik: quorum kaybında "lider yok" alarmı üretilmiyor, çünkü
+    # quorum olmadan lider seçilemez — lidersizlik bu durumun sonucu, ayrı bir arıza değil.
+    suppressed = suppressed_alert_metrics(metrics)
 
     for rule in rules:
+        if rule.metric in suppressed:
+            continue
         raw = metrics.get(rule.metric)
         if raw is None:
             continue

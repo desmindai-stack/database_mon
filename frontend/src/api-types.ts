@@ -3355,6 +3355,13 @@ export interface components {
             /** Status */
             status: string;
             /**
+             * Suppression
+             * @default {}
+             */
+            suppression: {
+                [key: string]: unknown;
+            };
+            /**
              * Warning Count
              * @default 0
              */
@@ -4543,6 +4550,11 @@ export interface components {
             fingerprint: string;
             /** Id */
             id: number;
+            /**
+             * Is Root Cause
+             * @default false
+             */
+            is_root_cause: boolean;
             /** Link Hint */
             link_hint?: string | null;
             /** Note */
@@ -4566,6 +4578,13 @@ export interface components {
              * @default open
              */
             status: string;
+            /**
+             * Suppressed
+             * @default false
+             */
+            suppressed: boolean;
+            /** Suppressed By */
+            suppressed_by?: string | null;
             /** Title */
             title: string;
             /**

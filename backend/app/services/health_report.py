@@ -34,6 +34,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import SessionLocal
 from app.services.advice import Advice, advice_to_dict, simple_advice, unavailable
+from app.services.finding_dependencies import SuppressionPlan, build_suppression_plan
 from app.services.finding_status import (
     COUNTED_STATUSES,
     STATUS_OPEN,
@@ -134,6 +135,17 @@ class ReportContext:
     period_end: datetime
     previous: HealthReport | None
     previous_findings: dict[str, ReportFinding]
+
+    # Faz 28 İŞ 2 — bağımlılık bastırma planı. Normal bölümler bittikten SONRA, özet
+    # bölümleri çalışmadan ÖNCE dolduruluyor.
+    #
+    # Neden context'te: yönetici özeti de, kaydedilen bulgular da, sayaçlar da aynı planı
+    # kullanmak zorunda. İkisi ayrı hesaplasaydı özet "40 kritik" derken liste 1 kritik
+    # gösterirdi — CLAUDE.md'deki "aynı veriyi gösteren yerler tek kaynaktan beslensin"
+    # kuralının tam olarak uyardığı durum.
+    suppression: "SuppressionPlan | None" = None
+    unique_drafts: list["FindingDraft"] = field(default_factory=list)
+    draft_fingerprints: dict[int, str] = field(default_factory=dict)
 
     @property
     def period_days(self) -> float:
@@ -265,7 +277,28 @@ async def _previous_report(session: AsyncSession, scope: ReportScope, before: da
     return (await session.execute(stmt)).scalar_one_or_none()
 
 
-def _priority(draft: FindingDraft, change_state: str, open_days: int, acknowledged: bool) -> float:
+#: Kök sebep bulgusunun öncelik çarpanı (Faz 28 İŞ 2).
+#:
+#: Kök sebep, kendisiyle aynı ciddiyetteki başka bir kritik bulgunun ALTINDA kalmamalı:
+#: 39 bulguyu doğuran şey listenin ortasında duruyorsa, bastırma işini yarısına kadar
+#: yapmış oluruz. Çarpan büyük ama sonsuz değil — bilgi seviyesindeki bir kök sebep, gerçek
+#: bir kritik bulgunun üstüne çıkmıyor.
+_ROOT_CAUSE_BOOST = 3.0
+
+#: Bastırılmış bulgunun öncelik çarpanı. Sıfırlanmıyor ki açıldığında kendi içlerinde
+#: anlamlı sıralansınlar.
+_SUPPRESSED_DAMPING = 0.02
+
+
+def _priority(
+    draft: FindingDraft,
+    change_state: str,
+    open_days: int,
+    acknowledged: bool,
+    *,
+    is_root_cause: bool = False,
+    suppressed: bool = False,
+) -> float:
     """Etki × aciliyet. Büyük olan üstte."""
     base = _SEVERITY_WEIGHT.get(draft.severity, 5.0)
     env = _ENVIRONMENT_WEIGHT.get((draft.environment or "prod").lower(), 1.0)
@@ -274,6 +307,10 @@ def _priority(draft: FindingDraft, change_state: str, open_days: int, acknowledg
     # 30 günde en fazla %25 ek ağırlık.
     age = 1.0 + min(open_days, 30) * 0.0083
     score = base * env * change * age
+    if is_root_cause:
+        score *= _ROOT_CAUSE_BOOST
+    if suppressed:
+        score *= _SUPPRESSED_DAMPING
     if acknowledged:
         # Kabul edilenler ayrı bölümde; yine de kendi içlerinde sıralanabilsinler diye
         # tamamen sıfırlanmıyor.
@@ -293,6 +330,29 @@ def _failed_section(builder, index: int) -> SectionResult:
     )
 
 
+def _build_plan(
+    ctx: ReportContext, results: list[SectionResult]
+) -> tuple[list[FindingDraft], dict[int, str], SuppressionPlan]:
+    """Fingerprint'leri hesaplar, tekrarları eler ve bastırma planını üretir.
+
+    Fingerprint hesabı TEK yerde: bağımlılık modülünün kendi hesabını yapması iki ayrı
+    sonuç riski demek olurdu ve ayrışırlarsa bastırma sessizce yanlış bulguyu hedeflerdi.
+    """
+    seen: set[str] = set()
+    fingerprints: dict[int, str] = {}
+    unique: list[FindingDraft] = []
+    for result in results:
+        for draft in result.findings:
+            fingerprint = make_fingerprint(draft.section, *draft.fingerprint_parts)
+            if fingerprint in seen:
+                continue  # aynı bulgu iki bölümden geldiyse bir kez raporla
+            seen.add(fingerprint)
+            fingerprints[id(draft)] = fingerprint
+            unique.append(draft)
+    plan = build_suppression_plan(unique, fingerprints, {i.id: i.group_id for i in ctx.instances})
+    return unique, fingerprints, plan
+
+
 async def _run_sections(ctx: ReportContext, report: HealthReport, session: AsyncSession) -> list[SectionResult]:
     builders = registered_sections()
     summary_builders = registered_summary_sections()
@@ -309,6 +369,11 @@ async def _run_sections(ctx: ReportContext, report: HealthReport, session: Async
         report.progress_pct = int((index + 1) * 100 / max(total, 1))
         report.progress_label = result.title
         await session.commit()
+
+    # BASTIRMA PLANI BURADA ÜRETİLİYOR: özet bölümleri (yönetici özeti, değişenler) bulgu
+    # SAYIYOR ve bastırılmışları saymamaları gerekiyor. Plan onlardan sonra üretilseydi
+    # özet 40 kritik derken liste 1 kritik gösterirdi.
+    ctx.unique_drafts, ctx.draft_fingerprints, ctx.suppression = _build_plan(ctx, results)
 
     summary_results: list[SectionResult] = []
     for offset, builder in enumerate(summary_builders):
@@ -437,13 +502,16 @@ async def generate_report(
         membership = await build_scope_membership(session, instances)
         index = DecisionIndex(decisions, membership)
 
-        seen: set[str] = set()
+        # Plan `_run_sections` içinde üretildi (özet bölümleri de onu kullandı); burada
+        # yeniden hesaplanmıyor.
+        plan = ctx.suppression or SuppressionPlan()
+        seen = set(ctx.draft_fingerprints.values())
+
         findings: list[ReportFinding] = []
-        for draft in drafts:
-            fingerprint = make_fingerprint(draft.section, *draft.fingerprint_parts)
-            if fingerprint in seen:
-                continue  # aynı bulgu iki bölümden geldiyse bir kez raporla
-            seen.add(fingerprint)
+        for draft in ctx.unique_drafts:
+            fingerprint = ctx.draft_fingerprints[id(draft)]
+            is_root_cause = plan.is_root(fingerprint)
+            suppressed_by = plan.suppressed_by.get(fingerprint)
 
             prior = previous_findings.get(fingerprint)
             if prior is None:
@@ -503,7 +571,17 @@ async def generate_report(
                     decision_note=payload["note"],
                     decision_reference=payload["reference"],
                     decision_until=payload["until"],
-                    priority=_priority(draft, change_state, open_days, effective.status not in COUNTED_STATUSES),
+                    priority=_priority(
+                        draft,
+                        change_state,
+                        open_days,
+                        effective.status not in COUNTED_STATUSES,
+                        is_root_cause=is_root_cause,
+                        suppressed=suppressed_by is not None,
+                    ),
+                    is_root_cause=is_root_cause,
+                    suppressed=suppressed_by is not None,
+                    suppressed_by=suppressed_by,
                     open_since_days=open_days,
                     change_state=change_state,
                     # Geriye dönük uyumluluk: eski `acknowledged` bayrağı artık "açık değil"
@@ -579,9 +657,18 @@ async def generate_report(
         # Kritik/uyarı sayaçları ve genel durum YALNIZCA "açık" bulguları sayar (Ek İŞ A):
         # yoksayılan, ertelenen, planlanan, risk kabul edilen ya da kapanan bulgular raporun
         # tamamını kırmızıya boyamaz.
-        counted = [f for f in findings if f.status in COUNTED_STATUSES]
+        # BASTIRILMIŞ BULGULAR SAYILMIYOR (Faz 28 İŞ 2): bir düğüm düştüğünde kritik sayacı
+        # 40 gösterirse "kritik" kelimesi anlamını yitirir. Bulgular silinmiyor, yalnızca
+        # sayaca ve genel duruma girmiyorlar.
+        counted = [f for f in findings if f.status in COUNTED_STATUSES and not f.suppressed]
         worst = max((SEVERITY_ORDER.get(f.severity, 0) for f in counted), default=0)
         report.overall_status = {3: "critical", 2: "warning", 1: "info", 0: "ok"}[worst]
+        # "Kök sebep nedeniyle N kontrol yapılamadı" satırları. Bastırılan bulgular
+        # KAYBOLMUYOR: raporda duruyor, işaretli ve bu özetin altından açılabiliyor.
+        report.suppression = {
+            "roots": plan.summary_rows(),
+            "suppressed_total": sum(plan.counts.values()),
+        }
         report.sections = {
             "order": [r.key for r in results],
             "items": {

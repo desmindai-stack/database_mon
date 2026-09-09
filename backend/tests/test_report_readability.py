@@ -142,9 +142,13 @@ async def test_availability_finding_is_also_structured():
         for offset in (3600, 3585, 2385):
             session.add(MetricSample(instance_id=instance.id, collected_at=now - timedelta(seconds=offset)))
         await session.commit()
+        # Dönem son ölçümden kısa süre sonra bitiyor: bu test KAPANMIŞ kesinti bulgusunun
+        # okunabilirliğini ölçüyor, Faz 28 İŞ 2'de eklenen "süregelen kesinti" bulgusunu değil.
+        period_end = now - timedelta(seconds=2385 - 30)
         ctx = hr.ReportContext(
             session=session, scope=hr.ReportScope("global", None, "x"), instances=[instance],
-            period_start=now - timedelta(hours=2), period_end=now, previous=None, previous_findings={},
+            period_start=period_end - timedelta(hours=2), period_end=period_end,
+            previous=None, previous_findings={},
         )
         result = await availability_section(ctx)
 

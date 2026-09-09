@@ -6463,6 +6463,104 @@ artık elle yazılmış hâline dönmesi testte düşüyor.
 `tests/test_backup_health.py` — 45 test. Ayrıca `test_prerequisites.py`'ye üç
 yeni test. Tüm arka uç: **1407 geçti, 1 atlandı**.
 
+## Faz 28 — İŞ 2: Bağımlılık bastırma
+
+Bir düğüm düştüğünde rapor **40 bulgu** üretiyordu. Biri gerçekti ("düğüme
+erişilemiyor"), kalan 39'u onun sonucuydu: parametre denetimi dünkü fotoğrafı
+okuyup sapma bildiriyor, yedek bölümü eskimiş yedek diyor, ön koşullar eksik
+eklenti sayıyor, kapasite tahmini eski trendden konuşuyor.
+
+Asıl zarar sayı değil: **gerçek bulgu 40 satırın içinde kayboluyor** ve kritik
+sayacı 40 gösterince "kritik" kelimesi anlamını yitiriyor.
+
+### Yol açan gerçek hata: sonda kalan boşluk hiç görülmüyordu
+
+Kesinti tespiti yalnızca **iki ölçüm arasındaki** boşluklara bakıyordu. Son
+ölçümden dönem sonuna kadar geçen süre hiç sayılmıyordu — yani bir düğüm üç
+saat önce düşüp bir daha gelmediyse rapor **hiç kesinti göstermiyordu**. En kötü
+durum tam da görünmez olan durumdu; erişilebilirlik yüzdesi de olduğundan iyi
+çıkıyordu.
+
+Sonda kalan boşluk artık ölçülüyor ve ayrı bir kök sebep bulgusuna çıkıyor:
+"veri toplama durmuş, sürüyor". "Dönem içinde 3 kesinti oldu" ile "şu anda hâlâ
+erişilemiyor" çok farklı iki şey ve ikincisi bugün müdahale gerektiriyor.
+
+### Grafik tek yerde
+
+`services/finding_dependencies.py` tek merkez. Bölümler kendi bastırma
+mantığını yazmıyor; hiçbir bulgu tipi "beni şu durumda gösterme" demiyor.
+Gerekçe: bastırma kararının bütünlüğü ancak tek yerden görülebilir — 11 bölüme
+dağılmış bir mantıkta "neden bu bulguyu görmüyorum" sorusunun cevabı 11 dosyada
+aranır ve iki bölüm birbirini bastırdığında kimse fark etmez.
+
+Aynı grafik **rapor, dashboard ve alarmları** besliyor. "40 alarm e-postası
+gitmesin" isteğinin karşılığı alarm tarafına ayrı bir liste yazmak değil, aynı
+grafikten geçmek — iki liste zamanla mutlaka ayrışırdı.
+
+| Kök sebep | Kapsam | Bastırdığı |
+|---|---|---|
+| Veritabanına erişilemiyor (`no_samples`, `unreachable_now`) | instance | yedek, performans, kaynak, şema, bloklama, kapasite, parametre, ön koşul bölümleri + eşik alarmları |
+| Patroni servisi kapalı | instance | lider/lider değişimi/lag bulguları |
+| etcd quorum kaybı | grup | lider/lider değişimi bulguları (gruptaki tüm düğümlerde) |
+
+### Bastırılan bulgu SİLİNMİYOR
+
+Raporda kalıyor, işaretleniyor ve "kök sebep nedeniyle N kontrol yapılamadı"
+satırının altında açılabiliyor. Silmek, bastırma kuralı yanlışsa gerçek bir
+sorunu görünmez yapardı; katlamak ise en kötü ihtimalle bir tıklama maliyeti.
+
+Dashboard'da bastırılan satır listeden çıkıyor ama **sayısı kök sebebin
+mesajına ekleniyor** ("— 1 bağlı kontrol bastırıldı"): sessizce yok etmek,
+kural yanlış olduğunda kimsenin fark edememesi demekti.
+
+### Kısmi sorun kök sebep değildir
+
+En kolay hata, "kısmi" bir durumu kök sebep saymak olurdu. Bir düğüm günün 20
+saati ayakta olup son 4 saatte düştüyse **o 20 saatin performans bulguları
+gerçektir** ve bastırılmaları veri kaybı olurdu. Bu yüzden kapanmış bir toplama
+boşluğu (`collection_gap`) kök sebep sayılmıyor; yalnızca "hiç ölçüm yok" ve
+"dönem sonunda toplama hâlâ durmuş" sayılıyor. İkisi de bağlı analizlerin
+dayanacağı canlı verinin olmadığını kanıtlıyor.
+
+### Bastırılmayan üç bölüm ve gerekçesi
+
+- **`availability`** — kök sebebin kendisi orada; bastırmak tek gerçek bulguyu
+  silmek olurdu.
+- **`cluster`** — cluster bilgisi host-agent/Patroni API üzerinden geliyor, yani
+  veritabanı bağlantısından **bağımsız bir kanal**. Veritabanına
+  bağlanılamazken cluster bilgisi hâlâ doğru olabilir ve o an en çok ihtiyaç
+  duyulan bilgi odur.
+- **`alerts`** — alarm gürültüsünün kendisini raporlayan bölüm; bastırmak,
+  bastırmanın çalışıp çalışmadığını görmeyi engellerdi.
+
+### İki kök sebep birbirini bastırmıyor
+
+Hangisinin "daha kök" olduğuna karar vermek için elimizde kanıt yok; yanlış
+tahmin gerçek bir arızayı gizlemek olurdu. İkisi de kök sebep olarak duruyor.
+
+### Servis adına bakan desen
+
+`service_down:patroni` deseni servis adını da eşleştiriyor. Bakmasaydı
+**haproxy'nin kapalı olması lider bulgularını bastırırdı** — oysa haproxy'nin
+lider seçimiyle ilgisi yok.
+
+### Sayaçlar ve sıralama
+
+Kritik/uyarı sayaçları (rapor listesi, yönetici özeti, genel durum) bastırılmış
+bulguları saymıyor. Kök sebep 3× öncelik çarpanı alıyor ve listenin başına
+çıkıyor; bastırılanlar dibe iniyor ama sıfırlanmıyor ki açıldıklarında kendi
+içlerinde anlamlı sıralansınlar.
+
+### Testler
+
+`tests/test_finding_dependencies.py` — 22 test: grafiğin kendisi (her kural bir
+şey bastırmalı, kök sebep kendi alarmını bastırmamalı), kapsam sızmaması,
+grup→düğüm inişi, kısmi sorunun kök sebep sayılmaması, servis adı ayrımı,
+alarm ve dashboard bastırması, uçtan uca rapor üretimi.
+
+Ayrıca `test_outage_that_is_still_ongoing_at_period_end_is_detected` sonda kalan
+boşluk hatasını kalıcı olarak kapatıyor. Tüm arka uç: **1431 geçti, 1 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

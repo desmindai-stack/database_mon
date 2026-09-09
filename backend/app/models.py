@@ -523,6 +523,11 @@ class HealthReport(Base):
     # ok | info | warning | critical — bölümlerin en kötüsü.
     overall_status: Mapped[str] = mapped_column(String(16), default="ok", nullable=False)
     sections: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Faz 28 İŞ 2: bağımlılık bastırma özeti — {"roots": [...], "suppressed_total": N}.
+    # "Kök sebep nedeniyle N kontrol yapılamadı" satırının kaynağı. Bulgulardan
+    # türetilebilirdi ama o zaman her okuyan yeniden hesaplardı; rapor donmuş bir belge
+    # olduğu için özet de rapora yazılıyor.
+    suppression: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     # Aynı kapsamın bir önceki raporu — "dünden beri değişenler" bölümü bunun bulgularıyla
     # karşılaştırarak üretilir.
     previous_report_id: Mapped[int | None] = mapped_column(ForeignKey("health_reports.id"), nullable=True)
@@ -593,6 +598,17 @@ class ReportFinding(Base):
     # new | ongoing | resolved | regressed — "dünden beri değişenler" bölümünün ham verisi.
     change_state: Mapped[str] = mapped_column(String(16), default="new", nullable=False)
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Faz 28 İŞ 2 — bağımlılık bastırma.
+    #
+    # `is_root_cause`: bu bulgu düzeltilince başka bulgular da kapanacak. Listede en üstte
+    # ve işaretli gösteriliyor.
+    # `suppressed`: bulgu bir kök sebebin SONUCU. Silinmiyor — sayaçlara girmiyor ve
+    # "kök sebep nedeniyle N kontrol yapılamadı" satırının altında açılabiliyor. Silmek,
+    # bastırma kuralı yanlışsa gerçek bir sorunu görünmez yapardı.
+    # `suppressed_by`: bastıran kök sebebin fingerprint'i.
+    is_root_cause: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    suppressed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    suppressed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     report: Mapped["HealthReport"] = relationship(back_populates="findings")
 

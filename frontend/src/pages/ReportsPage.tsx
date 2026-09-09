@@ -859,7 +859,17 @@ function SectionFindings({
   selected: Set<string>;
   toggleSelect: (fingerprint: string) => void;
 }) {
-  const shown = useShowMore(findings);
+  /*
+   * Bastırılmış bulgular (Faz 28 İŞ 2) ayrı ve KATLANMIŞ gösteriliyor.
+   *
+   * Silinmiyorlar: bastırma kuralı yanlışsa gerçek bir sorunu görünmez yapardık. Katlamak
+   * ise en kötü ihtimalle bir tıklama maliyeti — ve kök sebep düzeltilene kadar bu
+   * bulguların doğru olup olmadığı zaten bilinmiyor.
+   */
+  const visible = findings.filter((f) => !f.suppressed);
+  const suppressed = findings.filter((f) => f.suppressed);
+  const [showSuppressed, setShowSuppressed] = useState(false);
+  const shown = useShowMore(visible);
   return (
     <>
       {shown.items.map((finding) => (
@@ -874,6 +884,30 @@ function SectionFindings({
         />
       ))}
       <ShowMoreButton hidden={shown.hidden} onClick={shown.showAll} />
+      {suppressed.length > 0 && (
+        <div className="suppressed-block">
+          <button
+            type="button"
+            className="btn btn-xs show-more-btn"
+            onClick={() => setShowSuppressed((v) => !v)}
+          >
+            {showSuppressed ? "▾" : "▸"} Kök sebep nedeniyle {suppressed.length} kontrol
+            yapılamadı
+          </button>
+          {showSuppressed &&
+            suppressed.map((finding) => (
+              <ReportFindingCard
+                key={finding.id}
+                finding={finding}
+                canWrite={canWrite}
+                scopeTargets={scopeTargetsFor(finding)}
+                onApplyStatus={applyStatus}
+                selected={selected.has(finding.fingerprint)}
+                onToggleSelect={toggleSelect}
+              />
+            ))}
+        </div>
+      )}
     </>
   );
 }

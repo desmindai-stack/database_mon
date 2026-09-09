@@ -4279,6 +4279,12 @@
             "title": "Status",
             "type": "string"
           },
+          "suppression": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Suppression",
+            "type": "object"
+          },
           "warning_count": {
             "default": 0,
             "title": "Warning Count",
@@ -7665,6 +7671,11 @@
             "title": "Id",
             "type": "integer"
           },
+          "is_root_cause": {
+            "default": false,
+            "title": "Is Root Cause",
+            "type": "boolean"
+          },
           "link_hint": {
             "anyOf": [
               {
@@ -7740,6 +7751,22 @@
             "default": "open",
             "title": "Status",
             "type": "string"
+          },
+          "suppressed": {
+            "default": false,
+            "title": "Suppressed",
+            "type": "boolean"
+          },
+          "suppressed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suppressed By"
           },
           "title": {
             "title": "Title",
