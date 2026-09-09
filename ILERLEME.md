@@ -6204,6 +6204,67 @@ SQL Server toplamasının GERÇEKTEN bağlı olduğu, XE zaman damgasının kaym
 bozuk tek bir XML'in turu düşürmediği. **`timedelta` importu kaldırıldığında 8
 test düşüyor.** Toplam 1320 test yeşil, 16 kritik tarayıcı testi yeşil.
 
+## Doküman yapısı — CLAUDE.md 212 satırdan 126'ya
+
+CLAUDE.md kuraldaki 200 satır sınırını aşmıştı. Sınırı yükseltmek yapısal
+sorunu çözmez, erteler: dosya **her oturumda** okunuyor ve token maliyeti var.
+Mimari detayı ise ihtiyaç anında okunacak bir referans.
+
+**Ayrım ölçüsü:** "her oturumda uygulanması gerekiyor mu?" Kurallar ve
+terminoloji evet; servis tablosu, süreç diyagramı ve kurulum komutları hayır.
+
+### Taşınanlar
+
+| İçerik | Nereye | Neden |
+|---|---|---|
+| Mimari bölümü (dizin ağaçları + 20 satırlık servis tablosu) | `docs/MIMARI.md` | Kodda yön bulmak için, ihtiyaç anında |
+| Yerel çalıştırma komutları | README (zaten vardı) | **Üçlü mükerrerdi**: CLAUDE.md, README ve MIMARI.md'de ayrı ayrı |
+| Canlı ortam tablosu | `docs/MIMARI.md` bileşen tablosu | Aynı bilginin iki hâliydi |
+
+Yerine tek bir **"Nerede ne var"** yönlendirme tablosu kondu (12 satır): hangi
+soru için hangi dosyaya bakılacağı.
+
+### docs/MIMARI.md birleştirilirken düzeltildi
+
+Mevcut dosya epey eskimişti ve olduğu gibi üzerine eklemek mükerrer + yanlış
+bilgi bırakırdı:
+
+- "SQL Server (stub)" deniyordu — çoktan tam collector.
+- Yol haritasında **bitmiş işler** duruyordu: SQL Server collector, metrik
+  retention policy.
+- Tahmin anlatımı Faz 20 öncesiydi ("son ~40 örnekte linear trend") — artık
+  güven aralığı, aralık olarak tarih ve doğruluk geri beslemesi var.
+- "Yerel geliştirme" bloğu README ile mükerrerdi.
+
+Eklenen: worker'daki zamanlanmış işlerin tablosu (hangi iş hangi aralıkta ve
+neden), günlük işlerin neden `cron` ile kurulduğu (canlıda yaşanan sorun),
+tip üretiminin neden zorunlu olduğu, alarm/tahmin/bulgu ayrımı.
+
+### Kalanlar ve gerekçesi
+
+| Bölüm | Satır | Neden kaldı |
+|---|---|---|
+| Vizyon | 12 | İki ayrı hedef kitle, rapor ve arayüz kararlarının çoğunu belirliyor |
+| Nerede ne var | 12 | Yönlendirme tablosu |
+| Mevcut durum | 15 | Var olanı yeniden yazmayı engelliyor |
+| Testler | 15 | Her iş sonunda çalıştırılıyor |
+| Kurallar | 30 | Her oturumda uygulanıyor |
+| Terminoloji | 17 | Kullanıcı isteği: kural, referans değil |
+| Bilinen sınırlar | 21 | "Bunu bilerek yapmadık" — düzeltmeye kalkışmayı engelliyor |
+
+**126 satır**, sınırın 74 satır altında.
+
+### Sınır artık test edilerek korunuyor
+
+`tests/test_docs_structure.py` (7 test): satır bütçesi (180 — tam sınıra
+dayanmış bir dosya bir sonraki eklemede yine aynı soruna düşerdi), referans
+içeriğin CLAUDE.md'ye geri sızmaması, kuralların ve terminolojinin yerinde
+kalması, ve **yönlendirilen dosyaların gerçekten var olması** (var olmayan bir
+dosyaya yönlendirmek, bilgiyi taşımaktan beter: okuyucu arar ve bulamaz).
+
+Mimari bölümü geri konduğunda iki test düşüyor — korumanın çalıştığı
+doğrulandı.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
