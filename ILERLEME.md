@@ -7097,6 +7097,83 @@ sayaçlarda `BigInteger` kullanıldı — kümülatif sayaçlar int32 sınırın
 
 Arka uç: **1554 geçti, 15 atlandı**.
 
+## Faz 29 — İŞ 2b: Tablo erişim kalıbı
+
+### Envanter: ne vardı, ne eksikti
+
+`collect_schema_health` zaten kapsıyordu: kullanılmayan index'ler, şişmiş tablolar
+(ölü satır oranı, son vacuum/analyze, freeze age), vacuum gecikmesi.
+
+**Eksik olan, tabloya NASIL erişildiğiydi:**
+
+| Sinyal | Kaynak | Neden değerli |
+|---|---|---|
+| Sıralı tarama baskınlığı | `pg_stat_user_tables.seq_scan/seq_tup_read` | Index önerisi sorgu bazında çalışıyor; bu tablo bazında "buraya index'le girilmiyor" diyor ve pg_stat_statements'a düşmeyen erişimleri de kapsıyor |
+| Tablo/index cache isabeti | `pg_statio_user_tables` | Çalışma kümesi belleğe sığıyor mu |
+| HOT güncelleme oranı | `n_tup_hot_upd / n_tup_upd` | Yazma yükünün sorgu listesinde **görünmeyen** kaynağı |
+| İstatistik tazeliği | `n_mod_since_analyze / n_live_tup` | Yanlış plan seçiminin en sık sebebi |
+
+### Tasarımın merkezi: gürültü üretmemek
+
+En kolay hata `seq_scan` sayacı yüksek diye bulgu üretmek olurdu. **1000 satırlık
+bir tabloda sıralı tarama planlayıcının DOĞRU tercihidir** — tüm tabloyu okumak
+index'ten ucuzdur. O doğru tercihleri bulgu diye göstermek, listeyi gürültüye
+boğup gerçek sinyali görünmez yapardı.
+
+Bu yüzden eşikler sayaçlara değil **oranlara ve asgari hacimlere** bağlı:
+
+- Sıralı tarama: "kaç kez tarandı" değil **tarama başına kaç satır** (≥10.000) ve
+  toplam taramaların ≥%50'si sıralı olmalı.
+- Cache isabeti: en az 10.000 blok okunmuş olmalı — 10 bloklu bir tabloda %50
+  isabet istatistiksel gürültüdür.
+- HOT oranı: en az 10.000 güncelleme.
+- İstatistik: en az 10.000 satır değişmiş olmalı.
+
+**İstatistik tazeliğinde zaman değil değişim hacmi ölçülüyor.** Mevcut vacuum
+gecikmesi kontrolü zamana bakıyor; ama az yazılan bir tabloda 3 gün eski
+istatistik sorun değil, çok yazılan bir tabloda 1 saat eski istatistik sorundur.
+
+### Sürüm farkı yine ölçüldü
+
+`last_seq_scan` ve `n_tup_newpage_upd` **yalnızca PostgreSQL 16+** (gerçek
+15/16/17/18 kaplarında `information_schema` sorgulanarak doğrulandı). 15'e
+göndermek sorguyu tamamen düşürürdü. Yeni sorgu dört sürümde de çalıştırıldı;
+sinyaller doğru çıktı — PG 17'deki 226 MB'lik tablo, 128 MB `shared_buffers` ile
+gerçekten düşük cache isabeti verdi.
+
+### Öneri, bilmediğini söylüyor
+
+dbace **hangi kolona index gerektiğini tablo sayacından bilemez**: `seq_scan`
+hangi WHERE koşuluyla tarandığını taşımıyor. Bu yüzden öneri "şu index'i kur"
+demiyor; sorgu bazında çalışan index önerisi ekranına yönlendiriyor ve "sıralı
+tarama beklenen olabilir, raporlama tablosuysa bulguyu yoksayın" diyor.
+Bilinmeyeni biliyormuş gibi sunmak, yanlış index kurdurmaktan başka işe yaramaz.
+Bu kalıcı bir testle sabitlendi.
+
+HOT önerisi ise somut: kullanılmayan index'leri sil, güncellenen kolonun index'li
+olup olmadığına bak, `fillfactor` düşür — ve dikkat notunda fillfactor'ün tabloyu
+~%18 büyüteceği yazıyor, çünkü kazanç bu maliyeti karşılamıyorsa yapılmamalı.
+
+### Altıncı tip kayması
+
+`SchemaHealth` elle yazılmıştı ve `table_access` alanını bilmiyordu. Türetilmiş
+tipe çevrildi.
+
+### Kapsam notu
+
+Bu iş **DPA (canlı Şema sekmesi)** yolunu kapsıyor. Günlük rapora bölüm olarak
+eklemek ayrı bir günlük fotoğraf (`DailyStateSnapshot`) gerektiriyor ve bilinçli
+olarak bu turun dışında bırakıldı — yarım bir rapor bölümü, hiç olmamasından kötü.
+
+### Testler
+
+`tests/test_table_access.py` — 13 test. En değerlileri, özelliğin *üretmediği*
+şeyi koruyanlar: küçük tablodaki sıralı taramanın bulgu olmaması, index erişimi
+baskınken arada bir yapılan büyük taramanın bulgu olmaması, önerinin kolon adı
+uydurmaması.
+
+Arka uç: **1569 geçti, 15 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

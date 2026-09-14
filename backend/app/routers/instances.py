@@ -53,6 +53,7 @@ from app.schemas import (
 from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
+from app.services.table_access_advice import advice_for_signal
 from app.services.advice import advice_to_dict
 from app.services.blocking import build_blocking_tree, tree_to_dict
 from app.services.blocking_history import recent_episodes
@@ -463,7 +464,24 @@ async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)
         data = await collector.collect_schema_health(limit=50)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
+    _attach_access_advice(data)
     return SchemaHealthOut.model_validate(data)
+
+
+def _attach_access_advice(data: dict) -> None:
+    """Tablo erişim sinyallerine beş parçalı öneriyi ekler (Faz 29 İŞ 2b).
+
+    Öneri toplayıcıda ÜRETİLMİYOR: toplayıcı ölçüm yapar, öneri üretmek iş mantığıdır ve
+    motora/sürüme bağlı komutlar içerir. Aynı sinyal ileride SQL Server tarafında da
+    çıkabilir; o zaman ölçüm aynı kalır, öneri değişir.
+    """
+    for row in data.get("table_access") or []:
+        for signal in row.get("signals") or []:
+            signal["advice"] = advice_to_dict(
+                advice_for_signal(
+                    signal["key"], row["schema_name"], row["table_name"], signal.get("evidence") or {}
+                )
+            )
 
 
 def build_prerequisite_report(

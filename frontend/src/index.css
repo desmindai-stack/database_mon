@@ -1161,6 +1161,11 @@ td code,
 .query-flag-head { display: flex; gap: 0.5rem; align-items: baseline; }
 .query-flag-value { font-variant-numeric: tabular-nums; color: var(--danger); font-weight: 600; }
 
+/* Faz 29 İŞ 2b — tablo erişim kalıbı sinyalleri. */
+.access-signal-list { display: grid; gap: 1rem; }
+.access-signal-row { display: grid; gap: 0.5rem; }
+.access-signal-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
+
 .exec-grade { display: grid; justify-items: end; gap: 0.25rem; }
 .exec-grade-value { font-size: 1.5rem; font-weight: 600; color: var(--text); }
 .exec-grade-reason { font-size: 0.8rem; color: var(--muted); max-width: 380px; text-align: right; }

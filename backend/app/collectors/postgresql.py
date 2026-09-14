@@ -12,6 +12,7 @@ from app.collectors.base import (
     classify_connection_error,
     resolve_uses_pooler,
 )
+from app.domain.table_access import analyze_table_access, derive_table_access
 from app.domain.pg_capabilities import (
     capability_matrix,
     source_for,
@@ -28,7 +29,10 @@ logger = logging.getLogger(__name__)
 # 12-17; a server outside that range still gets a best-effort attempt (the closest branch below
 # is used, a warning is logged) rather than an outright refusal — most system-catalog changes
 # are additive and forward-compatible in practice.
-PG_VERSION_STAT_STATEMENTS_EXEC_TIME = 130_000  # 13+: pg_stat_statements.total_exec_time/mean_exec_time
+PG_VERSION_STAT_STATEMENTS_EXEC_TIME = 130_000
+#: `pg_stat_user_tables.last_seq_scan` ve `n_tup_newpage_upd` PostgreSQL 16 ile geldi
+#: (gerçek 15/16/17/18 kaplarında ölçüldü). 15'e gönderilirse sorgu tamamen düşer.
+PG_VERSION_LAST_SEQ_SCAN = 160_000  # 13+: pg_stat_statements.total_exec_time/mean_exec_time
 PG_VERSION_STAT_IO = 160_000  # 16+: pg_stat_io view exists
 PG_VERSION_CHECKPOINTER = 170_000  # 17+: pg_stat_checkpointer split out of pg_stat_bgwriter
 # 18+: pg_stat_io'da `op_bytes` KALDIRILDI, yerine read_bytes/write_bytes/extend_bytes geldi.
@@ -1070,6 +1074,7 @@ class PostgreSQLCollector(BaseCollector):
     async def collect_schema_health(self, limit: int = 50) -> dict[str, Any]:
         conn = await self._connect()
         try:
+            version_num, _ = await self._detect_version(conn)
             unused_rows = await conn.fetch(
                 """
                 SELECT
@@ -1230,16 +1235,98 @@ class PostgreSQLCollector(BaseCollector):
                 for r in vacuum_rows
             ]
 
+            # FAZ 29 İŞ 2b: TABLOYA NASIL ERİŞİLDİĞİ.
+            #
+            # Yukarıdaki üç sorgu "tablo şişmiş mi, vacuum gecikmiş mi, index kullanılıyor mu"
+            # diyor. Eksik olan erişim KALIBI: sıralı tarama baskın mı, cache isabeti nasıl,
+            # güncellemeler index'leri de yazıyor mu, istatistikler eskimiş mi.
+            #
+            # `last_seq_scan` ve `n_tup_newpage_upd` YALNIZCA PostgreSQL 16+ (gerçek
+            # 15/16/17/18 kaplarında ölçüldü); 15'e gönderilirse sorgu tamamen düşerdi.
+            last_seq_scan_col = (
+                "s.last_seq_scan" if version_num >= PG_VERSION_LAST_SEQ_SCAN else "NULL::timestamptz"
+            )
+            access_rows = await conn.fetch(
+                f"""
+                SELECT
+                    n.nspname AS schema_name,
+                    c.relname AS table_name,
+                    s.seq_scan::bigint AS seq_scan,
+                    s.seq_tup_read::bigint AS seq_tup_read,
+                    coalesce(s.idx_scan, 0)::bigint AS idx_scan,
+                    coalesce(s.idx_tup_fetch, 0)::bigint AS idx_tup_fetch,
+                    s.n_live_tup::bigint AS n_live_tup,
+                    s.n_tup_upd::bigint AS n_tup_upd,
+                    s.n_tup_hot_upd::bigint AS n_tup_hot_upd,
+                    s.n_mod_since_analyze::bigint AS n_mod_since_analyze,
+                    {last_seq_scan_col} AS last_seq_scan,
+                    io.heap_blks_hit::bigint AS heap_blks_hit,
+                    io.heap_blks_read::bigint AS heap_blks_read,
+                    coalesce(io.idx_blks_hit, 0)::bigint AS idx_blks_hit,
+                    coalesce(io.idx_blks_read, 0)::bigint AS idx_blks_read,
+                    pg_table_size(c.oid)::bigint AS table_bytes
+                FROM pg_stat_user_tables s
+                JOIN pg_class c ON c.oid = s.relid
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                LEFT JOIN pg_statio_user_tables io ON io.relid = s.relid
+                -- Boş/çok küçük tablolar elenir: onlarda her oran istatistiksel gürültüdür
+                -- ve listeyi doldurup gerçek sinyali gizler.
+                WHERE s.n_live_tup > 1000
+                ORDER BY s.seq_tup_read DESC NULLS LAST
+                LIMIT $1
+                """,
+                limit,
+            )
+            table_access = []
+            for r in access_rows:
+                row = {
+                    "schema_name": r["schema_name"],
+                    "table_name": r["table_name"],
+                    "seq_scan": int(r["seq_scan"] or 0),
+                    "seq_tup_read": int(r["seq_tup_read"] or 0),
+                    "idx_scan": int(r["idx_scan"] or 0),
+                    "idx_tup_fetch": int(r["idx_tup_fetch"] or 0),
+                    "n_live_tup": int(r["n_live_tup"] or 0),
+                    "n_tup_upd": int(r["n_tup_upd"] or 0),
+                    "n_tup_hot_upd": int(r["n_tup_hot_upd"] or 0),
+                    "n_mod_since_analyze": int(r["n_mod_since_analyze"] or 0),
+                    "last_seq_scan": r["last_seq_scan"].isoformat() if r["last_seq_scan"] else None,
+                    "heap_blks_hit": int(r["heap_blks_hit"] or 0),
+                    "heap_blks_read": int(r["heap_blks_read"] or 0),
+                    "idx_blks_hit": int(r["idx_blks_hit"] or 0),
+                    "idx_blks_read": int(r["idx_blks_read"] or 0),
+                    "table_bytes": int(r["table_bytes"] or 0),
+                }
+                row["derived"] = derive_table_access(row)
+                row["signals"] = [
+                    {
+                        "key": sig.key,
+                        "severity": sig.severity,
+                        "title": sig.title,
+                        "meaning": sig.meaning,
+                        "when_problem": sig.when_problem,
+                        "evidence": sig.evidence,
+                    }
+                    for sig in analyze_table_access(row)
+                ]
+                table_access.append(row)
+
+            # Sinyali olan tablolar başa: sinyalsiz 50 satırın arasında kalan tek bir uyarı,
+            # hiç gösterilmemiş sayılır.
+            table_access.sort(key=lambda r: (-len(r["signals"]), -r["seq_tup_read"]))
+
             unused_bytes = sum(i["index_bytes"] for i in unused_indexes)
             return {
                 "unused_indexes": unused_indexes,
                 "bloated_tables": bloated_tables,
                 "vacuum_lag": vacuum_lag,
+                "table_access": table_access,
                 "totals": {
                     "unused_indexes": len(unused_indexes),
                     "unused_index_bytes": unused_bytes,
                     "bloated_tables": len(bloated_tables),
                     "vacuum_lag_tables": len(vacuum_lag),
+                    "tables_with_access_signals": sum(1 for r in table_access if r["signals"]),
                 },
             }
         finally:

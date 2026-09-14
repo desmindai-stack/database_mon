@@ -54,6 +54,10 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
   const unused_indexes = keep(data.unused_indexes);
   const bloated_tables = keep(data.bloated_tables);
   const vacuum_lag = keep(data.vacuum_lag);
+  // Yalnızca sinyal veren tablolar; ötekiler listeyi doldurup sinyali gizlerdi.
+  const accessWithSignals = ((data.table_access || []) as Record<string, any>[]).filter(
+    (row) => (row.signals || []).length > 0,
+  );
   const hiddenCount =
     data.unused_indexes.length -
     unused_indexes.length +
@@ -207,6 +211,65 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+      </div>
+
+      {/*
+        Tabloya NASIL erişildiği (Faz 29 İŞ 2b).
+
+        Yukarıdaki üç blok "tablo şişmiş mi, vacuum gecikmiş mi, index kullanılıyor mu"
+        diyor. Bu blok erişim KALIBINI gösteriyor: sıralı tarama baskın mı, cache isabeti
+        nasıl, güncellemeler index'leri de yazıyor mu, istatistikler eskimiş mi.
+
+        Yalnızca SİNYAL VEREN tablolar listeleniyor: sinyalsiz 50 satırın arasında kalan
+        tek bir uyarı, hiç gösterilmemiş sayılır.
+      */}
+      <div className="card">
+        <h3 className="chart-title">Tablo erişim kalıbı</h3>
+        {accessWithSignals.length === 0 ? (
+          <div className="empty">
+            {(data.table_access || []).length === 0
+              ? "Erişim kalıbı ölçülemedi."
+              : "Erişim kalıbında dikkat gerektiren tablo yok."}
+          </div>
+        ) : (
+          <div className="access-signal-list">
+            {accessWithSignals.map((row) => (
+              <div className="access-signal-row" key={`${row.schema_name}.${row.table_name}-access`}>
+                <div className="access-signal-head">
+                  <strong>{row.schema_name}.{row.table_name}</strong>
+                  <span className="muted-note">
+                    {row.derived?.seq_scan_share_pct != null &&
+                      `sıralı tarama payı %${row.derived.seq_scan_share_pct}`}
+                    {row.derived?.rows_per_seq_scan != null &&
+                      ` · tarama başına ${Math.round(row.derived.rows_per_seq_scan).toLocaleString("tr-TR")} satır`}
+                    {row.derived?.heap_cache_hit_pct != null &&
+                      ` · cache %${row.derived.heap_cache_hit_pct}`}
+                    {row.derived?.hot_update_pct != null &&
+                      ` · HOT %${row.derived.hot_update_pct}`}
+                  </span>
+                </div>
+                <ul className="query-flag-list">
+                  {(row.signals || []).map((sig: Record<string, any>) => (
+                    <li key={sig.key}>
+                      <span className="query-flag-head">
+                        <strong>{sig.title}</strong>
+                        <span className={`insight-severity ${sig.severity}`}>
+                          {SEVERITY_LABELS[sig.severity as Severity] || sig.severity}
+                        </span>
+                      </span>
+                      <span className="muted-note">{sig.meaning}</span>
+                      <span className="muted-note">{sig.when_problem}</span>
+                      {sig.advice?.steps?.map(
+                        (step: Record<string, any>, i: number) =>
+                          step.command && <CopyableAction key={i} command={step.command} />,
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </div>
         )}
       </div>

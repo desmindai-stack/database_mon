@@ -130,6 +130,8 @@ MUST_BE_DERIVED = [
     # Faz 29: elle yazılmış hâli `metrics`/`metric_flags` ve pg_stat_statements'ın yeni
     # sütunlarını bilmiyordu.
     "SlowQuery",
+    # Faz 29 İŞ 2b: elle yazılmış hâli `table_access` alanını bilmiyordu.
+    "SchemaHealth",
 ]
 
 # Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler

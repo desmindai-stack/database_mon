@@ -4921,6 +4921,13 @@ export interface components {
         SchemaHealthOut: {
             /** Bloated Tables */
             bloated_tables: components["schemas"]["BloatedTableOut"][];
+            /**
+             * Table Access
+             * @default []
+             */
+            table_access: {
+                [key: string]: unknown;
+            }[];
             totals: components["schemas"]["SchemaHealthTotalsOut"];
             /** Unused Indexes */
             unused_indexes: components["schemas"]["UnusedIndexOut"][];
@@ -4931,6 +4938,11 @@ export interface components {
         SchemaHealthTotalsOut: {
             /** Bloated Tables */
             bloated_tables: number;
+            /**
+             * Tables With Access Signals
+             * @default 0
+             */
+            tables_with_access_signals: number;
             /** Unused Index Bytes */
             unused_index_bytes: number;
             /** Unused Indexes */

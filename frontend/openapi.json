@@ -8216,6 +8216,15 @@
             "title": "Bloated Tables",
             "type": "array"
           },
+          "table_access": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Table Access",
+            "type": "array"
+          },
           "totals": {
             "$ref": "#/components/schemas/SchemaHealthTotalsOut"
           },
@@ -8247,6 +8256,11 @@
         "properties": {
           "bloated_tables": {
             "title": "Bloated Tables",
+            "type": "integer"
+          },
+          "tables_with_access_signals": {
+            "default": 0,
+            "title": "Tables With Access Signals",
             "type": "integer"
           },
           "unused_index_bytes": {

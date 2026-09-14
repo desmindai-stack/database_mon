@@ -60,6 +60,31 @@ def _responses(**over) -> dict:
                 "freeze_age": 250_000_000,
             }
         ],
+        # Faz 29 İŞ 2b: sürüm tespiti ve tablo erişim kalıbı sorgusu.
+        #
+        # `server_version_num` gerekiyor çünkü `last_seq_scan` sütunu yalnızca PostgreSQL
+        # 16+ ile var; toplayıcı sürüme göre sorguyu değiştiriyor.
+        "server_version_num": {"num": 170000, "txt": "PostgreSQL 17.0"},
+        "pg_statio_user_tables": [
+            {
+                "schema_name": "app",
+                "table_name": "orders",
+                "seq_scan": 800,
+                "seq_tup_read": 40_000_000,
+                "idx_scan": 100,
+                "idx_tup_fetch": 500,
+                "n_live_tup": 5_000_000,
+                "n_tup_upd": 100_000,
+                "n_tup_hot_upd": 1_000,
+                "n_mod_since_analyze": 2_000_000,
+                "last_seq_scan": None,
+                "heap_blks_hit": 100_000,
+                "heap_blks_read": 900_000,
+                "idx_blks_hit": 5_000,
+                "idx_blks_read": 100,
+                "table_bytes": 900_000_000,
+            }
+        ],
     }
     base.update(over)
     return base

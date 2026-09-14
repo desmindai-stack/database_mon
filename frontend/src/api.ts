@@ -515,53 +515,14 @@ export interface ExportSection {
   title: string;
 }
 
-export interface SchemaHealth {
-  unused_indexes: {
-    schema_name: string;
-    table_name: string;
-    index_name: string;
-    index_bytes: number;
-    idx_scan: number;
-    idx_tup_read: number;
-    idx_tup_fetch: number;
-    index_def: string;
-    drop_ddl: string;
-    severity: string;
-  }[];
-  bloated_tables: {
-    schema_name: string;
-    table_name: string;
-    live_tup: number;
-    dead_tup: number;
-    dead_ratio_pct: number;
-    table_bytes: number;
-    last_vacuum: string | null;
-    last_autovacuum: string | null;
-    last_analyze: string | null;
-    last_autoanalyze: string | null;
-    freeze_age: number;
-    severity: string;
-    vacuum_ddl: string;
-  }[];
-  vacuum_lag: {
-    schema_name: string;
-    table_name: string;
-    live_tup: number;
-    dead_tup: number;
-    last_autovacuum: string | null;
-    last_autoanalyze: string | null;
-    lag_sec: number;
-    freeze_age: number;
-    severity: string;
-    vacuum_ddl: string;
-  }[];
-  totals: {
-    unused_indexes: number;
-    unused_index_bytes: number;
-    bloated_tables: number;
-    vacuum_lag_tables: number;
-  };
-}
+/**
+ * Şema sağlığı — ÜRETİLEN ŞEMADAN TÜRETİLİYOR (Faz 29 İŞ 2b).
+ *
+ * Elle yazılmış hâli `table_access` alanını bilmiyordu. `Instance`, `ExplainResult`,
+ * `InstanceDependencies`, `ExecutiveReport` ve `SlowQuery` ile aynı hata — altıncısı.
+ */
+export type SchemaHealth = Gen["SchemaHealthOut"];
+
 
 export type AlertRuleType = "metric" | "custom";
 

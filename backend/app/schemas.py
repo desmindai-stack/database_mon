@@ -1385,6 +1385,8 @@ class SchemaHealthTotalsOut(BaseModel):
     unused_index_bytes: int
     bloated_tables: int
     vacuum_lag_tables: int
+    # Faz 29 İŞ 2b: erişim kalıbında sinyal veren tablo sayısı.
+    tables_with_access_signals: int = 0
 
 
 class SchemaHealthOut(BaseModel):
@@ -1392,6 +1394,10 @@ class SchemaHealthOut(BaseModel):
     bloated_tables: list[BloatedTableOut]
     vacuum_lag: list[VacuumLagOut]
     totals: SchemaHealthTotalsOut
+    # Faz 29 İŞ 2b: tabloya NASIL erişildiği — sıralı tarama baskınlığı, cache isabeti,
+    # HOT güncelleme oranı, istatistik tazeliği. Her satır `derived` (oranlar) ve `signals`
+    # (eşiği aşanlar + ne anlama geldiği + beş parçalı öneri) taşıyor.
+    table_access: list[dict[str, Any]] = []
 
 
 class ClusterServiceStatusOut(BaseModel):
