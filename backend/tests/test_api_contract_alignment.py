@@ -127,6 +127,9 @@ MUST_BE_DERIVED = [
     # Faz 28: elle yazılmış hâli `backup` alanını bilmiyordu — yönetici raporundaki yedek
     # güvencesi bölümü sessizce boş kalırdı.
     "ExecutiveReport",
+    # Faz 29: elle yazılmış hâli `metrics`/`metric_flags` ve pg_stat_statements'ın yeni
+    # sütunlarını bilmiyordu.
+    "SlowQuery",
 ]
 
 # Yalnızca ORM nesnesinden doldurulan ve nullable kolonu olan şemalar. (Türetilmiş tipler

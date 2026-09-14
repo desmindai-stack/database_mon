@@ -88,33 +88,15 @@ export interface SlowQueryList {
   filtered_insignificant: number;
 }
 
-export interface SlowQuery {
-  id: number;
-  instance_id: number;
-  collected_at: string;
-  /** Kararlı kimlik — queryid NULL gelebildiği için eşleştirme bununla yapılır (Faz 18 İŞ 1). */
-  key: string;
-  queryid: string | null;
-  query: string;
-  calls: number;
-  total_time_ms: number;
-  mean_time_ms: number;
-  rows: number;
-  shared_blks_hit?: number;
-  shared_blks_read?: number;
-  local_blks_hit?: number;
-  local_blks_read?: number;
-  temp_blks_read?: number;
-  temp_blks_written?: number;
-  plan_user_time?: number;
-  plan_sys_time?: number;
-  exec_user_time?: number;
-  exec_sys_time?: number;
-  /** Sistem/platform sorgusu mu; öyleyse hangi kurala takıldı (Faz 18 İŞ 2). */
-  is_system: boolean;
-  system_reason: string | null;
-  sample_count: number;
-}
+/**
+ * Yavaş sorgu satırı — ÜRETİLEN ŞEMADAN TÜRETİLİYOR (Faz 29 İŞ 2a).
+ *
+ * Elle yazılmış hâli, backend'e eklenen `metrics` / `metric_flags` ve pg_stat_statements'ın
+ * yeni sütunlarını bilmiyordu; alanlar sessizce kayboluyordu. `Instance`, `ExplainResult`,
+ * `InstanceDependencies` ve `ExecutiveReport` ile aynı hata — bu beşincisi.
+ * `test_api_contract_alignment.py` elle yazılmış hâline dönmesini engelliyor.
+ */
+export type SlowQuery = Gen["SlowQueryOut"];
 
 // "client" Faz 25'te eklendi: bekleme ölçümü sorgunun süresini UYGULAMAYI BEKLEYEREK
 // geçirdiğini gösterebiliyor. Bunu "bilinmiyor" saymak, DBA'yı veritabanında olmayan bir

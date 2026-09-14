@@ -2,6 +2,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Date,
     DateTime,
@@ -274,6 +275,54 @@ class SlowQuerySample(Base):
     plan_sys_time: Mapped[float | None] = mapped_column(Float, nullable=True)
     exec_user_time: Mapped[float | None] = mapped_column(Float, nullable=True)
     exec_sys_time: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # --- Faz 29 İŞ 2a: pg_stat_statements'ın kullanılmayan sütunları ---
+    #
+    # DEPOLAMA MALİYETİ BİLİNÇLİ: bu tabloya toplama döngüsü başına 20 satır yazılıyor
+    # (~3.5 milyon satır/ay/instance). 15 yeni sayısal sütun kabaca +400 MB/ay/instance
+    # demek. Karşılığında alınan şey, tanıyı ÇIKARIMDAN ÖLÇÜME taşımak:
+    # `blk_read_time_ms` sorgunun diskte beklediği süreyi doğrudan veriyor, `stddev_time_ms`
+    # kararsız sorguyu ortaya çıkarıyor, `wal_bytes` yazma amplifikasyonunu gösteriyor.
+    # Saklama süresi (services/retention.py) bu büyümeyi zaten sınırlıyor.
+    #
+    # BigInteger kullanılıyor: bunlar kümülatif sayaçlar ve uzun çalışan bir sunucuda
+    # int32 sınırını (2,1 milyar) aşarlar.
+
+    #: Yürütme süresinin standart sapması. KARARSIZ SORGU: ortalaması iyi ama sapması
+    #: büyük bir sorgu, kullanıcıların "bazen çok yavaşlıyor" şikâyetinin kaynağıdır ve
+    #: ortalamaya bakan hiçbir liste onu yakalayamaz.
+    stddev_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    #: Kirletilen/yazılan paylaşılan bloklar — sorgunun YAZMA basıncı. Okuma ağırlıklı
+    #: görünen bir sorgu checkpoint yükünün kaynağı olabilir.
+    shared_blks_dirtied: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    shared_blks_written: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    #: Diskte OKUMA/YAZMA beklenen süre (ms). `track_io_timing = on` gerektirir; kapalıysa
+    #: 0 gelir ve bu "I/O yok" DEĞİL "ölçülmedi" demektir — ayrım arayüzde korunuyor.
+    blk_read_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    blk_write_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temp_blk_read_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    temp_blk_write_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    #: Üretilen WAL. `wal_fpi` (full page image) ayrı tutuluyor: FPI ağırlıklı bir sorgu
+    #: checkpoint aralığının çok sık olduğunu gösterir, bu WAL hacminden anlaşılmaz.
+    wal_records: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    wal_fpi: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    wal_bytes: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    #: Planlama maliyeti. Çok sayıda farklı parametreyle çağrılan kısa sorgularda planlama
+    #: süresi yürütmeyi geçebilir; o zaman çözüm sorguyu hızlandırmak değil hazırlanmış
+    #: ifade kullanmaktır.
+    plans: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    total_plan_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    #: JIT toplam süresi (sekiz jit_* sütununun toplamı) ve derlenen fonksiyon sayısı.
+    #: Kısa sorgularda JIT fayda değil MALİYET olabilir.
+    jit_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    jit_functions: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="slow_queries")
 

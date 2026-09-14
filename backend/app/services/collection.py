@@ -93,6 +93,48 @@ def _should_collect_slow_queries(instance_id: int, now: datetime) -> bool:
     return last is None or (now - last).total_seconds() >= interval
 
 
+#: Faz 29 İŞ 2a'da eklenen pg_stat_statements alanları: (alan adı, dönüştürücü).
+#:
+#: Tek tek `if row.get(...) is not None` satırı yazmak yerine tablo: 15 alan için o desen
+#: 15 satır tekrar demekti ve bir alanın yanlışlıkla atlanması gözden kaçardı.
+_PGSS_OPTIONAL_FIELDS: tuple[tuple[str, type], ...] = (
+    ("stddev_time_ms", float),
+    ("min_time_ms", float),
+    ("max_time_ms", float),
+    ("shared_blks_dirtied", int),
+    ("shared_blks_written", int),
+    ("blk_read_time_ms", float),
+    ("blk_write_time_ms", float),
+    ("temp_blk_read_time_ms", float),
+    ("temp_blk_write_time_ms", float),
+    ("wal_records", int),
+    ("wal_fpi", int),
+    ("wal_bytes", float),
+    ("plans", int),
+    ("total_plan_time_ms", float),
+    ("jit_time_ms", float),
+    ("jit_functions", int),
+)
+
+
+def _optional_pgss_fields(row: dict) -> dict:
+    """Toplayıcıdan gelen isteğe bağlı alanları modele uygun tiplere çevirir.
+
+    Alan YOKSA sözlüğe hiç konmuyor (None yazmakla aynı değil ama sonuç aynı): eski bir
+    toplayıcı sürümünden gelen satır da çalışmaya devam etsin.
+    """
+    out: dict = {}
+    for name, caster in _PGSS_OPTIONAL_FIELDS:
+        value = row.get(name)
+        if value is None:
+            continue
+        try:
+            out[name] = caster(value)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     engine = DatabaseEngine(instance.engine)
     collector = get_collector(engine, connection_target_for(instance))
@@ -168,6 +210,8 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
                 plan_sys_time=float(row["plan_sys_time"]) if row.get("plan_sys_time") is not None else None,
                 exec_user_time=float(row["exec_user_time"]) if row.get("exec_user_time") is not None else None,
                 exec_sys_time=float(row["exec_sys_time"]) if row.get("exec_sys_time") is not None else None,
+                # Faz 29 İŞ 2a — pg_stat_statements'ın kalan sütunları.
+                **_optional_pgss_fields(row),
             )
         )
 

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.domain.query_metrics import IO_TIME_SHARE_WARN_PCT, io_timing_measured
+
 # performance_insights.py'nin "Disk okuma oranı yüksek" eşiğiyle aynı (%10) — iki modülün aynı
 # sinyali farklı eşiklerle yorumlaması tutarsızlık yaratırdı.
 IO_READ_RATIO_THRESHOLD = 0.10
@@ -104,6 +106,29 @@ def _diagnose_from_waits(row, profile) -> QueryDiagnosis | None:
     )
 
 
+#: Yürütme süresinin bu kadarı disk beklemesiyse sorgu depolamaya bağlı sayılıyor.
+#: Eşik domain/query_metrics.py ile AYNI olmalı: iki yerde farklı eşik, DPA'nın "I/O'ya bağlı"
+#: dediğine teşhisin "CPU'ya bağlı" demesi demekti.
+IO_TIME_SHARE_THRESHOLD = IO_TIME_SHARE_WARN_PCT / 100.0
+
+
+def _io_time_share(row) -> float | None:
+    """Sürenin I/O beklemesinde geçen oranı — ölçüm kapalıysa None.
+
+    `track_io_timing = off` iken sütun 0 gelir ve bunu "I/O yok" saymak yanlış teşhis
+    üretirdi; `io_timing_measured` ayrımı yapıyor.
+    """
+    if not io_timing_measured(row):
+        return None
+    total = float(getattr(row, "total_time_ms", 0) or 0)
+    if total <= 0:
+        return None
+    io_ms = float(getattr(row, "blk_read_time_ms", 0) or 0) + float(
+        getattr(row, "blk_write_time_ms", 0) or 0
+    )
+    return io_ms / total
+
+
 def diagnose_query(row, wait_profile=None) -> QueryDiagnosis:
     """`row` is a SlowQuerySample (or any object with the same attribute names).
 
@@ -129,13 +154,31 @@ def diagnose_query(row, wait_profile=None) -> QueryDiagnosis:
             f"için yetersiz kalmış, disk üzerinde geçici alan kullanılmış."
         )
         confidence = "observed"
+    elif _io_time_share(row) is not None and _io_time_share(row) >= IO_TIME_SHARE_THRESHOLD:
+        # ÖLÇÜM, ÇIKARIMDAN ÖNCE GELİR (Faz 29 İŞ 2a).
+        #
+        # `blk_read_time` sorgunun diskte BEKLEDİĞİ süreyi doğrudan veriyor. Aşağıdaki blok
+        # oranı yöntemi ise "çok blok diskten okundu, demek ki I/O'ya bağlı" diye çıkarım
+        # yapıyordu — ama çok sayıda bloğu HIZLI bir diskten okumak I/O darboğazı değildir.
+        # Süre ölçüsü varken oran tahmini kullanmak, yanlış teşhis riskini boşuna almaktı.
+        share = _io_time_share(row)
+        io_ms = float(row.blk_read_time_ms or 0) + float(row.blk_write_time_ms or 0)
+        resource = "io"
+        reason = (
+            f"Yürütme süresinin %{share * 100:.0f}'i diski beklemekle geçti "
+            f"({io_ms:.1f}ms / {float(row.total_time_ms or 0):.1f}ms). Sorgu CPU'ya değil "
+            "depolamaya bağlı."
+        )
+        confidence = "observed"
     elif shared_total > 0 and io_ratio > IO_READ_RATIO_THRESHOLD:
         resource = "io"
         reason = (
             f"Okunan bloklerin %{io_ratio * 100:.0f}'i cache'te değildi, diskten okundu "
-            f"({shared_read} disk / {shared_hit} cache)."
+            f"({shared_read} disk / {shared_hit} cache). Not: I/O süresi ölçülmediği için "
+            "(track_io_timing kapalı) bu bir çıkarımdır — çok sayıda bloğu hızlı bir diskten "
+            "okumak darboğaz olmayabilir."
         )
-        confidence = "observed"
+        confidence = "inferred"
     elif cpu_ms is not None and mean_ms > 0 and cpu_ms / mean_ms >= CPU_TIME_SHARE_THRESHOLD:
         resource = "cpu"
         reason = (

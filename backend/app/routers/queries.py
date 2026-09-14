@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
+from app.domain.query_metrics import derive_metrics, flag_metrics, metric_dictionary
 from app.models import CapturedPlan, Instance, Node, Server, SlowQuerySample
 from app.schemas import (
     CapturedPlanListOut,
@@ -184,8 +185,49 @@ async def get_slow_queries(
     return selection_to_out(selection, window_start, window_end)
 
 
+def _metric_fields(entry, total_time_all_ms: float | None) -> dict:
+    """Türetilmiş göstergeler + eşiği aşanlar.
+
+    Göstergeler PENCERE İÇİN HESAPLANMIŞ değerlerden türetiliyor (`entry`), ham örnekten
+    değil: pg_stat_statements kümülatif sayar ve ham satır, sunucunun açılışından beri olan
+    her şeyi taşır. Kullanıcının gördüğü pencere neyse gösterge de o olmalı.
+    """
+    from types import SimpleNamespace
+
+    sample = entry.sample
+    window_row = SimpleNamespace(
+        calls=entry.calls,
+        total_time_ms=entry.total_time_ms,
+        mean_time_ms=entry.mean_time_ms,
+        rows=entry.rows,
+        stddev_time_ms=sample.stddev_time_ms,
+        min_time_ms=sample.min_time_ms,
+        max_time_ms=sample.max_time_ms,
+        shared_blks_hit=sample.shared_blks_hit,
+        shared_blks_read=sample.shared_blks_read,
+        shared_blks_dirtied=sample.shared_blks_dirtied,
+        shared_blks_written=sample.shared_blks_written,
+        temp_blks_read=sample.temp_blks_read,
+        temp_blks_written=sample.temp_blks_written,
+        blk_read_time_ms=sample.blk_read_time_ms,
+        blk_write_time_ms=sample.blk_write_time_ms,
+        wal_records=sample.wal_records,
+        wal_fpi=sample.wal_fpi,
+        wal_bytes=sample.wal_bytes,
+        plans=sample.plans,
+        total_plan_time_ms=sample.total_plan_time_ms,
+        jit_time_ms=sample.jit_time_ms,
+    )
+    derived = derive_metrics(window_row, total_time_all_ms=total_time_all_ms)
+    return {"metrics": derived, "metric_flags": flag_metrics(derived)}
+
+
 def selection_to_out(selection, window_start: datetime, window_end: datetime) -> SlowQueryListOut:
     """SlowQuerySelection → API şeması. Rapor derin bağlantısının hedef ucu da bunu kullanıyor."""
+    # Toplam etki payı için PAYDA: bu penceredeki tüm sorguların toplam süresi. Paydayı
+    # vermezsek `derive_metrics` payı hesaplamıyor (uydurmuyor) — ve pay, "hangi sorguyu
+    # önce düzeltmeliyim" sorusunun tek anlamlı cevabı.
+    total_time_all_ms = sum(float(e.total_time_ms or 0) for e in selection.entries) or None
     return SlowQueryListOut(
         mode=selection.mode,
         window_start=window_start,
@@ -217,6 +259,21 @@ def selection_to_out(selection, window_start: datetime, window_end: datetime) ->
                 is_system=e.is_system,
                 system_reason=e.system_reason,
                 sample_count=e.sample_count,
+                stddev_time_ms=e.sample.stddev_time_ms,
+                min_time_ms=e.sample.min_time_ms,
+                max_time_ms=e.sample.max_time_ms,
+                shared_blks_dirtied=e.sample.shared_blks_dirtied,
+                shared_blks_written=e.sample.shared_blks_written,
+                blk_read_time_ms=e.sample.blk_read_time_ms,
+                blk_write_time_ms=e.sample.blk_write_time_ms,
+                wal_records=e.sample.wal_records,
+                wal_fpi=e.sample.wal_fpi,
+                wal_bytes=e.sample.wal_bytes,
+                plans=e.sample.plans,
+                total_plan_time_ms=e.sample.total_plan_time_ms,
+                jit_time_ms=e.sample.jit_time_ms,
+                jit_functions=e.sample.jit_functions,
+                **_metric_fields(e, total_time_all_ms),
             )
             for e in selection.entries
         ],
@@ -591,3 +648,15 @@ async def advise_indexes(
     )
     query_cache.set(cache_key, report, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
     return report
+
+
+@router.get("/metric-dictionary", response_model=list[dict])
+async def get_metric_dictionary() -> list[dict]:
+    """Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).
+
+    Arayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının
+    hangisine güveneceğini bilememesi demekti; eşikler de aynı modülden geliyor.
+
+    Instance gerektirmiyor: sözlük sunucudan bağımsız.
+    """
+    return metric_dictionary()

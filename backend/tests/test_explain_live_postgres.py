@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import json
 import os
+from types import SimpleNamespace
 from urllib.parse import urlparse
 
 import pytest
@@ -285,3 +286,78 @@ async def test_index_advisor_measures_benefit_for_a_normalized_query(conn, dsn):
     best = measured[0]
     assert best.before_cost and best.after_cost
     assert best.after_cost < best.before_cost
+
+
+# --- pg_stat_statements tam sömürüsü (Faz 29 İŞ 2a) ----------------------------------------
+
+
+async def test_slow_query_collection_works_on_this_server_version(dsn):
+    """Toplayıcının pg_stat_statements sorgusu BU sürümde çalışıyor mu.
+
+    Sürüm farkı burada teorik değil: PostgreSQL 17, `blk_read_time` sütununu
+    `shared_blk_read_time` olarak YENİDEN ADLANDIRDI. Eski adı 17'ye göndermek
+    "column does not exist" ile TÜM yavaş sorgu toplamasını düşürürdü — tek bir sütun
+    yüzünden özelliğin tamamı. Sahte bağlantı bunu yakalayamaz.
+    """
+    from app.collectors.postgresql import PostgreSQLCollector
+
+    collector = PostgreSQLCollector(_target(dsn))
+    rows = await collector.collect_slow_queries(limit=5)
+    assert rows, "pg_stat_statements boş — eklenti kurulu mu?"
+
+    required = {
+        "calls", "total_time_ms", "mean_time_ms", "stddev_time_ms", "min_time_ms",
+        "max_time_ms", "blk_read_time_ms", "blk_write_time_ms", "shared_blks_dirtied",
+        "shared_blks_written", "wal_records", "wal_fpi", "wal_bytes", "plans",
+        "total_plan_time_ms", "jit_time_ms", "jit_functions",
+        "temp_blk_read_time_ms", "temp_blk_write_time_ms",
+    }
+    missing = required - set(rows[0])
+    assert not missing, f"toplayıcı şu alanları döndürmedi: {sorted(missing)}"
+
+
+async def test_derived_metrics_survive_a_real_row(dsn):
+    """Gerçek bir satırda türetme çöküyor mu — sıfıra bölme, None, tip uyuşmazlığı."""
+    from app.collectors.postgresql import PostgreSQLCollector
+    from app.domain.query_metrics import derive_metrics, flag_metrics
+
+    collector = PostgreSQLCollector(_target(dsn))
+    rows = await collector.collect_slow_queries(limit=5)
+    total = sum(float(r.get("total_time_ms") or 0) for r in rows) or None
+
+    for raw in rows:
+        row = SimpleNamespace(**raw)
+        derived = derive_metrics(row, total_time_all_ms=total)
+        # Paydası olan her oran ya sayı ya None; asla NaN/sonsuz olmamalı.
+        for key, value in derived.items():
+            if isinstance(value, float):
+                assert value == value, f"{key} NaN"
+                assert value not in (float("inf"), float("-inf")), f"{key} sonsuz"
+        flag_metrics(derived)  # patlamamalı
+
+
+async def test_io_timing_distinguishes_off_from_no_io(conn, dsn):
+    """`track_io_timing` kapalıyken I/O payı 0 DEĞİL None olmalı.
+
+    Bu ayrım olmadan, ölçümü kapalı her sunucuda her sorgu "I/O beklemesi yok" görünür ve
+    depolamaya bağlı bir darboğaz sistematik olarak gözden kaçardı.
+    """
+    from app.collectors.postgresql import PostgreSQLCollector
+    from app.domain.query_metrics import derive_metrics
+
+    setting = await conn.fetchval("SHOW track_io_timing")
+    collector = PostgreSQLCollector(_target(dsn))
+    rows = await collector.collect_slow_queries(limit=20)
+    # Diskten gerçekten blok okumuş bir satır arıyoruz; yoksa ayrım test edilemez.
+    candidate = next(
+        (r for r in rows if float(r.get("shared_blks_read") or 0) > 0), None
+    )
+    if candidate is None:
+        pytest.skip("Bu sunucuda diskten blok okuyan bir sorgu yok; ayrım test edilemiyor")
+
+    derived = derive_metrics(SimpleNamespace(**candidate))
+    if str(setting).lower() in ("on", "true"):
+        assert derived["io_time_measured"] is True
+    else:
+        assert derived["io_time_measured"] is False
+        assert derived["io_time_share_pct"] is None

@@ -1154,6 +1154,13 @@ td code,
    sürüklerdi. */
 .exec-backup-alert { color: var(--danger); font-weight: 600; margin: 0 0 0.75rem; }
 
+/* Faz 29 İŞ 2a — sorgunun öne çıkan göstergeleri. Her madde "ne" + "ne anlama geliyor" +
+   "ne zaman sorun" taşıyor; metinler backend'den geliyor (tek eşik kaynağı). */
+.query-flag-list { list-style: none; padding: 0; margin: 0.25rem 0 0; display: grid; gap: 0.5rem; }
+.query-flag-list li { display: grid; gap: 0.25rem; padding-left: 0.5rem; border-left: 3px solid var(--warning, #f59e0b); }
+.query-flag-head { display: flex; gap: 0.5rem; align-items: baseline; }
+.query-flag-value { font-variant-numeric: tabular-nums; color: var(--danger); font-weight: 600; }
+
 .exec-grade { display: grid; justify-items: end; gap: 0.25rem; }
 .exec-grade-value { font-size: 1.5rem; font-weight: 600; color: var(--text); }
 .exec-grade-reason { font-size: 0.8rem; color: var(--muted); max-width: 380px; text-align: right; }

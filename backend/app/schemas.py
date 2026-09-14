@@ -564,6 +564,32 @@ class SlowQueryOut(BaseModel):
     # Pencerede kaç örnek görüldü — 1 ise fark hesaplanamamıştır.
     sample_count: int = 0
 
+    # --- Faz 29 İŞ 2a: pg_stat_statements'ın kalan sütunları ve türetilmiş göstergeler ---
+    #
+    # Ham sayaçlar KANIT için taşınıyor; karar `metrics` içindeki ORANLARA göre veriliyor.
+    # "shared_blks_read = 28864" bir sunucuda çok, başkasında az; "sürenin %28'i I/O" her
+    # sunucuda aynı şeyi söylüyor.
+    stddev_time_ms: float | None = None
+    min_time_ms: float | None = None
+    max_time_ms: float | None = None
+    shared_blks_dirtied: int | None = None
+    shared_blks_written: int | None = None
+    blk_read_time_ms: float | None = None
+    blk_write_time_ms: float | None = None
+    wal_records: int | None = None
+    wal_fpi: int | None = None
+    wal_bytes: float | None = None
+    plans: int | None = None
+    total_plan_time_ms: float | None = None
+    jit_time_ms: float | None = None
+    jit_functions: int | None = None
+
+    #: Türetilmiş göstergeler (domain/query_metrics.py). `io_time_share_pct` ölçüm kapalıysa
+    #: None — 0 DEĞİL; "I/O yok" ile "ölçülmedi" farklı şeyler.
+    metrics: dict[str, Any] = {}
+    #: Eşiği aşan göstergeler; her biri "ne anlama geliyor" ve "ne zaman sorun" taşıyor.
+    metric_flags: list[dict[str, str]] = []
+
     model_config = {"from_attributes": True}
 
 

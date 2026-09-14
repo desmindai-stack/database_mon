@@ -6996,6 +6996,107 @@ CPython dosyayı **açarken kırpıyor, `newline` değerini sonra doğruluyor** 
 
 Arka uç: **1530 geçti, 12 atlandı** (11'i canlı PostgreSQL testleri).
 
+## Faz 29 — İŞ 2a: pg_stat_statements'ın tam sömürüsü
+
+### Envanter: ne toplanıyordu, ne kaçıyordu
+
+Toplanan 12 sütun: `queryid, query, calls, total/mean_exec_time, rows,
+shared_blks_hit/read, local_blks_hit/read, temp_blks_read/written`
+(+ pg_stat_kcache kuruluysa CPU süreleri).
+
+**Kaçan ve tanı değeri en yüksek olanlar:** `blk_read_time`/`blk_write_time`,
+`stddev/min/max_exec_time`, `shared_blks_dirtied/written`, `wal_records/fpi/bytes`,
+`plans`/`total_plan_time`, `jit_*`, `temp_blk_read_time`/`temp_blk_write_time`.
+
+### Sürüm farkı ölçüldü, tahmin edilmedi
+
+Dört gerçek kapta (`postgres:15/16/17/18`) `information_schema.columns` sorgulandı:
+
+| Sütun | 15 | 16 | 17 | 18 |
+|---|---|---|---|---|
+| `blk_read_time` / `blk_write_time` | ✓ | ✓ | – | – |
+| `shared_blk_read_time` / `shared_blk_write_time` | – | – | ✓ | ✓ |
+| `local_blk_read_time` / `local_blk_write_time` | – | – | ✓ | ✓ |
+| `stats_since` | – | – | ✓ | ✓ |
+| `wal_buffers_full` | – | – | – | ✓ |
+| `stddev/min/max_exec_time`, `*_blks_dirtied/written`, `temp_blk_*_time`, `wal_*`, `jit_*` | ✓ | ✓ | ✓ | ✓ |
+
+**PostgreSQL 17 `blk_read_time` sütununu `shared_blk_read_time` olarak yeniden
+adlandırmış.** Eski adı 17'ye göndermek "column does not exist" ile **tüm yavaş
+sorgu toplamasını** düşürürdü — tek bir sütun yüzünden özelliğin tamamı. Eşleme
+`domain/pg_capabilities.py`'de; yeni SQL dört sürümde de çalıştırılarak
+doğrulandı.
+
+### En değerli kazanç: teşhis çıkarımdan ölçüme geçti
+
+`diagnose_query` "bu sorgu I/O'ya mı CPU'ya mı bağlı" sorusunu **blok
+sayılarından çıkarımla** cevaplıyordu: "okunan blokların %X'i cache'te değildi,
+demek ki I/O'ya bağlı". Ama çok sayıda bloğu **hızlı** bir diskten okumak I/O
+darboğazı değildir — oran beklemeyi kanıtlamaz.
+
+`blk_read_time` beklemeyi doğrudan ölçüyor. Gerçek sunucuda kanıtlandı: 226 MB
+tablo, 128 MB `shared_buffers`, yeniden başlatma sonrası →
+`shared_blks_read=28864`, `shared_blk_read_time=10.86 ms`, `mean=38.8 ms` →
+**sürenin %28'i disk beklemesi.**
+
+Artık ölçüm varsa o kullanılıyor (`confidence="observed"`), yoksa blok oranına
+düşülüyor ve **kullanıcıya bunun bir çıkarım olduğu söyleniyor**
+(`confidence="inferred"`). Eski kod blok oranı teşhisini de "observed" diye
+sunuyordu; bu yanlıştı ve testte sabitlenmişti — test düzeltildi.
+
+### Ölçüm yokluğu ile sıfır ayrımı
+
+`track_io_timing = off` iken sütun **0** gelir. Bunu "I/O beklemesi yok" diye
+sunmak, ölçümü kapalı her sunucuda depolamaya bağlı darboğazları sistematik
+olarak gizlerdi. `io_timing_measured()` ayrımı yapıyor: diskten blok okunmuş ama
+süre sıfırsa ölçüm kapalıdır. O durumda I/O payı `0` değil **`None`**.
+
+### Ham sayı tanı değildir: metrik sözlüğü
+
+`domain/query_metrics.py` her metriğin **ne ölçtüğünü** ve **ne zaman sorun**
+olduğunu tutuyor; eşikler de orada. Türetilen göstergeler:
+
+- **toplam etki payı** — "hangi sorguyu önce düzelteyim" sorusunun tek anlamlı
+  cevabı; çağrı başına süre tek başına yanıltıcı.
+- **kararsızlık** (stddev/mean) — "ara sıra takılıyor" şikâyetinin kaynağı;
+  ortalamaya bakan hiçbir liste onu yakalayamaz.
+- **I/O bekleme payı**, **cache isabeti**, **geçici dosya blokları**,
+  **çağrı başına WAL**, **FPI oranı** (checkpoint sıklığı sinyali),
+  **planlama payı** (çözüm sorguyu hızlandırmak değil hazırlanmış ifade),
+  **JIT payı** (kısa sorguda JIT maliyettir), **çağrı başına satır/yazılan blok**.
+
+### Arayüzdeki ikinci eşik kopyası kaldırıldı
+
+`InstanceDetailPage.tsx` içinde `possibleCauses()` diye **eşiklerin ikinci bir
+kopyası** vardı (mean > 100 ms, temp > 0, okuma > hit) ve backend'dekilerden
+farklıydı: aynı sorgu için DPA "sorun yok" derken rapor "kritik" diyebilirdi.
+Artık `metric_flags` backend'den geliyor ve her biri açıklamasını taşıyor.
+`GET /api/queries/metric-dictionary` sözlüğün tamamını veriyor.
+
+### Beşinci tip kayması
+
+`SlowQuery` elle yazılmıştı ve yeni alanları bilmiyordu. Türetilmiş tipe
+çevrildi, `MUST_BE_DERIVED`'a eklendi. (`Instance`, `ExplainResult`,
+`InstanceDependencies`, `ExecutiveReport`'tan sonra beşincisi.)
+
+### Depolama maliyeti bilinçli
+
+Bu tabloya toplama döngüsü başına 20 satır yazılıyor (~3,5 milyon
+satır/ay/instance); 16 yeni sayısal sütun kabaca **+400 MB/ay/instance**.
+Karşılığı tanının ölçüme dayanması; saklama süresi büyümeyi sınırlıyor. Yeni
+sayaçlarda `BigInteger` kullanıldı — kümülatif sayaçlar int32 sınırını aşar.
+
+### Testler
+
+- `tests/test_query_metrics.py` — 21 test: sözlüğün eksiksizliği, ölçüm/sıfır
+  ayrımı, sıfıra bölme, her eşik.
+- `tests/test_query_diagnostics.py` — ölçümün çıkarımı yendiği ve blok oranının
+  artık "inferred" olduğu.
+- `tests/test_explain_live_postgres.py` — toplayıcının yeni SQL'i ve türetmenin
+  gerçek satırlarda çökmediği; **PG 15/16/17/18'de 52 test geçti**.
+
+Arka uç: **1554 geçti, 15 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

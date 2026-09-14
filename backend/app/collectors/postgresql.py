@@ -16,6 +16,8 @@ from app.domain.pg_capabilities import (
     capability_matrix,
     source_for,
     unavailable_reason,
+    pgss_io_time_columns,
+    pgss_jit_time_expression,
 )
 from app.domain.waits import classify_postgres_wait
 from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
@@ -513,8 +515,22 @@ class PostgreSQLCollector(BaseCollector):
             else:
                 total_col, mean_col = "total_time", "mean_time"
 
-            sql = f"""
-                SELECT
+            # FAZ 29 İŞ 2a: pg_stat_statements'ın TAM SÖMÜRÜSÜ.
+            #
+            # Önceden yalnızca 12 sütun okunuyordu; tanı için en değerli olanlar dışarıda
+            # kalmıştı. Özellikle I/O SÜRESİ: `blk_read_time` sorgunun diskte geçirdiği
+            # süreyi DOĞRUDAN ölçüyor. Onsuz "bu sorgu I/O mu bekliyor, CPU mu yakıyor"
+            # sorusu blok SAYILARINDAN çıkarımla cevaplanıyordu — ölçüm varken çıkarım
+            # yapmak, yanlış teşhis riskini boşuna almak demek.
+            #
+            # Sütun adları sürüme göre değişiyor; eşleme domain/pg_capabilities.py'de ve
+            # gerçek 15/16/17/18 sunucularında ölçüldü.
+            io_read_col, io_write_col = pgss_io_time_columns(version_num)
+            jit_expr = pgss_jit_time_expression()
+
+            # `plans` ve `total_plan_time`: planlama maliyeti. Çok sayıda farklı parametreyle
+            # çağrılan bir sorguda planlama, yürütmenin yanında ihmal edilebilir olmayabilir.
+            common_columns = f"""
                     s.queryid::text,
                     LEFT(s.query, 2000) AS query,
                     s.calls,
@@ -523,10 +539,30 @@ class PostgreSQLCollector(BaseCollector):
                     s.rows,
                     s.shared_blks_hit,
                     s.shared_blks_read,
+                    s.shared_blks_dirtied,
+                    s.shared_blks_written,
                     s.local_blks_hit,
                     s.local_blks_read,
                     s.temp_blks_read,
-                    s.temp_blks_written
+                    s.temp_blks_written,
+                    s.stddev_exec_time AS stddev_time_ms,
+                    s.min_exec_time AS min_time_ms,
+                    s.max_exec_time AS max_time_ms,
+                    s.{io_read_col} AS blk_read_time_ms,
+                    s.{io_write_col} AS blk_write_time_ms,
+                    s.temp_blk_read_time AS temp_blk_read_time_ms,
+                    s.temp_blk_write_time AS temp_blk_write_time_ms,
+                    s.wal_records,
+                    s.wal_fpi,
+                    s.wal_bytes::double precision AS wal_bytes,
+                    s.plans,
+                    s.total_plan_time AS total_plan_time_ms,
+                    ({jit_expr}) AS jit_time_ms,
+                    s.jit_functions"""
+
+            sql = f"""
+                SELECT
+                    {common_columns}
                 FROM {pgss} s
                 WHERE s.dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
             """
@@ -534,18 +570,7 @@ class PostgreSQLCollector(BaseCollector):
                 kcache = qualified_view(kcache_schema, "pg_stat_kcache")
                 sql = f"""
                     SELECT
-                        s.queryid::text,
-                        LEFT(s.query, 2000) AS query,
-                        s.calls,
-                        s.{total_col} AS total_time_ms,
-                        s.{mean_col} AS mean_time_ms,
-                        s.rows,
-                        s.shared_blks_hit,
-                        s.shared_blks_read,
-                        s.local_blks_hit,
-                        s.local_blks_read,
-                        s.temp_blks_read,
-                        s.temp_blks_written,
+                        {common_columns},
                         k.plan_user_time,
                         k.plan_sys_time,
                         k.exec_user_time,

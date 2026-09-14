@@ -8834,6 +8834,28 @@
       },
       "SlowQueryOut": {
         "properties": {
+          "blk_read_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blk Read Time Ms"
+          },
+          "blk_write_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blk Write Time Ms"
+          },
           "calls": {
             "title": "Calls",
             "type": "integer"
@@ -8878,6 +8900,28 @@
             "title": "Is System",
             "type": "boolean"
           },
+          "jit_functions": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jit Functions"
+          },
+          "jit_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jit Time Ms"
+          },
           "key": {
             "default": "",
             "title": "Key",
@@ -8905,9 +8949,48 @@
             ],
             "title": "Local Blks Read"
           },
+          "max_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Time Ms"
+          },
           "mean_time_ms": {
             "title": "Mean Time Ms",
             "type": "number"
+          },
+          "metric_flags": {
+            "default": [],
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Metric Flags",
+            "type": "array"
+          },
+          "metrics": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Metrics",
+            "type": "object"
+          },
+          "min_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Time Ms"
           },
           "plan_sys_time": {
             "anyOf": [
@@ -8930,6 +9013,17 @@
               }
             ],
             "title": "Plan User Time"
+          },
+          "plans": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plans"
           },
           "query": {
             "title": "Query",
@@ -8955,6 +9049,17 @@
             "title": "Sample Count",
             "type": "integer"
           },
+          "shared_blks_dirtied": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Blks Dirtied"
+          },
           "shared_blks_hit": {
             "anyOf": [
               {
@@ -8976,6 +9081,28 @@
               }
             ],
             "title": "Shared Blks Read"
+          },
+          "shared_blks_written": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Blks Written"
+          },
+          "stddev_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stddev Time Ms"
           },
           "system_reason": {
             "anyOf": [
@@ -9010,9 +9137,53 @@
             ],
             "title": "Temp Blks Written"
           },
+          "total_plan_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Plan Time Ms"
+          },
           "total_time_ms": {
             "title": "Total Time Ms",
             "type": "number"
+          },
+          "wal_bytes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wal Bytes"
+          },
+          "wal_fpi": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wal Fpi"
+          },
+          "wal_records": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wal Records"
           }
         },
         "required": [
@@ -13937,6 +14108,38 @@
         "summary": "Acknowledge Prediction",
         "tags": [
           "predictions"
+        ]
+      }
+    },
+    "/api/queries/metric-dictionary": {
+      "get": {
+        "description": "Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).\n\nArayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının\nhangisine güveneceğini bilememesi demekti; eşikler de aynı modülden geliyor.\n\nInstance gerektirmiyor: sözlük sunucudan bağımsız.",
+        "operationId": "get_metric_dictionary_api_queries_metric_dictionary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response Get Metric Dictionary Api Queries Metric Dictionary Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Metric Dictionary",
+        "tags": [
+          "queries"
         ]
       }
     },

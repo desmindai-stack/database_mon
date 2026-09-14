@@ -126,37 +126,26 @@ interface LoadTimelinePoint {
   contributors: LoadContributor[];
 }
 
-// Honest, non-fabricated heuristics only — dbace doesn't have wait-event/lock data attached to
-// a historical query_history point, so this deliberately stops at "here's the signal that made
-// this query stand out" rather than guessing a root cause it can't actually see (Faz 15 İŞ 8,
-// see SORULAR.md).
-/** Sadece GERÇEKTEN anlamlı sinyaller (Faz 16-B İŞ 4).
+/**
+ * Sorgunun öne çıkan göstergeleri — ARTIK BACKEND'DEN (Faz 29 İŞ 2a).
  *
- * Önceki hali "+1 çağrı arttı" gibi önemsiz gözlemleri ve hiçbir sinyal yokken de bir dolgu
- * cümlesini öneri gibi sunuyordu. Artık eşiği geçmeyen hiçbir şey yazılmıyor; liste boşsa
- * "Olası nedenler" başlığı hiç görünmüyor. */
-function possibleCauses(q: SlowQuery): string[] {
-  const causes: string[] = [];
-  if (q.mean_time_ms > 100) {
-    causes.push(
-      `Ortalama çalışma süresi yüksek (${q.mean_time_ms.toFixed(0)} ms) — eksik index, sıralı tarama ` +
-        "(seq scan) veya kilit beklemesi olabilir. EXPLAIN planına bakın.",
-    );
-  }
-  if ((q.temp_blks_written ?? 0) > 0) {
-    causes.push(
-      "Geçici dosyaya taşma var (temp_blks_written > 0) — sıralama/hash işlemi work_mem'e sığmıyor.",
-    );
-  }
-  const read = q.shared_blks_read ?? 0;
-  const hit = q.shared_blks_hit ?? 0;
-  if (read > 0 && read > hit) {
-    causes.push(
-      `Blokların çoğu diskten okundu (${read.toLocaleString()} okuma / ${hit.toLocaleString()} cache) — ` +
-        "I/O ağırlıklı; index veya daha büyük shared_buffers değerlendirilebilir.",
-    );
-  }
-  return causes;
+ * Burada eskiden eşiklerin İKİNCİ BİR KOPYASI vardı (mean > 100ms, temp > 0, okuma > hit) ve
+ * backend'deki eşiklerden farklıydı: aynı sorgu için DPA "sorun yok" derken rapor "kritik"
+ * diyebiliyordu. Eşikler ve açıklamalar artık tek yerde (backend domain/query_metrics.py) ve
+ * buraya `metric_flags` olarak geliyor — her biri "ne anlama geliyor" ve "ne zaman sorun"
+ * metnini de taşıyor.
+ */
+function metricFlags(q: SlowQuery): Record<string, string>[] {
+  return (q.metric_flags as Record<string, string>[]) || [];
+}
+
+/**
+ * `metrics` üretilen şemada serbest sözlük (`dict[str, Any]`), yani değerleri `unknown`.
+ * Alan ADLARININ hizası derleyici tarafından korunuyor; sözlüğün İÇİ zaten şemasız olduğu
+ * için burada tek seferlik gevşetiliyor.
+ */
+function queryMetrics(q: SlowQuery): Record<string, any> {
+  return (q.metrics as Record<string, any>) || {};
 }
 
 export default function InstanceDetailPage() {
@@ -1500,12 +1489,19 @@ export default function InstanceDetailPage() {
                               )}
                               {/* Faz 16-B İŞ 4: sadece gerçekten anlamlı sinyaller — hiçbiri
                                   yoksa başlık da görünmüyor. */}
-                              {possibleCauses(q).length > 0 && (
-                                <div className="query-causes">
-                                  <h4>Olası nedenler</h4>
-                                  <ul>
-                                    {possibleCauses(q).map((cause, i) => (
-                                      <li key={i}>{cause}</li>
+                              {metricFlags(q).length > 0 && (
+                                <div className="query-flags">
+                                  <h4>Öne çıkan göstergeler</h4>
+                                  <ul className="query-flag-list">
+                                    {metricFlags(q).map((flag) => (
+                                      <li key={flag.key}>
+                                        <span className="query-flag-head">
+                                          <strong>{flag.label}</strong>
+                                          <span className="query-flag-value">{flag.value}</span>
+                                        </span>
+                                        <span className="muted-note">{flag.meaning}</span>
+                                        <span className="muted-note">{flag.when_problem}</span>
+                                      </li>
                                     ))}
                                   </ul>
                                 </div>
@@ -1519,6 +1515,27 @@ export default function InstanceDetailPage() {
                               <div><span>local hit</span><strong>{q.local_blks_hit ?? 0}</strong></div>
                               <div><span>temp okuma</span><strong>{q.temp_blks_read ?? 0}</strong></div>
                               <div><span>temp yazma</span><strong>{q.temp_blks_written ?? 0}</strong></div>
+                              {/* ÖLÇÜLMÜŞ I/O süresi: blok sayısından çıkarım değil, sunucunun
+                                  kendi ölçümü. `track_io_timing` kapalıysa hiç gösterilmiyor —
+                                  0 göstermek "I/O beklemesi yok" demek olurdu. */}
+                              {queryMetrics(q).io_time_measured && (
+                                <div>
+                                  <span>I/O beklemesi</span>
+                                  <strong>
+                                    {((q.blk_read_time_ms ?? 0) + (q.blk_write_time_ms ?? 0)).toFixed(1)} ms
+                                    {queryMetrics(q).io_time_share_pct != null && ` (%${queryMetrics(q).io_time_share_pct})`}
+                                  </strong>
+                                </div>
+                              )}
+                              {queryMetrics(q).instability_ratio != null && (
+                                <div><span>kararsızlık</span><strong>{queryMetrics(q).instability_ratio}×</strong></div>
+                              )}
+                              {queryMetrics(q).total_share_pct != null && (
+                                <div><span>toplam etki payı</span><strong>%{queryMetrics(q).total_share_pct}</strong></div>
+                              )}
+                              {q.wal_bytes != null && q.wal_bytes > 0 && (
+                                <div><span>WAL / çağrı</span><strong>{queryMetrics(q).wal_bytes_per_call ?? 0} B</strong></div>
+                              )}
                               {(q.exec_user_time || q.exec_sys_time) && (
                                 <div><span>CPU (exec)</span><strong>{((q.exec_user_time ?? 0) + (q.exec_sys_time ?? 0)).toFixed(2)} ms</strong></div>
                               )}

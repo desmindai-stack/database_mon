@@ -263,3 +263,49 @@ def version_support_note(version_num: int) -> str | None:
             "yeni metrikler kullanılmıyor olabilir."
         )
     return None
+
+
+# --- pg_stat_statements sütun adları (Faz 29 İŞ 2a) -----------------------------------------
+#
+# GERÇEK SUNUCULARDA ÖLÇÜLDÜ (postgres:15/16/17/18 kapları, `information_schema.columns`):
+#
+# | Sütun                                     | 15 | 16 | 17 | 18 |
+# |-------------------------------------------|----|----|----|----|
+# | blk_read_time / blk_write_time            | ✓  | ✓  | –  | –  |
+# | shared_blk_read_time / shared_blk_write_time | – | –  | ✓  | ✓  |
+# | local_blk_read_time / local_blk_write_time   | – | –  | ✓  | ✓  |
+# | stats_since                               | –  | –  | ✓  | ✓  |
+# | wal_buffers_full                          | –  | –  | –  | ✓  |
+# | stddev/min/max_exec_time, *_blks_dirtied, |    |    |    |    |
+# | *_blks_written, temp_blk_*_time, wal_*    | ✓  | ✓  | ✓  | ✓  |
+#
+# PostgreSQL 17, paylaşılan/yerel/geçici blok I/O sürelerini AYIRDI ve eski `blk_read_time`
+# adını `shared_blk_read_time` yaptı. Eski adı 17'ye göndermek "column does not exist" ile
+# TÜM yavaş sorgu toplamasını düşürürdü — tek bir sütun yüzünden özelliğin tamamı.
+PGSS_IO_TIME_SPLIT = PG_17
+
+#: JIT süresi tek sayıya indiriliyor: pg_stat_statements sekiz ayrı jit_* sütunu tutuyor ve
+#: sekizini de satır başına saklamak, tanı değeriyle orantısız bir depolama maliyeti olurdu.
+#: Sorulan soru "JIT bu sorguya ne kadar ek süre bindirdi" — toplam onu cevaplıyor.
+_JIT_TIME_COLUMNS = (
+    "jit_generation_time",
+    "jit_inlining_time",
+    "jit_optimization_time",
+    "jit_emission_time",
+)
+
+
+def pgss_io_time_columns(version_num: int) -> tuple[str, str]:
+    """(okuma süresi sütunu, yazma süresi sütunu) — sürüme göre."""
+    if version_num >= PGSS_IO_TIME_SPLIT:
+        return "shared_blk_read_time", "shared_blk_write_time"
+    return "blk_read_time", "blk_write_time"
+
+
+def pgss_jit_time_expression() -> str:
+    """Tüm JIT aşamalarının toplamı (ms).
+
+    `coalesce` şart: JIT hiç devreye girmediyse sütunlar 0 gelir ama eski sürümlerde
+    eksik olabilir; toplamın NULL'a düşmesi "JIT yok" ile "ölçülemedi"yi karıştırırdı.
+    """
+    return " + ".join(f"coalesce(s.{c}, 0)" for c in _JIT_TIME_COLUMNS)

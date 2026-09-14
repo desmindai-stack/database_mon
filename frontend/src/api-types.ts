@@ -1231,6 +1231,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queries/metric-dictionary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Metric Dictionary
+         * @description Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).
+         *
+         *     Arayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının
+         *     hangisine güveneceğini bilememesi demekti; eşikler de aynı modülden geliyor.
+         *
+         *     Instance gerektirmiyor: sözlük sunucudan bağımsız.
+         */
+        get: operations["get_metric_dictionary_api_queries_metric_dictionary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queries/{instance_id}": {
         parameters: {
             query?: never;
@@ -5114,6 +5139,10 @@ export interface components {
         };
         /** SlowQueryOut */
         SlowQueryOut: {
+            /** Blk Read Time Ms */
+            blk_read_time_ms?: number | null;
+            /** Blk Write Time Ms */
+            blk_write_time_ms?: number | null;
             /** Calls */
             calls: number;
             /**
@@ -5134,6 +5163,10 @@ export interface components {
              * @default false
              */
             is_system: boolean;
+            /** Jit Functions */
+            jit_functions?: number | null;
+            /** Jit Time Ms */
+            jit_time_ms?: number | null;
             /**
              * Key
              * @default
@@ -5143,12 +5176,32 @@ export interface components {
             local_blks_hit: number | null;
             /** Local Blks Read */
             local_blks_read: number | null;
+            /** Max Time Ms */
+            max_time_ms?: number | null;
             /** Mean Time Ms */
             mean_time_ms: number;
+            /**
+             * Metric Flags
+             * @default []
+             */
+            metric_flags: {
+                [key: string]: string;
+            }[];
+            /**
+             * Metrics
+             * @default {}
+             */
+            metrics: {
+                [key: string]: unknown;
+            };
+            /** Min Time Ms */
+            min_time_ms?: number | null;
             /** Plan Sys Time */
             plan_sys_time: number | null;
             /** Plan User Time */
             plan_user_time: number | null;
+            /** Plans */
+            plans?: number | null;
             /** Query */
             query: string;
             /** Queryid */
@@ -5160,18 +5213,32 @@ export interface components {
              * @default 0
              */
             sample_count: number;
+            /** Shared Blks Dirtied */
+            shared_blks_dirtied?: number | null;
             /** Shared Blks Hit */
             shared_blks_hit: number | null;
             /** Shared Blks Read */
             shared_blks_read: number | null;
+            /** Shared Blks Written */
+            shared_blks_written?: number | null;
+            /** Stddev Time Ms */
+            stddev_time_ms?: number | null;
             /** System Reason */
             system_reason?: string | null;
             /** Temp Blks Read */
             temp_blks_read: number | null;
             /** Temp Blks Written */
             temp_blks_written: number | null;
+            /** Total Plan Time Ms */
+            total_plan_time_ms?: number | null;
             /** Total Time Ms */
             total_time_ms: number;
+            /** Wal Bytes */
+            wal_bytes?: number | null;
+            /** Wal Fpi */
+            wal_fpi?: number | null;
+            /** Wal Records */
+            wal_records?: number | null;
         };
         /** StateCountOut */
         StateCountOut: {
@@ -8046,6 +8113,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_metric_dictionary_api_queries_metric_dictionary_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
                 };
             };
         };
