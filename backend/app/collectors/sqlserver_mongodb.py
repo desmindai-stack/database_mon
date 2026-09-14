@@ -103,6 +103,173 @@ CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
 ORDER BY qs.total_worker_time DESC
 """
 
+# --- FAZ 29 İŞ 2c: sys.dm_exec_query_stats'ın tam sömürüsü ----------------------------------
+#
+# ÖNCEKİ HÂLİN SEMANTİK HATASI: `total_time_ms` alanına `total_worker_time` yazılıyordu.
+# `total_worker_time` CPU süresidir; `total_elapsed_time` ise duvar saati. İkisinin FARKI
+# BEKLEMEDİR (kilit, I/O, ağ). Yani "yavaş sorgu" listesi aslında "CPU yiyen sorgu" listesiydi:
+# kilitte 10 saniye bekleyip 5 ms CPU kullanan bir sorgu listede HIZLI görünüyordu — oysa
+# kullanıcının şikâyet ettiği tam olarak odur.
+#
+# Artık `total_time_ms` = elapsed, CPU ayrı alanda ve ikisinin farkı "bekleme" olarak
+# türetiliyor.
+#
+# SÜRÜM/SP FARKI: SQL Server'da sütunlar temiz sürüm sınırlarında değil, SP/CU ile geliyor
+# (mevcut kod bunu `total_rows` için try/retry ile çözüyordu). Tahmin yerine SORUYORUZ:
+# `sys.all_columns` üzerinden DMV'nin gerçekten hangi sütunlara sahip olduğu okunuyor ve
+# SELECT ona göre kuruluyor. Böylece hiçbir SP kombinasyonunda "invalid column name" ile
+# toplama düşmüyor.
+
+_QUERY_STATS_COLUMNS_SQL = """
+SELECT c.name
+FROM sys.all_columns c
+JOIN sys.all_objects o ON o.object_id = c.object_id
+WHERE o.name = 'dm_exec_query_stats'
+"""
+
+#: Her SQL Server 2008+ sürümünde bulunan sütunlar — bunlar için varlık kontrolü yapılmıyor.
+_QS_BASE_COLUMNS = {
+    "execution_count",
+    "total_worker_time",
+    "total_elapsed_time",
+    "total_logical_reads",
+    "total_physical_reads",
+    "total_logical_writes",
+}
+
+#: Sürüme/SP'ye göre var olabilen sütunlar: (dbace alan adı, DMV sütunu, dönüşüm).
+#: Dönüşüm `{col}` yer tutucusunu kullanıyor.
+_QS_OPTIONAL_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("rows", "total_rows", "qs.{col}"),
+    ("min_time_ms", "min_elapsed_time", "qs.{col} / 1000.0"),
+    ("max_time_ms", "max_elapsed_time", "qs.{col} / 1000.0"),
+    ("min_cpu_ms", "min_worker_time", "qs.{col} / 1000.0"),
+    ("max_cpu_ms", "max_worker_time", "qs.{col} / 1000.0"),
+    # Bellek izni: SQL Server 2016+. Talep edilen ile KULLANILAN arasındaki fark, sorgunun
+    # gereğinden fazla bellek rezerve edip başkalarını beklettiğini gösterir.
+    ("grant_kb", "total_grant_kb", "qs.{col}"),
+    ("used_grant_kb", "total_used_grant_kb", "qs.{col}"),
+    # Spill: 2016 SP2 / 2017+. tempdb'ye taşma — PostgreSQL'deki temp_blks karşılığı.
+    ("spills", "total_spills", "qs.{col}"),
+    ("plan_generation_num", "plan_generation_num", "qs.{col}"),
+    ("last_execution_time", "last_execution_time", "qs.{col}"),
+)
+
+
+def build_slow_query_sql(available_columns: set[str]) -> str:
+    """Sunucunun GERÇEKTEN sahip olduğu sütunlara göre sorguyu kurar.
+
+    Sütun listesini tahmin etmek yerine sormak, SQL Server'ın SP/CU bazlı sütun ekleme
+    alışkanlığında tek güvenli yol: "invalid column name" hatası tüm yavaş sorgu toplamasını
+    düşürür ve o hata yalnızca belirli bir SP seviyesinde ortaya çıkacağı için test ortamında
+    hiç görünmeyebilir.
+    """
+    parts = [
+        "CONVERT(VARCHAR(64), qs.query_hash, 1) AS queryid",
+        (
+            "SUBSTRING(st.text, (qs.statement_start_offset / 2) + 1, "
+            "((CASE qs.statement_end_offset WHEN -1 THEN DATALENGTH(st.text) "
+            "ELSE qs.statement_end_offset END - qs.statement_start_offset) / 2) + 1) AS query"
+        ),
+        "qs.execution_count AS calls",
+        # total_time_ms ARTIK ELAPSED: bekleme dahil gerçek süre.
+        "qs.total_elapsed_time / 1000.0 AS total_time_ms",
+        "(qs.total_elapsed_time / 1000.0) / NULLIF(qs.execution_count, 0) AS mean_time_ms",
+        "qs.total_worker_time / 1000.0 AS cpu_time_ms",
+        "qs.total_logical_reads AS logical_reads",
+        "qs.total_physical_reads AS physical_reads",
+        "qs.total_logical_writes AS logical_writes",
+    ]
+    for field, column, expression in _QS_OPTIONAL_COLUMNS:
+        if column in available_columns:
+            parts.append(expression.format(col=column) + f" AS {field}")
+        else:
+            # Alan HEP var, değeri NULL: tüketicilerin sütun varlığı kontrolü yapmasına
+            # gerek kalmıyor ve "ölçülmedi" ile "sıfır" ayrımı korunuyor.
+            parts.append(f"NULL AS {field}")
+
+    return (
+        "SELECT TOP ({limit})\n    "
+        + ",\n    ".join(parts)
+        + "\nFROM sys.dm_exec_query_stats qs"
+        + "\nCROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st"
+        # Sıralama da elapsed'e göre: CPU'ya göre sıralamak, bekleyen sorguları listenin
+        # dışında bırakıyordu.
+        + "\nORDER BY qs.total_elapsed_time DESC"
+    )
+
+
+# --- FAZ 29 İŞ 2c: SQL Server'ın KENDİ eksik index önerileri --------------------------------
+#
+# SQL Server, sorguları planlarken "şu index olsaydı işim kolaylaşırdı" bilgisini
+# `sys.dm_db_missing_index_*` DMV'lerinde biriktiriyor. Bu HAZIR bir kaynak ve dbace onu hiç
+# kullanmıyordu — PostgreSQL tarafında hypopg ile ölçtüğümüz şeyin karşılığı burada motorun
+# kendisi tarafından zaten üretiliyor.
+#
+# DİKKAT (öneri metninde de yazıyor): bu öneriler HAM. SQL Server aynı tablo için onlarca
+# örtüşen öneri üretebilir, kolon sırasını optimize etmez ve INCLUDE listesini şişirir.
+# Körlemesine uygulamak, yazma maliyetini patlatan bir index yığını bırakır. Bu yüzden
+# `improvement_measure` ile sıralanıp yalnızca en yüksek etkili olanlar taşınıyor.
+_MISSING_INDEX_SQL = """
+SELECT TOP ({limit})
+    DB_NAME(mid.database_id) AS database_name,
+    OBJECT_SCHEMA_NAME(mid.object_id, mid.database_id) AS schema_name,
+    OBJECT_NAME(mid.object_id, mid.database_id) AS table_name,
+    mid.equality_columns,
+    mid.inequality_columns,
+    mid.included_columns,
+    migs.user_seeks,
+    migs.user_scans,
+    migs.avg_total_user_cost,
+    migs.avg_user_impact,
+    migs.last_user_seek,
+    -- SQL Server topluluğunun yerleşik "etki ölçüsü" formülü: maliyet x etki x kullanım.
+    -- Tek başına avg_user_impact yanıltıcı: günde bir çalışan bir sorgu için %99 iyileşme,
+    -- saniyede bin kez çalışan bir sorgu için %20 iyileşmeden daha az değerlidir.
+    CONVERT(DECIMAL(28, 2),
+        migs.avg_total_user_cost * (migs.avg_user_impact / 100.0) *
+        (migs.user_seeks + migs.user_scans)) AS improvement_measure
+FROM sys.dm_db_missing_index_details mid
+JOIN sys.dm_db_missing_index_groups mig ON mig.index_handle = mid.index_handle
+JOIN sys.dm_db_missing_index_group_stats migs ON migs.group_handle = mig.index_group_handle
+WHERE mid.database_id = DB_ID()
+ORDER BY improvement_measure DESC
+"""
+
+# --- Kullanılmayan / az kullanılan index'ler -------------------------------------------------
+#
+# PostgreSQL tarafındaki `idx_scan = 0` kontrolünün karşılığı. Fark: SQL Server bu sayaçları
+# SERVİS YENİDEN BAŞLATILDIĞINDA sıfırlıyor, bu yüzden "hiç kullanılmadı" iddiası ancak
+# sayaçların ne kadar süredir biriktiği bilinirse anlamlı. Sorgu bu yüzden sayaç yaşını da
+# döndürüyor ve öneri metni onu açıkça söylüyor.
+_UNUSED_INDEX_SQL = """
+SELECT TOP ({limit})
+    SCHEMA_NAME(o.schema_id) AS schema_name,
+    o.name AS table_name,
+    i.name AS index_name,
+    i.type_desc AS index_type,
+    ISNULL(us.user_seeks, 0) AS user_seeks,
+    ISNULL(us.user_scans, 0) AS user_scans,
+    ISNULL(us.user_lookups, 0) AS user_lookups,
+    ISNULL(us.user_updates, 0) AS user_updates,
+    ISNULL(ps.reserved_page_count, 0) * 8 * 1024 AS index_bytes,
+    (SELECT DATEDIFF(second, sqlserver_start_time, GETDATE()) FROM sys.dm_os_sys_info) AS stats_age_seconds
+FROM sys.indexes i
+JOIN sys.objects o ON o.object_id = i.object_id
+LEFT JOIN sys.dm_db_index_usage_stats us
+       ON us.object_id = i.object_id AND us.index_id = i.index_id AND us.database_id = DB_ID()
+LEFT JOIN sys.dm_db_partition_stats ps
+       ON ps.object_id = i.object_id AND ps.index_id = i.index_id
+WHERE o.is_ms_shipped = 0
+  AND i.type_desc <> 'HEAP'
+  AND i.is_primary_key = 0
+  AND i.is_unique_constraint = 0
+  AND ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0) = 0
+  AND ISNULL(ps.reserved_page_count, 0) > 1
+ORDER BY ps.reserved_page_count DESC
+"""
+
+
 _ACTIVITY_SQL = """
 SELECT TOP ({limit})
     s.session_id,
@@ -456,27 +623,156 @@ class SqlServerCollector(BaseCollector):
         if owns_conn:
             conn = await self._connect()
         try:
-            try:
-                async with conn.cursor() as cur:
-                    await cur.execute(_SLOW_QUERY_SQL.format(limit=int(limit)))
-                    columns = [c[0] for c in cur.description]
-                    rows = await cur.fetchall()
-            except Exception as exc:
-                # sys.dm_exec_query_stats.total_rows was added by a specific SP/CU, not
-                # cleanly by major version — on a server that doesn't have it, retry once
-                # without that column rather than losing slow-query data entirely.
+            # FAZ 29 İŞ 2c: SÜTUNLARI TAHMİN ETMEK YERİNE SORUYORUZ.
+            #
+            # Önceki kod `total_rows` için "dene, patlarsa sütunsuz tekrar dene" yapıyordu.
+            # Sömürülecek sütun sayısı arttıkça bu desen kombinatoryal hale geliyor (her
+            # opsiyonel sütun için ayrı bir yedek sorgu). DMV'nin gerçek sütun listesini
+            # okumak tek round-trip ve hiçbir SP kombinasyonunda "invalid column name"
+            # riski bırakmıyor.
+            async with conn.cursor() as cur:
+                await cur.execute(_QUERY_STATS_COLUMNS_SQL)
+                available = {str(r[0]) for r in await cur.fetchall()}
+
+            missing_base = _QS_BASE_COLUMNS - available
+            if missing_base:
+                # Temel sütunlar yoksa bu bir DMV değil ya da yetki sorunu var; sessizce boş
+                # dönmek "yavaş sorgu yok" izlenimi verirdi.
                 logger.warning(
-                    "sys.dm_exec_query_stats.total_rows sorgusu başarısız (muhtemelen bu SQL "
-                    "Server sürümü/SP'sinde yok), rows olmadan yeniden deneniyor: %s", exc
+                    "sys.dm_exec_query_stats beklenen sütunları taşımıyor (%s); yavaş sorgu "
+                    "toplanamadı", sorted(missing_base),
                 )
-                async with conn.cursor() as cur:
-                    await cur.execute(_SLOW_QUERY_SQL_NO_ROWS.format(limit=int(limit)))
-                    columns = [c[0] for c in cur.description]
-                    rows = await cur.fetchall()
+                return []
+
+            async with conn.cursor() as cur:
+                await cur.execute(build_slow_query_sql(available).format(limit=int(limit)))
+                columns = [c[0] for c in cur.description]
+                rows = await cur.fetchall()
             return [dict(zip(columns, row)) for row in rows]
         finally:
             if owns_conn:
                 await conn.close()
+
+    async def collect_index_advice(self, limit: int = 20) -> dict[str, Any]:
+        """SQL Server'ın kendi eksik index önerileri + kullanılmayan index'ler (Faz 29 İŞ 2c).
+
+        İkisi bir arada dönüyor çünkü birlikte okunmaları gerekiyor: yeni bir index eklemeden
+        önce kullanılmayanları silmek, aynı tabloda yazma maliyetini dengede tutar.
+        """
+        conn = await self._connect()
+        result: dict[str, Any] = {"missing_indexes": [], "unused_indexes": [], "errors": {}}
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SET LOCK_TIMEOUT 5000")
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(_MISSING_INDEX_SQL.format(limit=int(limit)))
+                    columns = [c[0] for c in cur.description]
+                    result["missing_indexes"] = [
+                        dict(zip(columns, row)) for row in await cur.fetchall()
+                    ]
+            except Exception as exc:
+                # Yetki eksikse (VIEW SERVER STATE) sessizce boş dönmek "eksik index yok"
+                # izlenimi verirdi; sebep taşınıyor.
+                result["errors"]["missing_indexes"] = str(exc)[:300]
+
+            try:
+                async with conn.cursor() as cur:
+                    await cur.execute(_UNUSED_INDEX_SQL.format(limit=int(limit)))
+                    columns = [c[0] for c in cur.description]
+                    result["unused_indexes"] = [
+                        dict(zip(columns, row)) for row in await cur.fetchall()
+                    ]
+            except Exception as exc:
+                result["errors"]["unused_indexes"] = str(exc)[:300]
+            return result
+        finally:
+            await conn.close()
+
+    async def collect_schema_health(self, limit: int = 50) -> dict[str, Any]:
+        """SQL Server şema sağlığı (Faz 29 İŞ 2c).
+
+        Bu motor için ÖNCEDEN HİÇ VERİ YOKTU: taban sınıf boş sözlük döndürüyordu, yani
+        SQL Server kullanan bir müşteride Şema sekmesi hep boştu.
+
+        İki kaynak:
+
+        * `sys.dm_db_missing_index_*` — SQL Server'ın KENDİ eksik index önerileri. Motor
+          zaten planlama sırasında "şu index olsaydı" bilgisini biriktiriyor; bunu
+          kullanmamak hazır bir kaynağı çöpe atmaktı.
+        * `sys.dm_db_index_usage_stats` — hiç kullanılmayan index'ler.
+
+        PostgreSQL'deki `bloated_tables` / `vacuum_lag` karşılıkları BOŞ dönüyor: SQL
+        Server'da ölü satır/vacuum kavramı yok, karşılığı index parçalanması ve o ayrı bir
+        ölçüm (`sys.dm_db_index_physical_stats`, tabloları kilitlemeden okumak için
+        LIMITED modu gerekir). Boş bırakmak, olmayan bir şeyi varmış gibi doldurmaktan iyi.
+        """
+        advice = await self.collect_index_advice(limit=limit)
+
+        unused_indexes = []
+        for row in advice.get("unused_indexes") or []:
+            schema = row.get("schema_name") or "dbo"
+            table = row.get("table_name") or "?"
+            index = row.get("index_name") or "?"
+            unused_indexes.append(
+                {
+                    "schema_name": schema,
+                    "table_name": table,
+                    "index_name": index,
+                    "index_bytes": int(row.get("index_bytes") or 0),
+                    # PostgreSQL alan adları korunuyor ki arayüz tek tablo ile iki motoru
+                    # gösterebilsin; SQL Server'ın seek/scan/lookup üçlüsü tek "kullanım"
+                    # sayısına indirgeniyor ve ham değerler `usage_detail`'de duruyor.
+                    "idx_scan": int(row.get("user_seeks") or 0) + int(row.get("user_scans") or 0),
+                    "idx_tup_read": int(row.get("user_lookups") or 0),
+                    "idx_tup_fetch": int(row.get("user_updates") or 0),
+                    "index_def": f"{row.get('index_type') or 'NONCLUSTERED'} index",
+                    "drop_ddl": f"DROP INDEX [{index}] ON [{schema}].[{table}];",
+                    # SQL Server kullanım sayaçlarını SERVİS YENİDEN BAŞLATILDIĞINDA
+                    # sıfırlıyor. Sayaçlar bir saatlik ise "hiç kullanılmadı" demek yanlış
+                    # olur; bu yüzden yaş küçükse ciddiyet düşürülüyor.
+                    "severity": (
+                        "medium"
+                        if int(row.get("stats_age_seconds") or 0) >= 7 * 86400
+                        else "low"
+                    ),
+                    "stats_age_seconds": int(row.get("stats_age_seconds") or 0),
+                }
+            )
+
+        missing_indexes = [
+            {
+                "schema_name": row.get("schema_name") or "dbo",
+                "table_name": row.get("table_name") or "?",
+                "equality_columns": row.get("equality_columns"),
+                "inequality_columns": row.get("inequality_columns"),
+                "included_columns": row.get("included_columns"),
+                "user_seeks": int(row.get("user_seeks") or 0),
+                "user_scans": int(row.get("user_scans") or 0),
+                "avg_user_impact": float(row.get("avg_user_impact") or 0),
+                "avg_total_user_cost": float(row.get("avg_total_user_cost") or 0),
+                "improvement_measure": float(row.get("improvement_measure") or 0),
+                "last_user_seek": (
+                    row["last_user_seek"].isoformat() if row.get("last_user_seek") else None
+                ),
+            }
+            for row in advice.get("missing_indexes") or []
+        ]
+
+        return {
+            "unused_indexes": unused_indexes,
+            "bloated_tables": [],
+            "vacuum_lag": [],
+            "missing_indexes": missing_indexes,
+            "errors": advice.get("errors") or {},
+            "totals": {
+                "unused_indexes": len(unused_indexes),
+                "unused_index_bytes": sum(i["index_bytes"] for i in unused_indexes),
+                "bloated_tables": 0,
+                "vacuum_lag_tables": 0,
+                "missing_indexes": len(missing_indexes),
+            },
+        }
 
     async def open_sampling_connection(self) -> SamplingConnection | None:
         conn = await self._connect()

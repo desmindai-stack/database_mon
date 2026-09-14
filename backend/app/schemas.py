@@ -583,6 +583,15 @@ class SlowQueryOut(BaseModel):
     total_plan_time_ms: float | None = None
     jit_time_ms: float | None = None
     jit_functions: int | None = None
+    # Faz 29 İŞ 2c — motordan bağımsız alanlar. SQL Server'da elapsed ile CPU'nun FARKI
+    # beklemedir; bu iki sayı olmadan "sorgu neden yavaş" cevaplanamıyor.
+    cpu_time_ms: float | None = None
+    logical_reads: int | None = None
+    physical_reads: int | None = None
+    logical_writes: int | None = None
+    spills: int | None = None
+    grant_kb: int | None = None
+    used_grant_kb: int | None = None
 
     #: Türetilmiş göstergeler (domain/query_metrics.py). `io_time_share_pct` ölçüm kapalıysa
     #: None — 0 DEĞİL; "I/O yok" ile "ölçülmedi" farklı şeyler.
@@ -1346,8 +1355,13 @@ class UnusedIndexOut(BaseModel):
     idx_tup_fetch: int
     index_def: str
     drop_ddl: str
+    # Faz 29 İŞ 2c: SQL Server satırlarında sayaç yaşı uyarısını taşıyan beş parçalı öneri.
+    advice: dict[str, Any] | None = None
     # Faz 16-B İŞ 5: severity filtresi üç listede de çalışsın diye.
     severity: str = "medium"
+    # Faz 29 İŞ 2c: SQL Server kullanım sayaçlarını servis yeniden başlatıldığında sıfırlıyor.
+    # Sayaçlar birkaç saatlikse "hiç kullanılmadı" iddiası yanlış olur — yaş gösteriliyor.
+    stats_age_seconds: int | None = None
 
 
 class BloatedTableOut(BaseModel):
@@ -1387,6 +1401,8 @@ class SchemaHealthTotalsOut(BaseModel):
     vacuum_lag_tables: int
     # Faz 29 İŞ 2b: erişim kalıbında sinyal veren tablo sayısı.
     tables_with_access_signals: int = 0
+    # Faz 29 İŞ 2c: SQL Server'ın önerdiği eksik index sayısı.
+    missing_indexes: int = 0
 
 
 class SchemaHealthOut(BaseModel):
@@ -1394,6 +1410,12 @@ class SchemaHealthOut(BaseModel):
     bloated_tables: list[BloatedTableOut]
     vacuum_lag: list[VacuumLagOut]
     totals: SchemaHealthTotalsOut
+    # Faz 29 İŞ 2c: SQL Server'ın KENDİ eksik index önerileri (sys.dm_db_missing_index_*).
+    # PostgreSQL'de karşılığı hypopg ile ölçülen fayda; SQL Server'da motorun kendisi zaten
+    # üretiyor ve bu kaynak kullanılmıyordu.
+    missing_indexes: list[dict[str, Any]] = []
+    #: Kaynak başına hata (yetki yok vb.) — boş liste "sorun yok" demek DEĞİL.
+    errors: dict[str, str] = {}
     # Faz 29 İŞ 2b: tabloya NASIL erişildiği — sıralı tarama baskınlığı, cache isabeti,
     # HOT güncelleme oranı, istatistik tazeliği. Her satır `derived` (oranlar) ve `signals`
     # (eşiği aşanlar + ne anlama geldiği + beş parçalı öneri) taşıyor.

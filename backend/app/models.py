@@ -324,6 +324,26 @@ class SlowQuerySample(Base):
     jit_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
     jit_functions: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
+    # --- Faz 29 İŞ 2c: motordan BAĞIMSIZ sorgu metrikleri ---
+    #
+    # SQL Server'da `sys.dm_exec_query_stats` bunları doğrudan veriyor; PostgreSQL'de
+    # `pg_stat_kcache` kuruluysa CPU süresi oradan gelebiliyor. Alan adları motora değil
+    # KAVRAMA göre: "CPU süresi" her iki motorda da aynı şeyi soruyor.
+    #
+    # `cpu_time_ms` neden kritik: SQL Server'da toplam süre (elapsed) ile CPU süresinin FARKI
+    # BEKLEMEDİR (kilit, I/O, ağ). Bu iki sayı olmadan "sorgu neden yavaş" sorusu
+    # cevaplanamıyor — ki dbace bu farkı hiç toplamıyordu.
+    cpu_time_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    logical_reads: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    physical_reads: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    logical_writes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: tempdb'ye taşma (SQL Server) — PostgreSQL'deki `temp_blks_*` karşılığı.
+    spills: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: Talep edilen ve gerçekten kullanılan bellek izni (KB). Aradaki büyük fark, sorgunun
+    #: gereğinden fazla bellek rezerve edip diğer sorguları beklettiğini gösterir.
+    grant_kb: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    used_grant_kb: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
     instance: Mapped["Instance"] = relationship(back_populates="slow_queries")
 
 

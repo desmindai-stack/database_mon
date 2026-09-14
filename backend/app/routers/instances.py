@@ -53,6 +53,11 @@ from app.schemas import (
 from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
 from app.services.credentials import decrypt_secret, encrypt_secret
+from app.services.mssql_index_advice import (
+    advice_for_missing_index,
+    advice_for_unused_index,
+    index_ddl,
+)
 from app.services.table_access_advice import advice_for_signal
 from app.services.advice import advice_to_dict
 from app.services.blocking import build_blocking_tree, tree_to_dict
@@ -465,7 +470,20 @@ async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
     _attach_access_advice(data)
+    _attach_index_advice(data)
     return SchemaHealthOut.model_validate(data)
+
+
+def _attach_index_advice(data: dict) -> None:
+    """SQL Server eksik/kullanılmayan index önerilerine beş parçalı öneriyi ekler."""
+    for missing in data.get("missing_indexes") or []:
+        missing["index_ddl"] = index_ddl(missing)
+        missing["advice"] = advice_to_dict(advice_for_missing_index(missing))
+    for unused in data.get("unused_indexes") or []:
+        # PostgreSQL tarafında bu listenin önerisi zaten `drop_ddl` ile geliyor; SQL Server
+        # satırlarında sayaç yaşı uyarısı taşıyan ayrı bir öneri gerekiyor.
+        if unused.get("stats_age_seconds") is not None:
+            unused["advice"] = advice_to_dict(advice_for_unused_index(unused))
 
 
 def _attach_access_advice(data: dict) -> None:

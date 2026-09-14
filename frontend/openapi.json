@@ -8216,6 +8216,23 @@
             "title": "Bloated Tables",
             "type": "array"
           },
+          "errors": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Errors",
+            "type": "object"
+          },
+          "missing_indexes": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Missing Indexes",
+            "type": "array"
+          },
           "table_access": {
             "default": [],
             "items": {
@@ -8256,6 +8273,11 @@
         "properties": {
           "bloated_tables": {
             "title": "Bloated Tables",
+            "type": "integer"
+          },
+          "missing_indexes": {
+            "default": 0,
+            "title": "Missing Indexes",
             "type": "integer"
           },
           "tables_with_access_signals": {
@@ -8879,6 +8901,17 @@
             "title": "Collected At",
             "type": "string"
           },
+          "cpu_time_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cpu Time Ms"
+          },
           "exec_sys_time": {
             "anyOf": [
               {
@@ -8900,6 +8933,17 @@
               }
             ],
             "title": "Exec User Time"
+          },
+          "grant_kb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Kb"
           },
           "id": {
             "title": "Id",
@@ -8963,6 +9007,28 @@
             ],
             "title": "Local Blks Read"
           },
+          "logical_reads": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logical Reads"
+          },
+          "logical_writes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Logical Writes"
+          },
           "max_time_ms": {
             "anyOf": [
               {
@@ -9005,6 +9071,17 @@
               }
             ],
             "title": "Min Time Ms"
+          },
+          "physical_reads": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Physical Reads"
           },
           "plan_sys_time": {
             "anyOf": [
@@ -9107,6 +9184,17 @@
             ],
             "title": "Shared Blks Written"
           },
+          "spills": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spills"
+          },
           "stddev_time_ms": {
             "anyOf": [
               {
@@ -9165,6 +9253,17 @@
           "total_time_ms": {
             "title": "Total Time Ms",
             "type": "number"
+          },
+          "used_grant_kb": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Used Grant Kb"
           },
           "wal_bytes": {
             "anyOf": [
@@ -9360,6 +9459,18 @@
       },
       "UnusedIndexOut": {
         "properties": {
+          "advice": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advice"
+          },
           "drop_ddl": {
             "title": "Drop Ddl",
             "type": "string"
@@ -9396,6 +9507,17 @@
             "default": "medium",
             "title": "Severity",
             "type": "string"
+          },
+          "stats_age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stats Age Seconds"
           },
           "table_name": {
             "title": "Table Name",

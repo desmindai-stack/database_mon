@@ -4922,6 +4922,20 @@ export interface components {
             /** Bloated Tables */
             bloated_tables: components["schemas"]["BloatedTableOut"][];
             /**
+             * Errors
+             * @default {}
+             */
+            errors: {
+                [key: string]: string;
+            };
+            /**
+             * Missing Indexes
+             * @default []
+             */
+            missing_indexes: {
+                [key: string]: unknown;
+            }[];
+            /**
              * Table Access
              * @default []
              */
@@ -4938,6 +4952,11 @@ export interface components {
         SchemaHealthTotalsOut: {
             /** Bloated Tables */
             bloated_tables: number;
+            /**
+             * Missing Indexes
+             * @default 0
+             */
+            missing_indexes: number;
             /**
              * Tables With Access Signals
              * @default 0
@@ -5162,10 +5181,14 @@ export interface components {
              * Format: date-time
              */
             collected_at: string;
+            /** Cpu Time Ms */
+            cpu_time_ms?: number | null;
             /** Exec Sys Time */
             exec_sys_time: number | null;
             /** Exec User Time */
             exec_user_time: number | null;
+            /** Grant Kb */
+            grant_kb?: number | null;
             /** Id */
             id: number;
             /** Instance Id */
@@ -5188,6 +5211,10 @@ export interface components {
             local_blks_hit: number | null;
             /** Local Blks Read */
             local_blks_read: number | null;
+            /** Logical Reads */
+            logical_reads?: number | null;
+            /** Logical Writes */
+            logical_writes?: number | null;
             /** Max Time Ms */
             max_time_ms?: number | null;
             /** Mean Time Ms */
@@ -5208,6 +5235,8 @@ export interface components {
             };
             /** Min Time Ms */
             min_time_ms?: number | null;
+            /** Physical Reads */
+            physical_reads?: number | null;
             /** Plan Sys Time */
             plan_sys_time: number | null;
             /** Plan User Time */
@@ -5233,6 +5262,8 @@ export interface components {
             shared_blks_read: number | null;
             /** Shared Blks Written */
             shared_blks_written?: number | null;
+            /** Spills */
+            spills?: number | null;
             /** Stddev Time Ms */
             stddev_time_ms?: number | null;
             /** System Reason */
@@ -5245,6 +5276,8 @@ export interface components {
             total_plan_time_ms?: number | null;
             /** Total Time Ms */
             total_time_ms: number;
+            /** Used Grant Kb */
+            used_grant_kb?: number | null;
             /** Wal Bytes */
             wal_bytes?: number | null;
             /** Wal Fpi */
@@ -5305,6 +5338,10 @@ export interface components {
         };
         /** UnusedIndexOut */
         UnusedIndexOut: {
+            /** Advice */
+            advice?: {
+                [key: string]: unknown;
+            } | null;
             /** Drop Ddl */
             drop_ddl: string;
             /** Idx Scan */
@@ -5326,6 +5363,8 @@ export interface components {
              * @default medium
              */
             severity: string;
+            /** Stats Age Seconds */
+            stats_age_seconds?: number | null;
             /** Table Name */
             table_name: string;
         };

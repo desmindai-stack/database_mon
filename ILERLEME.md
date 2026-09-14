@@ -7174,6 +7174,91 @@ uydurmaması.
 
 Arka uç: **1569 geçti, 15 atlandı**.
 
+## Faz 29 — İŞ 2c: SQL Server tarafı
+
+### En önemli düzeltme semantik: CPU süresi toplam süre değildir
+
+`total_time_ms` alanına `total_worker_time` (CPU) yazılıyordu. `total_elapsed_time`
+ise duvar saatidir ve **ikisinin farkı beklemedir** (kilit, I/O, ağ).
+
+Yani "yavaş sorgu" listesi aslında **"CPU yiyen sorgu" listesiydi**: kilitte 10
+saniye bekleyip 5 ms CPU kullanan bir sorgu listede *hızlı* görünüyordu — oysa
+kullanıcının şikâyet ettiği tam olarak odur. Sıralama da CPU'ya göre olduğu için
+bekleyen sorgular listenin tamamen dışında kalıyordu.
+
+Gerçek SQL Server 2022'de ölçüldü: **elapsed=224,9 ms, cpu=78,3 ms → 146,6 ms
+bekleme.** Bu sayı eskiden hiç görünmüyordu.
+
+### Sütunları tahmin etmek yerine sormak
+
+SQL Server sütunları temiz sürüm sınırlarında değil **SP/CU ile** ekliyor
+(PostgreSQL'in aksine). Eski kod `total_rows` için "dene, patlarsa sütunsuz tekrar
+dene" yapıyordu; sömürülecek sütun sayısı arttıkça bu desen kombinatoryal hale
+gelirdi — her opsiyonel sütun için ayrı bir yedek sorgu.
+
+Artık `sys.all_columns` üzerinden DMV'nin **gerçek sütun listesi** okunuyor ve
+SELECT ona göre kuruluyor. Olmayan sütun alan olarak **var** ama değeri `NULL`:
+tüketicinin sütun varlığı kontrolü yapmasına gerek kalmıyor ve "ölçülmedi" ile
+"sıfır" ayrımı korunuyor.
+
+SQL Server 2022'de 14 opsiyonel sütunun tamamı mevcut (ölçüldü).
+
+### Eklenen alanlar
+
+`cpu_time_ms`, `logical_reads`, `physical_reads`, `logical_writes`, min/max elapsed
+ve CPU, bellek izni (`grant_kb` / `used_grant_kb`), `spills`,
+`plan_generation_num`. Alan adları motora değil **kavrama** göre: "CPU süresi" iki
+motorda da aynı şeyi soruyor, PostgreSQL'de `pg_stat_kcache` kuruluysa oradan
+dolabilir.
+
+### SQL Server'ın kendi eksik index önerileri
+
+`sys.dm_db_missing_index_*` — motor bu bilgiyi zaten planlama sırasında
+biriktiriyor ve dbace bu **hazır kaynağı hiç okumuyordu**. Ayrıca
+`sys.dm_db_index_usage_stats` ile kullanılmayan index'ler.
+
+Daha temel bir boşluk da kapandı: **SQL Server için `collect_schema_health` hiç
+yoktu**, taban sınıf boş sözlük döndürüyordu — yani bu motoru kullanan bir
+müşteride Şema sekmesi hep boştu.
+
+### Öneriler bilinçli olarak temkinli
+
+SQL Server'ın önerileri **ham**: kolon sırasını optimize etmez, INCLUDE listesini
+şişirir, aynı tablo için örtüşen öneriler üretir. "Önerilen her index'i kurduk,
+sistem daha da yavaşladı" tam olarak bu yüzden olur. Öneri metni bunu söylüyor ve:
+
+- üretilen DDL kolon sırasını **düzeltiyor** (eşitlik → eşitsizlik → include),
+- `WITH (ONLINE = ON)` komuta gömülmüyor, yorum olarak veriliyor (Standard
+  sürümde hata verirdi),
+- etki ölçüsü gösteriliyor: günde bir çalışan bir sorgu için %99 iyileşme,
+  saniyede bin kez çalışan bir sorgu için %20 iyileşmeden daha az değerlidir.
+
+Kullanılmayan index önerisi, sayaçların **yeniden başlatmada sıfırlandığını**
+söylüyor ve silmeden önce **devre dışı bırakmayı** öneriyor (geri alması tek
+komut). Sayaç yaşı bir iş yükü döngüsünden kısaysa ciddiyet düşürülüyor — test
+sunucusunda sayaçlar 3,4 saatlikti ve öneri doğru şekilde "low" çıktı.
+
+### Uçtan uca kanıt
+
+Üretilen DDL gerçek sunucuda çalıştırıldı ve **ardından eksik index önerisi
+listeden kayboldu (0)** — yani öneri doğruydu. Bu, "bir şey ürettik" ile "doğru
+şeyi ürettik" arasındaki farkı kapatan kanıt.
+
+### Ortak metrik sözlüğü genişledi
+
+CPU payı, bekleme payı ve boşa ayrılan bellek eklendi; iki motor da aynı
+eşiklerden besleniyor. Paralel planlarda CPU süresi elapsed'i aşabildiği için
+bekleme payı negatife düşmüyor (test edildi).
+
+### Kapsam notu
+
+**Query Store** (plan regresyonu, zorlanmış planlar) ve **`dm_os_wait_stats`** bu
+turda yapılmadı. İkisi de ayrı birer iş büyüklüğünde: Query Store veritabanı
+başına etkinleştirme ve ayrı bir veri modeli istiyor, bekleme istatistikleri ise
+kümülatif/örnekleme farkı yönetimi. Yarım yapmak, olmamasından yanıltıcı olurdu.
+
+Arka uç: **1588 geçti, 15 atlandı**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

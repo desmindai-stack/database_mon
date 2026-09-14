@@ -93,7 +93,11 @@ def _should_collect_slow_queries(instance_id: int, now: datetime) -> bool:
     return last is None or (now - last).total_seconds() >= interval
 
 
-#: Faz 29 İŞ 2a'da eklenen pg_stat_statements alanları: (alan adı, dönüştürücü).
+#: Toplayıcıdan gelebilen isteğe bağlı sorgu alanları: (alan adı, dönüştürücü).
+#:
+#: Faz 29 İŞ 2a'da pg_stat_statements, İŞ 2c'de sys.dm_exec_query_stats alanlarıyla genişledi.
+#: Tablo motordan bağımsız: toplayıcı hangi alanı döndürürse o yazılıyor, döndürmediği
+#: alan hiç yazılmıyor (None ile "ölçülmedi" ayrımı korunuyor).
 #:
 #: Tek tek `if row.get(...) is not None` satırı yazmak yerine tablo: 15 alan için o desen
 #: 15 satır tekrar demekti ve bir alanın yanlışlıkla atlanması gözden kaçardı.
@@ -114,6 +118,14 @@ _PGSS_OPTIONAL_FIELDS: tuple[tuple[str, type], ...] = (
     ("total_plan_time_ms", float),
     ("jit_time_ms", float),
     ("jit_functions", int),
+    # Faz 29 İŞ 2c — motordan bağımsız alanlar (SQL Server dm_exec_query_stats).
+    ("cpu_time_ms", float),
+    ("logical_reads", int),
+    ("physical_reads", int),
+    ("logical_writes", int),
+    ("spills", int),
+    ("grant_kb", int),
+    ("used_grant_kb", int),
 )
 
 

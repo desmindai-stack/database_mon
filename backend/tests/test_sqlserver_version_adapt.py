@@ -12,6 +12,7 @@ import types
 
 from app.collectors.base import ConnectionTarget
 from app.collectors.sqlserver_mongodb import COLLECTOR_LOCK_TIMEOUT_MS, SqlServerCollector
+from app.collectors.sqlserver_mongodb import _QS_BASE_COLUMNS
 from tests.fakes import FakeSqlServerConnection
 
 _VERSION_ROW = ([(13, "Microsoft SQL Server 2016 (SP3) - 13.0.6300.2")], [("major",), ("version",)])
@@ -125,16 +126,29 @@ async def test_connect_applies_lock_timeout(monkeypatch):
     assert any(f"SET LOCK_TIMEOUT {COLLECTOR_LOCK_TIMEOUT_MS}" in q for q in fake_conn.queries)
 
 
-async def test_slow_queries_falls_back_when_total_rows_column_missing():
-    def _boom(_sql: str):
-        raise RuntimeError("Invalid column name 'total_rows'.")
+async def test_slow_queries_asks_which_columns_exist_instead_of_guessing():
+    """FAZ 29 İŞ 2c — "dene, patlarsa tekrar dene" yerine SÜTUNLARI SOR.
 
+    SQL Server sütunları temiz sürüm sınırlarında değil, SP/CU ile ekliyor. Eski kod
+    `total_rows` için bir yedek sorgu tutuyordu; sömürülen sütun sayısı arttıkça bu desen
+    kombinatoryal hale gelirdi (her opsiyonel sütun için ayrı yedek sorgu). DMV'nin gerçek
+    sütun listesini okumak tek round-trip ve hiçbir SP kombinasyonunda "invalid column name"
+    riski bırakmıyor.
+    """
+    available_rows = [(c,) for c in _QS_BASE_COLUMNS]  # opsiyonellerin HİÇBİRİ yok
     responses = {
         "SERVERPROPERTY('ProductMajorVersion')": _VERSION_ROW,
-        "qs.total_rows AS rows": _boom,
-        "NULL AS rows": (
-            [("abc123", "SELECT 1", 10, 5.0, 0.5, None)],
-            [("queryid",), ("query",), ("calls",), ("total_time_ms",), ("mean_time_ms",), ("rows",)],
+        # `sys.all_columns` yalnızca sonda sorgusunda geçiyor; "dm_exec_query_stats"
+        # anahtarı ana sorguya da uyardı (sahte bağlantı alt-dize eşleştiriyor).
+        "sys.all_columns": (available_rows, [("name",)]),
+        "qs.total_elapsed_time": (
+            [("abc123", "SELECT 1", 10, 5.0, 0.5, 2.0, 100, 0, 0, None, None, None, None,
+              None, None, None, None, None, None)],
+            [("queryid",), ("query",), ("calls",), ("total_time_ms",), ("mean_time_ms",),
+             ("cpu_time_ms",), ("logical_reads",), ("physical_reads",), ("logical_writes",),
+             ("rows",), ("min_time_ms",), ("max_time_ms",), ("min_cpu_ms",), ("max_cpu_ms",),
+             ("grant_kb",), ("used_grant_kb",), ("spills",), ("plan_generation_num",),
+             ("last_execution_time",)],
         ),
     }
     conn = FakeSqlServerConnection(responses)
@@ -145,4 +159,25 @@ async def test_slow_queries_falls_back_when_total_rows_column_missing():
 
     assert len(rows) == 1
     assert rows[0]["queryid"] == "abc123"
-    assert rows[0]["rows"] is None  # degraded gracefully instead of losing the whole result
+    # Olmayan sütunlar alan olarak VAR ama değeri None: tüketicinin sütun varlığı kontrolü
+    # yapmasına gerek kalmıyor ve "ölçülmedi" ile "sıfır" ayrımı korunuyor.
+    assert rows[0]["rows"] is None
+    assert rows[0]["spills"] is None
+    # Temel alanlar gerçek değerlerle geliyor ve toplam süre CPU DEĞİL.
+    assert rows[0]["total_time_ms"] == 5.0
+    assert rows[0]["cpu_time_ms"] == 2.0
+
+
+async def test_slow_queries_returns_nothing_when_the_dmv_is_unusable():
+    """Temel sütunlar yoksa bu bir DMV değil ya da yetki sorunu var. Sessizce boş dönmek
+    "yavaş sorgu yok" izlenimi verirdi — ama burada dönülecek doğru bir şey de yok; önemli
+    olan uydurma veri üretmemek ve sebebi loglamak."""
+    responses = {
+        "SERVERPROPERTY('ProductMajorVersion')": _VERSION_ROW,
+        "sys.all_columns": ([("execution_count",)], [("name",)]),
+    }
+    conn = FakeSqlServerConnection(responses)
+    collector = _collector()
+    collector._connect = _fake_connect(conn)  # type: ignore[method-assign]
+
+    assert await collector.collect_slow_queries(limit=5) == []

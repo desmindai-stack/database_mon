@@ -138,6 +138,35 @@ METRIC_MEANINGS: tuple[MetricMeaning, ...] = (
         "için JIT'i kapatmak gerekir.",
     ),
     MetricMeaning(
+        "cpu_time_share_pct",
+        "CPU payı",
+        "%",
+        "Toplam sürenin işlemcide geçen kısmı.",
+        "SQL Server'da `total_worker_time` CPU, `total_elapsed_time` duvar saatidir; ikisinin "
+        "FARKI beklemedir. CPU payı yüksekse (%70+) sorgu gerçekten hesaplama yapıyor demektir "
+        "ve çözüm sorguyu/index'i iyileştirmektir. Düşükse sorgu çalışmıyor, BEKLİYOR — o "
+        "zaman sorguyu optimize etmek işe yaramaz, beklenen kaynağı bulmak gerekir.",
+    ),
+    MetricMeaning(
+        "wait_time_share_pct",
+        "Bekleme payı",
+        "%",
+        "Toplam sürenin hiçbir iş yapmadan beklemekle geçen kısmı (kilit, I/O, ağ).",
+        "%50'yi geçtiğinde sorgunun kendisi sorun değildir: süre kilitte, diskte ya da "
+        "istemciyi beklemekte geçiyor. Sorguyu hızlandırmaya çalışmak burada boşa emektir; "
+        "bekleme türünü bulmak gerekir (bekleme analizi ekranı).",
+    ),
+    MetricMeaning(
+        "memory_grant_waste_pct",
+        "Boşa ayrılan bellek",
+        "%",
+        "Sorgunun talep ettiği bellek izninin kullanılmayan kısmı (SQL Server).",
+        "Bellek izni sorgu başlarken REZERVE edilir ve bitene kadar başkasına verilmez. "
+        "%50'nin üstünde boşa ayırma, o bellek kadar başka sorguların beklemesi demektir — "
+        "sorgunun kendisi hızlı görünse bile sistem genelinde yavaşlama üretir. Sebebi "
+        "genelde satır tahmininin sapmasıdır; istatistik güncellemek doğrudan düzeltir.",
+    ),
+    MetricMeaning(
         "rows_per_call",
         "Çağrı başına satır",
         "satır",
@@ -174,6 +203,10 @@ PLAN_TIME_SHARE_WARN_PCT = 10.0
 JIT_TIME_SHARE_WARN_PCT = 15.0
 #: Bu payın üstündeki tek bir sorgu, öncelik listesinin başına yazılıyor.
 TOTAL_SHARE_HIGH_PCT = 20.0
+#: Sürenin bu kadarı beklemeyse sorguyu optimize etmek boşa emek.
+WAIT_TIME_SHARE_WARN_PCT = 50.0
+#: Talep edilen belleğin bu kadarı kullanılmıyorsa başka sorgular boşuna bekliyor.
+MEMORY_GRANT_WASTE_WARN_PCT = 50.0
 
 
 def _ratio(numerator: float | None, denominator: float | None) -> float | None:
@@ -237,8 +270,31 @@ def derive_metrics(row: Any, *, total_time_all_ms: float | None = None) -> dict[
         getattr(row, "shared_blks_written", 0) or 0
     )
 
+    # CPU / BEKLEME AYRIMI (Faz 29 İŞ 2c).
+    #
+    # SQL Server bu iki sayıyı doğrudan veriyor (elapsed vs worker time). PostgreSQL'de CPU
+    # süresi yalnızca pg_stat_kcache kuruluysa var; yoksa `cpu_time_ms` None kalıyor ve
+    # pay hesaplanmıyor — 0 göstermek "hiç CPU kullanmadı" demek olurdu.
+    cpu_ms = getattr(row, "cpu_time_ms", None)
+    cpu_share = _pct(cpu_ms, total_ms) if cpu_ms is not None else None
+    wait_share = (
+        round(max(0.0, 100.0 - cpu_share), 2) if cpu_share is not None else None
+    )
+
+    grant_kb = getattr(row, "grant_kb", None)
+    used_grant_kb = getattr(row, "used_grant_kb", None)
+    grant_waste = (
+        _pct(float(grant_kb) - float(used_grant_kb), float(grant_kb))
+        if grant_kb and used_grant_kb is not None and float(grant_kb) > 0
+        else None
+    )
+
     return {
         "total_share_pct": _pct(total_ms, total_time_all_ms),
+        "cpu_time_share_pct": cpu_share,
+        "wait_time_share_pct": wait_share,
+        "memory_grant_waste_pct": grant_waste,
+        "spills": float(getattr(row, "spills", 0) or 0) or None,
         # Kararsızlık ortalamaya göre: 5 ms ortalamada 5 ms sapma ile 5 saniye ortalamada
         # 5 ms sapma bambaşka şeyler.
         "instability_ratio": (
@@ -310,6 +366,14 @@ def flag_metrics(derived: dict[str, Any]) -> list[dict[str, str]]:
     jit_share = derived.get("jit_time_share_pct")
     if jit_share is not None and jit_share >= JIT_TIME_SHARE_WARN_PCT:
         add("jit_time_share_pct", jit_share)
+
+    wait_share = derived.get("wait_time_share_pct")
+    if wait_share is not None and wait_share >= WAIT_TIME_SHARE_WARN_PCT:
+        add("wait_time_share_pct", wait_share)
+
+    grant_waste = derived.get("memory_grant_waste_pct")
+    if grant_waste is not None and grant_waste >= MEMORY_GRANT_WASTE_WARN_PCT:
+        add("memory_grant_waste_pct", grant_waste)
 
     total_share = derived.get("total_share_pct")
     if total_share is not None and total_share >= TOTAL_SHARE_HIGH_PCT:
