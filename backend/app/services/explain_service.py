@@ -11,6 +11,7 @@ import asyncpg
 from app.collectors.base import ConnectionTarget
 from app.services.advice import advice_to_dict
 from app.services.auto_explain import plan_source_caveat, plan_source_label
+from app.services.generic_plan import explain_json
 from app.services.sql_analysis import (
     humanize_postgres_error,
     plan_explain_strategy,
@@ -250,16 +251,15 @@ class PostgreSQLExplainService:
                     message = f"{message}\n\n{strategy.fix}"
                 raise ValueError(message)
 
-            sql = f"EXPLAIN ({strategy.options}) {cleaned}"
+            # PLANI ALAN TEK YER: services/generic_plan.py. Yer tutuculu bir sorguya
+            # doğrudan EXPLAIN göndermek asyncpg'nin protokolü yüzünden İMKÂNSIZ
+            # ("the server expects N arguments for this query, 0 were passed"); orada
+            # PREPARE + force_generic_plan yolu kullanılıyor.
             try:
-                row = await conn.fetchrow(sql)
+                raw = await explain_json(conn, cleaned, options=strategy.options)
             except Exception as exc:
                 # Ham PostgreSQL metni yerine ne olduğunu/ne yapılacağını söyleyen açıklama.
                 raise ValueError(humanize_postgres_error(str(exc))) from exc
-
-            raw = row[0] if row else []
-            if isinstance(raw, str):
-                raw = json.loads(raw)
 
             root = raw[0] if isinstance(raw, list) and raw else {}
             plan_dict = root.get("Plan") if isinstance(root, dict) else None

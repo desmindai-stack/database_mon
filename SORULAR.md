@@ -2170,9 +2170,15 @@ yanıltıcı bir plan verir hem de izlenen veritabanında öngörülemez maliyet
 ## Faz 27 İŞ 5: PG 15-18 davranışı GERÇEK sunucularda doğrulanmadı
 
 Sürüm yetenek matrisi (`backend/app/domain/pg_capabilities.py`) PostgreSQL'in
-sürüm notlarına ve katalog belgelerine dayanıyor; **hiçbir sürüme karşı gerçek
-bir bağlantıyla test edilmedi.** Bu geliştirme ortamında PostgreSQL yok (Docker
-kapalı, psql kurulu değil) — bu sınır Faz 25'ten beri açık.
+sürüm notlarına ve katalog belgelerine dayanıyor; **metrik toplama sorguları
+hiçbir sürüme karşı gerçek bir bağlantıyla test edilmedi.**
+
+**Faz 29 güncellemesi:** "bu ortamda PostgreSQL yok" kısıtı artık geçerli değil.
+Docker çalışıyor ve `postgres:17` / `postgres:15` kapları ayağa kaldırılıp EXPLAIN
+ve index önerisi gerçek sunucularda doğrulandı
+(`backend/tests/test_explain_live_postgres.py`). Yani kalan boşluk erişim değil,
+**kapsam**: doğrulanan şey EXPLAIN yolu; `collect_metrics` sürüm matrisi hâlâ
+yalnızca sürüm sahteleyen testlerle korunuyor.
 
 Testler sürüm numarasını SAHTELEYEREK hangi sorgunun gönderildiğini doğruluyor;
 yani "PG 18'de op_bytes istenmiyor" kanıtlanmış durumda. Doğrulanmayan şey,
@@ -2188,11 +2194,12 @@ boş gelir, çökme olmaz — her sorgu kendi try/except'inde):
 - `pg_stat_checkpointer` sütun adları (`num_timed`, `num_requested`,
   `write_time`, `sync_time`, `buffers_written`).
 
-**Kapanması için gereken:** her sürüm için bir kap (container) ayağa kaldırıp
+**Kapanması için gereken:** her sürüm için bir kap ayağa kaldırıp
 `collect_metrics` çalıştırmak ve `_unsupported_metrics` çıktısının boş olduğunu
-görmek. CI'da matris job'u olarak kurulabilir (`postgres:15` … `postgres:18`
-servisleriyle); bu turda kapsam dışı bırakıldı çünkü CI süresi ve Docker
-bağımlılığı ayrı bir karar.
+görmek. Yol artık açık: `test_explain_live_postgres.py`'nin `DBACE_TEST_PG_DSN`
+deseni aynen kullanılabilir (tanımlı değilse atla), yani CI'ı Docker'a bağımlı
+kılmadan yerelde koşulabilir bir matris testi yazılabilir. Bu turda yapılmadı
+çünkü İŞ 1'in kapsamı EXPLAIN'di.
 
 ## Faz 27 İŞ 5: PG 18'in yeni vacuum süre sayaçları kullanılmıyor
 

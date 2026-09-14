@@ -6875,6 +6875,127 @@ her testten önce geçmişi ve raporları temizliyor.
 
 Tüm arka uç: **1527 geçti, 1 atlandı**.
 
+## Faz 29 — İŞ 1: EXPLAIN üç turdur neden çalışmıyordu
+
+Yeni hata şuydu:
+
+    the server expects 4 arguments for this query, 0 were passed
+
+### Kök neden: EXPLAIN değil, PROTOKOL
+
+Sorun `GENERIC_PLAN`'in seçilmemesi değildi — **seçiliyordu.** Sorun, o komutun
+sunucuya nasıl gönderildiğiydi.
+
+asyncpg satır döndüren her sorguyu *genişletilmiş protokolle* yolluyor
+(Parse → Bind → Execute). Parse adımında sunucu
+`EXPLAIN (GENERIC_PLAN) ... $1 ... $4` ifadesini ayrıştırıyor ve "bu ifadenin 4
+parametresi var" diye bildiriyor. asyncpg 0 argüman verildiğini görüp **istemci
+tarafında** hata fırlatıyor. Yani istek sunucuya hiç gitmiyor; sunucu bir şey
+reddetmiyor.
+
+`psql`'de aynı komutun çalışmasının sebebi psql'in *basit sorgu protokolünü*
+kullanması. asyncpg'de bunun karşılığı `Connection.execute()` ama o da
+**satırları atıyor** (`coreproto.pyx::_process__simple_query`, DataRow mesajları
+`discard_message()` ile düşürülüyor) — yani planı geri alamıyoruz.
+
+Bu, sahte bağlantı testlerinin neden üç tur boyunca yeşil kaldığını da açıklıyor:
+sahte bağlantının protokolü yok.
+
+### Elenen çözüm ve neden elendiği
+
+İlk akla gelen şey parametre sayısı kadar NULL bağlamak. **Çalışıyor ama planı
+çöpe çeviriyor.** Gerçek PG 17'de ölçüldü:
+
+| Yol | Sonuç |
+|---|---|
+| psql, `EXPLAIN (GENERIC_PLAN)`, değersiz | Limit → Sort → Hash Join → Seq Scan, filtrelerde yer tutucular korunuyor |
+| asyncpg, `GENERIC_PLAN` + 5 × NULL | **`Result` + `One-Time Filter: false`, 0 satır** |
+| asyncpg, GENERIC_PLAN'siz + 5 × NULL | aynı çöküş — yani GENERIC_PLAN fiilen etkisiz |
+
+Bağlanan NULL'lar planlayıcıya "bu sorgu hiçbir şey döndürmez" dedirtiyor. Bu
+yol seçilseydi, tam da kaçınılmak istenen şey olurdu: gerçek çalıştırmanın planı
+değilmiş gibi duran, sessizce yanlış bir plan.
+
+### Seçilen çözüm: PREPARE + force_generic_plan
+
+    BEGIN;
+      PREPARE dbace_plan_<rastgele> AS <sorgu>;       -- yer tutucular artık İÇERİDE
+      SET LOCAL plan_cache_mode = force_generic_plan;  -- değerleri YOK SAY
+      EXPLAIN (FORMAT JSON) EXECUTE dbace_plan_<rastgele>(NULL, ...);
+    COMMIT;
+    DEALLOCATE dbace_plan_<rastgele>;
+
+`PREPARE` bir yardımcı ifade; içindeki yer tutucular **hazırlanan ifadenin**
+parametreleri, dıştaki Parse'ın değil. Dış ifade sıfır parametre bildiriyor.
+`force_generic_plan` ise bağlanan NULL'ları plandan dışlıyor.
+
+Ölçüm (gerçek sunucular):
+
+- PG 17.11 ve PG 15.19'da üretilen plan, psql'in `GENERIC_PLAN` çıktısıyla
+  **düğüm düğüm aynı**: Limit(139) → Sort(1389) → Hash Join(1389) →
+  Seq Scan orders(2778) + Hash → Seq Scan customers(1000); filtrelerde yer
+  tutucular korunuyor.
+- Kontrol grubu: aynı çağrı `force_custom_plan` ile plana çöküyor
+  (`One-Time Filter: false`) — yani `force_generic_plan` gerçekten iş yapıyor.
+
+### Yan kazanç: "PostgreSQL 16 gerekir" şartı kalktı
+
+`plan_cache_mode` PostgreSQL **12** ile geldi; `GENERIC_PLAN` ise 16 ile. Önceki
+kod 16'dan eski sunucularda "plan alınamıyor" diyordu. **Gerçek bir PG 15
+sunucusunda çalıştığı doğrulandı**, o ret kalktı.
+
+### Aynı hata index önerisinde de vardı — üstelik iki kat
+
+1. `_hypopg_estimate` doğrudan `"EXPLAIN (FORMAT JSON) " + metin` çağırıyordu:
+   yer tutuculu sorguda aynı protokol hatası.
+2. Daha kötüsü, çağrının önünde `not self._has_placeholders(query_text)` koşulu
+   vardı. pg_stat_statements'tan gelen **her** sorgu yer tutuculu olduğu için
+   hypopg fayda ölçümü **gerçek sorgularda hiç çalışmamıştı** — yalnızca elle
+   yapıştırılan sorgularda çalışıyordu. Koşul, hatayı çözmek yerine gizliyordu.
+
+Düzeltildikten sonra gerçek sunucuda ölçüldü: normalize sorgu için
+1711.75 → 156.26 (%91 fayda), `has_hypopg_estimate=True`.
+
+### Plan alma artık tek yerde
+
+`services/generic_plan.py`. EXPLAIN sayfası ve index önerisi aynı fonksiyondan
+besleniyor; ayrı iki yol, birinin düzelip diğerinin bozuk kalması demekti —
+zaten tam olarak bu olmuştu.
+
+Temizlik ayrıntısı: `PREPARE` **geri alınmıyor** (gerçek sunucuda ölçüldü,
+rollback sonrası ifade `pg_prepared_statements`'ta duruyor), o yüzden
+`DEALLOCATE` şart. Ve temizlik **işlemin dışında**: EXPLAIN hata verdiyse işlem
+iptal durumdadır ve içeride çalıştırılan her komut reddedilirdi — yani temizliğe
+en çok ihtiyaç duyulan anda temizlik yapılamazdı.
+
+### Testler artık gerçek sunucuya karşı
+
+`tests/test_explain_live_postgres.py` — `DBACE_TEST_PG_DSN` tanımlıysa çalışıyor,
+tanımlı değilse atlanıyor (CI kırmızıya dönmüyor). PG 17.11 ve 15.19 ile koşuldu:
+**20 geçti, 2 atlandı** (atlananlar PG 15'te var olmayan `GENERIC_PLAN`
+seçeneğiyle ilgili).
+
+En değerli iki test, çözümü değil **problemi** sabitliyor:
+
+- `test_direct_explain_on_a_normalized_query_is_impossible_through_asyncpg` —
+  doğrudan EXPLAIN'e geri dönmeyi imkânsız kılıyor.
+- `test_binding_nulls_would_produce_a_meaningless_plan` — elenen çözümün neden
+  elendiğinin kalıcı kanıtı.
+
+Yazılmayan bir test de var ve sebebi kayıtlı: planın psql çıktısıyla birebir
+aynı olduğu **elle** doğrulandı, teste alınmadı — referansı almanın tek yolu
+psql ve test de asyncpg'nin aynı kısıtına tabi. İddiasını kanıtlayamayan bir test
+yazmaktansa kanıtlayabildiğini kanıtlaması tercih edildi.
+
+### Bu iş sırasında yapılan bir hata
+
+Yama betiğinde `io.open(p, "w", newline=<geçersiz değer>)` kullanıldı.
+CPython dosyayı **açarken kırpıyor, `newline` değerini sonra doğruluyor** — yani
+`sql_analysis.py` 0 bayta düştü. Git'ten geri alındı. Ders: `open(..., "w")`
+çağrısının argümanları satır içinde hesaplanmamalı.
+
+Arka uç: **1530 geçti, 12 atlandı** (11'i canlı PostgreSQL testleri).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

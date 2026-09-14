@@ -48,6 +48,9 @@ DEFAULT_TRACK_ACTIVITY_QUERY_SIZE = 1024
 
 #: PostgreSQL 16, parametreli (yer tutuculu) sorguları DEĞER OLMADAN planlayabiliyor.
 PG_VERSION_GENERIC_PLAN = 160_000
+#: `plan_cache_mode` bu sürümle geldi — yer tutuculu bir sorgunun değerden bağımsız
+#: planlanabildiği alt sınır.
+PG_VERSION_PLAN_CACHE_MODE = 120_000
 
 _PLACEHOLDER = re.compile(r"\$\d+")
 
@@ -271,13 +274,21 @@ def _skip_quoted(sql: str, start: int, quote: str) -> int:
 # --- EXPLAIN edilebilirlik -----------------------------------------------------------------
 
 
+#: EXPLAIN'in NASIL gönderileceği. Seçenek metninden AYRI bir alan, çünkü fark seçeneklerde
+#: değil PROTOKOLDE: "generic" yolu sorguyu PREPARE edip EXECUTE üzerinden planlıyor.
+EXPLAIN_MODE_DIRECT = "direct"
+EXPLAIN_MODE_GENERIC = "generic"
+
+
 @dataclass
 class ExplainPlan:
     """Bu sorgu için EXPLAIN nasıl çalıştırılmalı."""
 
     can_explain: bool
-    #: EXPLAIN seçenekleri, ör. "GENERIC_PLAN, FORMAT JSON".
+    #: EXPLAIN seçenekleri, ör. "ANALYZE, BUFFERS, FORMAT JSON".
     options: str = "FORMAT JSON"
+    #: direct | generic — bkz. EXPLAIN_MODE_* sabitleri.
+    mode: str = EXPLAIN_MODE_DIRECT
     #: Çalıştırılamıyorsa kullanıcıya gösterilecek Türkçe açıklama.
     reason: str | None = None
     #: Çalıştırılabiliyor ama bir sınırla — kullanıcı bilsin.
@@ -334,28 +345,41 @@ def plan_explain_strategy(
             ),
         )
 
-    if server_version_num >= PG_VERSION_GENERIC_PLAN:
+    # FAZ 29 İŞ 1: yer tutuculu sorgu PREPARE + `force_generic_plan` ile planlanıyor.
+    #
+    # Önceki hâli `EXPLAIN (GENERIC_PLAN)` seçeneğini kullanıyordu ve CANLIDA HİÇ ÇALIŞMADI:
+    # asyncpg satır döndüren sorguları genişletilmiş protokolle yolladığı için sunucu
+    # `$1..$N` yer tutucularını bağlanacak parametre sanıyor ve asyncpg
+    # "the server expects N arguments for this query, 0 were passed" diyerek isteği daha
+    # göndermeden düşürüyordu. Ayrıntılı kök neden: services/generic_plan.py.
+    #
+    # Yeni yol PostgreSQL 12+ ile çalışıyor (`plan_cache_mode` o sürümde geldi), yani
+    # "sunucu 16'dan eski, plan alınamıyor" reddi de kalktı — gerçek bir PG 15 sunucusunda
+    # doğrulandı.
+    if server_version_num >= PG_VERSION_PLAN_CACHE_MODE:
         return ExplainPlan(
             can_explain=True,
-            options="GENERIC_PLAN, FORMAT JSON",
+            options="FORMAT JSON",
+            mode=EXPLAIN_MODE_GENERIC,
             caveat=(
-                "Bu plan GENERIC_PLAN ile alındı: parametre değerleri bilinmediği için "
-                "planlayıcı DEĞERDEN BAĞIMSIZ bir plan üretti. Gerçek çalıştırmada, parametre "
-                "değerine göre farklı (ve genelde daha iyi) bir plan seçilmiş olabilir. Gerçek "
-                "planı görmek için auto_explain kullanın."
+                "Bu plan DEĞERDEN BAĞIMSIZ (generic) olarak alındı: sorgu "
+                "pg_stat_statements'tan normalize edilmiş hâliyle geldiği için parametre "
+                "değerleri bilinmiyor. Gerçek çalıştırmada, parametre değerine göre farklı "
+                "(ve genelde daha iyi) bir plan seçilmiş olabilir. Gerçek planı görmek için "
+                "auto_explain kullanın."
             ),
         )
 
     return ExplainPlan(
         can_explain=False,
         reason=(
-            f"Sorgu yer tutucu ($1) içeriyor ve sunucu sürümü parametresiz planlamayı "
-            f"desteklemiyor. PostgreSQL 16 ile gelen EXPLAIN (GENERIC_PLAN) bu sorguyu "
-            f"değer olmadan planlayabilir; bu sunucuda o seçenek yok. Yer tutucuların yerine "
-            f"değer uydurmak yanlış bir plan üretir — o yüzden denenmiyor."
+            "Sorgu yer tutucu ($1) içeriyor ve sunucu sürümü değerden bağımsız planlamayı "
+            "desteklemiyor. Bunun için gereken `plan_cache_mode` ayarı PostgreSQL 12 ile "
+            "geldi; bu sunucu daha eski. Yer tutucuların yerine değer uydurmak yanlış bir "
+            "plan üretir — o yüzden denenmiyor."
         ),
         fix=(
-            "-- Seçenek 1: sunucuyu PostgreSQL 16+ sürümüne yükseltin.\n"
+            "-- Seçenek 1: sunucuyu PostgreSQL 12+ sürümüne yükseltin.\n"
             "-- Seçenek 2: auto_explain ile gerçek çalıştırmanın planını yakalayın\n"
             "--            (kurulum: docs/AUTO_EXPLAIN.md)."
         ),

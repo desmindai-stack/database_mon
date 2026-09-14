@@ -19,6 +19,8 @@ import pytest
 
 from app.services.sql_analysis import (
     DEFAULT_TRACK_ACTIVITY_QUERY_SIZE,
+    EXPLAIN_MODE_DIRECT,
+    EXPLAIN_MODE_GENERIC,
     PG_VERSION_GENERIC_PLAN,
     analyze_query,
     detect_truncation,
@@ -195,26 +197,60 @@ def test_analyze_adds_buffers():
     assert "ANALYZE" in plan.options and "BUFFERS" in plan.options
 
 
-def test_placeholders_use_generic_plan_on_pg16():
+def test_placeholders_are_planned_in_generic_mode():
     """Yer tutucuların yerine NULL koymak planlayıcıya BAŞKA bir sorgu sunar; dönen plan
-    gerçek çalıştırmanın planı olmadığı hâlde öyleymiş gibi gösterilirdi."""
+    gerçek çalıştırmanın planı olmadığı hâlde öyleymiş gibi gösterilirdi.
+
+    Faz 29 İŞ 1: strateji artık `EXPLAIN (GENERIC_PLAN)` SEÇENEĞİNİ değil, PREPARE +
+    `force_generic_plan` YOLUNU seçiyor. Sebep: GENERIC_PLAN seçeneği asyncpg üzerinden
+    gönderilemiyordu (bkz. services/generic_plan.py) ve özellik canlıda hiç çalışmadı.
+    """
     plan = plan_explain_strategy(
         "SELECT * FROM orders WHERE id = $1", server_version_num=PG_VERSION_GENERIC_PLAN
     )
     assert plan.can_explain is True
-    assert "GENERIC_PLAN" in plan.options
+    assert plan.mode == EXPLAIN_MODE_GENERIC
+    # GENERIC_PLAN seçeneği artık KULLANILMIYOR: EXECUTE ile birlikte anlamsız ve
+    # asyncpg üzerinden gönderilemiyor.
+    assert "GENERIC_PLAN" not in plan.options
     # Sınır kullanıcıya söyleniyor: değerden bağımsız plan, gerçek plan olmayabilir.
-    assert plan.caveat and "GENERIC_PLAN" in plan.caveat
+    assert plan.caveat and "DEĞERDEN BAĞIMSIZ" in plan.caveat
 
 
-def test_placeholders_are_refused_before_pg16_with_a_real_explanation():
+def test_placeholders_also_work_before_pg16():
+    """PREPARE yolu `plan_cache_mode` kullanıyor (PostgreSQL 12+), `GENERIC_PLAN` değil (16+).
+
+    Eski kod PG 16'dan eski sunucularda "plan alınamıyor" diyordu; bu ret gereksizdi.
+    Gerçek bir PostgreSQL 15 sunucusunda doğrulandı
+    (tests/test_explain_live_postgres.py).
+    """
     plan = plan_explain_strategy(
         "SELECT * FROM orders WHERE id = $1", server_version_num=150000
     )
+    assert plan.can_explain is True
+    assert plan.mode == EXPLAIN_MODE_GENERIC
+
+
+def test_placeholders_are_refused_before_pg12_with_a_real_explanation():
+    """`plan_cache_mode` PostgreSQL 12 ile geldi; ondan eskisinde değerden bağımsız plan
+    alınamıyor ve değer UYDURULMUYOR."""
+    plan = plan_explain_strategy(
+        "SELECT * FROM orders WHERE id = $1", server_version_num=110000
+    )
     assert plan.can_explain is False
-    assert "GENERIC_PLAN" in plan.reason
+    assert "plan_cache_mode" in plan.reason
     assert "değer uydurmak" in plan.reason
     assert "auto_explain" in (plan.fix or "")
+
+
+def test_a_query_without_placeholders_uses_the_direct_path():
+    """Yer tutucusuz sorguda PREPARE'e gerek yok; fazladan gidiş-dönüş maliyeti anlamsız."""
+    plan = plan_explain_strategy(
+        "SELECT * FROM orders WHERE id = 5", server_version_num=170000
+    )
+    assert plan.can_explain is True
+    assert plan.mode == EXPLAIN_MODE_DIRECT
+    assert plan.caveat is None
 
 
 def test_analyze_on_a_parameterized_query_is_refused_on_every_version():

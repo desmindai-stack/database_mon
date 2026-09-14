@@ -92,6 +92,31 @@ npm run gen:types:live     # çalışan bir backend'in /openapi.json ucundan ür
 CI, tipleri yeniden üretip commit'lenmiş hâliyle karşılaştırır — farklıysa iş kırmızı olur
 ("backend değişmiş ama tipler güncellenmemiş" demektir).
 
+### Gerçek PostgreSQL'e karşı testler (Faz 29 İŞ 1)
+
+Bazı davranışlar sahte bağlantıyla **doğrulanamaz**, çünkü kırılan şey sorgunun sunucuya
+hangi protokolle gittiği. EXPLAIN özelliği tam olarak bu yüzden üç tur boyunca "testler
+yeşil" görünürken canlıda hiç çalışmadı.
+
+`tests/test_explain_live_postgres.py` gerçek bir sunucuya bağlanır; `DBACE_TEST_PG_DSN`
+tanımlı değilse **atlanır** (CI'da PostgreSQL yok, suite kırmızıya dönmez).
+
+```bash
+docker run -d --name dbace-pg17 -e POSTGRES_PASSWORD=dbace -e POSTGRES_DB=dbace \
+    -p 55432:5432 postgres:17
+# Index önerisinin fayda ölçümü için (opsiyonel):
+docker exec -u root dbace-pg17 apt-get update -qq
+docker exec -u root dbace-pg17 apt-get install -y -qq postgresql-17-hypopg
+docker exec dbace-pg17 psql -U postgres -d dbace -c "CREATE EXTENSION hypopg"
+
+cd backend
+DBACE_TEST_PG_DSN=postgresql://postgres:dbace@127.0.0.1:55432/dbace \
+    .venv/Scripts/python.exe -m pytest tests/test_explain_live_postgres.py -v
+```
+
+Birden çok sürümü tek koşuda denemek için DSN'leri virgülle ayırın; testler her DSN için
+ayrı ayrı çalışır. Faz 29'da PostgreSQL **17.11** ve **15.19** ile koşuldu.
+
 ### Tarayıcı testleri (Playwright)
 
 Backend testleri API katmanında durur; arayüz çökmelerini (rapor bulgu detayı, silinmiş kayda

@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 
 from app.collectors.base import ConnectionTarget
+from app.services.generic_plan import explain_json
 from app.services.sql_analysis import analyze_query, detect_truncation
 
 logger = logging.getLogger(__name__)
@@ -393,7 +394,15 @@ class PostgreSQLIndexAdvisor:
         after_cost: float | None = None
         has_hypopg_estimate = False
 
-        if has_hypopg and not self._has_placeholders(query_text):
+        # YER TUTUCU ŞARTI KALDIRILDI (Faz 29 İŞ 1).
+        #
+        # Buradaki `not self._has_placeholders(...)` koşulu, hypopg fayda tahminini
+        # pg_stat_statements'tan gelen HER sorguda atlıyordu — çünkü normalize metin her
+        # zaman $1..$N içerir. Yani index önerisinin en değerli parçası (ölçülmüş önce/sonra
+        # maliyeti) gerçek sorgularda hiç çalışmadı; yalnızca elle yapıştırılan sorgularda
+        # çalışıyordu. Koşulun sebebi, doğrudan EXPLAIN'in yer tutuculu metinde patlamasıydı;
+        # `explain_json` bunu çözdüğü için şart gereksiz.
+        if has_hypopg:
             try:
                 before_cost, after_cost = await self._hypopg_estimate(
                     conn, schema_name, table_name, ordered_cols, query_text, index_name
@@ -549,9 +558,13 @@ class PostgreSQLIndexAdvisor:
         # could each be routed to a *different* real backend connection, silently losing the
         # hypothetical index between them. An explicit transaction pins the whole sequence to one
         # backend connection regardless of pooling mode.
+        # FAZ 29 İŞ 1: plan alma `explain_json` üzerinden. Buradaki iki çağrı da doğrudan
+        # "EXPLAIN (FORMAT JSON) " + metin şeklindeydi; yer tutuculu (normalize) bir sorgu
+        # geldiğinde EXPLAIN sayfasıyla AYNI hatayı veriyordu — yani index önerisinin fayda
+        # tahmini de sessizce hiç çalışmıyordu.
         async with conn.transaction():
             # Run EXPLAIN before
-            before = await conn.fetchval("EXPLAIN (FORMAT JSON) " + query_text)
+            before = await explain_json(conn, query_text)
             before_cost = self._total_cost(before)
 
             # Create hypothetical index and re-explain
@@ -559,7 +572,7 @@ class PostgreSQLIndexAdvisor:
                 "SELECT indexrelid FROM hypopg_create_index($1)", hypopg_ddl
             )
             try:
-                after = await conn.fetchval("EXPLAIN (FORMAT JSON) " + query_text)
+                after = await explain_json(conn, query_text)
                 after_cost = self._total_cost(after)
             finally:
                 await conn.execute("SELECT hypopg_drop_index($1)", hypopg_index)
