@@ -2,6 +2,7 @@ import { useState } from "react";
 import { formatBytes } from "../api";
 import type { SchemaHealth } from "../api";
 import CopyableAction from "./CopyableAction";
+import CollapsibleSection from "./CollapsibleSection";
 
 type Props = {
   data: SchemaHealth | null;
@@ -181,8 +182,12 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
         )}
       </div>
 
-      <div className="card">
-        <h3 className="chart-title">Vacuum / analyze lag</h3>
+      <CollapsibleSection
+        id="schema-vacuum-lag"
+        title="Vacuum / analyze lag"
+        status={vacuum_lag.length > 0 ? "warning" : "ok"}
+        warning={vacuum_lag.length}
+      >
         {vacuum_lag.length === 0 ? (
           <div className="empty">{emptyText(data.vacuum_lag, "Vacuum lag sorunu yok")}</div>
         ) : (
@@ -213,7 +218,7 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
             </table>
           </div>
         )}
-      </div>
+      </CollapsibleSection>
 
       {/*
         Tabloya NASIL erişildiği (Faz 29 İŞ 2b).
@@ -225,8 +230,12 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
         Yalnızca SİNYAL VEREN tablolar listeleniyor: sinyalsiz 50 satırın arasında kalan
         tek bir uyarı, hiç gösterilmemiş sayılır.
       */}
-      <div className="card">
-        <h3 className="chart-title">Tablo erişim kalıbı</h3>
+      <CollapsibleSection
+        id="schema-table-access"
+        title="Tablo erişim kalıbı"
+        status={accessWithSignals.length > 0 ? "warning" : "ok"}
+        warning={accessWithSignals.reduce((n, r) => n + (r.signals || []).length, 0)}
+      >
         {accessWithSignals.length === 0 ? (
           <div className="empty">
             {(data.table_access || []).length === 0
@@ -272,7 +281,7 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
             ))}
           </div>
         )}
-      </div>
+      </CollapsibleSection>
     </div>
   );
 }

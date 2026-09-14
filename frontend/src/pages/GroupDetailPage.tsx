@@ -18,6 +18,11 @@ import {
 import { useAuth } from "../auth";
 import CopyableAction from "../components/CopyableAction";
 import { EmptyState, NotFoundState, PageError, PageSkeleton } from "../components/PageState";
+import CollapsibleSection, {
+  PageSummaryBar,
+  SectionsProvider,
+  type SectionStatus,
+} from "../components/CollapsibleSection";
 import ConfigComparisonPanel from "../components/ConfigComparisonPanel";
 import RecommendationHeader from "../components/RecommendationHeader";
 import { showField, topologyOf, type FieldContext } from "../formFields";
@@ -312,6 +317,29 @@ export default function GroupDetailPage() {
 
   const healthByNodeId = new Map((health?.nodes ?? []).map((n) => [n.node_id, n]));
 
+  // Faz 29 IS 3: bolum durumlari. Katlama varsayilani ve ust seritteki sayaclar buradan
+  // besleniyor; sayilar bolumun KENDI verisinden cikiyor, ayri bir esik tanimi yok.
+  // "Olcum yok" ile "sorun yok" ayri: saglik henuz cekilmediyse durum "unknown", yani
+  // bolum ACIK gelir - kapali gelseydi kullanici hic olculmedigini fark etmezdi.
+  const downNodes = health?.totals.down ?? 0;
+  const nodesStatus: SectionStatus = !health ? "unknown" : downNodes > 0 ? "critical" : "ok";
+  const clusterStatus: SectionStatus =
+    !health?.cluster ? "unknown" : health.split_brain || !health.cluster.leader ? "critical" : "ok";
+  const paramsCritical = params?.summary.critical ?? 0;
+  const paramsWarning = params?.summary.warning ?? 0;
+  const paramsStatus: SectionStatus = !params
+    ? "unknown"
+    : paramsCritical > 0
+      ? "critical"
+      : paramsWarning > 0
+        ? "warning"
+        : "ok";
+  const alwaysOnStatus: SectionStatus = !alwaysOn
+    ? "unknown"
+    : alwaysOn.overall === "healthy"
+      ? "ok"
+      : "critical";
+
   // Eskiden bu üç durum için hiçbir koruma yoktu: silinmiş bir gruba gidildiğinde başlık
   // "Database Group" yazılı boş bir iskelet ve tepede ham hata metni çıkıyordu (Faz 19 İŞ 1).
   if (!idIsValid || notFound) {
@@ -334,7 +362,7 @@ export default function GroupDetailPage() {
   }
 
   return (
-    <>
+    <SectionsProvider pageKey="group-detail">
       <header className="page-header detail-header">
         <div>
           <div className="detail-title-row">
@@ -384,6 +412,8 @@ export default function GroupDetailPage() {
           Yapılandırma karşılaştırması
         </button>
       </div>
+
+      <PageSummaryBar />
 
       {tab === "config" && Number.isFinite(id) && <ConfigComparisonPanel groupId={id} />}
 
@@ -497,8 +527,13 @@ export default function GroupDetailPage() {
           )}
 
           {health?.cluster && (
-            <div className="card">
-              <h3 className="chart-title">Patroni cluster</h3>
+            <CollapsibleSection
+              id="group-patroni"
+              title="Patroni cluster"
+              status={clusterStatus}
+              critical={clusterStatus === "critical" ? 1 : 0}
+              subtitle={health.cluster.leader ? undefined : "Leader yok"}
+            >
               <p className="muted-note">
                 Leader: <strong>{health.cluster.leader || "yok"}</strong> · Members: {health.cluster.member_count}
               </p>
@@ -522,11 +557,16 @@ export default function GroupDetailPage() {
                   </table>
                 </div>
               )}
-            </div>
+            </CollapsibleSection>
           )}
 
-          <div className="card">
-            <h3 className="chart-title">Düğümler</h3>
+          <CollapsibleSection
+            id="group-nodes"
+            title="Düğümler"
+            status={nodesStatus}
+            critical={downNodes}
+            subtitle={`${nodes.length} düğüm`}
+          >
             <div className="cluster-service-grid">
               {nodes.length === 0 && (
                 <EmptyState
@@ -731,19 +771,25 @@ export default function GroupDetailPage() {
                 );
               })}
             </div>
-          </div>
+          </CollapsibleSection>
 
         </div>
       )}
 
       {tab === "parameters" && (
-        <div className="cluster-layout">
-          <div className="activity-toolbar">
-            <h3 className="chart-title" style={{ margin: 0 }}>PostgreSQL parametre denetimi</h3>
+        <CollapsibleSection
+          id="group-parameters"
+          title="PostgreSQL parametre denetimi"
+          status={paramsStatus}
+          critical={paramsCritical}
+          warning={paramsWarning}
+          subtitle={params ? `Düğüm: ${params.node_name}` : "Henüz denetlenmedi"}
+          actions={
             <button className="btn" onClick={loadParams} disabled={paramsLoading}>
               {paramsLoading ? "Denetleniyor…" : "Parametreleri denetle"}
             </button>
-          </div>
+          }
+        >
           {paramsError && <div className="error">{paramsError}</div>}
           {params && (
             <>
@@ -798,17 +844,22 @@ export default function GroupDetailPage() {
               )}
             </>
           )}
-        </div>
+        </CollapsibleSection>
       )}
 
       {tab === "alwayson" && (
-        <div className="cluster-layout">
-          <div className="activity-toolbar">
-            <h3 className="chart-title" style={{ margin: 0 }}>Always On Availability Group</h3>
+        <CollapsibleSection
+          id="group-alwayson"
+          title="Always On Availability Group"
+          status={alwaysOnStatus}
+          critical={alwaysOnStatus === "critical" ? 1 : 0}
+          subtitle={alwaysOn ? alwaysOn.ag_name || undefined : "Henüz getirilmedi"}
+          actions={
             <button className="btn" onClick={loadAlwaysOn} disabled={alwaysOnLoading}>
               {alwaysOnLoading ? "Getiriliyor…" : "Always On durumunu getir"}
             </button>
-          </div>
+          }
+        >
           {alwaysOnError && <div className="error">{alwaysOnError}</div>}
           {alwaysOn && (
             <>
@@ -862,8 +913,8 @@ export default function GroupDetailPage() {
               </div>
             </>
           )}
-        </div>
+        </CollapsibleSection>
       )}
-    </>
+    </SectionsProvider>
   );
 }

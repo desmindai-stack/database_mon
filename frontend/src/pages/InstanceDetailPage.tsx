@@ -62,6 +62,11 @@ import SlowQueryAvailabilityNote from "../components/SlowQueryAvailabilityNote";
 import { ChartRange, useChartRangeSelection } from "../components/useChartRangeSelection";
 import TuningPanel from "../components/TuningPanel";
 import { useAuth } from "../auth";
+import CollapsibleSection, {
+  PageSummaryBar,
+  SectionsProvider,
+  type SectionStatus,
+} from "../components/CollapsibleSection";
 
 type Tab = "overview" | "metrics" | "load" | "queries" | "activity" | "blocking" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
@@ -592,6 +597,12 @@ export default function InstanceDetailPage() {
     onRange: (r) => setZoom(r),
   });
 
+  // Faz 29 IS 3: yavas sorgu bolumunun durumu. Sayi backend'in urettigi `metric_flags`ten
+  // geliyor — arayuzde ikinci bir esik tanimi YOK, yoksa rapor ile DPA ayni sorgu icin
+  // farkli sey soylerdi (CLAUDE.md: tek gerceklik kaynagi).
+  const flaggedQueryCount = queries.filter((q) => metricFlags(q).length > 0).length;
+  const slowQueryStatus: SectionStatus = flaggedQueryCount > 0 ? "warning" : "ok";
+
   const topQueriesChart = useMemo(
     () =>
       queries.slice(0, 10).map((q, i) => ({
@@ -764,7 +775,7 @@ export default function InstanceDetailPage() {
   }
 
   return (
-    <>
+    <SectionsProvider pageKey="instance-detail">
       <header className="page-header detail-header">
         <div>
           <div className="detail-title-row">
@@ -882,6 +893,8 @@ export default function InstanceDetailPage() {
 
       {error && <div className="error">{error}</div>}
 
+      {/* Özet şeridi sekme çubuğunun ALTINDA: açık sekmenin bölümlerini özetliyor.
+          Sekme değiştiğinde içerik de değiştiği için özetin orada olması doğru. */}
       <div className="detail-tabs">
         <TabButton value="overview" label="Özet" />
         <TabButton value="metrics" label="Metrikler" />
@@ -915,6 +928,8 @@ export default function InstanceDetailPage() {
         <TabButton value="alerts" label="Uyarılar" />
         <TabButton value="predictions" label="Tahminler" />
       </div>
+
+      <PageSummaryBar />
 
       {tab === "overview" && (
         <>
@@ -1065,8 +1080,12 @@ export default function InstanceDetailPage() {
           {(events.length > 0 || predictions.length > 0) && (
             <div className="grid grid-2">
               {events.length > 0 && (
-                <div className="card">
-                  <h3 className="chart-title">Aktif uyarılar</h3>
+                <CollapsibleSection
+                  id="overview-active-alerts"
+                  title="Aktif uyarılar"
+                  status="critical"
+                  critical={events.length}
+                >
                   <ul className="event-list">
                     {events.slice(0, 5).map((e) => (
                       <li key={e.id}>
@@ -1076,11 +1095,15 @@ export default function InstanceDetailPage() {
                       </li>
                     ))}
                   </ul>
-                </div>
+                </CollapsibleSection>
               )}
               {predictions.length > 0 && (
-                <div className="card">
-                  <h3 className="chart-title">Açık tahminler</h3>
+                <CollapsibleSection
+                  id="overview-predictions"
+                  title="Açık tahminler"
+                  status="warning"
+                  warning={predictions.length}
+                >
                   <ul className="event-list">
                     {predictions.slice(0, 5).map((p) => (
                       <li key={p.id}>
@@ -1090,7 +1113,7 @@ export default function InstanceDetailPage() {
                       </li>
                     ))}
                   </ul>
-                </div>
+                </CollapsibleSection>
               )}
             </div>
           )}
@@ -1279,9 +1302,12 @@ export default function InstanceDetailPage() {
       {tab === "queries" && (
         <>
           {queryHistoryTop.length > 0 && (
-            <div className="card">
-              <h3 className="chart-title">Sorgu geçmişi (trend)</h3>
-              <p className="muted-note">Son {range === 168 ? "7 gün" : "24 saat"} · mean latency + çağrı delta</p>
+            <CollapsibleSection
+              id="queries-history"
+              title="Sorgu geçmişi (trend)"
+              status="info"
+              subtitle={`Son ${range === 168 ? "7 gün" : "24 saat"} · mean latency + çağrı delta`}
+            >
               <div className="history-grid">
                 {queryHistoryTop.slice(0, 4).map((s) => (
                   <div key={s.queryid} className="history-card">
@@ -1292,12 +1318,15 @@ export default function InstanceDetailPage() {
                   </div>
                 ))}
               </div>
-            </div>
+            </CollapsibleSection>
           )}
 
           {loadTimeline.length > 1 && (
-            <div className="card">
-              <h3 className="chart-title">Sorgu yükü zaman çizelgesi</h3>
+            <CollapsibleSection
+              id="queries-load-timeline"
+              title="Sorgu yükü zaman çizelgesi"
+              status="info"
+            >
               <p className="muted-note">
                 Bir noktaya tıklayın ya da <strong>sürükleyerek bir aralık seçin</strong> — altta o
                 ana/aralığa denk gelen sorgular listelenir. Kırmızı noktalar otomatik işaretlenen
@@ -1357,12 +1386,15 @@ export default function InstanceDetailPage() {
                 Seçim aşağıdaki <strong>En sorunlu sorgular</strong> listesine uygulanır — liste o
                 aralıktaki değişime göre yeniden sıralanır.
               </p>
-            </div>
+            </CollapsibleSection>
           )}
 
-          <div className="card">
+          <CollapsibleSection
+            id="queries-distribution"
+            title="En sorunlu sorgular — dağılım"
+            status="info"
+          >
             <div className="queries-header">
-              <h3 className="chart-title">En sorunlu sorgular — dağılım</h3>
               <div className="sort-bar">
                 <span>Sırala:</span>
                 {(["total", "mean", "calls"] as const).map((k) => (
@@ -1393,10 +1425,15 @@ export default function InstanceDetailPage() {
                 </ResponsiveContainer>
               </div>
             )}
-          </div>
+          </CollapsibleSection>
 
-          <div className="card">
-            <h3 className="chart-title">En sorunlu sorgular ({queries.length})</h3>
+          <CollapsibleSection
+            id="queries-top-list"
+            title={`En sorunlu sorgular (${queries.length})`}
+            status={slowQueryStatus}
+            warning={flaggedQueryCount}
+            defaultOpen
+          >
             {/* Faz 18 İŞ 1: hangi pencereye bakıldığı ve neyin filtrelendiği açıkça yazılı —
                 rapor ile DPA'nın aynı veriyi gösterdiğini kullanıcı buradan doğrulayabiliyor. */}
             <p className="muted-note">
@@ -1639,7 +1676,7 @@ export default function InstanceDetailPage() {
                 Son toplama: {formatTime(latest.collected_at)}
               </p>
             )}
-          </div>
+          </CollapsibleSection>
         </>
       )}
 
@@ -1706,8 +1743,12 @@ export default function InstanceDetailPage() {
 
       {tab === "alerts" && (
         <div className="grid grid-2">
-          <div className="card">
-            <h3 className="chart-title">Alarm kuralları</h3>
+          <CollapsibleSection
+            id="alerts-rules"
+            title="Alarm kuralları"
+            status="info"
+            subtitle={`${rules.length} kural`}
+          >
             {rules.length === 0 ? (
               <EmptyState
                 title="Bu veritabanı için alarm kuralı yok"
@@ -1734,9 +1775,14 @@ export default function InstanceDetailPage() {
                 </table>
               </div>
             )}
-          </div>
-          <div className="card">
-            <h3 className="chart-title">Son alarm olayları</h3>
+          </CollapsibleSection>
+          <CollapsibleSection
+            id="alerts-events"
+            title="Son alarm olayları"
+            status={events.length > 0 ? "critical" : "ok"}
+            critical={events.filter((e) => !e.resolved_at).length}
+            defaultOpen
+          >
             {events.length === 0 ? (
               <EmptyState
                 title="Alarm olayı yok"
@@ -1753,15 +1799,20 @@ export default function InstanceDetailPage() {
                 ))}
               </ul>
             )}
-          </div>
+          </CollapsibleSection>
         </div>
       )}
 
       {tab === "predictions" && (
         <>
           <PredictionReadinessPanel items={predictionReadiness} />
-          <div className="card">
-            <h3 className="chart-title">Tahminler</h3>
+          <CollapsibleSection
+            id="predictions-list"
+            title="Tahminler"
+            status={predictions.length > 0 ? "warning" : "ok"}
+            warning={predictions.length}
+            defaultOpen
+          >
             {predictions.length === 0 ? (
               <EmptyState
                 title="Açık tahmin yok"
@@ -1805,9 +1856,9 @@ export default function InstanceDetailPage() {
                 </table>
               </div>
             )}
-          </div>
+          </CollapsibleSection>
         </>
       )}
-    </>
+    </SectionsProvider>
   );
 }

@@ -1166,6 +1166,45 @@ td code,
 .access-signal-row { display: grid; gap: 0.5rem; }
 .access-signal-head { display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap; }
 
+/* Faz 29 İŞ 3 — katlanabilir bölümler ve sayfa özet şeridi.
+   Sayfalar sonsuza akıyordu (DPA'da 15, raporlarda 13 kart); kritik bir bulgu onuncu kartın
+   içinde kalıp hiç görünmüyordu. */
+.collapsible-section { padding-bottom: 0.75rem; }
+.collapsible-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.collapsible-title { display: flex; align-items: baseline; gap: 0.5rem; flex-wrap: wrap; min-width: 0; }
+.collapsible-title .chart-title { margin: 0; }
+.collapsible-actions { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
+.collapse-toggle {
+  background: transparent; border: 1px solid var(--border); border-radius: 4px;
+  color: inherit; cursor: pointer; font-size: 0.9rem; line-height: 1;
+  padding: 0.25rem 0.5rem;
+}
+.collapse-toggle:hover { background: var(--surface-2, rgba(127, 127, 127, 0.1)); }
+.collapsible-body { margin-top: 0.75rem; }
+/* Sorunlu bölüm kenarından belli olsun: kapalıyken bile hangi bölümün dikkat istediği
+   tek bakışta görünmeli. */
+.collapsible-section.critical { border-left: 3px solid var(--danger); }
+.collapsible-section.warning { border-left: 3px solid var(--warning, #f59e0b); }
+
+.page-summary-bar {
+  display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  padding: 0.75rem 1rem; margin-bottom: 1rem;
+  border: 1px solid var(--border); border-radius: 8px;
+}
+.page-summary-bar.has-critical { border-left: 3px solid var(--danger); }
+.page-summary-counts { display: flex; gap: 1rem; }
+.summary-count { font-variant-numeric: tabular-nums; }
+.summary-count.critical { color: var(--danger); }
+.summary-count.warning { color: var(--warning, #f59e0b); }
+.page-summary-links { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.summary-jump {
+  background: transparent; border: 1px solid var(--border); border-radius: 999px;
+  color: inherit; cursor: pointer; font-size: 0.85rem; padding: 0.25rem 0.75rem;
+}
+.summary-jump:hover { background: var(--surface-2, rgba(127, 127, 127, 0.1)); }
+.summary-jump.critical { border-color: var(--danger); color: var(--danger); }
+.summary-jump-count { margin-left: 0.5rem; font-weight: 600; }
+
 .exec-grade { display: grid; justify-items: end; gap: 0.25rem; }
 .exec-grade-value { font-size: 1.5rem; font-weight: 600; color: var(--text); }
 .exec-grade-reason { font-size: 0.8rem; color: var(--muted); max-width: 380px; text-align: right; }

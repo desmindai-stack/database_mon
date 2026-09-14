@@ -1,6 +1,7 @@
 import type { PrerequisiteCheck, PrerequisiteReport } from "../api";
 import { formatTime } from "../api";
 import CopyableAction from "./CopyableAction";
+import CollapsibleSection, { type SectionStatus } from "./CollapsibleSection";
 
 const STATUS_TR: Record<PrerequisiteCheck["status"], string> = {
   ok: "Tamam",
@@ -81,20 +82,44 @@ export default function PrerequisitesPanel({
     </div>
   );
 
+  // Faz 29 İŞ 3: bölüm KATLANABİLİR ve durumuna göre açılıyor.
+  //
+  // Bu blok ekranın yarısını kaplıyordu: uzun açıklama + uzun kontrol listesi. Her şey
+  // yolundayken o alanı kaplamasının bir değeri yok; eksik bir ön koşul varsa zaten
+  // görünmesi gerekiyor. Karar bölümün DURUMUNDAN çıkıyor, kullanıcıyı tıklatmadan.
+  const missingCount = active.filter((c) => c.status !== "ok").length;
+  const blockingCount = active.filter(
+    (c) => c.status !== "ok" && c.severity === "high",
+  ).length;
+  const status: SectionStatus = !data
+    ? "unknown"
+    : blockingCount > 0
+      ? "warning"
+      : missingCount > 0
+        ? "info"
+        : "ok";
+
   return (
-    <div className="card tuning-checklist-card">
-      <div className="insights-header">
-        <div>
-          <h3 className="chart-title">Ön koşullar</h3>
-          <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.25rem 0 0" }}>
-            Yavaş sorgu / EXPLAIN / index önerisi özelliklerinin çalışması için gereken uzantı, ayar ve
-            yetkiler — biri eksikse ilgili özellik neden boş göründüğünü burada görürsünüz.
-          </p>
-        </div>
+    <CollapsibleSection
+      id="prerequisites"
+      title="Ön koşullar"
+      status={status}
+      warning={blockingCount}
+      subtitle={
+        data
+          ? `${data.ok_count}/${active.length} kontrol tamam (%${data.completion_pct})`
+          : undefined
+      }
+      actions={
         <button className="btn" onClick={onRefresh} disabled={loading}>
           {loading ? "Kontrol ediliyor…" : "Yeniden kontrol et"}
         </button>
-      </div>
+      }
+    >
+      <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0 0 0.5rem" }}>
+        Yavaş sorgu / EXPLAIN / index önerisi özelliklerinin çalışması için gereken uzantı, ayar ve
+        yetkiler — biri eksikse ilgili özellik neden boş göründüğünü burada görürsünüz.
+      </p>
 
       {error && <div className="error">{error}</div>}
 
@@ -121,6 +146,6 @@ export default function PrerequisitesPanel({
           )}
         </>
       )}
-    </div>
+    </CollapsibleSection>
   );
 }

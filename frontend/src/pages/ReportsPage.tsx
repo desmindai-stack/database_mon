@@ -20,6 +20,7 @@ import {
   ReportScopeType,
 } from "../api";
 import { useAuth } from "../auth";
+import CollapsibleSection, { PageSummaryBar, SectionsProvider, type SectionStatus } from "../components/CollapsibleSection";
 import { NotFoundState, PageError } from "../components/PageState";
 import { ShowMoreButton, useShowMore } from "../components/Pagination";
 import ExecutiveReportView from "../components/ExecutiveReportView";
@@ -401,7 +402,7 @@ export default function ReportsPage() {
   }, [visibleFindings]);
 
   return (
-    <>
+    <SectionsProvider pageKey="reports">
       <header className="page-header">
         <div>
           <h2>Raporlar</h2>
@@ -752,18 +753,28 @@ export default function ReportsPage() {
                 </div>
               )}
 
+              {/* Özet şeridi bölümlerin ÜSTÜNDE: "bu sayfada kaç kritik var" sorusunun
+                  cevabı, sayfayı aşağı kaydırmadan görünmeli. */}
+              <PageSummaryBar />
+
               {sectionOrder.map((key) => {
                 const item = sectionItems[key];
                 if (!item) return null;
                 const findings = (findingsBySection.get(key) || []).sort((a, b) => b.priority - a.priority);
+                // Sayaçlar BASTIRILMAMIŞ bulgulardan (Faz 28 İŞ 2): bastırılmış bir bulgu
+                // özet şeridinde "3 kritik" diye görünüp kullanıcıyı kök sebepten
+                // uzaklaştırmamalı.
+                const visible = findings.filter((f) => !f.suppressed);
                 return (
-                  <div className="card" key={key}>
-                    <div className="section-head">
-                      <h3 className="chart-title">{item.title}</h3>
-                      <span className={`insight-severity ${item.status}`}>
-                        {STATUS_TR[item.status] || item.status}
-                      </span>
-                    </div>
+                  <CollapsibleSection
+                    key={key}
+                    id={key}
+                    title={item.title}
+                    status={(item.status as SectionStatus) || "ok"}
+                    critical={visible.filter((f) => f.severity === "critical").length}
+                    warning={visible.filter((f) => f.severity === "warning").length}
+                    subtitle={STATUS_TR[item.status] || item.status}
+                  >
                     <p>{item.summary}</p>
                     {item.unknown_reason && (
                       <p className="warn-text">Değerlendirilemedi: {item.unknown_reason}</p>
@@ -776,7 +787,7 @@ export default function ReportsPage() {
                       selected={selected}
                       toggleSelect={toggleSelect}
                     />
-                  </div>
+                  </CollapsibleSection>
                 );
               })}
             </>
@@ -832,7 +843,7 @@ export default function ReportsPage() {
           </div>
         </div>
       )}
-    </>
+    </SectionsProvider>
   );
 }
 

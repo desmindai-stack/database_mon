@@ -7259,6 +7259,124 @@ kümülatif/örnekleme farkı yönetimi. Yarım yapmak, olmamasından yanıltıc
 
 Arka uç: **1588 geçti, 15 atlandı**.
 
+## Faz 29 — İŞ 3: Sayfa düzeni, öncelik ve katlanabilirlik
+
+### Sorun: kritik bulgu onuncu kartın içinde kalıyordu
+
+Sayfalar sonsuza doğru akıyordu — veritabanı detayında 15, raporlarda 13 kart alt
+alta. Hepsi aynı görsel ağırlıkta olduğu için **hiçbiri öne çıkmıyordu**: kritik
+bir bulgu, her şeyin yolunda olduğu dokuz kartın altında kalıyor ve kullanıcı onu
+hiç görmüyordu. Kullanıcının örnek verdiği "Ön koşullar" bloğu (uzantı + ayar +
+yetki listesi) tek başına ekranın yarısını kaplıyordu — üstelik **hepsi tamamken
+bile**.
+
+### Karar: varsayılanı kullanıcı değil, bölümün durumu belirler
+
+`frontend/src/components/CollapsibleSection.tsx` üç kural üzerine kuruldu.
+
+**1. Sorunlu bölüm açık, sorunsuz bölüm kapalı gelir.** "Her şeyi kapat" da yanlış
+olurdu: kullanıcı kritik bulguyu görmek için tıklamak zorunda kalırdı. Karar
+`defaultOpenFor(status)` fonksiyonunda tek yerde: `critical`, `warning` ve
+**`unknown`** açık gelir. `unknown`'ın açık olması bilinçli — "ölçüm yok" ile
+"sorun yok" farklı şeyler, henüz toplanmamış bir bölüm kapalı gelseydi kullanıcı
+ölçümün hiç yapılmadığını fark etmezdi.
+
+**2. Kullanıcının kararı hatırlanır, ama kritik bölümde geçersizdir.**
+
+```ts
+if (stored === undefined) return fallbackOpen ?? defaultOpenFor(status);
+if (stored === false && status === "critical") return true;
+return stored;
+```
+
+"Dün kapattım" kararı **dünkü duruma** verilmişti. Bölüm bugün kritikse onu gizli
+tutmak, gizlenmesi en yanlış olan şeyi gizlemek olurdu. Açma kararı ise her
+durumda geçerli: kullanıcı bir şeyi görmek istiyorsa onu saklamak için bir
+gerekçemiz yok.
+
+**3. Kapalı bölümün içeriği hiç çizilmez.** `hidden` ile gizlemek ağır tabloları
+ve grafikleri yine de render ederdi; katlamanın asıl kazancı görsel değil, o
+işin hiç yapılmaması. Bu yüzden koşullu render (`{open && …}`).
+
+### Ayar bölümleri: durumdan türetmek yanlış olurdu
+
+Yönetim sayfasının bölümlerinin "durumu" yok. Durumdan türetilseydi hepsi `ok`
+sayılıp **kapalı** gelirdi — oysa kullanıcı o sayfaya zaten bir ayarı
+değiştirmeye geliyor; değiştireceği kontrolü bir tıklamanın arkasına saklamak
+sayfayı kısaltmaz, kullanılmaz hale getirirdi. Bu yüzden bileşen çağıranın açık
+bir varsayılan vermesine izin veriyor (`defaultOpen`); kullanıcının kendi kararı
+yine yeniyor ve asıl kazanç orada: ilgilenmediği ayarı kapatabiliyor ve kapalı
+kalıyor.
+
+Tek istisna "Yeni kullanıcı" formu: o bir ayar değil, **nadir bir eylem** —
+kapalı geliyor.
+
+### Özet şeridi: sayfanın en üstünde kaç kritik, kaç uyarı
+
+`PageSummaryBar` kayıtlı bölümlerin sayaçlarını toplar ve tıklanınca ilgili
+bölüme gider — **kapalıysa önce açarak**. Açılma bir sonraki render'da olduğu
+için kaydırma bir kare geciktiriliyor; aksi halde kapalı yüksekliğe kaydırılır ve
+bölüm ekranın dışında kalırdı.
+
+### Şerit bilerek her sayfada yok
+
+Bu, "tüm sayfalara uygula" isteğinden bir sapma değil; aynı kuralın sonucu.
+
+- **Dashboard'da yok.** Üstteki durum kartları zaten "kaç kritik, kaç uyarı"
+  sorusunu cevaplıyor ve tıklanınca ilgili grupları süzüyor. İkinci bir şerit
+  aynı kelimeyi **başka bir sayıyla** gösterirdi: kartlar kritik *grup* sayısını,
+  şerit kritik *bulgu* sayısını. CLAUDE.md'nin "ayrı hesaplama = ayrı sonuç =
+  güven kaybı" kuralı tam olarak bunu yasaklıyor.
+- **Yönetim sayfasında yok.** Sayılacak bir bulgu yok; her zaman "0 kritik" yazan
+  bir şerit bilgi değil gürültü olurdu.
+
+Katlama mekanizması ise **her sayfada** var — istenen tutarlılık orada.
+
+### Sayaçlar nereden geliyor
+
+Hiçbir bölüm kendi eşiğini tanımlamıyor; sayılar bölümün kendi verisinden
+çıkıyor:
+
+| Bölüm | Sayaç kaynağı |
+|---|---|
+| Rapor bölümleri | **bastırılmamış** bulgular (`!f.suppressed`) |
+| Yavaş sorgular | backend'in ürettiği `metric_flags` |
+| Düğümler | `health.totals.down` |
+| Parametre denetimi | `params.summary.critical / .warning` |
+
+Rapor tarafındaki bastırma filtresi önemli: bastırılmış bir bulgu (Faz 28 İŞ 2,
+kök sebebe bağlı olduğu için susturulmuş) özet şeridinde "3 kritik" diye görünüp
+kullanıcıyı kök sebepten uzaklaştırmamalı.
+
+### Uygulanan yerler
+
+| Sayfa / bileşen | pageKey | Bölüm |
+|---|---|---|
+| Raporlar | `reports` | rapor bölümlerinin tamamı (döngüden) |
+| Veritabanı detayı | `instance-detail` | aktif uyarılar, açık tahminler, sorgu geçmişi, yük çizelgesi, sorgu dağılımı, sorgu listesi, alarm kuralları, alarm olayları, tahminler |
+| Grup detayı | `group-detail` | Patroni cluster, düğümler, parametre denetimi, Always On |
+| Yönetim | `admin` | saklama süresi, yenileme aralığı, günlük rapor, gürültü filtresi, yeni kullanıcı |
+| Dashboard | `dashboard` | süzülmüş gruplar, sorunlar ve öneriler |
+| Ön koşullar paneli | — | kullanıcının örnek verdiği blok |
+| Şema sağlığı paneli | — | vacuum/analyze lag, tablo erişim kalıbı |
+
+Durum `localStorage`'da (`dbace.sections.<pageKey>`): kullanıcı ve tarayıcı başına
+bir tercih, sunucuya taşımak her sayfa açılışında fazladan bir istek ve bir tablo
+demekti. Kaybolması da zararsız — en kötü ihtimalle varsayılan davranışa dönülür.
+Okuma ve yazma `try/catch` içinde: gizli sekme, kapalı depolama ya da bozuk JSON
+sayfayı düşürmemeli.
+
+### Test
+
+Frontend'in kendi koşucusu olmadığı için garantiler
+`backend/tests/test_collapsible_sections.py`'de statik denetim olarak duruyor (21
+test): varsayılanın durumdan çıktığı, kapatılmış kritik bölümün geri açıldığı,
+kapalı bölümün render edilmediği, depolamanın çökmediği, şeridin kaydırmadan önce
+bölümü açtığı, id'lerin sayfa içinde tekil olduğu — ve şeridin dashboard/yönetimde
+**bilerek** olmadığı, gerekçesiyle birlikte.
+
+Arka uç: **1612 geçti, 15 atlandı**. Playwright: **33 geçti**.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

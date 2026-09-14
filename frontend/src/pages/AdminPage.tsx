@@ -14,6 +14,7 @@ import { NotFoundState, TableState } from "../components/PageState";
 import MaintenanceWindowsPanel from "../components/MaintenanceWindowsPanel";
 import SlaTargetsPanel from "../components/SlaTargetsPanel";
 import { useUrlTab } from "../hooks/useUrlState";
+import CollapsibleSection, { SectionsProvider } from "../components/CollapsibleSection";
 
 type Tab = "retention" | "users" | "settings" | "maintenance";
 const TABS: readonly Tab[] = ["retention", "users", "settings", "maintenance"];
@@ -214,7 +215,7 @@ export default function AdminPage() {
   }
 
   return (
-    <>
+    <SectionsProvider pageKey="admin">
       <header className="page-header">
         <div>
           <h2>Yönetim</h2>
@@ -252,8 +253,12 @@ export default function AdminPage() {
       )}
 
       {tab === "retention" && (
-        <div className="card" style={{ marginTop: "1rem", maxWidth: 520 }}>
-          <h3 className="chart-title">Metrik ve olay verisi saklama süresi</h3>
+        <CollapsibleSection
+          id="admin-retention"
+          title="Metrik ve olay verisi saklama süresi"
+          defaultOpen
+          style={{ marginTop: "1rem", maxWidth: 520 }}
+        >
           <p className="muted-note">
             Bu sürenin öncesindeki metrik, yavaş sorgu, alarm olayı ve tahmin kayıtları her gün
             otomatik çalışan bir temizlik göreviyle silinir.
@@ -284,7 +289,7 @@ export default function AdminPage() {
             </button>
           </div>
           {runResult && <p className="ok-text">{runResult}</p>}
-        </div>
+        </CollapsibleSection>
       )}
 
       {tab === "users" && (
@@ -363,8 +368,7 @@ export default function AdminPage() {
             </table>
           </div>
 
-          <div className="card">
-            <h3 style={{ marginBottom: "1rem", color: "var(--text)", fontSize: "1rem" }}>Yeni kullanıcı</h3>
+          <CollapsibleSection id="admin-new-user" title="Yeni kullanıcı" defaultOpen={false}>
             <form className="form-grid" onSubmit={onCreateUser}>
               <label>
                 Kullanıcı adı <span className="required-mark">*</span>
@@ -400,13 +404,17 @@ export default function AdminPage() {
                 </button>
               </div>
             </form>
-          </div>
+          </CollapsibleSection>
         </div>
       )}
 
       {tab === "settings" && (
-        <div className="card" style={{ marginTop: "1rem", maxWidth: 420 }}>
-          <h3 className="chart-title">Dashboard otomatik yenileme aralığı</h3>
+        <CollapsibleSection
+          id="admin-refresh-interval"
+          title="Dashboard otomatik yenileme aralığı"
+          defaultOpen
+          style={{ marginTop: "1rem", maxWidth: 420 }}
+        >
           <p className="muted-note">
             Dashboard sayfasının arka planda ne sıklıkla kendini yenileyeceği — canlı prob
             (scheduler) aralığını da etkiler.
@@ -423,12 +431,16 @@ export default function AdminPage() {
               ))}
             </select>
           </label>
-        </div>
+        </CollapsibleSection>
       )}
 
       {tab === "settings" && (
-        <div className="card" style={{ marginTop: "1rem", maxWidth: 420 }}>
-          <h3 className="chart-title">Günlük sağlık raporu</h3>
+        <CollapsibleSection
+          id="admin-report-schedule"
+          title="Günlük sağlık raporu"
+          defaultOpen
+          style={{ marginTop: "1rem", maxWidth: 420 }}
+        >
           <p className="muted-note">
             Zamanlanmış rapor üretimi. Rapor arka planda çalışır; toplama döngüsünü etkilemez.
           </p>
@@ -465,12 +477,16 @@ export default function AdminPage() {
               <option value="both">İkisi birden</option>
             </select>
           </label>
-        </div>
+        </CollapsibleSection>
       )}
 
       {tab === "settings" && (
-        <div className="card" style={{ marginTop: "1rem", maxWidth: 520 }}>
-          <h3 className="chart-title">Gürültü filtresi</h3>
+        <CollapsibleSection
+          id="admin-noise-filter"
+          title="Gürültü filtresi"
+          defaultOpen
+          style={{ marginTop: "1rem", maxWidth: 520 }}
+        >
           <p className="muted-note">
             Rapor ve DPA <strong>aynı</strong> eşikleri kullanır. Doğru değer ortama göre değişir:
             OLTP bir veritabanında 1 saniye ciddi, raporlama veritabanında sıradan olabilir.
@@ -539,8 +555,8 @@ export default function AdminPage() {
             kendi toplama sorguları listelerden ve bulgulardan çıkarılır. Kaç sorgunun
             filtrelendiği DPA'da yazılı kalır.
           </p>
-        </div>
+        </CollapsibleSection>
       )}
-    </>
+    </SectionsProvider>
   );
 }

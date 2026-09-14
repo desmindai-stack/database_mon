@@ -17,6 +17,7 @@ import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
 import { ADD_ACTIONS } from "../terminology";
+import CollapsibleSection, { SectionsProvider, type SectionStatus } from "../components/CollapsibleSection";
 
 const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
   critical: "Kritik",
@@ -208,8 +209,23 @@ export default function DashboardPage() {
     );
   };
 
+  const filteredGroups = (groupSummary?.groups ?? []).filter((g) => g.status === statusFilter);
+  const filteredGroupsStatus: SectionStatus =
+    statusFilter === "critical" ? "critical" : statusFilter === "warning" ? "warning" : "info";
+  const problemCounts = {
+    critical: problemCards.filter((c) => c.severity === "critical").length,
+    warning: problemCards.filter((c) => c.severity === "warning").length,
+  };
+  const problemsStatus: SectionStatus = groupSummaryLoading
+    ? "unknown"
+    : problemCounts.critical > 0
+      ? "critical"
+      : problemCounts.warning > 0
+        ? "warning"
+        : "ok";
+
   return (
-    <>
+    <SectionsProvider pageKey="dashboard">
       <header className="page-header">
         <div>
           <h2>DBA Overview</h2>
@@ -317,18 +333,21 @@ export default function DashboardPage() {
           </div>
 
           {statusFilter && (
-            <div className="card" style={{ marginBottom: "1.5rem" }}>
-              <div className="activity-toolbar">
-                <h3 className="chart-title" style={{ margin: 0 }}>
-                  {STATUS_LABELS_TR[statusFilter]} gruplar
-                  <span className="muted-note" style={{ marginLeft: "0.5rem" }}>
-                    ({(groupSummary?.groups ?? []).filter((g) => g.status === statusFilter).length})
-                  </span>
-                </h3>
+            // Kullanici bu bolumu bir durum kartina tiklayarak actigi icin defaultOpen:
+            // tiklamanin sonucunu bir tiklama daha isteyerek gostermek anlamsiz olurdu.
+            <CollapsibleSection
+              id="dashboard-filtered-groups"
+              title={`${STATUS_LABELS_TR[statusFilter]} gruplar`}
+              status={filteredGroupsStatus}
+              subtitle={`${filteredGroups.length} grup`}
+              defaultOpen
+              style={{ marginBottom: "1.5rem" }}
+              actions={
                 <button type="button" className="btn btn-xs" onClick={() => setStatusFilter(null)}>
                   Filtreyi temizle
                 </button>
-              </div>
+              }
+            >
               {(groupSummary?.groups ?? []).filter((g) => g.status === statusFilter).length === 0 ? (
                 <p className="muted-note">Bu durumda grup yok.</p>
               ) : (
@@ -359,11 +378,18 @@ export default function DashboardPage() {
                     ))}
                 </ul>
               )}
-            </div>
+            </CollapsibleSection>
           )}
 
-          <div className="card" style={{ marginBottom: "1.5rem" }}>
-            <h3 className="chart-title">Sorunlar ve öneriler</h3>
+          <CollapsibleSection
+            id="dashboard-problems"
+            title="Sorunlar ve öneriler"
+            status={problemsStatus}
+            critical={problemCounts.critical}
+            warning={problemCounts.warning}
+            defaultOpen
+            style={{ marginBottom: "1.5rem" }}
+          >
             {/* Tek satırlık "Yükleniyor…" yerine iskelet: kart yüksekliği veri gelince
                 birden değişip altındaki içeriği aşağı itmiyor (Faz 22 İŞ 2). */}
             {groupSummaryLoading ? (
@@ -424,9 +450,9 @@ export default function DashboardPage() {
                 })}
               </div>
             )}
-          </div>
+          </CollapsibleSection>
         </>
       )}
-    </>
+    </SectionsProvider>
   );
 }
