@@ -67,6 +67,7 @@ import CollapsibleSection, {
   SectionsProvider,
   type SectionStatus,
 } from "../components/CollapsibleSection";
+import MetricHint, { useMetricDictionary } from "../components/MetricHint";
 
 type Tab = "overview" | "metrics" | "load" | "queries" | "activity" | "blocking" | "cluster" | "schema" | "tuning" | "alerts" | "predictions";
 type RangeHours = 1 | 6 | 24 | 168;
@@ -600,6 +601,10 @@ export default function InstanceDetailPage() {
   // Faz 29 IS 3: yavas sorgu bolumunun durumu. Sayi backend'in urettigi `metric_flags`ten
   // geliyor — arayuzde ikinci bir esik tanimi YOK, yoksa rapor ile DPA ayni sorgu icin
   // farkli sey soylerdi (CLAUDE.md: tek gerceklik kaynagi).
+  // Faz 30 İŞ 3: metrik açıklamaları backend sözlüğünden geliyor; arayüzde elle
+  // yazılsalardı aynı metriğin iki tanımı olur ve eşik değişince biri sessizce eskirdi.
+  const metricDictionary = useMetricDictionary();
+
   const flaggedQueryCount = queries.filter((q) => metricFlags(q).length > 0).length;
   const slowQueryStatus: SectionStatus = flaggedQueryCount > 0 ? "warning" : "ok";
 
@@ -1564,17 +1569,17 @@ export default function InstanceDetailPage() {
                             <h4>Sorgu bazında I/O ve CPU</h4>
                             <div className="query-stats-grid">
                               <div><span>shared okuma</span><strong>{q.shared_blks_read ?? 0}</strong></div>
-                              <div><span>shared hit</span><strong>{q.shared_blks_hit ?? 0}</strong></div>
+                              <div><span>shared hit<MetricHint metricKey="cache_hit_pct" dictionary={metricDictionary} /></span><strong>{q.shared_blks_hit ?? 0}</strong></div>
                               <div><span>local okuma</span><strong>{q.local_blks_read ?? 0}</strong></div>
                               <div><span>local hit</span><strong>{q.local_blks_hit ?? 0}</strong></div>
-                              <div><span>temp okuma</span><strong>{q.temp_blks_read ?? 0}</strong></div>
+                              <div><span>temp okuma<MetricHint metricKey="temp_blocks" dictionary={metricDictionary} /></span><strong>{q.temp_blks_read ?? 0}</strong></div>
                               <div><span>temp yazma</span><strong>{q.temp_blks_written ?? 0}</strong></div>
                               {/* ÖLÇÜLMÜŞ I/O süresi: blok sayısından çıkarım değil, sunucunun
                                   kendi ölçümü. `track_io_timing` kapalıysa hiç gösterilmiyor —
                                   0 göstermek "I/O beklemesi yok" demek olurdu. */}
                               {queryMetrics(q).io_time_measured && (
                                 <div>
-                                  <span>I/O beklemesi</span>
+                                  <span>I/O beklemesi<MetricHint metricKey="io_time_share_pct" dictionary={metricDictionary} /></span>
                                   <strong>
                                     {((q.blk_read_time_ms ?? 0) + (q.blk_write_time_ms ?? 0)).toFixed(1)} ms
                                     {queryMetrics(q).io_time_share_pct != null && ` (%${queryMetrics(q).io_time_share_pct})`}
@@ -1582,13 +1587,13 @@ export default function InstanceDetailPage() {
                                 </div>
                               )}
                               {queryMetrics(q).instability_ratio != null && (
-                                <div><span>kararsızlık</span><strong>{queryMetrics(q).instability_ratio}×</strong></div>
+                                <div><span>kararsızlık<MetricHint metricKey="instability_ratio" dictionary={metricDictionary} /></span><strong>{queryMetrics(q).instability_ratio}×</strong></div>
                               )}
                               {queryMetrics(q).total_share_pct != null && (
-                                <div><span>toplam etki payı</span><strong>%{queryMetrics(q).total_share_pct}</strong></div>
+                                <div><span>toplam etki payı<MetricHint metricKey="total_share_pct" dictionary={metricDictionary} /></span><strong>%{queryMetrics(q).total_share_pct}</strong></div>
                               )}
                               {q.wal_bytes != null && q.wal_bytes > 0 && (
-                                <div><span>WAL / çağrı</span><strong>{queryMetrics(q).wal_bytes_per_call ?? 0} B</strong></div>
+                                <div><span>WAL / çağrı<MetricHint metricKey="wal_bytes_per_call" dictionary={metricDictionary} /></span><strong>{queryMetrics(q).wal_bytes_per_call ?? 0} B</strong></div>
                               )}
                               {/* Faz 30 İŞ 2 — SQL Server: CPU ile BEKLEMENİN ayrımı.
                                   `total_elapsed_time` duvar saati, `total_worker_time` CPU;
@@ -1600,11 +1605,11 @@ export default function InstanceDetailPage() {
                               {queryMetrics(q).cpu_time_share_pct != null && (
                                 <>
                                   <div>
-                                    <span>CPU payı</span>
+                                    <span>CPU payı<MetricHint metricKey="cpu_time_share_pct" dictionary={metricDictionary} /></span>
                                     <strong>%{queryMetrics(q).cpu_time_share_pct}</strong>
                                   </div>
                                   <div>
-                                    <span>bekleme payı</span>
+                                    <span>bekleme payı<MetricHint metricKey="wait_time_share_pct" dictionary={metricDictionary} /></span>
                                     <strong>%{queryMetrics(q).wait_time_share_pct}</strong>
                                   </div>
                                 </>
@@ -1638,7 +1643,7 @@ export default function InstanceDetailPage() {
                               )}
                               {queryMetrics(q).memory_grant_waste_pct != null && (
                                 <div>
-                                  <span>kullanılmayan bellek izni</span>
+                                  <span>kullanılmayan bellek izni<MetricHint metricKey="memory_grant_waste_pct" dictionary={metricDictionary} /></span>
                                   <strong>%{queryMetrics(q).memory_grant_waste_pct}</strong>
                                 </div>
                               )}

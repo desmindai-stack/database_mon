@@ -568,6 +568,23 @@ class MetricSampleOut(BaseModel):
         )
 
 
+class MetricMeaningOut(BaseModel):
+    """Bir metriğin kullanıcıya anlatımı (Faz 30 İŞ 3).
+
+    Uç eskiden `list[dict]` dönüyordu: OpenAPI'de alansız bir sözlük, yani arayüz tarafında
+    türetilecek bir tip YOK. Açıklama metinleri arayüze elle yazılsaydı aynı metriğin iki
+    farklı tanımı olurdu ve kullanıcı hangisine güveneceğini bilemezdi.
+    """
+
+    key: str
+    label: str
+    unit: str
+    #: Bu sayı NE ÖLÇÜYOR.
+    meaning: str
+    #: NE ZAMAN sorun; eşik varsa burada geçiyor.
+    when_problem: str
+
+
 class SlowQueryOut(BaseModel):
     id: int
     instance_id: int

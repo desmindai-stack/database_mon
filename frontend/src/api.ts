@@ -57,6 +57,9 @@ export type Instance = Omit<Gen["InstanceOut"], "engine" | "options"> & {
 // Faz 30 İŞ 1: toplama durumu. Türetilmiş — elle yazılan tipin backend'den sessizce
 // ayrışması bu projede üç kez canlı hataya yol açtı.
 export type CollectionHealth = Gen["CollectionHealthOut"];
+// Faz 30 İŞ 3: metrik açıklamaları. Uç `list[dict]` dönüyordu (OpenAPI'de alansız
+// sözlük, yani türetilecek tip yok); gerçek şemaya çevrildi.
+export type MetricMeaning = Gen["MetricMeaningOut"];
 export type CollectionHealthItem = Gen["CollectionHealthItemOut"];
 
 export interface MetricSample {
@@ -1262,6 +1265,7 @@ export const api = {
   getInstance: (id: number) => request<Instance>(`/api/instances/${id}`),
   // Sabit yol; backend'de `/{instance_id}`'den ÖNCE kayıtlı olmalı (tests/test_route_order.py).
   getCollectionHealth: () => request<CollectionHealth>("/api/instances/collection-health"),
+  getMetricDictionary: () => request<MetricMeaning[]>("/api/queries/metric-dictionary"),
   createInstance: (data: InstanceCreate) =>
     request<Instance>("/api/instances", { method: "POST", body: JSON.stringify(data) }),
   updateInstance: (id: number, data: Partial<InstanceCreate>) =>

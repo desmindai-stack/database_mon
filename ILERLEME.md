@@ -7567,6 +7567,51 @@ konusu tam olarak buydu.
 
 Arka uç: **1633 geçti, 15 atlandı**. `npm run build` yeşil.
 
+## Faz 30 — İŞ 3: Metrik sözlüğü arayüze bağlandı
+
+### Üretiliyordu, hiçbir ekranda yoktu
+
+`/api/queries/metric-dictionary` her metriğin "ne ölçüyor" ve "ne zaman sorun"
+açıklamasını döndürüyordu — Faz 29 İŞ 2a'da yazılmıştı, Faz 29 sonunda erişilebilir hâle
+geldi (rota gölgelenmesi düzeltmesi), ama arayüz onu **hiç çağırmıyordu**. Kullanıcı
+ekranda "kararsızlık 2.4×" görüyor, bunun ne demek olduğunu hiçbir yerde bulamıyordu.
+
+### Uç `list[dict]` dönüyordu
+
+OpenAPI'de alansız bir sözlük, yani frontend tarafında **türetilecek tip yok**.
+CLAUDE.md'nin "frontend tipleri elle yazılmaz" kuralı burada uygulanamıyordu. Uç artık
+`MetricMeaningOut` şemasıyla dönüyor ve arayüz tipi üretilen şemadan türetiliyor.
+
+### Metin arayüzde yazılı değil
+
+Açıklamalar backend sözlüğünden geliyor. Arayüze kopyalansalardı aynı metriğin iki tanımı
+olurdu ve sayısal eşikler kodda değiştiğinde buradaki metin sessizce eskirdi — kullanıcı
+hangisine güveneceğini bilemezdi. Test bunu koruyor: bileşende bir eşik sayısı geçerse
+düşüyor.
+
+Bu kural testi yazarken kendi kendini de yakaladı: bileşenin açıklama bloğunda örnek
+olarak bir eşik yazılıydı. Test gevşetilmedi, **metin düzeltildi** — bileşende geçen her
+eşik sayısı gerçekten şüphe uyandırmalı.
+
+### Sözlükte olmayan anahtar için hiçbir şey çizilmiyor
+
+Uydurulmuş bir açıklama, açıklama olmamasından kötüdür. Bunun sessiz bir boşluğa
+dönüşmemesi için ayrı bir test var: arayüzde bağlanan **her** anahtarın sözlükte
+bulunması zorunlu.
+
+### Nasıl görünüyor
+
+Her metrik döşemesinin yanında ⓘ düğmesi: fare kullanıcısı `title` ile görüyor, tıklama
+dokunmatik için — ikisi de aynı iki cümleyi gösteriyor (ne ölçüyor + ne zaman sorun).
+Sözlük sunucudan bağımsız olduğu için modül seviyesinde bir kez alınıyor; her sorgu
+satırı açılışında yeniden istenmiyor. Alınamazsa sessizce yutuluyor: açıklama bir **ek**
+bilgi, sayfayı engellememeli.
+
+Bağlanan dokuz döşeme: cache isabeti, geçici dosya, I/O bekleme payı, kararsızlık, toplam
+etki payı, çağrı başına WAL, CPU payı, bekleme payı, kullanılmayan bellek izni.
+
+Test: `tests/test_metric_dictionary_surface.py` (5 test).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

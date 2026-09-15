@@ -4118,6 +4118,26 @@ export interface components {
             /** Unit */
             unit: string;
         };
+        /**
+         * MetricMeaningOut
+         * @description Bir metriğin kullanıcıya anlatımı (Faz 30 İŞ 3).
+         *
+         *     Uç eskiden `list[dict]` dönüyordu: OpenAPI'de alansız bir sözlük, yani arayüz tarafında
+         *     türetilecek bir tip YOK. Açıklama metinleri arayüze elle yazılsaydı aynı metriğin iki
+         *     farklı tanımı olurdu ve kullanıcı hangisine güveneceğini bilemezdi.
+         */
+        MetricMeaningOut: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Meaning */
+            meaning: string;
+            /** Unit */
+            unit: string;
+            /** When Problem */
+            when_problem: string;
+        };
         /** MetricSampleOut */
         MetricSampleOut: {
             /** Active Connections */
@@ -8284,9 +8304,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    }[];
+                    "application/json": components["schemas"]["MetricMeaningOut"][];
                 };
             };
         };

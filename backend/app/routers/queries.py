@@ -9,6 +9,7 @@ from app.database import get_db
 from app.domain.query_metrics import derive_metrics, flag_metrics, metric_dictionary
 from app.models import CapturedPlan, Instance, Node, Server, SlowQuerySample
 from app.schemas import (
+    MetricMeaningOut,
     CapturedPlanListOut,
     CapturedPlanOut,
     ExplainOut,
@@ -58,7 +59,7 @@ _ADVICE_CACHE_TTL_SECONDS = 300.0
 # eşleştiriyor ve `/{instance_id}` her tek segmenti yakalıyor. Bu uç eskiden dosyanın
 # sonundaydı ve `GET /metric-dictionary` "metric-dictionary" bir instance_id sanılarak
 # 422 dönüyordu — sözlüğe hiç erişilemiyordu (Faz 29 İŞ 2a düzeltmesi).
-@router.get("/metric-dictionary", response_model=list[dict])
+@router.get("/metric-dictionary", response_model=list[MetricMeaningOut])
 async def get_metric_dictionary() -> list[dict]:
     """Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).
 
