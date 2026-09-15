@@ -2,64 +2,122 @@
 
 [![CI](https://github.com/desmindai-stack/database_mon/actions/workflows/ci.yml/badge.svg)](https://github.com/desmindai-stack/database_mon/actions/workflows/ci.yml)
 
-Multi-database DBA monitoring (PostgreSQL, SQL Server, MongoDB) with alerts and trend-based predictions.
+PostgreSQL ve SQL Server için kurumsal DBA izleme, performans analizi ve troubleshooting
+platformu. Çok müşterili: bir müşterinin uygulamaları, uygulamaların veritabanı grupları
+(standalone, Patroni cluster, Always On AG) ve bu grupların düğümleri tek yerden izlenir.
 
-**Bulut (Faz 1 — geliştirme/test):** [deploy/cloud/BULUT-KURULUM.md](deploy/cloud/BULUT-KURULUM.md)  
-**Yaşam döngüsü (bulut → on-prem paket):** [docs/YASAM-DONGUSU.md](docs/YASAM-DONGUSU.md)  
-**On-prem paket kurulumu (Faz 3):** [deploy/onprem/KURULUM.md](deploy/onprem/KURULUM.md)
+Aynı veriden iki ayrı çıktı üretir: **DBA** için derin, komutlu, eyleme dönük analiz;
+**müşteri yöneticisi** için özet, risk ve trend.
 
-**Türkçe mimari (bulut):** [docs/MIMARI.md](docs/MIMARI.md)
+## İçindekiler
 
-## Features
+- [Ne yapıyor](#ne-yapıyor)
+- [Mimari](#mimari)
+- [Hızlı başlangıç (yerel geliştirme)](#hızlı-başlangıç-yerel-geliştirme)
+- [İlk kurulum — kimlik doğrulama](#i̇lk-kurulum--kimlik-doğrulama)
+- [İzlenecek veritabanını hazırlama](#i̇zlenecek-veritabanını-hazırlama)
+- [Testler](#testler)
+- [API tipleri (TypeScript)](#api-tipleri-typescript)
+- [PgBouncer / connection pooler arkasında çalışma](#pgbouncer--connection-pooler-arkasında-çalışma)
+- [PostgreSQL sürüm yetenek matrisi](#postgresql-sürüm-yetenek-matrisi)
+- [İzleme yükü](#i̇zleme-yükü)
+- [Dokümanlar](#dokümanlar)
 
-- **Multi-instance monitoring** — register many PostgreSQL servers
-- **Core metrics** — connections, TPS, cache hit ratio, DB size, replication lag, deadlocks
-- **Slow queries** — top queries from `pg_stat_statements`
-- **Web dashboard** — React UI with live charts
-- **Alerting** — threshold rules with active alert events
+## Ne yapıyor
 
-## Architecture
+| Alan | İçerik |
+|---|---|
+| **Desteklenen motorlar** | PostgreSQL 12-18 (standalone, Patroni 2-3 düğüm + DR), SQL Server (standalone, Always On AG + DR). MongoDB için temel bir collector var, yalnızca standalone. |
+| **Çok müşterili yapı** | Müşteri → Uygulama → Veritabanı grubu → Düğüm + Sunucu. `public` (çok müşteri) ve `private` (tek müşteri, izole) dağıtım modu. |
+| **Veritabanı detayı (DPA)** | Metrik grafikleri, veritabanı yükü (AAS) + bekleme kırılımı, yavaş sorgular (`pg_stat_statements` / DMV), EXPLAIN ve auto_explain ile yakalanan gerçek planlar, tahmini/gerçek satır sapması, bloklama zinciri ve geçmişi, deadlock, index önerisi, şema sağlığı, ön koşul kontrolü, tuning. |
+| **Cluster sağlığı** | Patroni/Always On durumu, etcd quorum, split-brain tespiti, parametre sapması, host-agent üzerinden servis durumu ve log tail. |
+| **Tahminler** | Trend tabanlı öngörü (tarih tek nokta değil aralık), adım adım playbook, doğruluk geri beslemesi. |
+| **Sağlık raporu** | Teknik (DBA) ve yönetici raporu, zamanlanmış üretim, PDF/CSV. Bulgular kanıtlı ve durum makinesine bağlı. |
+| **Alarmlar** | Varsayılan + özel (SQL tabanlı) kurallar, olay geçmişi. |
+| **Diğer** | Yedek izleme, bakım pencereleri, SLA hedefleri, JWT kimlik doğrulama (admin / salt-okunur viewer). |
+
+Bilerek yapılmamış işler ve açık varsayımlar (ör. host-agent'ın CPU/RAM/disk toplamaması)
+[CLAUDE.md](CLAUDE.md#bilinen-sınırlar) ve [SORULAR.md](SORULAR.md)'de.
+
+## Mimari
 
 ```
-┌─────────────┐     poll every 15s     ┌──────────────────┐
-│ PostgreSQL  │ ◄──────────────────────│  FastAPI backend │
-│  instances  │                        │  (collector+API) │
-└─────────────┘                        └────────┬─────────┘
-                                                │
-                                       SQLite (metadata + metrics)
-                                                │
-                                       ┌────────▼─────────┐
-                                       │  React dashboard │
-                                       └──────────────────┘
+┌─────────────────┐              ┌──────────────────────────┐
+│ React dashboard │ ◄──  REST ──►│ FastAPI  (RUN_MODE=api)   │
+└─────────────────┘              └────────────┬─────────────┘
+                                              │
+                          metadata + metrik geçmişi
+                   (yerelde SQLite, canlıda PostgreSQL/Supabase)
+                                              │
+                                 ┌────────────▼─────────────┐
+                                 │ Worker (RUN_MODE=worker)  │
+                                 │ APScheduler döngüleri     │
+                                 └────────────┬─────────────┘
+                     ┌────────────────────────┼──────────────────┐
+                     ▼                        ▼                  ▼
+                PostgreSQL               SQL Server         host-agent
+            (asyncpg, salt-okuma)     (aioodbc, DMV)    (systemd + log tail)
 ```
 
-## Quick start (local dev)
+API ve worker aynı kod tabanıdır; `RUN_MODE` hangi rolde çalışacağını seçer. Yerelde
+`RUN_MODE=all` (varsayılan) ikisini tek süreçte çalıştırır. Canlıda **ikisini ayrı servis
+olarak** çalıştırın — ikisi de `all` kalırsa toplama döngüsü iki kez çalışır.
 
-### 1. Demo PostgreSQL (optional)
+Kodda yön bulma, servis sorumlulukları ve zamanlanmış işlerin listesi:
+**[docs/MIMARI.md](docs/MIMARI.md)**.
+
+| Katman | Teknoloji |
+|---|---|
+| Backend | Python 3.12 (canlı), FastAPI, SQLAlchemy 2.0 async, Pydantic v2, APScheduler, sqlglot, reportlab |
+| Frontend | React 19, React Router 7, Recharts, Vite 6, TypeScript 5.7 |
+| Testler | pytest (backend + frontend statik denetimleri), Playwright (tarayıcı) |
+
+## Hızlı başlangıç (yerel geliştirme)
+
+**Gereksinimler:** Python 3.12+, Node 20+, isteğe bağlı Docker (demo PostgreSQL için).
+SQL Server izleyecekseniz makinede **ODBC Driver 18 for SQL Server** kurulu olmalı.
+
+> **Python sürümü:** Canlı ortam ve CI 3.12 kullanıyor. Yerelde daha yeni bir sürüm
+> (ör. 3.14) çalışır, ama annotation değerlendirmesi farklı olduğu için bazı hatalar yalnızca
+> 3.12'de görünür — ayrıntı için [CLAUDE.md](CLAUDE.md#kurallar).
+
+### 1. Demo PostgreSQL (isteğe bağlı)
 
 ```bash
 docker compose up -d postgres-demo
 ```
 
-Connects on `localhost:5433` with user/password `postgres`.
+`localhost:5433`, kullanıcı/şifre `postgres`. `pg_stat_statements` yüklü gelir
+(`docker/init-demo.sql`).
 
-Enable slow query stats (already applied via init script):
-
-```sql
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-```
+> Demo konteyner `pg_stat_statements.track=all` ile başlıyor; bu, her şeyi görmek isteyen
+> geliştirme ortamı için. Canlı sunucularda `top` önerilir — bkz.
+> [İzlenecek veritabanını hazırlama](#i̇zlenecek-veritabanını-hazırlama).
 
 ### 2. Backend
 
 ```bash
 cd backend
 python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+cp ../.env.example .env            # yerelde DATABASE_URL satırını silin → SQLite kullanılır
 uvicorn app.main:app --reload --port 8000
 ```
 
-API docs: http://localhost:8000/docs
+- API dokümantasyonu: http://localhost:8000/docs
+- Sağlık kontrolü: http://localhost:8000/api/health
+- Yerel veritabanı: `backend/data/dbace.db` (ilk açılışta oluşur)
+
+`.env.example` canlı (Supabase) değerleriyle geliyor. Yerelde `DATABASE_URL` tanımlı
+değilse SQLite kullanılır; `SUPABASE_*` değişkenleri boş kalabilir. Tüm ortam değişkenleri
+ve açıklamaları: **[DEPLOY.md](DEPLOY.md)**.
+
+Demo verisi (örnek müşteri/uygulama/grup hiyerarşisi) için:
+
+```bash
+python scripts/seed_demo.py        # idempotent, tekrar çalıştırılabilir
+```
 
 ### 3. Frontend
 
@@ -69,42 +127,160 @@ npm install
 npm run dev
 ```
 
-Dashboard: http://localhost:5173
+Dashboard: http://localhost:5173 — Vite, `/api` isteklerini `127.0.0.1:8000`'e yönlendirir.
 
-### API tipleri (TypeScript)
+### 4. İlk veritabanını ekleme
 
-`frontend/src/api-types.ts` **otomatik üretilir, elle düzenlenmez.** Kaynağı backend'in
-OpenAPI şemasıdır. Elle yazılmış tipler API'den sessizce ayrıştığı için canlı çökmeler
-yaşandı (`ReportFinding.facts` tipte "her zaman var" diyordu, API onu hiç döndürmüyordu);
-bu üretim o sınıfı derleme zamanına taşıyor.
+1. Admin hesabıyla giriş yapın (bkz. [İlk kurulum](#i̇lk-kurulum--kimlik-doğrulama)).
+2. **Müşteriler** sayfasında **+ Veritabanı ekle** — sihirbaz müşteri, uygulama ve
+   veritabanı grubunu (standalone / Patroni / Always On) adım adım oluşturur.
+3. Sihirbazdaki **Bağlantıyı test et** adımı, kaydetmeden önce kimlik bilgisini doğrular.
 
-Backend'de bir şema değiştirdiyseniz tipleri yeniden üretin ve sonucu commit'leyin:
+Aynı işlem API ile de yapılabilir: `POST /api/instances` (bkz. http://localhost:8000/docs).
+
+### Docker ile tüm yığın
+
+Kapalı ortam (on-prem) paketi tam yığını — PostgreSQL metadata veritabanı, API/worker ve
+nginx arkasında dashboard — tek komutla kurar:
+**[deploy/onprem/KURULUM.md](deploy/onprem/KURULUM.md)**.
+
+> **Bilinen sorun:** Kök dizindeki `docker-compose.yml` içindeki `backend` + `frontend`
+> servisleri şu an birlikte çalışmıyor. Web imajının nginx ayarı API'yi `dbace-app:8000`
+> adresinde arıyor, kök compose ise servisi `backend` diye adlandırıyor; dashboard
+> (http://localhost:8080) açılır ama API çağrıları başarısız olur. Kök compose'u yalnızca
+> `postgres-demo` için kullanın, tam yığın için on-prem paketini kullanın.
+
+## İlk kurulum — kimlik doğrulama
+
+`/api/health` ve `/api/auth/login` (+`/refresh`) dışında her API ucu bir oturum (JWT)
+gerektirir. Değişiklik yapan uçlar ayrıca `admin` rolü ister; `viewer` salt-okunurdur.
+
+### Kimlik doğrulama değişkenleri
+
+| Değişken | Zorunlu mu | Açıklama |
+|---|---|---|
+| `JWT_SECRET` | Canlıda zorunlu | Token imzalama anahtarı — uzun, rastgele. Yerelde bir varsayılanı var; kullanılırsa her açılışta uyarı loglanır. |
+| `CREDENTIALS_MASTER_KEY` | Canlıda zorunlu | İzlenen veritabanı şifrelerini (Fernet) şifreler. Değiştirilirse kayıtlı şifreler çözülemez. |
+| `ADMIN_USERNAME` | Hayır (varsayılan `admin`) | İlk açılışta oluşturulacak admin kullanıcı adı |
+| `ADMIN_PASSWORD` | Hayır, ama önerilir | Boşsa rastgele bir şifre üretilip **yalnızca bir kez** loglanır |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | Hayır (varsayılan 60) | Access token ömrü |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | Hayır (varsayılan 7) | Refresh token ömrü |
+
+### İlk giriş
+
+1. Backend'i ilk kez başlatın. `users` tablosunda bu kullanıcı adıyla kayıt yoksa bir admin
+   oluşturulur (log: `Admin oluşturuldu: <kullanıcı adı>`). `ADMIN_PASSWORD` tanımlı
+   değilse üretilen şifre **bir kez** loglanır
+   (`ADMIN_PASSWORD not set — generated initial admin credentials: ...`) — bu satırı
+   kaydedin, bir daha gösterilmez.
+2. Dashboard'a bu kullanıcı adı/şifreyle giriş yapın.
+3. İlk girişte şifre değiştirme zorunludur; sistem sizi şifre değiştirme ekranına yönlendirir.
+
+### `ADMIN_PASSWORD`'u `.env`'e sonradan eklediyseniz
+
+Kullanıcı henüz ilk şifre değişikliğini yapmamışsa, bir sonraki açılışta şifre `.env`'deki
+değere senkronize edilir (log: `Admin şifresi .env'den güncellendi: <kullanıcı adı>`).
+Kullanıcı kendi şifresini zaten belirlemişse `.env` bir daha **asla** üzerine yazmaz — bu
+durumda aşağıdaki betiği kullanın.
+
+### Şifre unutulursa / hesap kilitlenirse
+
+Sunucuya doğrudan erişiminiz varsa, `backend/` dizininden:
 
 ```bash
-cd frontend
-npm run gen:types          # backend'i çalıştırmadan üretir (python gerekir)
-npm run gen:types:live     # çalışan bir backend'in /openapi.json ucundan üretir
+python scripts/reset_admin_password.py <kullanici_adi> <yeni_sifre>
+python scripts/reset_admin_password.py <kullanici_adi> <yeni_sifre> --activate   # pasif kullanıcıyı da aktifleştirir
 ```
 
-`gen:types:live` varsayılan olarak `http://localhost:8000` adresine bakar;
-`DBACE_API_URL` ile değiştirilebilir.
+Betik şifreyi hemen ayarlar ve "ilk girişte şifre değiştir" zorunluluğunu kaldırır — betiği
+çalıştırabilen kişinin zaten sunucuya erişimi olduğundan, arayüzde ayrıca zorlamanın bir
+güvenlik faydası yok.
 
-CI, tipleri yeniden üretip commit'lenmiş hâliyle karşılaştırır — farklıysa iş kırmızı olur
-("backend değişmiş ama tipler güncellenmemiş" demektir).
+> Logout stateless'tır: JWT sunucu tarafında iptal edilmez, süresi dolana kadar geçerlidir.
 
-### Gerçek PostgreSQL'e karşı testler (Faz 29 İŞ 1)
+## İzlenecek veritabanını hazırlama
+
+dbace izlenen oturumu salt-okunura **zorlamaz**; güvenlik, verdiğiniz kimlik bilgisinin
+yetkisine dayanır. Bu yüzden izleme için ayrı, yalnızca okuma yetkili bir kullanıcı açın.
+
+### PostgreSQL
+
+```sql
+CREATE USER dbace_monitor WITH PASSWORD 'changeme';
+GRANT pg_monitor TO dbace_monitor;
+GRANT CONNECT ON DATABASE yourdb TO dbace_monitor;
+```
+
+`postgresql.conf` (yeniden başlatma gerektirir):
+
+```
+shared_preload_libraries = 'pg_stat_statements'
+pg_stat_statements.track = top
+```
+
+`track = top` (varsayılan) yalnızca en üst seviye ifadeleri kaydeder — dbace'in okuduğu tam
+olarak budur. `track = all`, PL/pgSQL fonksiyon/tetikleyici içindeki her ifadeyi de kaydeder;
+izlenen kayıt sayısını ve çalıştırma başına yükü artırır, ama dbace'in yavaş sorgu ekranına
+bir şey katmaz. Yalnızca belirli bir fonksiyonun içini ayıklarken geçici olarak açın.
+
+Gerçek çalıştırma planlarının yakalanması (auto_explain) ve yönetilen servislerdeki
+(RDS, Azure, Cloud SQL) farklar: **[docs/AUTO_EXPLAIN.md](docs/AUTO_EXPLAIN.md)**.
+
+### SQL Server
+
+Bağlantı `aioodbc` ile, varsayılan olarak **ODBC Driver 18 for SQL Server** üzerinden kurulur
+(bağlantı seçeneklerinde `odbc_driver` ile değiştirilebilir). DMV'leri okuyabilmek için izleme
+kullanıcısına en az `VIEW SERVER STATE` yetkisi gerekir; yedek izleme `msdb` geçmişini okur.
+
+SQL Server'da `statement_timeout` karşılığı yoktur; sorgular `SET LOCK_TIMEOUT 5000` ile
+korunur. Bu, PostgreSQL'e göre daha zayıf bir korumadır (gerekçe SORULAR.md'de).
+
+### Patroni cluster: host-agent
+
+Patroni/etcd/HAProxy/Keepalived servis durumu, VIP sahipliği ve log tail için her düğüme
+küçük bir ajan kurulur: **[agents/host-agent/README.md](agents/host-agent/README.md)**.
+Host-agent işletim sistemi metriği (CPU/RAM/disk) **toplamaz**. Cluster değerlendirmesinin
+nasıl yapıldığı: **[docs/CLUSTER_HEALTH.md](docs/CLUSTER_HEALTH.md)**.
+
+## Testler
+
+Her değişiklikten sonra en az şu ikisi yeşil olmalı:
+
+```bash
+cd backend && python -c "from app.main import app"
+cd frontend && npm run build
+```
+
+### Backend (pytest)
+
+```bash
+cd backend
+.venv/Scripts/python.exe -m pytest tests/ -q     # Windows
+.venv/bin/python -m pytest tests/ -q             # Linux/macOS
+python scripts/check_model_integrity.py          # import + Pydantic + OpenAPI bütünlüğü (CI'daki ilk adım)
+```
+
+pytest kendi veritabanını (`backend/data/dbace_pytest.db`) kullanır; geliştirme veritabanına
+dokunmaz.
+
+Frontend'in kendi birim test koşucusu **yok**. Arayüz garantileri backend'deki statik
+denetim testleriyle korunuyor: `test_navigation_integrity.py`,
+`test_frontend_state_handling.py`, `test_ui_consistency.py`, `test_ui_terminology.py`,
+`test_definition_order.py`.
+
+### Gerçek PostgreSQL'e karşı testler
 
 Bazı davranışlar sahte bağlantıyla **doğrulanamaz**, çünkü kırılan şey sorgunun sunucuya
-hangi protokolle gittiği. EXPLAIN özelliği tam olarak bu yüzden üç tur boyunca "testler
-yeşil" görünürken canlıda hiç çalışmadı.
+hangi protokolle gittiği. EXPLAIN özelliği tam da bu yüzden üç tur boyunca "testler yeşil"
+görünürken canlıda çalışmadı.
 
 `tests/test_explain_live_postgres.py` gerçek bir sunucuya bağlanır; `DBACE_TEST_PG_DSN`
-tanımlı değilse **atlanır** (CI'da PostgreSQL yok, suite kırmızıya dönmez).
+tanımlı değilse **atlanır** (CI'da PostgreSQL yok).
 
 ```bash
 docker run -d --name dbace-pg17 -e POSTGRES_PASSWORD=dbace -e POSTGRES_DB=dbace \
     -p 55432:5432 postgres:17
-# Index önerisinin fayda ölçümü için (opsiyonel):
+# Index önerisinin fayda ölçümü için (isteğe bağlı):
 docker exec -u root dbace-pg17 apt-get update -qq
 docker exec -u root dbace-pg17 apt-get install -y -qq postgresql-17-hypopg
 docker exec dbace-pg17 psql -U postgres -d dbace -c "CREATE EXTENSION hypopg"
@@ -114,195 +290,87 @@ DBACE_TEST_PG_DSN=postgresql://postgres:dbace@127.0.0.1:55432/dbace \
     .venv/Scripts/python.exe -m pytest tests/test_explain_live_postgres.py -v
 ```
 
-Birden çok sürümü tek koşuda denemek için DSN'leri virgülle ayırın; testler her DSN için
-ayrı ayrı çalışır. Faz 29'da PostgreSQL **17.11** ve **15.19** ile koşuldu.
+Birden çok sürümü tek koşuda denemek için DSN'leri virgülle ayırın. Faz 29'da PostgreSQL
+**17.11** ve **15.19** ile koşuldu.
 
 ### Tarayıcı testleri (Playwright)
 
 Backend testleri API katmanında durur; arayüz çökmelerini (rapor bulgu detayı, silinmiş kayda
-gitme, boş form) yalnızca gerçek tarayıcı yakalar. Bu paket o katmanı kapatır.
+gitme, boş form) yalnızca gerçek tarayıcı yakalar.
 
 ```bash
 cd frontend
 npx playwright install chromium   # ilk seferde bir kez
 npm run test:e2e                  # tamamı
-npm run test:e2e:critical         # yalnızca @critical akışlar (CI her push'ta bunu koşar)
-npm run test:e2e:ui               # etkileşimli mod — adım adım izlemek için
+npm run test:e2e:critical         # yalnızca @critical akışlar
+npm run test:e2e:ui               # etkileşimli mod
 ```
 
-Backend ve frontend sunucularını Playwright **kendisi başlatır**; elle `npm run dev`
-çalıştırmanız gerekmez (çalışıyorsa da sorun olmaz, ayrı portlar kullanılır: API 8001,
-web 5174).
+Playwright backend ve frontend'i **kendisi başlatır** (API 8001, web 5174); çalışan bir
+`npm run dev` ile çakışmaz. E2E kendi SQLite dosyasını (`backend/data/dbace_e2e.db`) kullanır
+ve her çalıştırmadan önce siler; toplayıcı kapalıdır (`RUN_MODE=api`), yani testler hiçbir
+hedef veritabanına bağlanmaz.
 
-**Veri izolasyonu:** e2e kendi SQLite dosyasını (`backend/data/dbace_e2e.db`) kullanır ve her
-çalıştırmadan önce siler. Geliştirme (`dbace.db`) ve pytest (`dbace_pytest.db`) veritabanlarına
-dokunmaz. Toplayıcı kapalıdır (`RUN_MODE=api`), yani testler sırasında hiçbir hedef veritabanına
-bağlanılmaz.
-
-Bir test kırıldığında ekran görüntüsü, video ve iz `frontend/test-results/` altına yazılır:
+Kırılan testin ekran görüntüsü, videosu ve izi `frontend/test-results/` altına yazılır:
 
 ```bash
 npx playwright show-trace test-results/<klasör>/trace.zip
 ```
 
-CI her push'ta `@critical` akışları, gecelik zamanlamada tam paketi koşar; başarısız testin
-kanıtları artifact olarak yüklenir.
+### CI
 
-### 4. Add an instance
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) her push'ta şunları koşar:
 
-In the UI go to **Instances → Add instance**, or POST to `/api/instances`:
+| İş | Ne kontrol ediyor |
+|---|---|
+| Backend (Python 3.12) | Model bütünlüğü + pytest — canlıyla aynı Python sürümünde |
+| Frontend (Node 20) | `tsc -b` + `npm run build` |
+| Tip sürüklenmesi | OpenAPI'den tipleri yeniden üretir, commit'lenmiş hâliyle karşılaştırır |
+| Tarayıcı testleri | Push'ta `@critical` akışlar; gecelik ve elle tetiklemede tam paket. Hata kanıtları artifact olarak yüklenir. |
 
-```json
-{
-  "name": "local-demo",
-  "host": "localhost",
-  "port": 5433,
-  "database": "postgres",
-  "username": "postgres",
-  "password": "postgres"
-}
-```
+## API tipleri (TypeScript)
 
-## İlk kurulum — kimlik doğrulama
+`frontend/src/api-types.ts` **otomatik üretilir, elle düzenlenmez.** Kaynağı backend'in
+OpenAPI şemasıdır. Elle yazılmış tipler API'den sessizce ayrıştığı için canlı çökmeler
+yaşandı; bu üretim o hata sınıfını derleme zamanına taşıyor.
 
-`/api/health` ve `/api/auth/login` (+`/refresh`) dışında her API ucu bir
-oturum (JWT) gerektirir — dashboard'a girmeden önce bir admin hesabıyla
-giriş yapmanız gerekir.
-
-### Zorunlu / önerilen `.env` değişkenleri
-
-| Değişken | Zorunlu mu | Açıklama |
-|---|---|---|
-| `JWT_SECRET` | Prod'da zorunlu (dev'de bir varsayılanı var, kullanılırsa her açılışta uyarı loglanır) | Token imzalama anahtarı — uzun, rastgele bir değer olmalı |
-| `ADMIN_USERNAME` | Hayır (varsayılan `admin`) | İlk açılışta oluşturulacak admin kullanıcının adı |
-| `ADMIN_PASSWORD` | Hayır ama önerilir | Belirtilmezse rastgele bir şifre üretilip **sadece bir kez** loglanır — kaçırırsanız aşağıdaki "şifre unutuldu" adımına bakın |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | Hayır (varsayılan 60) | Access token ömrü |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | Hayır (varsayılan 7) | Refresh token ömrü |
-
-Örnek değerler için `.env.example`'a bakın.
-
-### İlk giriş
-
-1. Backend'i `ADMIN_USERNAME`/`ADMIN_PASSWORD` `.env`'de tanımlıyken ilk kez
-   başlatın. Açılışta `users` tablosunda bu kullanıcı adıyla kayıt yoksa bir
-   admin oluşturulur (log: `Admin oluşturuldu: <kullanıcı adı>`).
-   `ADMIN_PASSWORD` tanımlı değilse rastgele bir şifre üretilip **bir kez**
-   loglanır (`ADMIN_PASSWORD not set — generated initial admin credentials: ...`)
-   — bu satırı kaydedin, bir daha gösterilmez.
-2. Dashboard'ı açıp bu kullanıcı adı/şifreyle giriş yapın.
-3. İlk girişte şifre değiştirme zorunludur — sistem sizi otomatik olarak
-   şifre değiştirme ekranına yönlendirir.
-
-### `.env`'e `ADMIN_PASSWORD`'u sonradan eklediyseniz
-
-Admin kullanıcısı `ADMIN_PASSWORD` `.env`'e eklenmeden ÖNCE bir açılışta
-oluşturulmuşsa (rastgele şifre üretilip loglanmış, kaybedilmiş olabilir),
-şifreyi `.env`'e eklemek tek başına yeterlidir: kullanıcı henüz ilk şifre
-değişikliğini yapmamışsa, bir sonraki backend açılışında şifre otomatik
-olarak `.env`'deki değere senkronize edilir (log:
-`Admin şifresi .env'den güncellendi: <kullanıcı adı>`). Kullanıcı zaten
-kendi şifresini belirlemişse, `.env`'deki değer bir daha ASLA üzerine
-yazmaz — bu durumda aşağıdaki CLI script'ini kullanın.
-
-### Şifre unutulursa / hesap kilitlenirse
-
-Veritabanına/sunucuya doğrudan erişiminiz varsa, `backend/` dizininden:
+Backend'de bir şema değiştirdiyseniz tipleri yeniden üretin ve sonucu commit'leyin:
 
 ```bash
-python scripts/reset_admin_password.py <kullanici_adi> <yeni_sifre>
+cd frontend
+npm run gen:types          # backend'i çalıştırmadan üretir (python gerekir)
+npm run gen:types:live     # çalışan bir backend'in /openapi.json ucundan üretir
 ```
 
-Kullanıcı pasifleştirilmişse (`is_active=false`) aynı anda aktifleştirmek için:
-
-```bash
-python scripts/reset_admin_password.py <kullanici_adi> <yeni_sifre> --activate
-```
-
-Script şifreyi hemen ayarlar ve "ilk girişte şifre değiştir" zorunluluğunu
-kaldırır — script'i çalıştırabilen kişinin zaten sunucuya doğrudan erişimi
-olduğundan, web arayüzünde ayrıca bir şifre-değiştir adımına zorlamanın
-güvenlik faydası yoktur.
+`gen:types:live` varsayılan olarak `http://localhost:8000` adresine bakar; `DBACE_API_URL`
+ile değiştirilebilir. CI tipler güncel değilse kırmızı olur.
 
 ## PgBouncer / connection pooler arkasında çalışma
 
-dbace'in izlediği bir PostgreSQL sunucusu (veya dbace'in kendi meta veri tabanı — Supabase dahil)
-PgBouncer ya da Supabase'in pooler'ı gibi bir bağlantı havuzlayıcısının arkasındaysa ve havuzlayıcı
-`transaction` veya `statement` pool_mode'da çalışıyorsa, aşağıdaki gibi bir hata görebilirdiniz:
+İzlenen bir PostgreSQL sunucusu (ya da dbace'in kendi metadata veritabanı — Supabase dahil)
+`transaction` veya `statement` pool_mode'daki bir havuzlayıcının arkasındaysa şu hata
+görülebilirdi:
 
 ```
 prepared statement "__asyncpg_stmt_21__" already exists
 pgbouncer cannot support prepared statements in transaction/statement pooling mode
 ```
 
-Sebep: asyncpg (dbace'in PostgreSQL sürücüsü) varsayılan olarak sorguları isimli bir "prepared
-statement" olarak sunucuda önbelleğe alır. Transaction/statement modundaki bir havuzlayıcı, aynı
-istemci bağlantısındaki ardışık sorguları farklı gerçek sunucu bağlantılarına yönlendirebilir —
-bu yüzden bir sorgu, kendisini hiç görmemiş bir bağlantıda "EXECUTE" edilmeye çalışılır.
+**Sebep:** asyncpg sorguları varsayılan olarak isimli prepared statement olarak önbelleğe
+alır; havuzlayıcı ardışık sorguları farklı sunucu bağlantılarına yönlendirince sorgu, onu hiç
+görmemiş bir bağlantıda çalıştırılmaya çalışılır.
 
-dbace bunu artık her asyncpg bağlantısında (collector, activity, schema health, parametre
-denetimi, EXPLAIN, index advisor ve dbace'in kendi meta veri tabanı bağlantısı dahil)
-`statement_cache_size=0` ile koşulsuz olarak devre dışı bırakarak çözer — havuzlayıcı olsun ya da
-olmasın, ek bir maliyeti yoktur.
+**Çözüm:** dbace her asyncpg bağlantısında (collector, aktivite, şema sağlığı, parametre
+denetimi, EXPLAIN, index önerisi ve kendi metadata bağlantısı) `statement_cache_size=0`
+kullanır — havuzlayıcı olsun ya da olmasın, ek maliyeti yoktur. `DATABASE_URL`
+`postgresql+asyncpg://` ise aynı koruma otomatik uygulanır.
 
-Bu hata yine de bir yerden sızarsa (ör. tespit edilemeyen özel bir kurulum), API anlaşılır bir
-Türkçe mesaj döner ve pooler'ı işaretlemenizi önerir. Instance/Node ekleme formunda ve sihirbazda
-**"Pooler kullanılıyor"** seçeneği bulunur:
+Hata yine de sızarsa API anlaşılır bir Türkçe mesaj döner. Veritabanı/düğüm ekleme formunda
+ve sihirbazda **"Pooler kullanılıyor"** seçeneği vardır:
 
-- **Otomatik algıla** (varsayılan) — host adı `pooler`/`pgbouncer` içeriyorsa veya port
-  `6432`/`6543` ise (Supabase'in pooled portu 6543, PgBouncer'ın paket varsayılanı 6432) pooler
-  olarak kabul edilir.
-- **Evet / Hayır** — otomatik tespiti geçersiz kılar; standart olmayan bir host/port üzerinde
-  çalışan bir PgBouncer için elle işaretleyin.
-
-dbace'in kendi meta veri tabanı için (`DATABASE_URL` bir Supabase/PgBouncer bağlantısıysa) ayrı
-bir ayar gerekmez — `postgresql+asyncpg://` şemasını gördüğünde SQLAlchemy motoru otomatik olarak
-aynı korumayı uygular.
-
-## Docker (all services)
-
-```bash
-docker compose up --build
-```
-
-- Dashboard: http://localhost:5173
-- API: http://localhost:8000
-- Demo Postgres: localhost:5433
-
-## API overview
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/instances/summary` | Dashboard overview |
-| `POST /api/instances` | Register instance |
-| `POST /api/instances/test` | Test connection |
-| `GET /api/metrics/{id}` | Time-series metrics |
-| `GET /api/queries/{id}` | Slow queries |
-| `GET/POST /api/alerts/rules` | Alert rules |
-| `GET /api/alerts/events` | Active alerts |
-
-## Recommended PostgreSQL setup for monitoring
-
-Create a dedicated monitoring user with read-only access:
-
-```sql
-CREATE USER pgwatch WITH PASSWORD 'changeme';
-GRANT pg_monitor TO pgwatch;
-GRANT CONNECT ON DATABASE yourdb TO pgwatch;
-```
-
-For `pg_stat_statements`, add to `postgresql.conf`:
-
-```
-shared_preload_libraries = 'pg_stat_statements'
-pg_stat_statements.track = top
-```
-
-`track = top` (the default) only records top-level statements — exactly what
-dbace's collector reads. `track = all` additionally records every statement
-nested inside PL/pgSQL functions/triggers, which multiplies the number of
-tracked entries (and the bookkeeping overhead per execution) without adding
-anything dbace's slow-query view uses. Only switch to `all` if you're
-debugging inside a specific function and plan to switch back afterward.
+- **Otomatik algıla** (varsayılan) — host adı `pooler`/`pgbouncer` içeriyorsa ya da port
+  `6432`/`6543` ise pooler kabul edilir.
+- **Evet / Hayır** — standart olmayan host/port üzerindeki bir PgBouncer için elle işaretleyin.
 
 ## PostgreSQL sürüm yetenek matrisi
 
@@ -310,9 +378,7 @@ PostgreSQL sistem katalogları sürümden sürüme değişiyor: sütunlar taşı
 adlandırılıyor, kaldırılıyor. dbace bu farkları **tek yerden** yönetiyor —
 `backend/app/domain/pg_capabilities.py`. Sürüm eşiği koda dağılmıyor.
 
-**Kural: bir metriğin alternatif kaynağı varsa "desteklenmiyor" DENMEZ.** Alternatifi
-varken öyle demek, kullanıcıyı ekranında bir eksiklikle ve başka bir araca yönlenmekle baş
-başa bırakır.
+**Kural: bir metriğin alternatif kaynağı varsa "desteklenmiyor" denmez.**
 
 | Metrik | PG 12-16 | PG 17-18 |
 |---|---|---|
@@ -326,8 +392,8 @@ başa bırakır.
 | `io_op_bytes` | 16-17 `pg_stat_io.op_bytes` | **18'de kaldırıldı** |
 | `io_read_bytes/write_bytes_per_sec` | **yok** | 18+ `pg_stat_io` (gerçek bayt sayaçları) |
 
-PostgreSQL 17, `buffers_backend` sütununu `pg_stat_bgwriter`'dan kaldırdı. dbace önceden
-"doğrudan bir karşılığı yok" diyordu — yanlıştı. Aynı bilgi `pg_stat_io` içinde duruyor:
+PostgreSQL 17, `buffers_backend` sütununu `pg_stat_bgwriter`'dan kaldırdı; aynı bilgi
+`pg_stat_io` içinde duruyor:
 
 ```sql
 SELECT SUM(writes), SUM(fsyncs)
@@ -336,12 +402,11 @@ WHERE object = 'relation' AND context = 'normal'
   AND backend_type NOT IN ('checkpointer', 'background writer');
 ```
 
-PostgreSQL 18 `op_bytes` sütununu kaldırıp yerine gerçek bayt sayaçlarını koydu. Bu kod
-tarafında **gerçek bir kırılmaydı**: eski sütunu sormaya devam etmek PG 18'de `pg_stat_io`
-sorgusunun tamamını düşürürdü — tek bir sütun yüzünden `io_reads` ve `io_writes` de
-kaybolurdu. Sorgu artık sürüme göre farklı sütun seçiyor.
+PostgreSQL 18 `op_bytes` sütununu kaldırıp yerine gerçek bayt sayaçlarını koydu. Eski sütunu
+sormaya devam etmek PG 18'de `pg_stat_io` sorgusunun tamamını düşürürdü (tek sütun yüzünden
+`io_reads` ve `io_writes` de kaybolurdu); sorgu artık sürüme göre farklı sütun seçiyor.
 
-Sorgu tarafında da sürüm dallanması var:
+Sorgu tarafındaki sürüm dallanmaları:
 
 | Özellik | Gereken sürüm | Yoksa ne oluyor |
 |---|---|---|
@@ -349,68 +414,75 @@ Sorgu tarafında da sürüm dallanması var:
 | `EXPLAIN (GENERIC_PLAN)` (yer tutuculu sorgu planı) | 16+ | Plan alınamıyor; sebebi ve auto_explain alternatifi yazılıyor |
 | `pg_stat_statements` `total_exec_time` (vs `total_time`) | 13+ | 13 öncesinde eski sütun adları kullanılıyor |
 
-Desteklenen aralık **PostgreSQL 12-18**. Altındaki sunucuya yine bağlanılıyor (en yakın
-davranış + uyarı) — reddetmek, çalışabilecek bir kurulumu boşuna engellerdi. Üstündeki
-sürümlerde en yeni dal kullanılıyor: PostgreSQL katalog değişiklikleri neredeyse her zaman
-eklemeli olduğu için bu, toplamayı durdurmaktan güvenli.
+Desteklenen aralık **PostgreSQL 12-18**. Altındaki sunucuya yine bağlanılır (en yakın
+davranış + uyarı); üstündeki sürümlerde en yeni dal kullanılır, çünkü katalog değişiklikleri
+neredeyse her zaman eklemelidir.
 
-Arayüzde her metriğin kaynağı **Veritabanı detayı → Metrik kaynakları** altında görünüyor.
+Arayüzde her metriğin kaynağı **Veritabanı detayı → Metrik kaynakları** altında görünür.
 
-## Monitoring load (izleme yükü)
+> Bu matris gerçek sunucuların tamamında doğrulanmadı; testler sürüm sahteleyerek hangi
+> sorgunun gönderildiğini kanıtlıyor. Canlı doğrulama yalnızca 15 ve 17'de yapıldı.
 
-dbace is designed so the *cost of being monitored* stays close to zero on a
-normal, healthy target server. This section is the audit: every query dbace
-runs against a monitored instance, how often, and roughly how expensive it
-is — so you can reason about the load on your own production database
-before turning monitoring on.
+## İzleme yükü
 
-### Collection loop — every `collect_interval_seconds` (default 15s, per-instance override supported)
+dbace, sağlıklı bir hedef sunucuda *izlenmenin maliyeti* sıfıra yakın kalacak şekilde
+tasarlandı. Bu bölüm bir denetim listesi: dbace'in izlenen veritabanına gönderdiği her sorgu,
+ne sıklıkla ve kabaca ne maliyetle — canlı sunucunuzda izlemeyi açmadan önce yükü
+değerlendirebilmeniz için.
 
-One connection per cycle (see `services/collection.py` / `collectors/postgresql.py`),
-`statement_timeout = 5000ms` on every query:
+### Toplama döngüsü — her `COLLECT_INTERVAL_SECONDS` (varsayılan 15 sn, veritabanı başına değiştirilebilir)
 
-| Query / source | What it reads | Cost |
+Tur başına tek bağlantı (`services/collection.py`, `collectors/postgresql.py`), her sorguda
+`statement_timeout = 5000ms`:
+
+| Sorgu / kaynak | Ne okuyor | Maliyet |
 |---|---|---|
-| `current_setting('server_version_num')`, `version()` | in-memory | negligible |
-| `pg_stat_database` (one row) | in-memory cumulative counters | negligible |
-| `SHOW max_connections` | GUC read | negligible |
-| `pg_database_size(current_database())` | filesystem stat over the DB's relation files | low, scales with object count (not data volume) — a handful of ms even on large schemas |
-| `pg_last_wal_receive_lsn()` / `pg_last_wal_replay_lsn()` | function call | negligible |
-| `pg_stat_checkpointer` (17+) or `pg_stat_bgwriter` (<17) | in-memory cumulative counters | negligible |
-| `pg_stat_io` (16+ only, version-gated — not even queried below 16) | in-memory view | negligible |
-| `pg_stat_statements` (top ~20 by mean time) | extension's own in-memory ring buffer | negligible — this is exactly what the extension exists for |
+| `current_setting('server_version_num')`, `version()` | bellek | ihmal edilebilir |
+| `pg_stat_database` (tek satır) | bellekteki kümülatif sayaçlar | ihmal edilebilir |
+| `SHOW max_connections` | GUC okuması | ihmal edilebilir |
+| `pg_database_size(current_database())` | veritabanının ilişki dosyaları üzerinde dosya sistemi stat'ı | düşük; veri hacmiyle değil nesne sayısıyla ölçeklenir — büyük şemalarda bile birkaç ms |
+| `pg_last_wal_receive_lsn()` / `pg_last_wal_replay_lsn()` | fonksiyon çağrısı | ihmal edilebilir |
+| `pg_stat_checkpointer` (17+) ya da `pg_stat_bgwriter` (<17) | bellekteki kümülatif sayaçlar | ihmal edilebilir |
+| `pg_stat_io` (yalnızca 16+, altında hiç sorulmaz) | bellekteki view | ihmal edilebilir |
 
-Total per cycle: roughly 8 lightweight queries over one connection, typically
-low single-digit milliseconds combined on a normal server. SQL Server's
-equivalent collector cycle is the DMV/perf-counter analog of the same list,
-guarded with `SET LOCK_TIMEOUT 5000` (SQL Server has no direct client-side
-`statement_timeout` equivalent — see `SORULAR.md` for why LOCK_TIMEOUT was
-chosen over guessing at an ODBC-driver-specific query-timeout attribute).
+Toplam: tek bağlantı üzerinden yaklaşık 7-8 hafif sorgu, normal bir sunucuda toplamda
+genellikle birkaç milisaniye. SQL Server'daki karşılığı aynı listenin DMV/performans sayacı
+eşdeğeridir ve `SET LOCK_TIMEOUT 5000` ile korunur.
 
-### Wait-event sampler — every `wait_sample_interval_seconds` (default 1s)
+### Yavaş sorgu toplama — her `SLOW_QUERY_INTERVAL_SECONDS` (varsayılan 300 sn)
 
-Separate from the collection loop, and much more frequent: cumulative counters
-are fine to read every 15s, but "what is the system waiting on *right now*"
-needs frequent snapshots of instantaneous state. A 15s cadence would miss a
-200ms lock storm entirely.
-
-**One persistent connection per instance**, reused across ticks — reconnecting
-every second would cost more (TCP + TLS handshake + backend fork) than the
-sample query itself. `statement_timeout = 1000ms` (tighter than the collection
-loop's 5000ms: a sampling query that takes over a second is already broken).
-
-| Query / source | What it reads | Cost |
+| Sorgu / kaynak | Ne okuyor | Maliyet |
 |---|---|---|
-| `pg_stat_activity`, filtered to `state='active'` server-side | in-memory view, one row per backend | negligible — no disk access, no catalog scan |
-| `pg_blocking_pids(pid)` | lock manager walk | **only called for rows already waiting on a `Lock`** — a `CASE` guard keeps it off every other row; the answer is meaningless anywhere else |
-| SQL Server: `dm_exec_requests` + `dm_os_waiting_tasks` + `dm_exec_sql_text` | DMVs / plan-cache lookup | low; active requests are few by definition, and `TOP` caps the worst case |
+| `pg_stat_statements` (ortalama süreye göre ilk ~20) | eklentinin kendi bellek içi yapısı | ihmal edilebilir — eklenti tam olarak bunun için var |
 
-One query, one round trip, per instance per tick. Instances are sampled
-concurrently, so one slow server does not delay the others, and the scheduler
-job runs with `max_instances=1` so ticks never overlap.
+Metriklerden seyrek toplanmasının sebebi hedef yükü değil, **dbace'in kendi depolaması**:
+15 sn'de her tur 20 satır yazmak veritabanı başına ayda ~3,5 milyon satır demek.
+`pg_stat_statements` kümülatif olduğu için 5 dakikalık örnekler aynı pencere farklarını verir;
+aylık satır sayısı ~173 bine iner.
 
-**Measuring the cost on your own server** (the sampler's query shows up in
-`pg_stat_statements` like any other):
+### Bekleme örnekleyicisi — her `WAIT_SAMPLE_INTERVAL_SECONDS` (varsayılan 1 sn)
+
+Toplama döngüsünden ayrı ve çok daha sık: kümülatif sayaçları 15 sn'de okumak yeterli, ama
+"sistem şu an ne bekliyor" sorusu anlık durumun sık fotoğrafını ister. 15 sn aralık 200 ms'lik
+bir kilit fırtınasını tamamen kaçırır.
+
+**Veritabanı başına tek kalıcı bağlantı**, turlar arasında yeniden kullanılır — her saniye
+yeniden bağlanmak (TCP + TLS el sıkışması + backend fork) örnekleme sorgusundan pahalıya
+patlardı. `statement_timeout = 1000ms` (bir saniyeden uzun süren örnekleme sorgusu zaten
+bozuktur).
+
+| Sorgu / kaynak | Ne okuyor | Maliyet |
+|---|---|---|
+| `pg_stat_activity`, sunucu tarafında `state='active'` filtreli | bellekteki view, backend başına bir satır | ihmal edilebilir — disk erişimi yok, katalog taraması yok |
+| `pg_blocking_pids(pid)` | kilit yöneticisi taraması | **yalnızca zaten `Lock` bekleyen satırlarda** çağrılır — bir `CASE` koruması onu diğer satırlardan uzak tutar |
+| SQL Server: `dm_exec_requests` + `dm_os_waiting_tasks` + `dm_exec_sql_text` | DMV'ler / plan önbelleği | düşük; aktif istek sayısı tanımı gereği azdır ve `TOP` en kötü durumu sınırlar |
+
+Veritabanı başına tur başına tek sorgu, tek gidiş-dönüş. Veritabanları eşzamanlı örneklenir
+(yavaş bir sunucu diğerlerini geciktirmez) ve iş `max_instances=1` ile çalışır (turlar üst
+üste binmez).
+
+**Maliyeti kendi sunucunuzda ölçmek** (örnekleyicinin sorgusu `pg_stat_statements`'ta
+görünür):
 
 ```sql
 SELECT calls,
@@ -422,78 +494,82 @@ WHERE query LIKE '%pg_stat_activity%'
 ORDER BY total_exec_time DESC;
 ```
 
-`mean_ms` is the per-sample cost on *your* hardware and workload. This is the
-number to look at before enabling the sampler on a busy production server; the
-target-side cost has not been measured on a real production instance by the
-project itself (see `SORULAR.md`).
+`mean_ms`, *sizin* donanımınız ve iş yükünüzdeki örnek başına maliyettir. Yoğun bir canlı
+sunucuda örnekleyiciyi açmadan önce bakılacak sayı budur; hedef taraftaki maliyet proje
+tarafından gerçek bir canlı sunucuda **ölçülmedi** (bkz. SORULAR.md).
 
-**Storage cost on dbace's own database** (this *is* measured):
+**dbace'in kendi veritabanındaki depolama maliyeti** (bu ölçüldü):
 
-Raw samples are never stored. At 1s sampling, one row per active session per
-second means ~864,000 rows/day for a server with 10 concurrently active
-sessions. Instead, samples are accumulated in memory and written once per
-minute as one row per `(minute, queryid, wait category, wait event)`
-combination.
+Ham örnekler saklanmaz. 1 sn örneklemede, 10 eşzamanlı aktif oturumlu bir sunucu için satır
+başına bir örnek günde ~864.000 satır demek. Bunun yerine örnekler bellekte biriktirilir ve
+dakikada bir, `(dakika, queryid, bekleme kategorisi, bekleme olayı)` birleşimi başına tek satır
+olarak yazılır.
 
-Measured at **192 bytes/row including indexes** (SQLite, 200k rows, realistic
-queryid cardinality):
+Ölçülen: **indeksler dahil satır başına 192 bayt** (SQLite, 200 bin satır, gerçekçi queryid
+çeşitliliği):
 
-| Distinct combinations per minute | Rows/day per instance | Per month (30d retention) |
+| Dakika başına farklı birleşim | Veritabanı başına günlük satır | Aylık (30 gün saklama) |
 |---|---|---|
-| 5 (quiet, few distinct queries) | 7,200 | ~41 MB |
-| 15 (typical mixed workload) | 21,600 | ~124 MB |
-| 50 (very diverse workload) | 72,000 | ~415 MB |
+| 5 (sakin, az sayıda farklı sorgu) | 7.200 | ~41 MB |
+| 15 (tipik karışık iş yükü) | 21.600 | ~124 MB |
+| 50 (çok çeşitli iş yükü) | 72.000 | ~415 MB |
 
-That is a ~40× reduction versus storing raw samples, and all three tables are
-covered by the retention policy (`services/retention.py`) — unlike
-`slow_query_samples`, which accumulated 337k rows for a single instance before
-retention was fixed in Faz 21.
+Bu, ham örnek saklamaya göre ~40 kat azalma; üç tablo da saklama politikasının
+(`services/retention.py`) kapsamında.
 
-Turn the sampler off entirely with `WAIT_SAMPLING_ENABLED=false`: no
-connection is opened and no query is sent to the target at all.
+Örnekleyiciyi tamamen kapatmak için `WAIT_SAMPLING_ENABLED=false`: hiçbir bağlantı açılmaz,
+hedefe hiçbir sorgu gönderilmez.
 
-### Dashboard refresh loop — every `dashboard_refresh_interval_seconds` (default 60s, as low as 10s)
+### Dashboard yenileme — her `DASHBOARD_REFRESH_INTERVAL_SECONDS` (varsayılan 60 sn, en az 10 sn)
 
-Per Patroni-topology group, against its target node:
+Patroni topolojili grup başına, hedef düğüme karşı:
 
-| Source | What it reads | Cost |
+| Kaynak | Ne okuyor | Maliyet |
 |---|---|---|
-| `parameter_audit` (`pg_settings`, ~10 named parameters) | in-memory catalog view | negligible; `statement_timeout = 5000ms` |
-| `performance_insights` | pure in-memory analysis of already-collected `metrics_json` | zero — never touches the target database |
-| cluster health probes (Patroni/etcd/haproxy/keepalived) | TCP socket checks + HTTP to Patroni/agent REST APIs | zero DB load — never opens a PostgreSQL/SQL Server protocol connection at all |
+| `parameter_audit` (`pg_settings`, ~10 adlı parametre) | bellekteki katalog view'ı | ihmal edilebilir; `statement_timeout = 5000ms` |
+| `performance_insights` | zaten toplanmış `metrics_json` üzerinde bellek içi analiz | sıfır — hedefe hiç dokunmaz |
+| cluster sağlık probları (Patroni/etcd/HAProxy/Keepalived) | TCP soket kontrolleri + Patroni/ajan REST API'lerine HTTP | sıfır veritabanı yükü — PostgreSQL/SQL Server protokol bağlantısı hiç açılmaz |
 
-`index_advisor` recommendations used to run automatically here too (a live
-catalog scan per instance, every tick) — this was removed; see below.
+Index önerileri eskiden burada da her turda otomatik çalışıyordu (veritabanı başına canlı
+katalog taraması); kaldırıldı, aşağıya bakın.
 
-### On-demand only, user-triggered, cached (5 min TTL) — never in the periodic loop
+### Diğer periyodik işler
 
-| Source | Endpoint | Cost | Notes |
+| İş | Aralık | Hedefe etkisi |
+|---|---|---|
+| Plan yakalama (auto_explain) | `PLAN_CAPTURE_INTERVAL_SECONDS` (300 sn) | Log host-agent üzerinden HTTP ile çekilir; PostgreSQL'e bağlanılmaz. SQL Server'da `system_health` deadlock'ları okunur. |
+| Yedek izleme | `BACKUP_CHECK_INTERVAL_SECONDS` (900 sn) | Yedek geçmişi okuması (SQL Server'da `msdb`); `BACKUP_MONITORING_ENABLED=false` ile kapatılır |
+
+### Yalnızca istek üzerine, kullanıcı tetikli, önbellekli (5 dk) — periyodik döngüde asla
+
+| Kaynak | Uç | Maliyet | Not |
 |---|---|---|---|
-| Index advice | `POST /api/queries/{id}/advice` | catalog scan (`pg_stats`/`pg_indexes`/`pg_class`) + optionally 2× `EXPLAIN (FORMAT JSON)` and a hypothetical index create/drop via `hypopg` | moderate; `statement_timeout = 8000ms`; only runs when a user opens a slow query's advice panel |
-| EXPLAIN plan | `POST /api/queries/{id}/explain` (`analyze=false`, the default) | plans only, never executes the query | low; `statement_timeout = 8000ms` |
-| EXPLAIN ANALYZE | same endpoint, `analyze=true` | **actually executes the query** | cost = the query's own real cost; the UI requires an explicit confirmation with a warning before sending this |
-| Activity / Schema Health tabs | `GET /api/instances/{id}/activity`, `/schema-health` | `pg_stat_activity` (in-memory) / `pg_stat_user_indexes`+`pg_stat_user_tables`+`pg_relation_size` (catalog scan) | low–moderate; only runs while that tab is open |
+| Index önerisi | `POST /api/queries/{id}/advice` | katalog taraması (`pg_stats`/`pg_indexes`/`pg_class`) + isteğe bağlı 2× `EXPLAIN (FORMAT JSON)` ve `hypopg` ile varsayımsal index | orta; `statement_timeout = 8000ms`; yalnızca kullanıcı bir yavaş sorgunun öneri panelini açınca |
+| EXPLAIN planı | `POST /api/queries/{id}/explain` (`analyze=false`, varsayılan) | yalnızca planlar, sorguyu çalıştırmaz | düşük; `statement_timeout = 8000ms` |
+| EXPLAIN ANALYZE | aynı uç, `analyze=true` | **sorguyu gerçekten çalıştırır** | maliyet = sorgunun kendi gerçek maliyeti; arayüz göndermeden önce uyarılı açık onay ister |
+| Aktivite / Şema sağlığı sekmeleri | `GET /api/instances/{id}/activity`, `/schema-health` | `pg_stat_activity` (bellek) / `pg_stat_user_indexes` + `pg_stat_user_tables` + `pg_relation_size` (katalog taraması) | düşük–orta; yalnızca sekme açıkken |
 
-### Practical takeaways
+### Pratik sonuçlar
 
-- Leave `pg_stat_statements.track = top` (default) — see above.
-- The periodic collection loop is safe to run against production at the
-  default 15s/60s cadence; it's the on-demand tools (index advice, EXPLAIN
-  ANALYZE) that carry real cost, and those are gated behind an explicit user
-  action plus a cache.
-- If a specific server is lower-priority or you want to reduce load further,
-  set a longer **collection interval** for just that instance (Instances →
-  edit → "Toplama aralığı") instead of lowering the global default for
-  everyone.
+- `pg_stat_statements.track = top` (varsayılan) bırakın.
+- Periyodik toplama döngüsü varsayılan 15 sn / 60 sn aralıkla canlıda güvenle çalışır; gerçek
+  maliyet taşıyan istek üzerine araçlardır (index önerisi, EXPLAIN ANALYZE) ve bunlar açık bir
+  kullanıcı eylemi + önbellek arkasındadır.
+- Belirli bir sunucu düşük öncelikliyse ya da yükü daha da azaltmak istiyorsanız, genel
+  varsayılanı herkes için düşürmek yerine yalnızca o veritabanının **Toplama aralığı**
+  ayarını uzatın (veritabanını düzenle → "Toplama aralığı").
 
-## Roadmap
+## Dokümanlar
 
-- [ ] TimescaleDB / Prometheus export for long-term retention
-- [ ] Email/Slack/PagerDuty alert channels
-- [ ] Query plan capture and index recommendations
-- [ ] MySQL, Redis, MongoDB collectors
-- [ ] Agent-based deployment model
-
-## License
-
-MIT
+| Ne arıyorsan | Nereye bak |
+|---|---|
+| Kodda yön bulma, servis sorumlulukları, süreç mimarisi | [docs/MIMARI.md](docs/MIMARI.md) |
+| Ortam değişkenleri, migration sırası, deploy adımları | [DEPLOY.md](DEPLOY.md) |
+| Bulut kurulumu (geliştirme/test) | [deploy/cloud/BULUT-KURULUM.md](deploy/cloud/BULUT-KURULUM.md) |
+| Kapalı ortam (on-prem) paketi | [deploy/onprem/KURULUM.md](deploy/onprem/KURULUM.md), [docs/YASAM-DONGUSU.md](docs/YASAM-DONGUSU.md) |
+| auto_explain kurulumu, yönetilen servisler | [docs/AUTO_EXPLAIN.md](docs/AUTO_EXPLAIN.md) |
+| Cluster sağlık değerlendirmesi | [docs/CLUSTER_HEALTH.md](docs/CLUSTER_HEALTH.md) |
+| Host-agent | [agents/host-agent/README.md](agents/host-agent/README.md) |
+| Ne yapıldı, hangi karar neden verildi | [ILERLEME.md](ILERLEME.md) |
+| Çözülmemiş / bilerek yapılmamış işler | [SORULAR.md](SORULAR.md) |
+| Geliştirme kuralları (commit, migration, terminoloji) | [CLAUDE.md](CLAUDE.md) |
