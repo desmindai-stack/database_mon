@@ -54,6 +54,22 @@ _EXPLAIN_CACHE_TTL_SECONDS = 300.0
 _ADVICE_CACHE_TTL_SECONDS = 300.0
 
 
+# SABİT yollar `/{instance_id}`'den ÖNCE kayıtlı olmalı: FastAPI rotaları kayıt sırasıyla
+# eşleştiriyor ve `/{instance_id}` her tek segmenti yakalıyor. Bu uç eskiden dosyanın
+# sonundaydı ve `GET /metric-dictionary` "metric-dictionary" bir instance_id sanılarak
+# 422 dönüyordu — sözlüğe hiç erişilemiyordu (Faz 29 İŞ 2a düzeltmesi).
+@router.get("/metric-dictionary", response_model=list[dict])
+async def get_metric_dictionary() -> list[dict]:
+    """Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).
+
+    Arayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının
+    hangisine güveneceğini bilememesi demekti; eşikler de aynı modülden geliyor.
+
+    Instance gerektirmiyor: sözlük sunucudan bağımsız.
+    """
+    return metric_dictionary()
+
+
 @router.get("/{instance_id}/history", response_model=QueryHistoryListOut)
 async def get_query_history(
     instance_id: int,
@@ -659,15 +675,3 @@ async def advise_indexes(
     )
     query_cache.set(cache_key, report, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
     return report
-
-
-@router.get("/metric-dictionary", response_model=list[dict])
-async def get_metric_dictionary() -> list[dict]:
-    """Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).
-
-    Arayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının
-    hangisine güveneceğini bilememesi demekti; eşikler de aynı modülden geliyor.
-
-    Instance gerektirmiyor: sözlük sunucudan bağımsız.
-    """
-    return metric_dictionary()

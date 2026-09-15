@@ -7377,6 +7377,59 @@ bölümü açtığı, id'lerin sayfa içinde tekil olduğu — ve şeridin dashb
 
 Arka uç: **1612 geçti, 15 atlandı**. Playwright: **33 geçti**.
 
+## Faz 29 — İŞ 2a düzeltmesi: metrik sözlüğüne hiç erişilemiyordu
+
+### Hata
+
+`GET /api/queries/metric-dictionary` **422** dönüyordu. Uç `queries.py`'nin sonunda,
+`/{instance_id}`'den sonra kayıtlıydı; FastAPI rotaları kayıt sırasıyla eşleştiriyor ve
+`/{instance_id}` her tek segmenti yakalıyor. "metric-dictionary" bir instance_id sanılıp
+tamsayıya çevrilmeye çalışılıyordu.
+
+Gerçek istekle doğrulandı: düzeltmeden önce 422 (`int_parsing`), sonra 200 ve sözlük
+içeriği.
+
+### Neden gözden kaçtı
+
+Test `metric_dictionary()` **fonksiyonunu** sınıyordu. Fonksiyon doğruydu; rota hiç
+çalışmıyordu.
+
+### Koruma testi ilk denemede kendisi yanlıştı
+
+İlk koruma testi `app.routes`'u tarıyordu ve **hata varken de boş geçti**. FastAPI 0.141
+dahil edilen router'ları düzleştirmiyor: `app.routes`'ta API rotaları yerine yolu `''`
+olan tek bir `_IncludedRouter` duruyor, alt rotalara yalnızca özel alanlarla
+ulaşılıyor. Bunu, testin içine koyduğum öz-denetim yakaladı — hatanın sentetik
+kopyasına karşı çalıştırılan denetim `[]` döndü. Öz-denetim olmasaydı sahte bir
+güvenceyle commit atılacaktı.
+
+`tests/test_route_order.py` artık rota tablosuna değil **belirtiye** bakıyor, herkese
+açık yüzeyden: gölgelenebilir sabit GET yolları OpenAPI şemasından çıkarılıyor (bugün
+5 tane) ve her birine gerçek istek atılıyor. Yolunda parametre olmayan bir uç asla
+`loc: ["path", …]` doğrulama hatası üretemez; üretiyorsa istek başka rotaya gitmiştir.
+Özel iç yapıya dayanmadığı için bir sonraki FastAPI sürümünde sessizce boş geçmez.
+
+Kanıt: eski rota sırasına dönüldüğünde gerçek uygulama testleri kırmızı (yutulmuş rota
+ve 422), düzeltmeyle yeşil. Aday listesi boşsa test ayrıca düşüyor — ilk sürümün düştüğü
+tuzak.
+
+### Düzeltilmeyen, bilerek: eksik migration tüm toplamayı düşürüyor
+
+İnceleme sırasında daha ciddi bir şey çıktı. `collect_all_instances` **bütün
+veritabanları için tek oturum** kullanıyor ve en sonda tek commit yapıyor. Bir
+veritabanında flush patlarsa oturum geri alınmış duruma düşüyor; aynı turdaki diğer
+veritabanları `PendingRollbackError` alıyor ve commit de düşüyor.
+
+Sonuç: canlıda 43 ve 44 numaralı migration'lar çalıştırılmadıysa **yalnızca yeni
+alanlar değil, hiçbir veritabanının hiçbir metriği kaydedilmiyor.** Scheduler'ın deseni
+birebir kopyalanarak sütunu eksik bir tabloya karşı ölçüldü: iki veritabanından biri
+yeni sütunlara hiç dokunmadığı hâlde kaydedilen metrik satırı **0** (beklenen 2).
+
+Bu turda düzeltilmedi: tasarım Faz 29'dan eski, istenen iş değildi ve
+toplama döngüsünün hata sınırını değiştirmek ayrı bir karar. Çözüm yönü: veritabanı
+başına ayrı oturum (ya da `begin_nested` savepoint), böylece bir veritabanının hatası
+ötekilerin verisini götürmez. **SORULAR.md**'ye yazıldı.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

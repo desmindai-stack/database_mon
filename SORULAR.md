@@ -2303,3 +2303,18 @@ pencerede kayma bakımı pencere dışına düşürebilir.
 **Kapanması için gereken:** pencereye saat dilimi alanı eklemek ve tekrar
 genişletmesini o saat diliminde yapmak (`zoneinfo`). Bu turda yapılmadı çünkü
 kullanıcı arayüzüne saat dilimi seçimi eklemek İŞ 3'ün kapsamını genişletirdi.
+
+## Toplama döngüsünde bir veritabanının hatası tüm turu düşürüyor
+
+`collectors/scheduler.py::collect_all_instances` bütün veritabanları için tek oturum ve
+sonda tek commit kullanıyor. Bir veritabanında flush hatası (ör. canlıda çalıştırılmamış
+bir migration yüzünden eksik sütun) oturumu geri alınmış duruma düşürüyor; aynı turdaki
+diğer veritabanlarının verisi de kaydedilmiyor. Ölçüldü: 2 veritabanından biri yeni
+sütunlara hiç dokunmadığı hâlde 0 satır kaydedildi.
+
+**Neden yapılmadı:** Faz 29'dan eski bir tasarım; hata sınırını değiştirmek (veritabanı
+başına oturum ya da savepoint) ayrı bir karar ve istenen iş değildi.
+
+**Açık soru:** Veritabanı başına ayrı oturum mu, savepoint mi? Ayrı oturum daha basit ve
+daha güvenli; savepoint tek bağlantıyı korur.
+
