@@ -206,6 +206,15 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(
             conn, "instances", "collect_interval_seconds", "collect_interval_seconds INTEGER"
         )
+        # Faz 30 İŞ 1: veritabanı başına toplama durumu.
+        await _sqlite_add_column_if_missing(conn, "instances", "last_collect_ok_at", "last_collect_ok_at DATETIME")
+        await _sqlite_add_column_if_missing(conn, "instances", "last_collect_error", "last_collect_error TEXT")
+        await _sqlite_add_column_if_missing(
+            conn, "instances", "last_collect_error_at", "last_collect_error_at DATETIME"
+        )
+        await _sqlite_add_column_if_missing(
+            conn, "instances", "last_collect_error_kind", "last_collect_error_kind VARCHAR(32)"
+        )
         await _sqlite_add_column_if_missing(conn, "database_groups", "listener_port", "listener_port INTEGER")
         await _sqlite_add_column_if_missing(conn, "servers", "ip_address", "ip_address VARCHAR(64)")
         await _sqlite_add_column_if_missing(conn, "prediction_insights", "recommendation", "recommendation TEXT")

@@ -54,6 +54,11 @@ export type Instance = Omit<Gen["InstanceOut"], "engine" | "options"> & {
   options?: ClusterServiceOptions | null;
 };
 
+// Faz 30 İŞ 1: toplama durumu. Türetilmiş — elle yazılan tipin backend'den sessizce
+// ayrışması bu projede üç kez canlı hataya yol açtı.
+export type CollectionHealth = Gen["CollectionHealthOut"];
+export type CollectionHealthItem = Gen["CollectionHealthItemOut"];
+
 export interface MetricSample {
   id: number;
   instance_id: number;
@@ -1255,6 +1260,8 @@ export const api = {
   getSummaries: () => request<InstanceSummary[]>("/api/instances/summary"),
   getInstances: () => request<Instance[]>("/api/instances"),
   getInstance: (id: number) => request<Instance>(`/api/instances/${id}`),
+  // Sabit yol; backend'de `/{instance_id}`'den ÖNCE kayıtlı olmalı (tests/test_route_order.py).
+  getCollectionHealth: () => request<CollectionHealth>("/api/instances/collection-health"),
   createInstance: (data: InstanceCreate) =>
     request<Instance>("/api/instances", { method: "POST", body: JSON.stringify(data) }),
   updateInstance: (id: number, data: Partial<InstanceCreate>) =>

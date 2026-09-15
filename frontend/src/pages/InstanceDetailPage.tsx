@@ -793,6 +793,15 @@ export default function InstanceDetailPage() {
               {instance.application ? ` · ${instance.application}` : ""}
               {instance.server_version ? ` · ${instance.server_version}` : ""}
             </span>
+            {/* Faz 30 İŞ 1: toplama durumu. Hata eskiden yalnızca log'a düşüyordu;
+                kullanıcı bir veritabanının günlerdir veri yazamadığını ancak grafiklerin
+                boş kalmasından anlıyordu — o da "sorun yok" ile karıştırılabilecek bir
+                sinyal. "Ölçüm yok" ile "sorun yok" farklı şeyler. */}
+            <span className="detail-meta">
+              {instance.last_collect_ok_at
+                ? `Son başarılı toplama: ${formatTime(instance.last_collect_ok_at)}`
+                : "Henüz başarılı toplama yok"}
+            </span>
             {/* Faz 16-B İŞ 2: düzenleme ekranı buradan bulunabilir olsun — kullanıcılar
                 instance'ı silip yeniden eklemek zorunda kalıyordu. */}
             <Link className="detail-meta-link" to={`/instances?edit=${instance.id}`}>
@@ -888,6 +897,14 @@ export default function InstanceDetailPage() {
           >
             Yakınlaştırmayı sıfırla
           </button>
+        </div>
+      )}
+
+      {instance.last_collect_error && (
+        <div className="error">
+          <strong>Son toplama başarısız</strong>
+          {instance.last_collect_error_at ? ` (${formatTime(instance.last_collect_error_at)})` : ""}:{" "}
+          {instance.last_collect_error}
         </div>
       )}
 

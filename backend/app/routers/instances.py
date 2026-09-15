@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.collectors.registry import get_collector
 from app.database import get_db
+from app.services.collection_status import systemic_notice
 from app.domain.engines import DatabaseEngine
 from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
 from app.models import (
@@ -34,6 +35,8 @@ from app.schemas import (
     ConnectionTestResult,
     DatabaseLoadOut,
     IgnoredPrerequisitesUpdate,
+    CollectionHealthItemOut,
+    CollectionHealthOut,
     InstanceCreate,
     InstanceDependenciesOut,
     InstanceOut,
@@ -47,6 +50,7 @@ from app.schemas import (
     PrerequisiteCheckOut,
     PrerequisiteReportOut,
     SchemaHealthOut,
+    SystemicCollectionNoticeOut,
     TuningChecklistOut,
     TuningReportOut,
 )
@@ -199,6 +203,41 @@ async def list_summaries(db: AsyncSession = Depends(get_db)) -> list[InstanceSum
             )
         )
     return summaries
+
+
+# SABİT yol `/{instance_id}`'den ÖNCE: FastAPI rotaları kayıt sırasıyla eşleştiriyor ve
+# `/{instance_id}` her tek segmenti yakalıyor (bkz. tests/test_route_order.py).
+@router.get("/collection-health", response_model=CollectionHealthOut)
+async def get_collection_health(db: AsyncSession = Depends(get_db)) -> CollectionHealthOut:
+    """Veritabanı başına toplama durumu ve varsa sistemik uyarı (Faz 30 İŞ 1).
+
+    Hata eskiden yalnızca log'a düşüyordu; kullanıcı bir veritabanının günlerdir veri
+    yazamadığını ancak grafiklerin boş kalmasından anlıyordu — o da "sorun yok" ile
+    karıştırılabilecek bir sinyal.
+
+    Sistemik uyarı ayrı alanda: şema uyumsuzluğu tek tek veritabanlarının sorunu değil.
+    """
+    result = await db.execute(select(Instance).order_by(Instance.name))
+    instances = result.scalars().all()
+    items = [
+        CollectionHealthItemOut(
+            instance_id=i.id,
+            name=i.name,
+            engine=i.engine,
+            enabled=i.enabled,
+            last_collect_ok_at=i.last_collect_ok_at,
+            last_collect_error=i.last_collect_error,
+            last_collect_error_at=i.last_collect_error_at,
+            last_collect_error_kind=i.last_collect_error_kind,
+        )
+        for i in instances
+    ]
+    notice = systemic_notice()
+    return CollectionHealthOut(
+        items=items,
+        failing=sum(1 for i in items if i.last_collect_error),
+        notice=SystemicCollectionNoticeOut(**notice.as_dict()) if notice else None,
+    )
 
 
 @router.get("/{instance_id}", response_model=InstanceOut)

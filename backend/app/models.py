@@ -192,6 +192,20 @@ class Instance(Base):
     # instance be sampled less often — see services/collection.py / collectors/scheduler.py.
     collect_interval_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Faz 30 İŞ 1: toplama durumu. Hata artık sessizce geçilmiyor; hangi veritabanının ne
+    # zamandır veri yazamadığı buradan görünüyor.
+    #
+    # "Son BAŞARILI toplama" ayrı tutuluyor: son DENEME zamanıyla karıştırılsaydı üç gündür
+    # hata veren bir veritabanı "az önce toplandı" gibi görünürdü.
+    #
+    # last_collect_error_kind: 'instance' (o veritabanına özel — bağlantı, yetki) ya da
+    # 'schema' (kod kendi şemamızla uyumsuz; tek bir veritabanının değil KURULUMUN sorunu).
+    # Bkz. services/collection_status.py.
+    last_collect_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_collect_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_collect_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_collect_error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

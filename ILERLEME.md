@@ -7430,6 +7430,90 @@ toplama döngüsünün hata sınırını değiştirmek ayrı bir karar. Çözüm
 başına ayrı oturum (ya da `begin_nested` savepoint), böylece bir veritabanının hatası
 ötekilerin verisini götürmez. **SORULAR.md**'ye yazıldı.
 
+## Faz 30 — İŞ 1: Toplama döngüsü izolasyonu
+
+### Sorun canlıda yaşandı
+
+`collect_all_instances` bütün veritabanları için **tek oturum** ve sonda **tek commit**
+kullanıyordu. Bir veritabanında flush hatası olduğunda oturum geri alınmış duruma
+düşüyor, aynı turdaki diğer veritabanları `PendingRollbackError` alıyor ve commit de
+düşüyordu. Yani bir veritabanının sorunu, sorunsuz olanların verisini de siliyordu.
+
+Çalıştırılmamış bir migration yüzünden **hiçbir veritabanı metrik yazamadı**. Sorunun
+tek bir veritabanında olması, sonucun tüm sistemi durdurması.
+
+Ölçüldü (scheduler deseni birebir kopyalanarak): iki veritabanından biri yeni sütunlara
+hiç dokunmadığı hâlde kaydedilen satır **0**, beklenen 2.
+
+### Düzeltme: hata sınırı veritabanı başına
+
+Oturum artık döngünün **içinde** açılıyor; her veritabanı kendi oturumunda toplanıyor ve
+kendi commit'ini yapıyor. Biri patlarsa yalnızca kendi turu kayboluyor.
+
+Hata **sessizce geçilmiyor**: yakalanıyor, loglanıyor ve o veritabanının kaydına
+yazılıyor. Kayıt **ayrı bir oturumda** yapılıyor — hatanın oluştuğu oturum geri alınmış
+durumda, üzerinden bir şey yazılamaz. ORM nesnesi yerine doğrudan `UPDATE` kullanılıyor.
+
+Durum kaydının kendisi de başarısız olabilir: hata tam olarak `instances` tablosundaki bu
+yeni sütunların eksikliğiyse. O durumda log'a düşüyor ve sistemik uyarı zaten ayrıca
+üretiliyor.
+
+### İki ayrı hata sınıfı
+
+Bir veritabanının bağlantısının kopması ile kodun şemayla uyumsuz olması aynı şey değil:
+
+| Tür | Anlamı | Nasıl gösteriliyor |
+|---|---|---|
+| `instance` | O veritabanına özel: bağlantı, yetki, hedefteki view | Veritabanı detayında, o veritabanının kendi hatası |
+| `schema` | Kod **kendi** şemamızla uyumsuz — kurulum eksik | Dashboard'da **tek** sistemik uyarı |
+
+Şema uyumsuzluğunda "12 veritabanı hata verdi" listesi operatörü yanlış yere bakmaya
+gönderirdi: hiçbiri hatalı değil, çalıştırılmamış bir migration var.
+
+### Sınıflandırıcı ilk hâlinde yanlıştı, testi yakaladı
+
+İlk sürüm alt dize arıyordu (`"column does not exist"`). PostgreSQL'in gerçek metni ise
+`column slow_query_samples.wal_bytes does not exist` — sütun adı aradaki boşluğu
+dolduruyor ve arama tutmuyordu. Şema hatası "o veritabanına özel sorun" diye
+sınıflandırılıyordu, yani operatör yine yanlış yere bakacaktı. Regresyon testi bunu
+kırmızıya düşürdü; sınıflandırma desen eşleşmesine çevrildi.
+
+Sıra da önemli: `classify_connection_error` "does not exist" metnini "veritabanı
+bulunamadı" diye yorumluyor. Şema kontrolü **önce** yapılmazsa eksik bir sütun, hedefteki
+bir sorun gibi gösterilir. Bu da ayrıca test ediliyor.
+
+### Sistemik uyarı ne zaman kalkıyor
+
+`since` alanı **korunuyor**: uyarı ilk ne zaman görüldüyse o. Her turda tazelenseydi "5
+dakikadır böyle" ile "üç gündür böyle" ayırt edilemezdi. Temiz geçen ilk turda uyarı
+kalkıyor — asılı kalsaydı bir sonraki gerçek sorun fark edilmezdi.
+
+### Arayüz
+
+- **Veritabanı detayı**: başlıkta "son başarılı toplama", varsa altında tam genişlikte son
+  hata. "Son deneme" ile karıştırılmasın diye ayrı alan: üç gündür hata veren bir
+  veritabanı yoksa "az önce toplandı" gibi görünürdü.
+- **Dashboard**: sistemik uyarı şeridi, en üstte. Alınamazsa sessizce yutuluyor — bu bir
+  **ek** bilgi, dashboard'u engellememeli.
+- Yeni uç: `GET /api/instances/collection-health` (veritabanı başına durum + sistemik
+  uyarı). Sabit yol olduğu için `/{instance_id}`'den **önce** kayıtlı; `test_route_order.py`
+  bunu koruyor.
+
+### Test
+
+`tests/test_collection_isolation.py` (6 test). Asıl regresyon:
+`test_one_failing_instance_does_not_lose_the_others_data` — biri hata verirken diğerinin
+metriği **ayrı bir oturumdan okunarak** doğrulanıyor, yani gerçekten commit edilmiş mi
+diye. Diğerleri: hatanın kaydedilmesi, düzelen veritabanında hatanın **temizlenmesi**
+(yapışıp kalsaydı düzelen veritabanı sonsuza kadar hatalı görünürdü), şema hatasının tek
+sistemik uyarıya dönüşmesi ve temiz turda kalkması.
+
+Testler kendi veritabanlarını izole ediyor (diğerlerini `enabled=False` yapıyor): "denenen
+kaç veritabanı" sayısı başka testlerden kalan kayıtlara bağlı olsaydı, test kendi
+senaryosunu değil çalışma sırasını ölçerdi.
+
+Migration: `20260921090000_collection_status.sql` (DEPLOY.md satır 45).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

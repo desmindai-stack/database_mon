@@ -10,6 +10,13 @@ from app.config import settings
 from app.database import SessionLocal
 from app.models import Instance
 from app.services.collection import collect_instance, effective_collect_interval, last_collected_at
+from app.services.collection_status import (
+    KIND_SCHEMA,
+    classify_collection_error,
+    note_cycle,
+    record_collection_failure,
+    record_collection_success,
+)
 from app.services.custom_alert_rules import evaluate_custom_alert_rules
 from app.services.dashboard_snapshot import refresh_all_group_snapshots
 from app.services.retention import run_retention_cleanup
@@ -39,27 +46,55 @@ CUSTOM_RULES_TICK_SECONDS = 10
 
 
 async def collect_all_instances() -> None:
-    """Runs on a fixed tick (settings.collect_interval_seconds — this is the minimum
-    granularity, not a per-instance guarantee). Each instance is only actually collected once
-    its own effective_collect_interval() has elapsed since its last run — an instance with a
-    longer override (e.g. a lower-priority/less critical server) is simply skipped on the
-    ticks it isn't due yet, same "per-item due-check on a shared tick" pattern
-    evaluate_custom_alert_rules already uses for custom alert rules."""
+    """Sabit bir tick'te çalışır (settings.collect_interval_seconds — bu asgari granülerlik,
+    veritabanı başına garanti değil). Her veritabanı yalnızca kendi
+    effective_collect_interval() süresi dolduğunda toplanır; daha uzun aralığı olan bir
+    veritabanı sırası gelmediği tick'lerde atlanır (evaluate_custom_alert_rules'un
+    kural başına "sırası geldi mi" desenin aynısı).
+
+    ## Her veritabanı KENDİ oturumunda ve KENDİ commit'inde (Faz 30 İŞ 1)
+
+    Eskiden tek oturum ve sonda tek commit vardı. Bir veritabanında flush hatası olduğunda
+    oturum geri alınmış duruma düşüyor, aynı turdaki DİĞER veritabanları
+    `PendingRollbackError` alıyor ve commit de düşüyordu — yani bir veritabanının sorunu,
+    sorunsuz olanların verisini de siliyordu. Canlıda yaşandı: çalıştırılmamış bir migration
+    yüzünden hiçbir veritabanı metrik yazamadı.
+
+    Hata artık izole: yakalanıyor, loglanıyor ve o veritabanının kaydına yazılıyor. Sessizce
+    geçilmiyor.
+    """
+    now = datetime.now(UTC)
     async with SessionLocal() as session:
         result = await session.execute(select(Instance).where(Instance.enabled.is_(True)))
-        instances = result.scalars().all()
-        now = datetime.now(UTC)
-        for instance in instances:
+        due_ids: list[int] = []
+        for instance in result.scalars().all():
             last_at = last_collected_at(instance.id)
-            if last_at is not None:
-                elapsed = (now - last_at).total_seconds()
-                if elapsed < effective_collect_interval(instance):
+            if last_at is not None and (now - last_at).total_seconds() < effective_collect_interval(instance):
+                continue
+            due_ids.append(instance.id)
+
+    schema_failures = 0
+    for instance_id in due_ids:
+        try:
+            # Oturum döngünün İÇİNDE açılıyor: dışarıda açılsaydı bir veritabanının hatası
+            # oturumu bozar ve sonrakiler hiç yazamazdı — düzeltilen sorun tam olarak buydu.
+            async with SessionLocal() as session:
+                instance = await session.get(Instance, instance_id)
+                if instance is None or not instance.enabled:
                     continue
-            try:
                 await collect_instance(instance, session)
-            except Exception:
-                logger.exception("Failed collecting metrics for instance %s", instance.name)
-        await session.commit()
+                await record_collection_success(session, instance)
+                await session.commit()
+        except Exception as exc:
+            kind, message = classify_collection_error(exc)
+            if kind == KIND_SCHEMA:
+                schema_failures += 1
+            logger.exception("Failed collecting metrics for instance %s (%s)", instance_id, kind)
+            await record_collection_failure(instance_id, kind, message)
+
+    # Sistemik hata TEK TEK değil, tek bir uyarı olarak: şema uyumsuzluğunda "12 veritabanı
+    # hata verdi" listesi operatörü yanlış yere bakmaya gönderir.
+    note_cycle(schema_failures=schema_failures, attempted=len(due_ids))
 
 
 async def refresh_dashboard_snapshots() -> None:

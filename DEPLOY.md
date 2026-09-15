@@ -102,6 +102,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 42 | `20260918090000_sla_targets.sql` | **YENİ** — sla_targets (erişilebilirlik hedefleri ve dönem). CONCURRENTLY YOK |
 | 43 | `20260919090000_pgss_full_columns.sql` | **YENİ** — slow_query_samples'a pg_stat_statements'ın kalan 16 sütunu (I/O süresi, sapma, WAL, planlama, JIT). CONCURRENTLY YOK |
 | 44 | `20260920090000_engine_neutral_query_metrics.sql` | **YENİ** — slow_query_samples'a motordan bağımsız metrikler (CPU süresi, mantıksal/fiziksel okuma, spill, bellek izni). CONCURRENTLY YOK |
+| 45 | `20260921090000_collection_status.sql` | **YENİ** — instances'a toplama durumu (son başarılı toplama, son hata ve hata türü). CONCURRENTLY YOK |
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 

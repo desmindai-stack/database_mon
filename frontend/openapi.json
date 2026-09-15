@@ -2091,6 +2091,111 @@
         "title": "ClusterTotalsOut",
         "type": "object"
       },
+      "CollectionHealthItemOut": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "integer"
+          },
+          "last_collect_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Error"
+          },
+          "last_collect_error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Error At"
+          },
+          "last_collect_error_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Error Kind"
+          },
+          "last_collect_ok_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Ok At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "instance_id",
+          "name",
+          "engine",
+          "enabled"
+        ],
+        "title": "CollectionHealthItemOut",
+        "type": "object"
+      },
+      "CollectionHealthOut": {
+        "properties": {
+          "failing": {
+            "title": "Failing",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CollectionHealthItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "notice": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SystemicCollectionNoticeOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "failing"
+        ],
+        "title": "CollectionHealthOut",
+        "type": "object"
+      },
       "ConfigOut": {
         "properties": {
           "default_customer_name": {
@@ -5040,6 +5145,52 @@
           "id": {
             "title": "Id",
             "type": "integer"
+          },
+          "last_collect_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Error"
+          },
+          "last_collect_error_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Error At"
+          },
+          "last_collect_error_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Error Kind"
+          },
+          "last_collect_ok_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Collect Ok At"
           },
           "metric_sources": {
             "anyOf": [
@@ -9341,6 +9492,36 @@
         "title": "StateCountOut",
         "type": "object"
       },
+      "SystemicCollectionNoticeOut": {
+        "description": "Tek tek veritabanlarının değil, KURULUMUN sorunu (Faz 30 İŞ 1).\n\nŞema uyumsuzluğunda \"12 veritabanı hata verdi\" listesi operatörü yanlış yere bakmaya\ngönderir: hiçbiri hatalı değil, çalıştırılmamış bir migration var.",
+        "properties": {
+          "affected": {
+            "title": "Affected",
+            "type": "integer"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "since": {
+            "format": "date-time",
+            "title": "Since",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "message",
+          "affected",
+          "since"
+        ],
+        "title": "SystemicCollectionNoticeOut",
+        "type": "object"
+      },
       "TokenOut": {
         "properties": {
           "access_token": {
@@ -12416,6 +12597,33 @@
           }
         ],
         "summary": "Metric Catalog",
+        "tags": [
+          "instances"
+        ]
+      }
+    },
+    "/api/instances/collection-health": {
+      "get": {
+        "description": "Veritabanı başına toplama durumu ve varsa sistemik uyarı (Faz 30 İŞ 1).\n\nHata eskiden yalnızca log'a düşüyordu; kullanıcı bir veritabanının günlerdir veri\nyazamadığını ancak grafiklerin boş kalmasından anlıyordu — o da \"sorun yok\" ile\nkarıştırılabilecek bir sinyal.\n\nSistemik uyarı ayrı alanda: şema uyumsuzluğu tek tek veritabanlarının sorunu değil.",
+        "operationId": "get_collection_health_api_instances_collection_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionHealthOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Collection Health",
         "tags": [
           "instances"
         ]

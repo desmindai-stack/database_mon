@@ -480,8 +480,44 @@ class InstanceOut(BaseModel):
     # kullanıcı ekrandaki sayının nereden geldiğini görebilmeli.
     metric_sources: dict[str, str] | None = None
     server_version_num: int | None = None
+    # Faz 30 İŞ 1: toplama durumu. "Ölçüm yok" ile "sorun yok" farklı şeyler — bir
+    # veritabanının veri yazamadığı arayüzde görünmeliydi, log'da kalmamalıydı.
+    last_collect_ok_at: datetime | None = None
+    last_collect_error: str | None = None
+    last_collect_error_at: datetime | None = None
+    last_collect_error_kind: str | None = None
 
     model_config = {"from_attributes": True}
+
+
+class SystemicCollectionNoticeOut(BaseModel):
+    """Tek tek veritabanlarının değil, KURULUMUN sorunu (Faz 30 İŞ 1).
+
+    Şema uyumsuzluğunda "12 veritabanı hata verdi" listesi operatörü yanlış yere bakmaya
+    gönderir: hiçbiri hatalı değil, çalıştırılmamış bir migration var.
+    """
+
+    kind: str
+    message: str
+    affected: int
+    since: datetime
+
+
+class CollectionHealthItemOut(BaseModel):
+    instance_id: int
+    name: str
+    engine: str
+    enabled: bool
+    last_collect_ok_at: datetime | None = None
+    last_collect_error: str | None = None
+    last_collect_error_at: datetime | None = None
+    last_collect_error_kind: str | None = None
+
+
+class CollectionHealthOut(BaseModel):
+    items: list[CollectionHealthItemOut]
+    failing: int
+    notice: SystemicCollectionNoticeOut | None = None
 
 
 class MetricSampleOut(BaseModel):

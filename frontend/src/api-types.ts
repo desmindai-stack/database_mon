@@ -668,6 +668,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/collection-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Collection Health
+         * @description Veritabanı başına toplama durumu ve varsa sistemik uyarı (Faz 30 İŞ 1).
+         *
+         *     Hata eskiden yalnızca log'a düşüyordu; kullanıcı bir veritabanının günlerdir veri
+         *     yazamadığını ancak grafiklerin boş kalmasından anlıyordu — o da "sorun yok" ile
+         *     karıştırılabilecek bir sinyal.
+         *
+         *     Sistemik uyarı ayrı alanda: şema uyumsuzluğu tek tek veritabanlarının sorunu değil.
+         */
+        get: operations["get_collection_health_api_instances_collection_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/instances/summary": {
         parameters: {
             query?: never;
@@ -2636,6 +2662,33 @@ export interface components {
              */
             up: number;
         };
+        /** CollectionHealthItemOut */
+        CollectionHealthItemOut: {
+            /** Enabled */
+            enabled: boolean;
+            /** Engine */
+            engine: string;
+            /** Instance Id */
+            instance_id: number;
+            /** Last Collect Error */
+            last_collect_error?: string | null;
+            /** Last Collect Error At */
+            last_collect_error_at?: string | null;
+            /** Last Collect Error Kind */
+            last_collect_error_kind?: string | null;
+            /** Last Collect Ok At */
+            last_collect_ok_at?: string | null;
+            /** Name */
+            name: string;
+        };
+        /** CollectionHealthOut */
+        CollectionHealthOut: {
+            /** Failing */
+            failing: number;
+            /** Items */
+            items: components["schemas"]["CollectionHealthItemOut"][];
+            notice?: components["schemas"]["SystemicCollectionNoticeOut"] | null;
+        };
         /** ConfigOut */
         ConfigOut: {
             /** Default Customer Name */
@@ -3842,6 +3895,14 @@ export interface components {
             host: string;
             /** Id */
             id: number;
+            /** Last Collect Error */
+            last_collect_error?: string | null;
+            /** Last Collect Error At */
+            last_collect_error_at?: string | null;
+            /** Last Collect Error Kind */
+            last_collect_error_kind?: string | null;
+            /** Last Collect Ok At */
+            last_collect_ok_at?: string | null;
             /** Metric Sources */
             metric_sources?: {
                 [key: string]: string;
@@ -5291,6 +5352,26 @@ export interface components {
             count: number;
             /** State */
             state: string;
+        };
+        /**
+         * SystemicCollectionNoticeOut
+         * @description Tek tek veritabanlarının değil, KURULUMUN sorunu (Faz 30 İŞ 1).
+         *
+         *     Şema uyumsuzluğunda "12 veritabanı hata verdi" listesi operatörü yanlış yere bakmaya
+         *     gönderir: hiçbiri hatalı değil, çalıştırılmamış bir migration var.
+         */
+        SystemicCollectionNoticeOut: {
+            /** Affected */
+            affected: number;
+            /** Kind */
+            kind: string;
+            /** Message */
+            message: string;
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
         };
         /** TokenOut */
         TokenOut: {
@@ -7104,6 +7185,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_collection_health_api_instances_collection_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CollectionHealthOut"];
                 };
             };
         };

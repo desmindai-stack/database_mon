@@ -4,6 +4,7 @@ import {
   Advice,
   api,
   AppConfig,
+  CollectionHealth,
   DashboardSummary,
   formatRelativeTime,
   GroupOverallStatus,
@@ -100,6 +101,25 @@ function buildProblemCards(summary: DashboardSummary): ProblemCard[] {
 }
 
 export default function DashboardPage() {
+  // Faz 30 İŞ 1: SİSTEMİK toplama hatası. Şema uyumsuzluğu tek tek veritabanlarının sorunu
+  // değil — "12 veritabanı hata verdi" listesi operatörü yanlış yere bakmaya gönderir.
+  // Bu yüzden veritabanı kartlarının arasında değil, sayfanın en üstünde TEK bir uyarı.
+  const [collectionNotice, setCollectionNotice] = useState<CollectionHealth["notice"]>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getCollectionHealth()
+      .then((health) => {
+        if (!cancelled) setCollectionNotice(health.notice ?? null);
+      })
+      // Sessizce yutuluyor: bu şerit bir EK bilgi, alınamaması dashboard'u engellememeli.
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const canWrite = useAuth().user?.role === "admin";
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState<HealthResponse | null>(null);
@@ -247,6 +267,12 @@ export default function DashboardPage() {
 
       {error && <PageError error={error} onRetry={() => { setError(null); api.getHealth().then(setConfig).catch((err) => setError(String(err.message || err))); }} />}
       {groupSummaryError && <PageError error={groupSummaryError} onRetry={loadSummary} />}
+
+      {collectionNotice && (
+        <div className="error" role="alert">
+          <strong>Veri toplama durdu:</strong> {collectionNotice.message}
+        </div>
+      )}
 
       {/* Faz 17 İŞ 5: bugünün sağlık raporu kartı — tıklayınca doğrudan o rapora gider. */}
       {latestReport && (
