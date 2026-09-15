@@ -1590,6 +1590,58 @@ export default function InstanceDetailPage() {
                               {q.wal_bytes != null && q.wal_bytes > 0 && (
                                 <div><span>WAL / çağrı</span><strong>{queryMetrics(q).wal_bytes_per_call ?? 0} B</strong></div>
                               )}
+                              {/* Faz 30 İŞ 2 — SQL Server: CPU ile BEKLEMENİN ayrımı.
+                                  `total_elapsed_time` duvar saati, `total_worker_time` CPU;
+                                  ikisinin FARKI beklemedir (kilit, I/O, ağ). Bu iki sayı
+                                  olmadan "sorgu neden yavaş" sorusu cevaplanamıyor.
+                                  Pay yalnızca CPU süresi ÖLÇÜLDÜYSE gösteriliyor —
+                                  PostgreSQL'de pg_stat_kcache yoksa None, ve 0 göstermek
+                                  "hiç CPU kullanmadı" demek olurdu. */}
+                              {queryMetrics(q).cpu_time_share_pct != null && (
+                                <>
+                                  <div>
+                                    <span>CPU payı</span>
+                                    <strong>%{queryMetrics(q).cpu_time_share_pct}</strong>
+                                  </div>
+                                  <div>
+                                    <span>bekleme payı</span>
+                                    <strong>%{queryMetrics(q).wait_time_share_pct}</strong>
+                                  </div>
+                                </>
+                              )}
+                              {q.cpu_time_ms != null && (
+                                <div><span>CPU süresi</span><strong>{q.cpu_time_ms.toFixed(1)} ms</strong></div>
+                              )}
+                              {q.logical_reads != null && q.logical_reads > 0 && (
+                                <div>
+                                  <span>mantıksal okuma</span>
+                                  <strong>{q.logical_reads.toLocaleString("tr-TR")}</strong>
+                                </div>
+                              )}
+                              {q.physical_reads != null && q.physical_reads > 0 && (
+                                <div>
+                                  <span>fiziksel okuma</span>
+                                  <strong>{q.physical_reads.toLocaleString("tr-TR")}</strong>
+                                </div>
+                              )}
+                              {q.logical_writes != null && q.logical_writes > 0 && (
+                                <div>
+                                  <span>mantıksal yazma</span>
+                                  <strong>{q.logical_writes.toLocaleString("tr-TR")}</strong>
+                                </div>
+                              )}
+                              {q.spills != null && q.spills > 0 && (
+                                <div>
+                                  <span>tempdb taşması</span>
+                                  <strong>{q.spills.toLocaleString("tr-TR")}</strong>
+                                </div>
+                              )}
+                              {queryMetrics(q).memory_grant_waste_pct != null && (
+                                <div>
+                                  <span>kullanılmayan bellek izni</span>
+                                  <strong>%{queryMetrics(q).memory_grant_waste_pct}</strong>
+                                </div>
+                              )}
                               {(q.exec_user_time || q.exec_sys_time) && (
                                 <div><span>CPU (exec)</span><strong>{((q.exec_user_time ?? 0) + (q.exec_sys_time ?? 0)).toFixed(2)} ms</strong></div>
                               )}
@@ -1645,6 +1697,15 @@ export default function InstanceDetailPage() {
                                 {explain[q.id] && <ExplainPlanTree result={explain[q.id]!} />}
                                 {advice[q.id] && (
                                   <div className="advice-results">
+                                    {/* Faz 30 İŞ 2: kaynak belli olsun. Bu öneri BU SORGU için
+                                        üretildi; SQL Server'ın motor içi önerileri (planlama
+                                        sırasında biriken talep) Şema sekmesinde ayrı duruyor. */}
+                                    <p className="muted-note">
+                                      Kaynak: dbace — bu sorgunun metninden üretildi
+                                      {instance.engine === "postgresql"
+                                        ? ", faydası hypopg ile ölçülüyor."
+                                        : ". Motorun kendi eksik index önerileri Şema sekmesinde."}
+                                    </p>
                                     {advice[q.id].advice.length === 0 ? (
                                       <NoAdviceReasons reasons={advice[q.id].no_advice_reasons} />
                                     ) : (

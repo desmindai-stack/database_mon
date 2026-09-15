@@ -3,6 +3,7 @@ import { formatBytes } from "../api";
 import type { SchemaHealth } from "../api";
 import CopyableAction from "./CopyableAction";
 import CollapsibleSection from "./CollapsibleSection";
+import AdviceCard from "./AdviceCard";
 
 type Props = {
   data: SchemaHealth | null;
@@ -55,6 +56,13 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
   const unused_indexes = keep(data.unused_indexes);
   const bloated_tables = keep(data.bloated_tables);
   const vacuum_lag = keep(data.vacuum_lag);
+  // Faz 30 İŞ 2: SQL Server'ın KENDİ eksik index önerileri. Etki ölçüsüne göre sıralı —
+  // motorun verdiği yüzde tek başına yanıltıcı: günde bir çalışan bir sorgu için %99
+  // iyileşme, saniyede bin kez çalışan bir sorgu için %20'den daha az değerli.
+  const missingIndexes = ((data.missing_indexes || []) as Record<string, any>[])
+    .slice()
+    .sort((a, b) => Number(b.improvement_measure ?? 0) - Number(a.improvement_measure ?? 0));
+
   // Yalnızca sinyal veren tablolar; ötekiler listeyi doldurup sinyali gizlerdi.
   const accessWithSignals = ((data.table_access || []) as Record<string, any>[]).filter(
     (row) => (row.signals || []).length > 0,
@@ -230,6 +238,46 @@ export default function SchemaHealthPanel({ data, error, loading, onRefresh }: P
         Yalnızca SİNYAL VEREN tablolar listeleniyor: sinyalsiz 50 satırın arasında kalan
         tek bir uyarı, hiç gösterilmemiş sayılır.
       */}
+      {/* Faz 30 İŞ 2: KAYNAK AÇIKÇA YAZILI.
+          Bu satırlar SQL Server'ın KENDİ ölçümü (sys.dm_db_missing_index_*): motor planlama
+          sırasında "şu index olsaydı" bilgisini zaten biriktiriyor. Bizim sorgu bazında
+          ürettiğimiz öneri (Yavaş sorgular sekmesi) başka bir şey: tek bir sorgu için
+          hipotetik index'le ölçülmüş fayda. İkisi karışırsa kullanıcı hangisine güveneceğini
+          bilemez. */}
+      <CollapsibleSection
+        id="schema-missing-indexes"
+        title="Eksik index önerileri"
+        status={missingIndexes.length > 0 ? "warning" : "ok"}
+        warning={missingIndexes.length}
+        subtitle="Kaynak: SQL Server motoru (sys.dm_db_missing_index_*)"
+      >
+        {missingIndexes.length === 0 ? (
+          <div className="empty">
+            Motorun biriktirdiği eksik index önerisi yok. (PostgreSQL'de bu liste boştur; orada
+            öneri sorgu bazında, Yavaş sorgular sekmesinde üretiliyor.)
+          </div>
+        ) : (
+          <div className="access-signal-list">
+            {missingIndexes.map((row, i) => (
+              <div className="access-signal-row" key={`${row.schema_name}.${row.table_name}-${i}`}>
+                <div className="access-signal-head">
+                  <strong>
+                    {row.schema_name}.{row.table_name}
+                  </strong>
+                  <span className="muted-note">
+                    etki ölçüsü {Number(row.improvement_measure ?? 0).toFixed(2)} · motorun tahmini
+                    iyileşmesi %{Number(row.avg_user_impact ?? 0).toFixed(0)} ·{" "}
+                    {Number(row.user_seeks ?? 0).toLocaleString("tr-TR")} seek
+                  </span>
+                </div>
+                {row.index_ddl && <CopyableAction command={row.index_ddl} />}
+                <AdviceCard advice={row.advice} defaultOpen={false} />
+              </div>
+            ))}
+          </div>
+        )}
+      </CollapsibleSection>
+
       <CollapsibleSection
         id="schema-table-access"
         title="Tablo erişim kalıbı"

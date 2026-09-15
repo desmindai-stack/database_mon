@@ -492,8 +492,16 @@ async def get_schema_health(instance_id: int, db: AsyncSession = Depends(get_db)
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    if instance.engine != "postgresql":
-        raise HTTPException(status_code=400, detail="Schema health is currently PostgreSQL-only")
+    # Faz 30 İŞ 2: SQL Server da geçiyor. Faz 29 İŞ 2c'de bu motor için `collect_schema_health`
+    # yazılmıştı (motorun KENDİ eksik index önerileri + kullanılmayan index'ler) ama bu koruma
+    # yüzünden uç 400 dönüyordu: analiz üretiliyor, hiçbir ekrana ulaşmıyordu.
+    #
+    # MongoDB hâlâ dışarıda: taban toplayıcı boş sözlük döndürüyor ve "ölçüm yok"u boş bir
+    # ekranla "sorun yok" gibi göstermek yanlış olurdu.
+    if instance.engine not in ("postgresql", "sqlserver"):
+        raise HTTPException(
+            status_code=400, detail="Şema sağlığı yalnızca PostgreSQL ve SQL Server için var"
+        )
 
     target = ConnectionTarget(
         host=instance.host,

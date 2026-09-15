@@ -7514,6 +7514,59 @@ senaryosunu değil çalışma sırasını ölçerdi.
 
 Migration: `20260921090000_collection_status.sql` (DEPLOY.md satır 45).
 
+## Faz 30 — İŞ 2: SQL Server analizlerinin arayüz karşılığı
+
+### Kod yazılmış olması, çalıştığı anlamına gelmiyordu
+
+Faz 29 İŞ 2c'de SQL Server için `collect_schema_health` yazılmıştı: motorun **kendi**
+eksik index önerileri (`sys.dm_db_missing_index_*`) ve kullanılmayan index'ler. Ama uç
+noktada `engine != "postgresql"` koruması duruyordu ve istek **400** dönüyordu. Analiz
+üretiliyor, hiçbir ekrana ulaşmıyordu.
+
+Yani sorun yalnızca "arayüz eksik" değildi; uç kapalıydı. Koruma artık PostgreSQL ve SQL
+Server'ı geçiriyor. MongoDB hâlâ dışarıda: taban toplayıcı boş sözlük döndürüyor ve
+"ölçüm yok"u boş bir ekranla "sorun yok" gibi göstermek yanlış olurdu.
+
+### İki öneri kaynağı ayrı ayrı işaretli
+
+| Kaynak | Ne ölçüyor | Nerede |
+|---|---|---|
+| **SQL Server motoru** (`sys.dm_db_missing_index_*`) | Planlama sırasında birikmiş gerçek talep — "şu index olsaydı" | Şema sekmesi, "Eksik index önerileri" |
+| **dbace** | Tek bir sorgunun metninden üretilen öneri; PostgreSQL'de faydası hypopg ile ölçülüyor | Yavaş sorgular sekmesi, sorgu detayında |
+
+İkisi karışırsa kullanıcı hangisine güveneceğini bilemez. Bu yüzden her iki yerde de
+kaynak açıkça yazılı ve testle korunuyor.
+
+Motorun listesi **etki ölçüsüne** göre sıralı, yüzdeye göre değil: günde bir çalışan bir
+sorgu için %99 iyileşme, saniyede bin kez çalışan bir sorgu için %20'den daha az
+değerlidir. Etki ölçüsü = `avg_total_user_cost × (avg_user_impact/100) × (seeks + scans)`.
+Her satır çalıştırılabilir `CREATE NONCLUSTERED INDEX` ve beş parçalı öneri taşıyor.
+
+### Yavaş sorgu detayında CPU ile beklemenin ayrımı
+
+`total_elapsed_time` duvar saati, `total_worker_time` CPU; **ikisinin farkı beklemedir**
+(kilit, I/O, ağ). Bu iki sayı olmadan "sorgu neden yavaş" sorusu cevaplanamıyor — kilitte
+10 saniye bekleyen bir sorgu, CPU'ya bakan bir ekranda hızlı görünür.
+
+Eklenen döşemeler: CPU payı, bekleme payı, CPU süresi, mantıksal/fiziksel okuma, mantıksal
+yazma, tempdb taşması, kullanılmayan bellek izni.
+
+Pay yalnızca CPU süresi **ölçüldüyse** gösteriliyor: PostgreSQL'de `pg_stat_kcache` yoksa
+değer None kalıyor ve 0 göstermek "hiç CPU kullanmadı" demek olurdu. PostgreSQL'in kendi
+göstergeleriyle aynı ızgarada duruyorlar — motor değişince ekran değişmiyor, yalnızca
+dolan alanlar değişiyor.
+
+### Test
+
+`tests/test_sqlserver_dpa_surface.py` (11 test). Uç noktanın SQL Server'da gerçekten
+açıldığı, DDL'in çalıştırılabilir olduğu (eşitlik kolonu anahtarda, INCLUDE ayrı — sıra
+yanlışsa index çalışmaz), önerinin beş parçalı standarda uyduğu, MongoDB'nin hâlâ
+"burada ölçüm yok" dediği, ve **her SQL Server metriğinin arayüzde gerçekten çizildiği**:
+API'den gelip hiçbir ekranda gösterilmeyen alan, toplanmamış alanla aynı şeydir — bu turun
+konusu tam olarak buydu.
+
+Arka uç: **1633 geçti, 15 atlandı**. `npm run build` yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
