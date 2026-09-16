@@ -144,11 +144,15 @@ Kapalı ortam (on-prem) paketi tam yığını — PostgreSQL metadata veritaban�
 nginx arkasında dashboard — tek komutla kurar:
 **[deploy/onprem/KURULUM.md](deploy/onprem/KURULUM.md)**.
 
-> **Bilinen sorun:** Kök dizindeki `docker-compose.yml` içindeki `backend` + `frontend`
-> servisleri şu an birlikte çalışmıyor. Web imajının nginx ayarı API'yi `dbace-app:8000`
-> adresinde arıyor, kök compose ise servisi `backend` diye adlandırıyor; dashboard
-> (http://localhost:8080) açılır ama API çağrıları başarısız olur. Kök compose'u yalnızca
-> `postgres-demo` için kullanın, tam yığın için on-prem paketini kullanın.
+Kök dizindeki `docker-compose.yml` de tam yığını (demo PostgreSQL + API/worker + nginx
+arkasında dashboard) ayağa kaldırır:
+
+```bash
+docker compose up -d --build     # dashboard: http://localhost:8080
+```
+
+Dashboard 8080'de, API aynı origin üzerinden `/api/` altında. Doğrudan API'ye
+http://localhost:8000 adresinden de erişilir.
 
 ## İlk kurulum — kimlik doğrulama
 

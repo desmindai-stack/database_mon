@@ -7612,6 +7612,67 @@ etki payı, çağrı başına WAL, CPU payı, bekleme payı, kullanılmayan bell
 
 Test: `tests/test_metric_dictionary_surface.py` (5 test).
 
+## Faz 30 — İŞ 4: Kök compose ile tam yığın gerçekten kalkıyor
+
+### Bildirilen sorun bir tanesiydi, gerçekte iki tane vardı
+
+**1. İsim uyuşmazlığı.** Web imajı `deploy/onprem/nginx.conf` dosyasını içine gömüyor ve
+API'yi `dbace-app:8000` adresinde arıyor; kök compose ise servisi `backend` diye
+adlandırıyordu. Dashboard 8080'de açılıyor, her API çağrısı düşüyordu.
+
+Düzeltme **ağ takma adı** ile yapıldı, servis adı değiştirilerek değil: `nginx.conf`
+`deploy/` altında ve o dosya on-prem paketinin sözleşmesi (CLAUDE.md oraya dokunmayı
+yasaklıyor). İsim paketten geliyor, kök compose ona uyuyor.
+
+**2. Satır sonu.** Takma ad eklendikten sonra yığın yine kalkmadı: backend konteyneri
+`exec /entrypoint.sh: no such file or directory` ile ölüyordu. Dosya oradaydı —
+bulunamayan şey **yorumlayıcıydı**. `deploy/onprem/entrypoint.sh` çalışma kopyasında CRLF
+satır sonlarıyla duruyordu; shebang satırının sonundaki taşıma karakteri yorumlayıcı
+adının parçası sayılıyor ve öyle bir yorumlayıcı yok.
+
+Depodaki hâli LF'ti (`git ls-files --eol` → `i/lf w/crlf`), yani sorun içerikte değil
+**Windows checkout'unda**: her Windows geliştiricisinde tekrar ederdi. Kök
+`.gitattributes` ile `*.sh`, `Dockerfile*` ve `*.conf` LF'e sabitlendi ve çalışma kopyası
+yeniden yazdırıldı.
+
+Hata mesajının yanlış yere baktırması bu turun en önemli ayrıntısı: "no such file or
+directory" cümlesi dosyanın yokluğunu ima ediyor, oysa eksik olan yorumlayıcı.
+
+**3. Yarış durumu (bonus).** nginx yukarı akış adını **başlangıçta** çözüyor ve
+bulamazsa ölüyor, bir daha denemiyor (`host not found in upstream "dbace-app"`).
+`depends_on` yalnızca "başladı"yı bekliyor, "hazır"ı değil. nginx servisine yeniden
+başlatma politikası eklendi.
+
+### Doğrulama — gerçekten ayağa kalktığı ölçüldü
+
+`docker compose up -d --build` sonrası, nginx **üzerinden**:
+
+| İstek | Sonuç |
+|---|---|
+| `GET /api/health` | **200**, gövde `{"status":"ok","mode":"all",...}` |
+| `GET /` (dashboard) | 200 |
+| `GET /openapi.json` | 200 |
+| `GET /docs` | 200 |
+| `POST /api/auth/login` | 422 — istek FastAPI'ye **ulaşıyor** (POST proxy'si de çalışıyor) |
+
+Üç konteyner de ayakta. README'deki "bilinen sorun" notu bu ölçümden **sonra** kaldırıldı.
+
+### Test
+
+`tests/test_compose_stack_contract.py` (6 test), Docker gerektirmiyor: nginx'in
+`proxy_pass` ile gittiği her (host, port) çiftinin kök compose'ta bir servis adı ya da
+takma ad olarak çözüldüğü — ve doğru portu açtığı; nginx servisinin yeniden başlatma
+politikası taşıdığı; `.gitattributes`'ın betikleri LF'e sabitlediği; ve ağaçtaki hiçbir
+`.sh` dosyasının CRLF içermediği (kural yazılı olsa da dosya CRLF ile gelirse yığın yine
+kalkmaz).
+
+### Kendi hatam: `git checkout -- .`
+
+CRLF'i normalleştirirken tüm ağaç için `git checkout -- .` çalıştırdım; bu, commit
+edilmemiş compose değişikliğini (takma adı) sildi. Sözleşme testi bunu hemen kırmızıya
+düşürdüğü için fark edildi — test olmasaydı "düzelttim" denip takma adsız bir dosya
+commit edilecekti. Ders: normalleştirme dosya bazlı yapılmalı, `checkout -- .` ile değil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

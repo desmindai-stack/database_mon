@@ -1,0 +1,11 @@
+# Kabuk betikleri HER ZAMAN LF ile yazılsın.
+#
+# Windows checkout'unda CRLF'e çevrilen bir betik, Linux konteynerinde çalışmaz:
+# `#!/bin/sh\r` diye bir yorumlayıcı yoktur ve Docker "exec /entrypoint.sh: no such file
+# or directory" der — dosya oradadır, bulunamayan şey yorumlayıcıdır. Kök compose ile tam
+# yığın tam olarak bu yüzden ayağa kalkmıyordu (Faz 30 İŞ 4).
+*.sh text eol=lf
+
+# Aynı gerekçe: konteynere giren diğer metin dosyaları.
+Dockerfile* text eol=lf
+*.conf text eol=lf

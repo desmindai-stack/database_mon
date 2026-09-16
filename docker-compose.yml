@@ -30,6 +30,15 @@ services:
       CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173"]'
     depends_on:
       - postgres-demo
+    # Web imajının nginx ayarı API'yi `dbace-app:8000` adresinde arıyor
+    # (deploy/onprem/nginx.conf — on-prem paketinin sözleşmesi, değiştirilmiyor).
+    # Kök compose servisi `backend` diye adlandırdığı için bu isim çözümlenmiyordu:
+    # dashboard 8080'de açılıyor ama HER API çağrısı düşüyordu.
+    # Takma ad iki dosyayı, servis adını değiştirmeden uyumlu kılıyor.
+    networks:
+      default:
+        aliases:
+          - dbace-app
 
   frontend:
     build:
@@ -39,6 +48,11 @@ services:
       - "8080:80"
     depends_on:
       - backend
+    # nginx yukarı akış adını BAŞLANGIÇTA çözüyor: `dbace-app` henüz ayakta değilse
+    # "host not found in upstream" ile ölüyor ve bir daha denemiyor. `depends_on` yalnızca
+    # "başladı"yı bekliyor, "hazır"ı değil — backend ilk saniyelerde çıkarsa nginx de
+    # kalıcı olarak ölü kalırdı. Yeniden başlatma politikası bu yarışı kapatıyor.
+    restart: unless-stopped
 
 volumes:
   dbace-data:
