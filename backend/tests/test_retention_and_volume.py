@@ -164,3 +164,31 @@ def test_the_retention_default_is_still_one_month():
     """Hacim düzeltmesi saklama süresini kısaltarak yapılmadı — veri kaybı olmamalı."""
     assert DEFAULT_RETENTION_DAYS == 30
     assert DEFAULT_RETENTION_DAYS in ALLOWED_RETENTION_DAYS
+
+
+async def test_index_advice_watch_job_is_registered_and_calls_the_service(monkeypatch):
+    """Faz 31 İŞ 1c: izleme turu zamanlayıcıda KAYITLI ve çalıştığında servis fonksiyonunu
+    çağırıyor — yazılmış ama hiç tetiklenmeyen bir tur, "eşik dolunca öneri üretilir"
+    sözünü sessizce boşa çıkarırdı."""
+    # Şema bu testin içinde kuruluyor: dosya tek başına koşulduğunda diğer testler
+    # `app_settings` tablosu yok diye düşüyor (Faz 31 öncesinden kalan sıra bağımlılığı).
+    from app.database import init_db
+
+    await init_db()
+    await sched.start_scheduler()
+    try:
+        job = sched.scheduler.get_job(sched.INDEX_ADVICE_WATCH_JOB_ID)
+        assert job is not None, "index önerisi izleme işi kayıtlı değil"
+        assert job.max_instances == 1 and job.coalesce is True
+    finally:
+        sched.stop_scheduler()
+
+    calls = []
+
+    async def fake_tick():
+        calls.append(True)
+        return {"checked": 1, "ready": 1, "still_waiting": 0, "failed": 0, "unparsable": 0}
+
+    monkeypatch.setattr(sched, "run_index_advice_watch_tick", fake_tick)
+    await sched.index_advice_watch_tick()
+    assert calls == [True]

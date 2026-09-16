@@ -1134,9 +1134,15 @@ class MetricDefinitionOut(BaseModel):
 
 class IndexAdviceRequest(BaseModel):
     query: str = Field(min_length=1)
-    # pg_stat_statements.calls for this query, if the caller has it (Faz 16 İŞ 4) — used to warn
-    # when a recommendation would be based on very few executions.
+    # İstemcinin bildiği çağrı sayısı — YALNIZCA sunucu kümülatif değeri bulamazsa kullanılır
+    # (Faz 31 İŞ 1c: arayüzdeki liste pencere farkını gösteriyor, eşik toplamı soruyor).
     calls: int | None = None
+    # Faz 31: çağrı sayısını sunucunun kendi verisinden bulmak ve izleme kaydını eşlemek için.
+    queryid: str | None = None
+
+
+# TANIM SIRASI (Faz 31): aşağıdaki tipler kendilerini KULLANAN modellerden önce tanımlı olmalı
+# (yerel 3.14 / canlı 3.12 farkı — tests/test_definition_order.py).
 
 
 class IndexAdviceOut(BaseModel):
@@ -1145,11 +1151,16 @@ class IndexAdviceOut(BaseModel):
     columns: list[str]
     index_ddl: str
     reason: str
-    estimated_improvement_pct: float
+    # Faz 31: ölçülemediyse None — izleme kullanıcısının SELECT yetkisi yoksa ya da tablo hiç
+    # ANALYZE edilmemişse uydurma bir yüzde gösterilmiyor. Sebep `measurement_notes`'ta.
+    estimated_improvement_pct: float | None
     has_hypopg_estimate: bool
     before_cost: float | None
     after_cost: float | None
     existing_indexes: list[str]
+    # btree | expression | like_prefix | trigram
+    index_kind: str = "btree"
+    measurement_notes: list[str] = []
     # Faz 17 Ek İŞ B: rapor ve dashboard ile AYNI öneri yapısı — arayüzde tek bileşen.
     advice: AdviceOut | None = None
 
@@ -1160,9 +1171,87 @@ class NoAdviceReasonOut(BaseModel):
     what_to_do: str
 
 
+class IndexPredicateOut(BaseModel):
+    """Sorguda bulunan tek filtre ve index'e dönüştürülemediyse sebebi (Faz 31 İŞ 1b)."""
+
+    column: str
+    # "şema.tablo"; çözülemediyse None.
+    table: str | None
+    # Niteliksiz kolon birden çok tabloda varsa adaylar.
+    candidates: list[str] = []
+    # eq | in | is_null | join | range | like_prefix | like_unanchored | like_unknown | sort | group | other
+    kind: str
+    # where | join_on | having | order_by | group_by
+    clause: str
+    # main | cte | subquery | exists
+    context: str
+    expression: str | None = None
+    text: str = ""
+    usable: bool
+    unusable_reason: str | None = None
+
+
+class IndexAdviceThresholdOut(BaseModel):
+    """Çağrı eşiği değerlendirmesi: "şu anda 2/5 çağrı"."""
+
+    calls_now: int
+    threshold: int
+    watching: bool
+    watch_enabled: bool
+    watch_id: int | None = None
+
+
+class IndexAdviceWatchOut(BaseModel):
+    id: int
+    queryid: str | None
+    query: str
+    # waiting | ready | failed
+    status: str
+    calls_seen: int
+    threshold: int
+    registered_at: datetime | None
+    last_checked_at: datetime | None
+    ready_at: datetime | None
+    last_error: str | None
+
+
 class IndexAdviceReportOut(BaseModel):
+    # advised | no_advice | below_threshold | system | unparsable | truncated | empty
+    status: str = "no_advice"
     advice: list[IndexAdviceOut]
     no_advice_reasons: list[NoAdviceReasonOut]
+    predicates: list[IndexPredicateOut] = []
+    threshold: IndexAdviceThresholdOut | None = None
+    watch: IndexAdviceWatchOut | None = None
+
+
+class IndexAdviceWatchListItemOut(IndexAdviceWatchOut):
+    # Eşik dolduğunda zamanlayıcının ürettiği rapor.
+    report: IndexAdviceReportOut | None = None
+
+
+class IndexAdviceBatchRequest(BaseModel):
+    items: list[IndexAdviceRequest] = Field(min_length=1, max_length=20)
+
+
+class IndexAdviceBatchSummaryOut(BaseModel):
+    total: int
+    counts: dict[str, int]
+    # "3 sorgudan 1'i çözümlenemedi; 1'i için öneri üretildi; …"
+    text: str
+
+
+class IndexAdviceBatchItemOut(BaseModel):
+    query: str
+    queryid: str | None = None
+    report: IndexAdviceReportOut | None = None
+    # Bu sorgu için öneri çalıştırılamadıysa (bağlantı hatası) sebebi.
+    error: str | None = None
+
+
+class IndexAdviceBatchOut(BaseModel):
+    summary: IndexAdviceBatchSummaryOut
+    items: list[IndexAdviceBatchItemOut]
 
 
 class PerformanceInsightOut(BaseModel):
@@ -2094,6 +2183,19 @@ class NoiseSettingsOut(BaseModel):
     finding_min_calls: int
     show_system_queries: bool
     defaults: dict[str, Any] = {}
+
+
+class AnalysisSettingsOut(BaseModel):
+    """Analiz derinliği ayarları (Faz 31 İŞ 1c)."""
+
+    index_advice_min_calls: int
+    index_advice_watch_enabled: bool
+    defaults: dict[str, Any] = {}
+
+
+class AnalysisSettingsUpdate(BaseModel):
+    index_advice_min_calls: int | None = Field(default=None, ge=1)
+    index_advice_watch_enabled: bool | None = None
 
 
 class NoiseSettingsUpdate(BaseModel):

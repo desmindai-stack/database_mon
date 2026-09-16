@@ -35,6 +35,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/analysis-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Analysis Settings
+         * @description Analiz derinliği ayarları — index önerisi çağrı eşiği ve izleme (Faz 31 İŞ 1c).
+         */
+        get: operations["read_analysis_settings_api_admin_analysis_settings_get"];
+        /** Update Analysis Settings */
+        put: operations["update_analysis_settings_api_admin_analysis_settings_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/noise-settings": {
         parameters: {
             query?: never;
@@ -1324,6 +1345,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queries/{instance_id}/advice-watches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Advice Watches
+         * @description Çağrı eşiği nedeniyle izlenen sorgular ve eşik dolunca üretilen öneriler (Faz 31 İŞ 1c).
+         */
+        get: operations["list_advice_watches_api_queries__instance_id__advice_watches_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/queries/{instance_id}/advice/batch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Advise Indexes Batch
+         * @description Birden çok sorgu için öneri — SAYILI özetle (Faz 31 İŞ 1b).
+         *
+         *     "Top sorgulara index öner" eskiden istemcide tek tek çağrı yapıyordu ve çözümlenemeyen
+         *     sorgular sessizce "öneri yok" satırına karışıyordu. Burada her sonuç durumuna göre
+         *     sayılıyor: "3 sorgudan 1'i çözümlenemedi; 1'i için öneri üretildi; …".
+         */
+        post: operations["advise_indexes_batch_api_queries__instance_id__advice_batch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queries/{instance_id}/availability": {
         parameters: {
             query?: never;
@@ -2208,6 +2273,30 @@ export interface components {
             primary_replica?: string | null;
             /** Replicas */
             replicas: components["schemas"]["ReplicaHealthOut"][];
+        };
+        /**
+         * AnalysisSettingsOut
+         * @description Analiz derinliği ayarları (Faz 31 İŞ 1c).
+         */
+        AnalysisSettingsOut: {
+            /**
+             * Defaults
+             * @default {}
+             */
+            defaults: {
+                [key: string]: unknown;
+            };
+            /** Index Advice Min Calls */
+            index_advice_min_calls: number;
+            /** Index Advice Watch Enabled */
+            index_advice_watch_enabled: boolean;
+        };
+        /** AnalysisSettingsUpdate */
+        AnalysisSettingsUpdate: {
+            /** Index Advice Min Calls */
+            index_advice_min_calls?: number | null;
+            /** Index Advice Watch Enabled */
+            index_advice_watch_enabled?: boolean | null;
         };
         /** ApplicationCreate */
         ApplicationCreate: {
@@ -3712,6 +3801,38 @@ export interface components {
              */
             keys: string[];
         };
+        /** IndexAdviceBatchItemOut */
+        IndexAdviceBatchItemOut: {
+            /** Error */
+            error?: string | null;
+            /** Query */
+            query: string;
+            /** Queryid */
+            queryid?: string | null;
+            report?: components["schemas"]["IndexAdviceReportOut"] | null;
+        };
+        /** IndexAdviceBatchOut */
+        IndexAdviceBatchOut: {
+            /** Items */
+            items: components["schemas"]["IndexAdviceBatchItemOut"][];
+            summary: components["schemas"]["IndexAdviceBatchSummaryOut"];
+        };
+        /** IndexAdviceBatchRequest */
+        IndexAdviceBatchRequest: {
+            /** Items */
+            items: components["schemas"]["IndexAdviceRequest"][];
+        };
+        /** IndexAdviceBatchSummaryOut */
+        IndexAdviceBatchSummaryOut: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Text */
+            text: string;
+            /** Total */
+            total: number;
+        };
         /** IndexAdviceOut */
         IndexAdviceOut: {
             advice?: components["schemas"]["AdviceOut"] | null;
@@ -3722,13 +3843,23 @@ export interface components {
             /** Columns */
             columns: string[];
             /** Estimated Improvement Pct */
-            estimated_improvement_pct: number;
+            estimated_improvement_pct: number | null;
             /** Existing Indexes */
             existing_indexes: string[];
             /** Has Hypopg Estimate */
             has_hypopg_estimate: boolean;
             /** Index Ddl */
             index_ddl: string;
+            /**
+             * Index Kind
+             * @default btree
+             */
+            index_kind: string;
+            /**
+             * Measurement Notes
+             * @default []
+             */
+            measurement_notes: string[];
             /** Reason */
             reason: string;
             /** Schema Name */
@@ -3742,6 +3873,18 @@ export interface components {
             advice: components["schemas"]["IndexAdviceOut"][];
             /** No Advice Reasons */
             no_advice_reasons: components["schemas"]["NoAdviceReasonOut"][];
+            /**
+             * Predicates
+             * @default []
+             */
+            predicates: components["schemas"]["IndexPredicateOut"][];
+            /**
+             * Status
+             * @default no_advice
+             */
+            status: string;
+            threshold?: components["schemas"]["IndexAdviceThresholdOut"] | null;
+            watch?: components["schemas"]["IndexAdviceWatchOut"] | null;
         };
         /** IndexAdviceRequest */
         IndexAdviceRequest: {
@@ -3749,6 +3892,103 @@ export interface components {
             calls?: number | null;
             /** Query */
             query: string;
+            /** Queryid */
+            queryid?: string | null;
+        };
+        /**
+         * IndexAdviceThresholdOut
+         * @description Çağrı eşiği değerlendirmesi: "şu anda 2/5 çağrı".
+         */
+        IndexAdviceThresholdOut: {
+            /** Calls Now */
+            calls_now: number;
+            /** Threshold */
+            threshold: number;
+            /** Watch Enabled */
+            watch_enabled: boolean;
+            /** Watch Id */
+            watch_id?: number | null;
+            /** Watching */
+            watching: boolean;
+        };
+        /** IndexAdviceWatchListItemOut */
+        IndexAdviceWatchListItemOut: {
+            /** Calls Seen */
+            calls_seen: number;
+            /** Id */
+            id: number;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Query */
+            query: string;
+            /** Queryid */
+            queryid: string | null;
+            /** Ready At */
+            ready_at: string | null;
+            /** Registered At */
+            registered_at: string | null;
+            report?: components["schemas"]["IndexAdviceReportOut"] | null;
+            /** Status */
+            status: string;
+            /** Threshold */
+            threshold: number;
+        };
+        /** IndexAdviceWatchOut */
+        IndexAdviceWatchOut: {
+            /** Calls Seen */
+            calls_seen: number;
+            /** Id */
+            id: number;
+            /** Last Checked At */
+            last_checked_at: string | null;
+            /** Last Error */
+            last_error: string | null;
+            /** Query */
+            query: string;
+            /** Queryid */
+            queryid: string | null;
+            /** Ready At */
+            ready_at: string | null;
+            /** Registered At */
+            registered_at: string | null;
+            /** Status */
+            status: string;
+            /** Threshold */
+            threshold: number;
+        };
+        /**
+         * IndexPredicateOut
+         * @description Sorguda bulunan tek filtre ve index'e dönüştürülemediyse sebebi (Faz 31 İŞ 1b).
+         */
+        IndexPredicateOut: {
+            /**
+             * Candidates
+             * @default []
+             */
+            candidates: string[];
+            /** Clause */
+            clause: string;
+            /** Column */
+            column: string;
+            /** Context */
+            context: string;
+            /** Expression */
+            expression?: string | null;
+            /** Kind */
+            kind: string;
+            /** Table */
+            table: string | null;
+            /**
+             * Text
+             * @default
+             */
+            text: string;
+            /** Unusable Reason */
+            unusable_reason?: string | null;
+            /** Usable */
+            usable: boolean;
         };
         /** InstanceCreate */
         InstanceCreate: {
@@ -5707,6 +5947,59 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    read_analysis_settings_api_admin_analysis_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisSettingsOut"];
+                };
+            };
+        };
+    };
+    update_analysis_settings_api_admin_analysis_settings_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalysisSettingsUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalysisSettingsOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -8371,6 +8664,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IndexAdviceReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_advice_watches_api_queries__instance_id__advice_watches_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexAdviceWatchListItemOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    advise_indexes_batch_api_queries__instance_id__advice_batch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["IndexAdviceBatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexAdviceBatchOut"];
                 };
             };
             /** @description Validation Error */

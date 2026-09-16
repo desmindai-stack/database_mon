@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import {
+  AnalysisSettings,
   api,
   HealthReportSchedule,
   NoiseSettings,
@@ -61,6 +62,7 @@ export default function AdminPage() {
   // Faz 17 İŞ 1/5: günlük sağlık raporunun saati ve kapsamı — diğer operasyonel ayarların yanında.
   const [reportSchedule, setReportSchedule] = useState<HealthReportSchedule | null>(null);
   const [noise, setNoise] = useState<NoiseSettings | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisSettings | null>(null);
   const [settingsBusy, setSettingsBusy] = useState(false);
 
   const loadRetention = () => api.getRetention().then(setRetention).catch((e) => setError(String(e.message || e)));
@@ -76,6 +78,7 @@ export default function AdminPage() {
   const loadSettings = () => {
     api.getReportSchedule().then(setReportSchedule).catch(() => undefined);
     api.getNoiseSettings().then(setNoise).catch(() => undefined);
+    api.getAnalysisSettings().then(setAnalysis).catch((err) => setError(String((err as Error).message)));
     return api.getRefreshInterval().then(setRefreshInterval).catch((e) => setError(String(e.message || e)));
   };
 
@@ -177,6 +180,15 @@ export default function AdminPage() {
     setError(null);
     try {
       setNoise(await api.updateNoiseSettings(patch));
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  };
+
+  const saveAnalysis = async (patch: Partial<Omit<AnalysisSettings, "defaults">>) => {
+    setError(null);
+    try {
+      setAnalysis(await api.updateAnalysisSettings(patch));
     } catch (err) {
       setError(String((err as Error).message));
     }
@@ -555,6 +567,48 @@ export default function AdminPage() {
             kendi toplama sorguları listelerden ve bulgulardan çıkarılır. Kaç sorgunun
             filtrelendiği DPA'da yazılı kalır.
           </p>
+        </CollapsibleSection>
+      )}
+
+      {tab === "settings" && (
+        <CollapsibleSection
+          id="admin-analysis-settings"
+          title="Analiz"
+          defaultOpen
+          style={{ marginTop: "1rem", maxWidth: 520 }}
+        >
+          <p className="muted-note">
+            Index önerisi az çalışmış bir sorgu için istatistiksel olarak zayıf olur. Eşiğin altındaki sorgular
+            izlemeye alınır; eşik dolunca öneri otomatik üretilir ve DPA'da görünür — elle tekrar denemek gerekmez.
+          </p>
+          <div className="noise-settings-grid">
+            <label>
+              Index önerisi için en az çağrı
+              <input
+                type="number"
+                min={1}
+                value={analysis?.index_advice_min_calls ?? 5}
+                disabled={!analysis}
+                onChange={(e) => {
+                  const value = Number(e.target.value);
+                  if (value >= 1) saveAnalysis({ index_advice_min_calls: value });
+                }}
+              />
+              <span className="muted-note">
+                Varsayılan: {String(analysis?.defaults?.index_advice_min_calls ?? 5)}. Sorgunun toplam çağrı sayısına
+                bakılır, seçili zaman aralığındaki farka değil.
+              </span>
+            </label>
+          </div>
+          <label style={{ display: "block", marginTop: "0.75rem" }}>
+            <input
+              type="checkbox"
+              checked={analysis?.index_advice_watch_enabled ?? true}
+              disabled={!analysis}
+              onChange={(e) => saveAnalysis({ index_advice_watch_enabled: e.target.checked })}
+            />{" "}
+            Eşik altındaki sorguları izle ve eşik dolunca öneri üret
+          </label>
         </CollapsibleSection>
       )}
     </SectionsProvider>

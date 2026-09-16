@@ -83,3 +83,43 @@ def test_the_shared_state_components_exist():
     page_state = (FRONTEND / "components" / "PageState.tsx").read_text(encoding="utf-8")
     for export in ("PageLoading", "PageError", "NotFoundState", "EmptyState", "TableState"):
         assert f"export function {export}" in page_state, f"{export} yok"
+
+
+# --- Faz 31 İŞ 1: index önerisi ------------------------------------------------------------
+
+_PAGE = FRONTEND / "pages" / "InstanceDetailPage.tsx"
+_PANEL = FRONTEND / "components" / "IndexAdvicePanel.tsx"
+
+
+def test_advice_failure_is_not_shown_as_no_advice():
+    """Önceden hata boş bir rapora çevriliyordu ve ekranda "Index önerisi bulunamadı" yazıyordu:
+    bağlantı hatası "öneri yok" gibi görünüyordu. Hata ayrı tutulup ayrı gösterilmeli."""
+    page = _PAGE.read_text(encoding="utf-8")
+    assert "{ advice: [], no_advice_reasons: [] }" not in page
+    load = dict(_function_blocks(page))["loadAdvice"]
+    assert "setAdviceError" in load
+    assert "Index önerisi alınamadı" in page
+
+
+def test_unmeasured_benefit_is_never_rendered_as_a_number():
+    panel = _PANEL.read_text(encoding="utf-8")
+    assert "estimated_improvement_pct != null" in panel
+    assert "Fayda ölçülemedi" in panel
+    assert "measurement_notes" in panel
+
+
+def test_found_predicates_threshold_and_watch_state_are_visible():
+    panel = _PANEL.read_text(encoding="utf-8")
+    page = _PAGE.read_text(encoding="utf-8")
+    assert "unusable_reason" in panel, "dönüştürülemeyen filtrenin nedeni gösterilmeli"
+    assert "calls_now" in panel and "threshold.threshold" in panel, '"şu anda X/Y çağrı" gösterilmeli'
+    assert "tekrar deneyin" not in panel.lower() and "tekrar deneyin" not in page.lower()
+    assert "<AdviceWatchList" in page and "getAdviceWatches" in page
+    assert "bulkAdviceSummary" in page and "getIndexAdviceBatch" in page
+
+
+def test_index_advice_types_come_from_the_generated_schema():
+    api = (FRONTEND / "api.ts").read_text(encoding="utf-8")
+    for name in ("IndexAdvice", "NoAdviceReason", "IndexAdviceReport", "IndexPredicate", "AnalysisSettings"):
+        assert f"export interface {name} " not in api, f"{name} elle yazılmış"
+        assert re.search(rf'export type {name} = Gen\["\w+"\];', api), f"{name} şemadan türetilmemiş"

@@ -66,10 +66,18 @@ class TableRef:
     schema: str
     name: str
     alias: str
+    #: Şema sorguda YAZMIYORDU, çıkarım yapıldı (Faz 31). Tablo varsayılan şemada
+    #: bulunamazsa index danışmanı katalogda adıyla arar; "yok" ile "varsaydığım şemada
+    #: yok" farklı şeyler.
+    schema_assumed: bool = False
 
     @property
     def qualified(self) -> str:
         return f"{self.schema}.{self.name}"
+
+    @property
+    def is_system_catalog(self) -> bool:
+        return self.schema.lower() in SYSTEM_SCHEMAS
 
 
 @dataclass
@@ -94,6 +102,37 @@ class QueryAnalysis:
     def is_not_a_table(self, name: str) -> bool:
         lowered = name.lower()
         return lowered in {n.lower() for n in self.cte_names | self.derived_names}
+
+
+#: Sistem kataloğu şemaları. Sorgudaki gerçek tabloların HEPSİ bunlardaysa sorgu bir
+#: veritabanı iç sorgusudur (Faz 31 İŞ 1a).
+SYSTEM_SCHEMAS = frozenset({"pg_catalog", "information_schema"})
+
+
+def resolve_schema(table: exp.Table, default_schema: str) -> tuple[str, bool]:
+    """Tablonun şeması ve bunun çıkarım olup olmadığı.
+
+    FAZ 31 İŞ 1a — canlıdaki hata: `SELECT ... FROM pg_class` sorgusu için
+    "'public.pg_class' tablosu bu veritabanında bulunamadı" deniyordu. Nitelenmemiş her ad
+    `public` sayılıyordu; oysa PostgreSQL `pg_catalog`'u search_path'te HER ZAMAN örtük
+    olarak ilk sırada arar. `pg_` önekli adlar kullanıcı şemasında yaratılabilse de (nadir)
+    önce pg_catalog'da çözülür — PostgreSQL'in kendisi gibi davranıyoruz.
+    """
+    if table.db:
+        return table.db, False
+    if table.name.lower().startswith("pg_"):
+        return "pg_catalog", False
+    return default_schema, True
+
+
+def is_system_catalog_query(analysis: "QueryAnalysis") -> bool:
+    """Sorgunun dokunduğu gerçek tabloların HEPSİ sistem kataloğunda mı.
+
+    Desen tabanlı `classify_system_query`'nin YAPISAL tamamlayıcısı: ağaç zaten
+    ayrıştırılmışsa kelime aramaktan daha doğru. Tablo yoksa False — o durumda karar
+    desene kalıyor (ör. `SELECT pg_is_in_recovery()`).
+    """
+    return bool(analysis.tables) and all(t.is_system_catalog for t in analysis.tables)
 
 
 def analyze_query(sql: str, *, default_schema: str = "public") -> QueryAnalysis:
@@ -143,13 +182,15 @@ def analyze_query(sql: str, *, default_schema: str = "public") -> QueryAnalysis:
             # `FROM generate_series(1, 10)` gibi fonksiyon çağrıları tablo değil.
             if isinstance(table.this, exp.Func):
                 continue
-            schema = table.db or default_schema
+            schema, assumed = resolve_schema(table, default_schema)
             alias = table.alias or name
             key = (schema.lower(), name.lower(), alias.lower())
             if key in seen:
                 continue
             seen.add(key)
-            analysis.tables.append(TableRef(schema=schema, name=name, alias=alias))
+            analysis.tables.append(
+                TableRef(schema=schema, name=name, alias=alias, schema_assumed=assumed)
+            )
 
     return analysis
 

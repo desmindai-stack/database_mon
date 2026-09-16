@@ -908,6 +908,60 @@
         "title": "AlwaysOnHealthOut",
         "type": "object"
       },
+      "AnalysisSettingsOut": {
+        "description": "Analiz derinliği ayarları (Faz 31 İŞ 1c).",
+        "properties": {
+          "defaults": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Defaults",
+            "type": "object"
+          },
+          "index_advice_min_calls": {
+            "title": "Index Advice Min Calls",
+            "type": "integer"
+          },
+          "index_advice_watch_enabled": {
+            "title": "Index Advice Watch Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "index_advice_min_calls",
+          "index_advice_watch_enabled"
+        ],
+        "title": "AnalysisSettingsOut",
+        "type": "object"
+      },
+      "AnalysisSettingsUpdate": {
+        "properties": {
+          "index_advice_min_calls": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Advice Min Calls"
+          },
+          "index_advice_watch_enabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Index Advice Watch Enabled"
+          }
+        },
+        "title": "AnalysisSettingsUpdate",
+        "type": "object"
+      },
       "ApplicationCreate": {
         "properties": {
           "customer_id": {
@@ -4694,6 +4748,115 @@
         "title": "IgnoredPrerequisitesUpdate",
         "type": "object"
       },
+      "IndexAdviceBatchItemOut": {
+        "properties": {
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndexAdviceReportOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "IndexAdviceBatchItemOut",
+        "type": "object"
+      },
+      "IndexAdviceBatchOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IndexAdviceBatchItemOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/IndexAdviceBatchSummaryOut"
+          }
+        },
+        "required": [
+          "summary",
+          "items"
+        ],
+        "title": "IndexAdviceBatchOut",
+        "type": "object"
+      },
+      "IndexAdviceBatchRequest": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IndexAdviceRequest"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "IndexAdviceBatchRequest",
+        "type": "object"
+      },
+      "IndexAdviceBatchSummaryOut": {
+        "properties": {
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total",
+          "counts",
+          "text"
+        ],
+        "title": "IndexAdviceBatchSummaryOut",
+        "type": "object"
+      },
       "IndexAdviceOut": {
         "properties": {
           "advice": {
@@ -4736,8 +4899,15 @@
             "type": "array"
           },
           "estimated_improvement_pct": {
-            "title": "Estimated Improvement Pct",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Improvement Pct"
           },
           "existing_indexes": {
             "items": {
@@ -4753,6 +4923,19 @@
           "index_ddl": {
             "title": "Index Ddl",
             "type": "string"
+          },
+          "index_kind": {
+            "default": "btree",
+            "title": "Index Kind",
+            "type": "string"
+          },
+          "measurement_notes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Measurement Notes",
+            "type": "array"
           },
           "reason": {
             "title": "Reason",
@@ -4797,6 +4980,39 @@
             },
             "title": "No Advice Reasons",
             "type": "array"
+          },
+          "predicates": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/IndexPredicateOut"
+            },
+            "title": "Predicates",
+            "type": "array"
+          },
+          "status": {
+            "default": "no_advice",
+            "title": "Status",
+            "type": "string"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndexAdviceThresholdOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "watch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndexAdviceWatchOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -4823,12 +5039,346 @@
             "minLength": 1,
             "title": "Query",
             "type": "string"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
           }
         },
         "required": [
           "query"
         ],
         "title": "IndexAdviceRequest",
+        "type": "object"
+      },
+      "IndexAdviceThresholdOut": {
+        "description": "Çağrı eşiği değerlendirmesi: \"şu anda 2/5 çağrı\".",
+        "properties": {
+          "calls_now": {
+            "title": "Calls Now",
+            "type": "integer"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "integer"
+          },
+          "watch_enabled": {
+            "title": "Watch Enabled",
+            "type": "boolean"
+          },
+          "watch_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watch Id"
+          },
+          "watching": {
+            "title": "Watching",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "calls_now",
+          "threshold",
+          "watching",
+          "watch_enabled"
+        ],
+        "title": "IndexAdviceThresholdOut",
+        "type": "object"
+      },
+      "IndexAdviceWatchListItemOut": {
+        "properties": {
+          "calls_seen": {
+            "title": "Calls Seen",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
+          },
+          "ready_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready At"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndexAdviceReportOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "queryid",
+          "query",
+          "status",
+          "calls_seen",
+          "threshold",
+          "registered_at",
+          "last_checked_at",
+          "ready_at",
+          "last_error"
+        ],
+        "title": "IndexAdviceWatchListItemOut",
+        "type": "object"
+      },
+      "IndexAdviceWatchOut": {
+        "properties": {
+          "calls_seen": {
+            "title": "Calls Seen",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
+          },
+          "ready_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ready At"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "threshold": {
+            "title": "Threshold",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "queryid",
+          "query",
+          "status",
+          "calls_seen",
+          "threshold",
+          "registered_at",
+          "last_checked_at",
+          "ready_at",
+          "last_error"
+        ],
+        "title": "IndexAdviceWatchOut",
+        "type": "object"
+      },
+      "IndexPredicateOut": {
+        "description": "Sorguda bulunan tek filtre ve index'e dönüştürülemediyse sebebi (Faz 31 İŞ 1b).",
+        "properties": {
+          "candidates": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidates",
+            "type": "array"
+          },
+          "clause": {
+            "title": "Clause",
+            "type": "string"
+          },
+          "column": {
+            "title": "Column",
+            "type": "string"
+          },
+          "context": {
+            "title": "Context",
+            "type": "string"
+          },
+          "expression": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expression"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "table": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Table"
+          },
+          "text": {
+            "default": "",
+            "title": "Text",
+            "type": "string"
+          },
+          "unusable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unusable Reason"
+          },
+          "usable": {
+            "title": "Usable",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "column",
+          "table",
+          "kind",
+          "clause",
+          "context",
+          "usable"
+        ],
+        "title": "IndexPredicateOut",
         "type": "object"
       },
       "InstanceCreate": {
@@ -10471,6 +11021,77 @@
         "summary": "Root"
       }
     },
+    "/api/admin/analysis-settings": {
+      "get": {
+        "description": "Analiz derinliği ayarları — index önerisi çağrı eşiği ve izleme (Faz 31 İŞ 1c).",
+        "operationId": "read_analysis_settings_api_admin_analysis_settings_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisSettingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Analysis Settings",
+        "tags": [
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "update_analysis_settings_api_admin_analysis_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisSettingsUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisSettingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Analysis Settings",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/noise-settings": {
       "get": {
         "description": "Rapor/DPA gürültü eşikleri (Faz 18 İŞ 2).",
@@ -14699,6 +15320,116 @@
           }
         ],
         "summary": "Advise Indexes",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/advice-watches": {
+      "get": {
+        "description": "Çağrı eşiği nedeniyle izlenen sorgular ve eşik dolunca üretilen öneriler (Faz 31 İŞ 1c).",
+        "operationId": "list_advice_watches_api_queries__instance_id__advice_watches_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IndexAdviceWatchListItemOut"
+                  },
+                  "title": "Response List Advice Watches Api Queries  Instance Id  Advice Watches Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Advice Watches",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/advice/batch": {
+      "post": {
+        "description": "Birden çok sorgu için öneri — SAYILI özetle (Faz 31 İŞ 1b).\n\n\"Top sorgulara index öner\" eskiden istemcide tek tek çağrı yapıyordu ve çözümlenemeyen\nsorgular sessizce \"öneri yok\" satırına karışıyordu. Burada her sonuç durumuna göre\nsayılıyor: \"3 sorgudan 1'i çözümlenemedi; 1'i için öneri üretildi; …\".",
+        "operationId": "advise_indexes_batch_api_queries__instance_id__advice_batch_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IndexAdviceBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IndexAdviceBatchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Advise Indexes Batch",
         "tags": [
           "queries"
         ]

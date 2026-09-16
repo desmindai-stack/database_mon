@@ -29,6 +29,7 @@ import {
   formatBytes,
   formatTime,
   IndexAdviceReport,
+  IndexAdviceWatch,
   Instance,
   InstanceSummary,
   MetricSample,
@@ -48,7 +49,7 @@ import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import BlockingTreePanel from "../components/BlockingTreePanel";
 import DatabaseLoadPanel from "../components/DatabaseLoadPanel";
-import AdviceCard from "../components/AdviceCard";
+import { AdviceWatchList, IndexAdviceResult } from "../components/IndexAdvicePanel";
 import CopyableAction from "../components/CopyableAction";
 import ExplainPlanTree from "../components/ExplainPlanTree";
 import PredictionPlaybook from "../components/PredictionPlaybook";
@@ -92,27 +93,6 @@ function toLocalInputValue(d: Date): string {
 
 function queryFingerprint(q: string): string {
   return q.length > 120 ? q.slice(0, 120) + "…" : q;
-}
-
-// Faz 16 İŞ 4 — "index önerisi bulunamadı" tek başına anlamsız; her zaman index_advisor'ın
-// belirlediği somut sebep(ler) + "şunu yaparsan önerebilirim" ile birlikte gösterilir.
-function NoAdviceReasons({ reasons }: { reasons: IndexAdviceReport["no_advice_reasons"] }) {
-  if (reasons.length === 0) {
-    return <p className="advice-empty">Index önerisi bulunamadı (sebep belirlenemedi).</p>;
-  }
-  return (
-    <div className="tuning-checklist">
-      {reasons.map((r) => (
-        <div key={r.code} className="checklist-row warn">
-          <span className="checklist-status">Öneri yok</span>
-          <div>
-            <strong>{r.message}</strong>
-            <p>{r.what_to_do}</p>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 interface LoadContributor {
@@ -213,6 +193,12 @@ export default function InstanceDetailPage() {
   const [focusQueryKey, setFocusQueryKey] = useState<string | null>(null);
   const [expandedQuery, setExpandedQuery] = useState<number | null>(null);
   const [advice, setAdvice] = useState<Record<number, IndexAdviceReport>>({});
+  // Faz 31: hata AYRI tutuluyor. Önceden hata boş bir rapora çevriliyor ve ekranda
+  // "Index önerisi bulunamadı" yazıyordu — bağlantı hatası "öneri yok" gibi görünüyordu.
+  const [adviceError, setAdviceError] = useState<Record<number, string>>({});
+  const [bulkAdviceSummary, setBulkAdviceSummary] = useState<string | null>(null);
+  const [adviceWatches, setAdviceWatches] = useState<IndexAdviceWatch[] | null>(null);
+  const [adviceWatchesError, setAdviceWatchesError] = useState<string | null>(null);
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
   const [explain, setExplain] = useState<Record<number, ExplainResult | null>>({});
   const [explainLoading, setExplainLoading] = useState<Record<number, boolean>>({});
@@ -251,13 +237,32 @@ export default function InstanceDetailPage() {
     }
   }, [tabParam]);
 
+  const loadAdviceWatches = async () => {
+    if (!instanceId || instance?.engine !== "postgresql") return;
+    try {
+      setAdviceWatches(await api.getAdviceWatches(instanceId));
+      setAdviceWatchesError(null);
+    } catch (e) {
+      setAdviceWatchesError(String((e as Error).message || e));
+    }
+  };
+
   const loadAdvice = async (q: SlowQuery) => {
     setAdviceLoading((prev) => ({ ...prev, [q.id]: true }));
+    setAdviceError((prev) => ({ ...prev, [q.id]: "" }));
     try {
-      const result = await api.getIndexAdvice(instanceId, q.query, q.calls);
+      const result = await api.getIndexAdvice(instanceId, q.query, q.calls, q.queryid);
       setAdvice((prev) => ({ ...prev, [q.id]: result }));
-    } catch {
-      setAdvice((prev) => ({ ...prev, [q.id]: { advice: [], no_advice_reasons: [] } }));
+      if (result.status === "below_threshold") {
+        void loadAdviceWatches();
+      }
+    } catch (e) {
+      setAdvice((prev) => {
+        const next = { ...prev };
+        delete next[q.id];
+        return next;
+      });
+      setAdviceError((prev) => ({ ...prev, [q.id]: String((e as Error).message || e) }));
     } finally {
       setAdviceLoading((prev) => ({ ...prev, [q.id]: false }));
     }
@@ -378,12 +383,27 @@ export default function InstanceDetailPage() {
       return;
     }
     setBulkAdviceRunning(true);
+    setBulkAdviceSummary(null);
     setActiveTab("queries");
     try {
-      for (const q of top) {
-        setExpandedQuery(q.id);
-        await loadAdvice(q);
-      }
+      // Faz 31: tek istek, SUNUCUDA sayılan özet ("3 sorgudan 1'i çözümlenemedi; …").
+      const batch = await api.getIndexAdviceBatch(
+        instanceId,
+        top.map((q) => ({ query: q.query, calls: q.calls, queryid: q.queryid })),
+      );
+      setBulkAdviceSummary(batch.summary.text);
+      batch.items.forEach((item, index) => {
+        const q = top[index];
+        if (item.report) {
+          setAdvice((prev) => ({ ...prev, [q.id]: item.report! }));
+        } else {
+          setAdviceError((prev) => ({ ...prev, [q.id]: item.error ?? "Öneri üretilemedi." }));
+        }
+      });
+      setExpandedQuery(top[0].id);
+      void loadAdviceWatches();
+    } catch (e) {
+      setBulkAdviceSummary(`Toplu index önerisi çalıştırılamadı: ${String((e as Error).message || e)}`);
     } finally {
       setBulkAdviceRunning(false);
     }
@@ -531,6 +551,14 @@ export default function InstanceDetailPage() {
     }, 15000);
     return () => clearInterval(timer);
   }, [instanceId, tab]);
+
+  useEffect(() => {
+    if (!instanceId || tab !== "queries") return;
+    // Faz 31 İŞ 1c: eşik dolunca üretilen öneriler burada "hazır" olarak görünür — kullanıcı
+    // elle tekrar denemek zorunda değil.
+    void loadAdviceWatches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceId, tab, instance?.engine]);
 
   useEffect(() => {
     if (!instanceId || tab !== "queries") return;
@@ -1456,6 +1484,8 @@ export default function InstanceDetailPage() {
             warning={flaggedQueryCount}
             defaultOpen
           >
+            {bulkAdviceSummary && <p className="advice-threshold">{bulkAdviceSummary}</p>}
+            <AdviceWatchList watches={adviceWatches} error={adviceWatchesError} />
             {/* Faz 18 İŞ 1: hangi pencereye bakıldığı ve neyin filtrelendiği açıkça yazılı —
                 rapor ile DPA'nın aynı veriyi gösterdiğini kullanıcı buradan doğrulayabiliyor. */}
             <p className="muted-note">
@@ -1700,50 +1730,10 @@ export default function InstanceDetailPage() {
                                   <p className="advice-empty">{explainError[q.id]}</p>
                                 )}
                                 {explain[q.id] && <ExplainPlanTree result={explain[q.id]!} />}
-                                {advice[q.id] && (
-                                  <div className="advice-results">
-                                    {/* Faz 30 İŞ 2: kaynak belli olsun. Bu öneri BU SORGU için
-                                        üretildi; SQL Server'ın motor içi önerileri (planlama
-                                        sırasında biriken talep) Şema sekmesinde ayrı duruyor. */}
-                                    <p className="muted-note">
-                                      Kaynak: dbace — bu sorgunun metninden üretildi
-                                      {instance.engine === "postgresql"
-                                        ? ", faydası hypopg ile ölçülüyor."
-                                        : ". Motorun kendi eksik index önerileri Şema sekmesinde."}
-                                    </p>
-                                    {advice[q.id].advice.length === 0 ? (
-                                      <NoAdviceReasons reasons={advice[q.id].no_advice_reasons} />
-                                    ) : (
-                                      advice[q.id].advice.map((a) => (
-                                        <div className="advice-card" key={a.index_ddl}>
-                                          <div className="advice-header">
-                                            <span className="advice-table">{a.schema_name}.{a.table_name}</span>
-                                            <span className="advice-pill">
-                                              Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong>
-                                              {a.has_hypopg_estimate && " (gerçek plan maliyeti)"}
-                                            </span>
-                                          </div>
-                                          {/* Faz 17 Ek İŞ B: rapor/dashboard ile aynı öneri yapısı —
-                                              neden, adımlar, dikkat notları ve doğrulama sorgusu. */}
-                                          {a.advice ? (
-                                            <AdviceCard advice={a.advice} defaultOpen={false} />
-                                          ) : (
-                                            <>
-                                              <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
-                                              <p className="recommendation-reason">{a.reason}</p>
-                                              <CopyableAction command={a.index_ddl} />
-                                            </>
-                                          )}
-                                          {a.before_cost !== null && a.after_cost !== null && (
-                                            <div className="advice-costs">
-                                              <span>Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}</span>
-                                            </div>
-                                          )}
-                                        </div>
-                                      ))
-                                    )}
-                                  </div>
+                                {adviceError[q.id] && (
+                                  <p className="advice-empty">Index önerisi alınamadı: {adviceError[q.id]}</p>
                                 )}
+                                {advice[q.id] && <IndexAdviceResult report={advice[q.id]} />}
                               </div>
                             </td>
                           </tr>

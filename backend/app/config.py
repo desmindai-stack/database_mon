@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     backup_check_interval_seconds: int = 900
     plan_capture_enabled: bool = True
     plan_capture_interval_seconds: int = 300
+    # Faz 31 İŞ 1c: çağrı eşiği izleme turu. Hedef sunucuya yalnızca eşiği dolan sorgu için
+    # bağlanılıyor; çağrı sayıları toplama döngüsünün zaten yazdığı tablodan okunuyor.
+    index_advice_watch_interval_seconds: int = 300
     db_statement_timeout_seconds: int = 120
     dashboard_refresh_interval_seconds: int = 60
     api_host: str = "0.0.0.0"

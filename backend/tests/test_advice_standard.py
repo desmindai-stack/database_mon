@@ -280,18 +280,16 @@ async def test_dashboard_recommendations_carry_standard_advice():
 
 
 def test_index_advice_is_converted_to_the_standard_shape():
-    from app.routers.queries import _index_advice
+    from app.services.index_advice_watch import _standard_advice
+    from app.services.index_advisor import IndexAdvice
 
-    recommendation = type(
-        "R", (),
-        {
-            "table_name": "orders", "schema_name": "app", "columns": ["customer_id"],
-            "index_ddl": "CREATE INDEX idx_orders_customer ON app.orders (customer_id);",
-            "reason": "WHERE koşulunda filtreleniyor.",
-        },
-    )()
+    recommendation = IndexAdvice(
+        table_name="orders", schema_name="app", columns=["customer_id"],
+        index_ddl="CREATE INDEX idx_orders_customer ON app.orders (customer_id);",
+        reason="WHERE koşulunda filtreleniyor.", estimated_improvement_pct=None,
+    )
 
-    payload = _index_advice(recommendation)
+    payload = _standard_advice(recommendation)
 
     assert_valid_advice(payload, where="dpa/index")
     # Kilitsiz oluşturma tercih edilmeli ve riskleri yazılı olmalı.
@@ -301,3 +299,21 @@ def test_index_advice_is_converted_to_the_standard_shape():
     assert payload["rollback"].startswith("DROP INDEX CONCURRENTLY")
     assert "idx_orders_customer" in payload["rollback"]
     assert payload["verification"]
+
+
+def test_expression_index_advice_warns_that_the_query_must_use_the_same_expression():
+    from app.services.index_advice_watch import _standard_advice
+    from app.services.index_advisor import IndexAdvice
+
+    payload = _standard_advice(
+        IndexAdvice(
+            table_name="users", schema_name="public", columns=["lower(email)"],
+            index_ddl="CREATE INDEX idx_dbace_users_lower_email ON public.users ((lower(email)));",
+            reason="İfade filtresi.", estimated_improvement_pct=None, index_kind="expression",
+            measurement_notes=["Seçicilik ölçülemedi: SELECT yetkisi yok."],
+        )
+    )
+    assert_valid_advice(payload, where="dpa/index-expression")
+    assert any("AYNI ifadeyi" in c for c in payload["cautions"])
+    # Ölçülemeyen şey dikkat notlarında görünür — sessizce kaybolmaz.
+    assert any("SELECT yetkisi yok" in c for c in payload["cautions"])

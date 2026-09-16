@@ -71,6 +71,17 @@ _SYSTEM_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bpg_current_wal_", "WAL konum fonksiyonları"),
     (r"\bpg_last_wal_", "WAL konum fonksiyonları"),
     (r"\binformation_schema\.", "information_schema"),
+    # Faz 31 İŞ 1a: şemasız yazılan katalog tabloları. `pg_catalog.` öneki olmadan da
+    # PostgreSQL bunları pg_catalog'dan çözer; eski listede yoktu ve `SELECT ... FROM pg_class`
+    # sorguları index önerisine girip "public.pg_class bulunamadı" hatası üretiyordu.
+    # FROM/JOIN'e bağlı: `pg_classification` gibi bir kolon adı ya da dizgi içindeki
+    # "from pg_class" metni eşleşmemeli — ikisi de testle sabit.
+    (
+        r"\b(?:FROM|JOIN)\s+(?:pg_class|pg_namespace|pg_attribute|pg_index|pg_indexes|pg_tables"
+        r"|pg_proc|pg_type|pg_locks|pg_roles|pg_constraint|pg_views|pg_sequences|pg_extension"
+        r"|pg_description|pg_depend|pg_am|pg_inherits|pg_trigger|pg_statistic|pg_stats)\b",
+        "sistem kataloğu tablosu",
+    ),
     (r"\bpg_database\b", "pg_database katalogu"),
     (r"\bpg_settings\b", "pg_settings katalogu"),
     (r"\bpg_replication_slots\b", "replikasyon katalogu"),
@@ -82,6 +93,9 @@ _SYSTEM_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bcloudsqladmin\b", "Cloud SQL iç sorgusu"),
     (r"\bazure_maintenance\b", "Azure iç sorgusu"),
     # dbace'in KENDİ toplama sorguları — kendi gürültüsünü raporlamamalı.
+    # Faz 31: izlenen sunucuya giden HER sorgu bu imzayı taşıyor (collectors/query_marker.py).
+    # İmza queryid'ye girmiyor, sorgu ŞEKLİNİ işaretliyor — ILERLEME.md Faz 31 Commit 1.
+    (r"/\*\s*dbace\s*\*/", "dbace'in kendi sorgusu"),
     (r"--\s*ext:", "dbace ön koşul denetimi"),
     (r"\bhypopg_", "dbace index danışmanı (hypopg)"),
 )
@@ -95,11 +109,18 @@ def classify_system_query(query: str) -> str | None:
     Sebebi de döndürmesi bilinçli: arayüzde "sistem sorgusu" etiketi tek başına yeterli değil,
     kullanıcı hangi kurala takıldığını görebilmeli (yanlış sınıflandırmayı fark etmek için).
     """
-    text = query or ""
+    # Dizgi sabitleri desen aramasından ÖNCE boşaltılıyor (Faz 31): `WHERE note LIKE
+    # '%pg_stat_%'` bir uygulama sorgusudur, sistem sorgusu değil. Yorumlar KORUNUYOR —
+    # dbace'in imzası (`/* dbace */`) ve `-- ext:` işareti yorumun içinde.
+    text = _STRING_LITERAL.sub("''", query or "")
     for pattern, label in _COMPILED_SYSTEM_PATTERNS:
         if pattern.search(text):
             return label
     return None
+
+
+#: Tek tırnaklı dizgi sabiti; `''` kaçışı dahil.
+_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
 
 
 @dataclass

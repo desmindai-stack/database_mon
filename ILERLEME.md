@@ -7761,6 +7761,149 @@ SQL Server (`program_name`) bu commit'e dahil değil; gerekçe SORULAR.md'de.
   elle yapıldı (`index_advisor.py`'ye ham `asyncpg.connect` geri konunca test kırmızı).
 - `tests/test_query_marker_live_postgres.py` — yukarıdaki ölçümler; `DBACE_TEST_PG_DSN` ile.
 
+## Faz 31 — Commit 2: İŞ 1 — index önerisi artık üretiliyor
+
+**Migration:** `supabase/migrations/20260922090000_index_advice_watches.sql` (DEPLOY.md #46).
+
+Üç ayrı sebep, üç ayrı katman. Hepsi PG 17.11 ve 15.19'da, süper kullanıcı ve yalnızca
+`pg_monitor` rolüyle doğrulandı (`tests/test_index_advice_live_postgres.py`, 54 test).
+
+### 1a — Sistem sorguları analize hiç girmiyor
+
+**Kök neden:** `sql_analysis.analyze_query` niteliksiz her ada `public` şemasını yazıyordu;
+`pg_class` için katalog `public.pg_class`'ı arayıp bulamıyordu. Ayrıca Faz 18'in
+`classify_system_query`'si index önerisinden hiç çağrılmıyordu.
+
+- `pg_` önekli niteliksiz ad → `pg_catalog` (PostgreSQL'in search_path davranışı).
+- Varsayılan şemada bulunamayan tablo katalogda adıyla aranıyor: tek şemadaysa o kullanılıyor
+  (`adv_invoices` → `adv_other`), birden çok şemadaysa tahmin yok, şemalar listeleniyor.
+- `classify_system_query` danışmanın ilk adımı; **yorumlar silinmeden önce** çalışıyor (dbace
+  imzası bir yorum). Ek olarak yapısal denetim: tüm tablolar `pg_catalog`/`information_schema`'da
+  ise sistem sorgusu.
+- Desen listesine şemasız katalog tabloları (FROM/JOIN'e bağlı) ve Commit 1'in `/* dbace */`
+  imzası eklendi. Desenler artık dizgi sabitleri boşaltıldıktan sonra uygulanıyor:
+  `WHERE msg LIKE '%pg_stat_%'` önceden yanlışlıkla sistem sorgusu sayılıyordu.
+
+Kanıt: beş sistem sorgusu (şemasız `pg_class`, nitelikli `pg_catalog`, `information_schema`,
+`pg_stat_activity`, dbace imzalı) danışmana dbace rolüyle verildi → beşi de `system`,
+pg_stat_statements'ta o rolden **0 kayıt** (bağlantı bile açılmadı). Gerçek toplama döngüsü
+sonrası yavaş sorgu listesi: gizli modda imzalı sorgu 0 (17.11'de 13, 15.19'da 10 sorgu
+filtrelendi), göster modunda 12 / 9.
+
+### 1b — Filtre kolonları sözdizim ağacından
+
+**`$1` hipotezi ölçüldü, suçlu DEĞİL.** Aynı sorgu yer tutuculu ve literal hâliyle eski
+çıkarıcıda da yeni çıkarıcıda da aynı sonucu verdi; gerçek sunucuda iki yazım aynı DDL'i
+üretti (`CREATE INDEX idx_dbace_orders_status_total ON public.orders (status, total)`).
+
+Eski regex çıkarıcının ölçülen gerçek hataları:
+
+| Sorgu | Eski çıktı |
+|---|---|
+| `lower(email) = $1` | hiçbir şey |
+| `date_trunc('day', created_at) = $1` | hiçbir şey |
+| `status::text = $1` | `text` diye bir KOLON (yanlış aday) |
+| 2 tablo, niteliksiz `WHERE status = $1` | `__unknown`'a düşüp atılıyor; ayrıca `JOIN`'den `JO` kolonu |
+| bağıntılı `EXISTS` | `EXISTS`'ten `EX` kolonu |
+
+Tasarım dokümanındaki iki iddia ölçümle düzeltildi: `ON a.x=b.y AND c.seg=$1` ikinci koşulu
+eski çıkarıcı da buluyordu (WHERE regex'i sayesinde); tek gerçek tablolu CTE'de filtreler
+"tek tablo" kuralıyla kurtarılıyordu. Kör nokta çok tablolu durumlardaydı.
+
+Yeni `services/sql_predicates.py` sqlglot kapsam çözümleyicisini kullanıyor. Gerçek sunucudaki
+sonuçlar (iki sürümde aynı):
+
+| Kalıp | Sonuç |
+|---|---|
+| WHERE eşitlik + aralık | `orders (status, created_at)` |
+| niteliksiz kolon, 2 tablo | katalogdan `orders.status` çözüldü |
+| niteliksiz `id`, iki tabloda da var | bağlanmadı: "birden çok tabloda var (orders, customers)" |
+| JOIN ON çok koşullu | `customers (segment, id)` |
+| CTE içi filtre | `orders (created_at, status)` |
+| bağıntılı EXISTS | `orders (status, customer_id)` |
+| IN alt sorgu | `customers (segment)` + `orders (customer_id)` |
+| BETWEEN | `orders (total)` |
+| LIKE önekli | `adv_users (name text_pattern_ops)` — collation C değil |
+| LIKE baştan joker | öneri yok: "pg_trgm KURULU DEĞİL" + kurulum komutu |
+| LIKE $1 | öneri yok: "kalıp bilinmiyor" |
+| `WHERE id = $1` (PK var) | `already_indexed` |
+| `created_at::date` (timestamptz) | öneri yok: IMMUTABLE değil (sunucunun kendi hatası) |
+
+**İfade index'i önerilip DOĞRULANIYOR.** `lower(email)` ve `date_trunc('day', happened_at)`
+(timestamp) için önerilen DDL gerçek tabloda çalıştırıldı, `enable_seqscan = off` ile planın
+o index'i kullandığı gösterildi (iki sürümde de evet). `date_trunc('day', created_at)`
+(timestamptz, STABLE) önerilmedi, sebep yazıldı.
+
+IMMUTABLE denetimi tasarımdaki `pg_proc.provolatile` okuması yerine boş bir geçici tabloda
+`CREATE INDEX` denenerek yapılıyor: aşırı yüklemeler ve cast'ler (`timestamptz::date`)
+katalogdan doğru çözülemezdi; sunucunun kendisine sormak kesin.
+
+**Bulunan hata:** sqlglot sabitleri normalleştiriyor (`'day'` → `'DAY'`). PostgreSQL ifade
+index'ini sabit değeriyle eşleştirdiği için `'DAY'` ile kurulan index `'day'` yazan sorguda
+kullanılmazdı — geçerli ama işe yaramaz DDL. İfade metni artık sorgunun orijinal yazımından,
+konum bilgisiyle kesilerek alınıyor.
+
+**Ayrıştırılamayan sorgular sayılıyor.** `POST /api/queries/{id}/advice/batch` her sonucu
+durumuna göre sayıyor. Gerçek sunucudaki özet (PostgreSQL'in kabul ettiği ama sqlglot'un
+ayrıştıramadığı `ORDER BY id USING >` dahil): "4 sorgudan 1'i için öneri üretildi; 1'i eşik
+altında, izlemeye alındı; 1'i sistem sorgusu, analize alınmadı; 1'i çözümlenemedi."
+
+### 1c — Çağrı eşiği elle tekrar denemeyi gerektirmiyor
+
+- Eşik altındaki sorgu için izlenen sunucuya **hiç bağlanılmıyor**; yanıt "Şu anda 2/5 çağrı.
+  Sorgu izlemeye alındı; eşik dolunca öneri otomatik üretilecek ve burada görünecek." diyor
+  ve bulunan filtreleri yine gösteriyor.
+- `index_advice_watches` tablosu + `index_advice_watch_tick` (5 dk). Çağrı sayısı
+  `slow_query_samples`'tan; sunucuya yalnızca eşiği dolan sorgu için bağlanılıyor.
+- **Çağrı sayısı istemciden alınmıyor:** arayüzdeki liste pencere farkını gösteriyor, eşik
+  toplamı soruyor. Uçtan uca testte istemci 999 gönderdi, sunucu kendi verisindeki 2'yi
+  kullandı; toplama 7 yazınca gerçek tur fonksiyonu izlemeyi `ready` yaptı.
+- Eşik `GET/PUT /api/admin/analysis-settings` (Yönetim → Ayarlar → Analiz). API üzerinden:
+  eşik 50 → `below_threshold`, eşik 10 → `advised`, 0 → 422.
+
+### Yalnızca pg_monitor rolü: ölçülemeyen uydurulmuyor
+
+Önceki kod SELECT yetkisi olmayan tabloda `pg_stats` boş dönünce seçiciliği sessizce 0.1
+sayıp bir "tahmini iyileştirme" yüzdesi üretiyordu. Artık:
+
+- B-tree önerisi yapısal olarak üretiliyor, `estimated_improvement_pct = null`, not: "Seçicilik
+  ölçülemedi: … SELECT yetkisi yok … Çözüm: GRANT SELECT ON public.orders …".
+- İfade index'i doğrulaması yapılamıyor → önerilmiyor, sebep ve doğru GRANT yazılıyor.
+
+**Kendi hatam, gerçek sunucu yakaladı:** ilk yazım pg_monitor rolündeki doğrulama hatasına
+"geçici tablo yetkisi yok, GRANT TEMPORARY" diyordu. Sunucuda ölçüldü: TEMP yetkisi VAR,
+SELECT yok (`CREATE TEMP TABLE … (LIKE t)` kaynak tabloda SELECT istiyor). Test yalnızca
+"ölçülemedi" kelimesine baktığı için yeşildi; DBA'ya yanlış yetkiyi verdirecekti. Mesaj ve
+test düzeltildi.
+
+Aynı turda istatistiği hiç olmayan kolon için de (ANALYZE çalışmamış) tahmin üretilmiyor;
+seçicilik formülündeki bir hata da düzeltildi: negatif `n_distinct` (satır oranı) doğrudan
+seçicilik sayılıyordu, yani benzersiz bir kolon (−1) "hiç seçici değil" görünüyordu.
+
+### Arayüz
+
+- `IndexAdvicePanel.tsx`: durum, eşik (X/Y), "Bulunan filtreler" tablosu (dönüştürülemeyenin
+  sebebi), ölçüm notları, null yüzde için "Fayda ölçülemedi"; izleme listesi.
+- **Önceki hata:** öneri isteği başarısız olunca boş rapora çevriliyor ve "Index önerisi
+  bulunamadı" yazıyordu. Hata artık ayrı gösteriliyor; üretilen tiplere geçiş derleyicide
+  bunu yakaladı. İlgili elle yazılmış tipler (`IndexAdvice` vb.) şemadan türetildi.
+
+### API değişikliği (geriye uyumlu genişleme)
+
+`IndexAdviceReportOut` yeni alanlar kazandı (`status`, `predicates`, `threshold`, `watch`);
+`IndexAdviceOut.estimated_improvement_pct` artık null olabiliyor; `IndexAdviceRequest.queryid`
+eklendi. Mevcut alanların hiçbiri kaldırılmadı.
+
+### Test
+
+- `test_sql_predicates.py` (15) ve `test_index_advisor_offline.py` (17): saf mantık, sahte
+  bağlantı YOK; bağlanmaması gereken dallarda bağlantı fonksiyonu çağrılırsa test kırılıyor.
+- Eski `test_index_advisor_reasons.py` silindi: katalog cevaplarını `FakeAsyncConnection` ile
+  taklit ediyordu; aynı davranışlar artık gerçek sunucuda.
+- `test_index_advice_live_postgres.py` (54, iki sürüm): yukarıdaki tüm kanıtlar.
+- `test_frontend_state_handling.py`: hata→"öneri yok" dönüşümü yasak, null yüzde, bulunan
+  filtreler, izleme ve toplu özet görünür, tipler şemadan (negatif kontrol elle yapıldı).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

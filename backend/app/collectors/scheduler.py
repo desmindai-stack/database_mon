@@ -25,6 +25,7 @@ from app.services.health_report import run_scheduled_reports
 from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
 from app.services.prediction_accuracy import evaluate_due_outcomes
 from app.services.backup_collection import backup_collection_tick
+from app.services.index_advice_watch import index_advice_watch_tick as run_index_advice_watch_tick
 from app.services.plan_capture import capture_plans_tick
 from app.services.wait_sampling import sampling_tick, shutdown_sampling
 
@@ -40,6 +41,7 @@ HEALTH_REPORT_JOB_ID = "daily_health_report"
 WAIT_SAMPLING_JOB_ID = "wait_event_sampling"
 PLAN_CAPTURE_JOB_ID = "auto_explain_plan_capture"
 BACKUP_JOB_ID = "backup_monitoring"
+INDEX_ADVICE_WATCH_JOB_ID = "index_advice_watch"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -186,6 +188,19 @@ async def plan_capture_tick() -> None:
         logger.exception("Plan yakalama turu başarısız")
 
 
+async def index_advice_watch_tick() -> None:
+    """Faz 31 İŞ 1c: çağrı eşiğini dolduran izlenen sorgular için index önerisi üretir."""
+    try:
+        totals = await run_index_advice_watch_tick()
+        if totals.get("ready") or totals.get("failed"):
+            logger.info(
+                "Index önerisi izleme turu: %s kontrol, %s hazır, %s hata, %s çözümlenemedi",
+                totals["checked"], totals["ready"], totals["failed"], totals["unparsable"],
+            )
+    except Exception:
+        logger.exception("Index önerisi izleme turu başarısız")
+
+
 async def backup_tick() -> None:
     """Faz 28 İŞ 1: yedek durumu sondası.
 
@@ -312,6 +327,16 @@ async def start_scheduler() -> None:
             coalesce=True,
             next_run_time=datetime.now(),
         )
+
+    scheduler.add_job(
+        index_advice_watch_tick,
+        "interval",
+        seconds=max(60, settings.index_advice_watch_interval_seconds),
+        id=INDEX_ADVICE_WATCH_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
 
     if settings.backup_monitoring_enabled:
         scheduler.add_job(

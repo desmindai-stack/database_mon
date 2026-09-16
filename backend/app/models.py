@@ -930,6 +930,46 @@ class CapturedPlan(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class IndexAdviceWatch(Base):
+    """Çağrı eşiğini henüz karşılamayan ve arka planda izlenen sorgu (Faz 31 İŞ 1c).
+
+    Önceden kullanıcıya "2 kez çalışmış, minimum 5, tekrar deneyin" deniyordu — hatırlayıp
+    geri dönmek kullanıcıya kalıyordu. Artık sorgu buraya yazılıyor; zamanlayıcı turu
+    (`services/index_advice_watch.py`) çağrı sayısını izliyor ve eşik dolunca öneriyi
+    üretip `advice_json`'a yazıyor.
+
+    Anahtar `query_fingerprint` (plan_capture.fingerprint ile AYNI normalleştirme): queryid
+    ayrıcalıksız rolde NULL gelebiliyor ve iki ayrı parmak izi tanımı iki ayrı eşleşme
+    davranışı demek olurdu.
+    """
+
+    __tablename__ = "index_advice_watches"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "query_fingerprint", name="uq_index_advice_watch"),
+        Index("ix_index_advice_watches_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    queryid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    query_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Kayıt anındaki eşik — bilgi amaçlı. Değerlendirme HER TURDA güncel ayarla yapılıyor ki
+    # eşik düşürüldüğünde bekleyen sorgular hemen yararlansın.
+    threshold: Mapped[int] = mapped_column(Integer, nullable=False)
+    calls_at_registration: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    calls_seen: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # waiting | ready | failed
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="waiting")
+    # Eşik dolduğunda üretilen rapor (API'nin döndürdüğü yapının aynısı).
+    advice_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # Son deneme başarısızsa sebebi (bağlantı hatası vb.) — sessizce beklemede kalmasın.
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class BlockingEpisode(Base):
     """Bir bloklama olayının geçmiş kaydı (Faz 26 İŞ 3).
 

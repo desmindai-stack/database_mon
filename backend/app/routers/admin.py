@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import User
 from app.schemas import (
+    AnalysisSettingsOut,
+    AnalysisSettingsUpdate,
     AdminPasswordResetOut,
     NoiseSettingsOut,
     NoiseSettingsUpdate,
@@ -19,6 +21,7 @@ from app.schemas import (
     UserUpdate,
 )
 from app.services.auth_deps import get_current_user
+from app.services.analysis_settings import get_analysis_settings, set_analysis_settings
 from app.services.noise_settings import get_noise_settings, set_noise_settings
 from app.services.retention import get_retention_status, run_retention_cleanup, set_retention_days
 from app.services.security import hash_password
@@ -140,3 +143,24 @@ async def update_noise_settings(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return NoiseSettingsOut(**updated)
+
+
+@router.get("/analysis-settings", response_model=AnalysisSettingsOut)
+async def read_analysis_settings(db: AsyncSession = Depends(get_db)) -> AnalysisSettingsOut:
+    """Analiz derinliği ayarları — index önerisi çağrı eşiği ve izleme (Faz 31 İŞ 1c)."""
+    return AnalysisSettingsOut(**await get_analysis_settings(db))
+
+
+@router.put("/analysis-settings", response_model=AnalysisSettingsOut)
+async def update_analysis_settings(
+    payload: AnalysisSettingsUpdate, db: AsyncSession = Depends(get_db)
+) -> AnalysisSettingsOut:
+    try:
+        updated = await set_analysis_settings(
+            db,
+            index_advice_min_calls=payload.index_advice_min_calls,
+            index_advice_watch_enabled=payload.index_advice_watch_enabled,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return AnalysisSettingsOut(**updated)

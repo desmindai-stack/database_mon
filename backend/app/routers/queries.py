@@ -14,10 +14,13 @@ from app.schemas import (
     CapturedPlanOut,
     ExplainOut,
     ExplainRequest,
-    IndexAdviceOut,
+    IndexAdviceBatchItemOut,
+    IndexAdviceBatchOut,
+    IndexAdviceBatchRequest,
+    IndexAdviceBatchSummaryOut,
     IndexAdviceReportOut,
     IndexAdviceRequest,
-    NoAdviceReasonOut,
+    IndexAdviceWatchListItemOut,
     QueryDiagnosisOut,
     QueryDiagnosticsReportOut,
     QueryHistoryListOut,
@@ -36,8 +39,8 @@ from app.services.plan_analysis import (
     analyze_plan,
     annotate_plan_dict,
 )
-from app.services.advice import Advice, AdviceStep, advice_to_dict
-from app.services.index_advisor import PostgreSQLIndexAdvisor
+from app.services.advice import advice_to_dict
+from app.services.index_advice_watch import list_watches, run_index_advice, summarize
 from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
@@ -563,64 +566,32 @@ async def explain_query(
     return out
 
 
-def _index_advice(recommendation) -> dict:
-    """Index önerisini standart öneri yapısına çevirir (Faz 17 Ek İŞ B).
+# Önbelleğe yalnızca DURUMU DEĞİŞMEYECEK sonuçlar alınıyor. "Eşik altında" yanıtı
+# önbelleklenseydi, zamanlayıcı öneriyi ürettikten sonra da 5 dakika "2/5" görünürdü.
+_CACHEABLE_ADVICE_STATUSES = {"advised", "no_advice", "system", "unparsable", "truncated", "empty"}
 
-    CREATE INDEX CONCURRENTLY bilinçli tercih: tabloyu yazmaya kapatmaz. Buna karşılık kendi
-    riskleri var (yarıda kalırsa INVALID index bırakır, iki kopya birden diskte durur) ve bu
-    riskler "Dikkat" başlığında yazılı — komutu uyarısız vermek sorumsuzluk olurdu.
-    """
-    target = f"{recommendation.schema_name}.{recommendation.table_name}"
-    columns = ", ".join(recommendation.columns)
-    concurrent_ddl = recommendation.index_ddl.replace("CREATE INDEX ", "CREATE INDEX CONCURRENTLY ", 1)
-    return advice_to_dict(
-        Advice(
-            title=f"{target} tablosuna ({columns}) index ekleyin",
-            why=(
-                f"{recommendation.reason} Index olmadan bu sorgu tabloyu baştan sona tarıyor; "
-                "veri büyüdükçe süre doğrusal olarak artar ve yoğun saatlerde uygulama yavaşlar."
-            ),
-            steps=[
-                AdviceStep(
-                    "Aynı kolonları kapsayan bir index zaten var mı, doğrulayın.",
-                    f"SELECT indexname, indexdef FROM pg_indexes\n"
-                    f"WHERE schemaname = '{recommendation.schema_name}' "
-                    f"AND tablename = '{recommendation.table_name}';",
-                ),
-                AdviceStep(
-                    "Index'i tabloyu kilitlemeden oluşturun.",
-                    concurrent_ddl,
-                ),
-                AdviceStep(
-                    "İstatistikleri tazeleyin ki planlayıcı yeni index'i hemen kullanabilsin.",
-                    f"ANALYZE {target};",
-                ),
-            ],
-            cautions=[
-                "CREATE INDEX CONCURRENTLY işlem bloğu içinde çalıştırılamaz ve normalinden uzun sürer.",
-                "Yarıda kalırsa geride INVALID bir index kalır; DROP INDEX ile temizlenmelidir.",
-                "İşlem sırasında index'in diskte yer kaplayacağını hesaba katın.",
-            ],
-            estimated_duration="Tablo boyutuna göre dakikalar; büyük tablolarda saatler sürebilir.",
-            rollback=f"DROP INDEX CONCURRENTLY IF EXISTS {recommendation.schema_name}.{_index_name(recommendation)};",
-            verification=(
-                f"EXPLAIN (ANALYZE, BUFFERS) <sorgunuz>;\n"
-                f"-- Planda Seq Scan yerine Index Scan görmelisiniz.\n"
-                f"SELECT idx_scan FROM pg_stat_user_indexes\n"
-                f"WHERE schemaname = '{recommendation.schema_name}' "
-                f"AND indexrelname = '{_index_name(recommendation)}';"
-            ),
-        )
+
+async def _postgres_instance(db: AsyncSession, instance_id: int) -> Instance:
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadi")
+    if instance.engine != "postgresql":
+        raise HTTPException(status_code=400, detail="Index advice is only available for PostgreSQL")
+    return instance
+
+
+async def _advice_report(db: AsyncSession, instance: Instance, item: IndexAdviceRequest) -> IndexAdviceReportOut:
+    cache_key = ("advice", instance.id, item.query.strip(), item.queryid)
+    cached = query_cache.get(cache_key)
+    if cached is not None:
+        return cached
+    payload = await run_index_advice(
+        db, instance, query=item.query, queryid=item.queryid, client_calls=item.calls
     )
-
-
-def _index_name(recommendation) -> str:
-    """CREATE INDEX ifadesinden index adını çıkarır (geri alma ve doğrulama komutları için)."""
-    parts = recommendation.index_ddl.split()
-    try:
-        return parts[parts.index("INDEX") + 1]
-    except (ValueError, IndexError):
-        return "<index_adi>"
+    report = IndexAdviceReportOut.model_validate(payload)
+    if report.status in _CACHEABLE_ADVICE_STATUSES:
+        query_cache.set(cache_key, report, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
+    return report
 
 
 @router.post("/{instance_id}/advice", response_model=IndexAdviceReportOut)
@@ -629,50 +600,48 @@ async def advise_indexes(
     body: IndexAdviceRequest,
     db: AsyncSession = Depends(get_db),
 ) -> IndexAdviceReportOut:
-    instance = await db.get(Instance, instance_id)
-    if not instance:
-        raise HTTPException(status_code=404, detail="Instance bulunamadi")
-    if instance.engine != "postgresql":
-        raise HTTPException(status_code=400, detail="Index advice is only available for PostgreSQL")
-
-    cache_key = ("advice", instance_id, body.query.strip(), body.calls)
-    cached = query_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    target = ConnectionTarget(
-        host=instance.host,
-        port=instance.port,
-        database=instance.database,
-        username=instance.username,
-        password=decrypt_secret(instance.password),
-        options=instance.options,
-    )
-    advisor = PostgreSQLIndexAdvisor(target)
+    instance = await _postgres_instance(db, instance_id)
     try:
-        recommendations, reasons = await advisor.advise(body.query, calls=body.calls)
+        return await _advice_report(db, instance, body)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
-    report = IndexAdviceReportOut(
-        advice=[
-            IndexAdviceOut(
-                table_name=r.table_name,
-                schema_name=r.schema_name,
-                columns=r.columns,
-                index_ddl=r.index_ddl,
-                reason=r.reason,
-                estimated_improvement_pct=r.estimated_improvement_pct,
-                has_hypopg_estimate=r.has_hypopg_estimate,
-                before_cost=r.before_cost,
-                after_cost=r.after_cost,
-                existing_indexes=r.existing_indexes,
-                advice=_index_advice(r),
+
+
+@router.post("/{instance_id}/advice/batch", response_model=IndexAdviceBatchOut)
+async def advise_indexes_batch(
+    instance_id: int,
+    body: IndexAdviceBatchRequest,
+    db: AsyncSession = Depends(get_db),
+) -> IndexAdviceBatchOut:
+    """Birden çok sorgu için öneri — SAYILI özetle (Faz 31 İŞ 1b).
+
+    "Top sorgulara index öner" eskiden istemcide tek tek çağrı yapıyordu ve çözümlenemeyen
+    sorgular sessizce "öneri yok" satırına karışıyordu. Burada her sonuç durumuna göre
+    sayılıyor: "3 sorgudan 1'i çözümlenemedi; 1'i için öneri üretildi; …".
+    """
+    instance = await _postgres_instance(db, instance_id)
+    items: list[IndexAdviceBatchItemOut] = []
+    statuses: list[str] = []
+    for item in body.items:
+        try:
+            report = await _advice_report(db, instance, item)
+            items.append(IndexAdviceBatchItemOut(query=item.query, queryid=item.queryid, report=report))
+            statuses.append(report.status)
+        except Exception as exc:  # noqa: BLE001 — bir sorgunun hatası diğerlerini düşürmemeli
+            items.append(
+                IndexAdviceBatchItemOut(
+                    query=item.query, queryid=item.queryid, error=classify_connection_error(exc)
+                )
             )
-            for r in recommendations
-        ],
-        no_advice_reasons=[
-            NoAdviceReasonOut(code=r.code, message=r.message, what_to_do=r.what_to_do) for r in reasons
-        ],
-    )
-    query_cache.set(cache_key, report, ttl_seconds=_ADVICE_CACHE_TTL_SECONDS)
-    return report
+            statuses.append("failed")
+    return IndexAdviceBatchOut(summary=IndexAdviceBatchSummaryOut(**summarize(statuses)), items=items)
+
+
+@router.get("/{instance_id}/advice-watches", response_model=list[IndexAdviceWatchListItemOut])
+async def list_advice_watches(
+    instance_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[IndexAdviceWatchListItemOut]:
+    """Çağrı eşiği nedeniyle izlenen sorgular ve eşik dolunca üretilen öneriler (Faz 31 İŞ 1c)."""
+    await _postgres_instance(db, instance_id)
+    return [IndexAdviceWatchListItemOut.model_validate(w) for w in await list_watches(db, instance_id)]

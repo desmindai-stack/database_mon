@@ -137,8 +137,11 @@ def test_the_engines_own_suggestions_are_labelled_as_such():
 
 
 def test_our_own_suggestion_says_where_it_came_from():
-    text = (FRONTEND / "pages" / "InstanceDetailPage.tsx").read_text(encoding="utf-8")
-    assert "Kaynak: dbace" in text, "kendi önerimizin kaynağı yazılmamış"
+    # Faz 31: öneri gösterimi IndexAdvicePanel bileşenine taşındı; sayfa onu kullanıyor.
+    page = (FRONTEND / "pages" / "InstanceDetailPage.tsx").read_text(encoding="utf-8")
+    panel = (FRONTEND / "components" / "IndexAdvicePanel.tsx").read_text(encoding="utf-8")
+    assert "<IndexAdviceResult" in page
+    assert "Kaynak: dbace" in panel, "kendi önerimizin kaynağı yazılmamış"
 
 
 @pytest.mark.parametrize(

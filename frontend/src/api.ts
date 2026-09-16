@@ -131,30 +131,16 @@ export interface QueryDiagnosticsReport {
   server_resource_note: string;
 }
 
-export interface IndexAdvice {
-  table_name: string;
-  schema_name: string;
-  columns: string[];
-  index_ddl: string;
-  reason: string;
-  estimated_improvement_pct: number;
-  has_hypopg_estimate: boolean;
-  before_cost: number | null;
-  after_cost: number | null;
-  existing_indexes: string[];
-  advice: Advice | null;
-}
-
-export interface NoAdviceReason {
-  code: string;
-  message: string;
-  what_to_do: string;
-}
-
-export interface IndexAdviceReport {
-  advice: IndexAdvice[];
-  no_advice_reasons: NoAdviceReason[];
-}
+// Faz 31: index önerisi tipleri ÜRETİLEN şemadan. Buradaki elle yazılmış hâl
+// `estimated_improvement_pct` için "her zaman sayı" diyordu; API artık ölçülemediğinde null
+// döndürüyor — elle tip, arayüzü "%null" göstermeye götürürdü.
+export type IndexAdvice = Gen["IndexAdviceOut"];
+export type NoAdviceReason = Gen["NoAdviceReasonOut"];
+export type IndexPredicate = Gen["IndexPredicateOut"];
+export type IndexAdviceReport = Gen["IndexAdviceReportOut"];
+export type IndexAdviceBatch = Gen["IndexAdviceBatchOut"];
+export type IndexAdviceWatch = Gen["IndexAdviceWatchListItemOut"];
+export type AnalysisSettings = Gen["AnalysisSettingsOut"];
 
 export interface PerformanceInsight {
   severity: "critical" | "high" | "medium" | "low" | "info";
@@ -1320,11 +1306,20 @@ export const api = {
     request<SlowQueryAvailability>(`/api/queries/${id}/availability`),
   getQueryDiagnostics: (id: number, limit = 10) =>
     request<QueryDiagnosticsReport>(`/api/queries/${id}/diagnostics?limit=${limit}`),
-  getIndexAdvice: (id: number, query: string, calls?: number) =>
+  getIndexAdvice: (id: number, query: string, calls?: number, queryid?: string | null) =>
     request<IndexAdviceReport>(`/api/queries/${id}/advice`, {
       method: "POST",
-      body: JSON.stringify({ query, calls: calls ?? null }),
+      body: JSON.stringify({ query, calls: calls ?? null, queryid: queryid ?? null }),
     }),
+  /** Faz 31: birden çok sorgu için öneri + "N sorgudan M'i çözümlenemedi" özeti. */
+  getIndexAdviceBatch: (id: number, items: { query: string; calls?: number; queryid?: string | null }[]) =>
+    request<IndexAdviceBatch>(`/api/queries/${id}/advice/batch`, {
+      method: "POST",
+      body: JSON.stringify({
+        items: items.map((i) => ({ query: i.query, calls: i.calls ?? null, queryid: i.queryid ?? null })),
+      }),
+    }),
+  getAdviceWatches: (id: number) => request<IndexAdviceWatch[]>(`/api/queries/${id}/advice-watches`),
   getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
   getActivity: (id: number) => request<ActivitySnapshot>(`/api/instances/${id}/activity`),
   getClusterHealth: (id: number) => request<ClusterHealth>(`/api/instances/${id}/cluster-health`),
@@ -1457,6 +1452,12 @@ export const api = {
     return { blob, filename: match ? match[1] : `rapor.${opts.format}` };
   },
   getReportSchedule: () => request<HealthReportSchedule>("/api/reports/schedule"),
+  getAnalysisSettings: () => request<AnalysisSettings>("/api/admin/analysis-settings"),
+  updateAnalysisSettings: (patch: Partial<Omit<AnalysisSettings, "defaults">>) =>
+    request<AnalysisSettings>("/api/admin/analysis-settings", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
   getNoiseSettings: () => request<NoiseSettings>("/api/admin/noise-settings"),
   updateNoiseSettings: (patch: Partial<Omit<NoiseSettings, "defaults">>) =>
     request<NoiseSettings>("/api/admin/noise-settings", {

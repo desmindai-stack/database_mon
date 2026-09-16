@@ -96,7 +96,9 @@ backend/app/
 | `slow_query_selection.py` | **Yavaş sorgu seçiminin tek gerçeklik kaynağı** — rapor ve DPA ikisi de buradan besleniyor |
 | `pgss.py`, `query_history.py`, `query_cache.py` | pg_stat_statements okuma, seri üretimi |
 | `sql_analysis.py` | **SQL ayrıştırmanın tek yeri** (sqlglot) — CTE/takma ad ayrımı, kesik metin tespiti, EXPLAIN stratejisi |
+| `sql_predicates.py` | Filtre kolonlarının (predicate) sözdizim ağacından çıkarılması — kapsam farkındalıklı, ifade filtresi, LIKE, OR |
 | `explain_service.py`, `index_advisor.py`, `query_diagnostics.py`, `plan_analysis.py` | Sorgu tanısı, plan analizi, index önerisi |
+| `index_advice_watch.py` | Index önerisinin **tek giriş noktası** (tekil, toplu, zamanlayıcı) + çağrı eşiği izleme listesi |
 | `auto_explain.py`, `plan_capture.py` | Gerçek çalıştırma planlarının log'dan yakalanması |
 | `wait_sampling.py`, `database_load.py`, `wait_advice.py` | Bekleme örnekleme, AAS, bekleme tabanlı öneri |
 | `blocking.py`, `blocking_history.py`, `deadlocks.py` | Bloklama zinciri, geçmiş olaylar, deadlock |
@@ -112,6 +114,7 @@ backend/app/
 | `auth_deps.py`, `security.py`, `credentials.py` | Kimlik/şifreleme |
 | `retention.py`, `rollup.py` | Saklama süresi temizliği, toplulaştırma |
 | `noise_settings.py` | Gürültü eşikleri (AppSetting tabanlı) |
+| `analysis_settings.py` | Analiz derinliği ayarları — index önerisi çağrı eşiği ve otomatik izleme (AppSetting tabanlı) |
 
 ## Frontend yerleşimi
 

@@ -12,6 +12,7 @@ from app.models import (
     BackupRecord,
     BlockingEpisode,
     CapturedPlan,
+    IndexAdviceWatch,
     DeadlockEvent,
     AlertEvent,
     AppSetting,
@@ -105,6 +106,9 @@ async def run_retention_cleanup() -> int:
             # Faz 26 İŞ 1: yakalanan planlar. Plan JSON'u satır başına kilobaytlar tutuyor —
             # saklama politikasının dışında bırakmak, tabloyu en hızlı büyüyen tablo yapardı.
             (CapturedPlan, CapturedPlan.captured_at),
+            # Faz 31 İŞ 1c: izlenen index önerisi sorguları. Saklama penceresi boyunca eşiğe
+            # ulaşmamış bir sorgu pratikte çalışmıyor demektir; sınırsız birikmemeli.
+            (IndexAdviceWatch, IndexAdviceWatch.registered_at),
             # Faz 26 İŞ 3: bloklama olayları ve deadlock'lar. Hacimleri küçük ama sınırsız
             # değil; saklama politikasının dışında kalan her tablo eninde sonunda en büyük
             # tablo oluyor (slow_query_samples dersi).

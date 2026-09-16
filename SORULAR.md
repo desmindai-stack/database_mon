@@ -2347,3 +2347,31 @@ kendi sorgularının listeye girip girmediği ölçülmedi. Ölçülmeden ekleme
 oid < $1` çalıştırıyor (toplevel=false). İstemci bu metne dokunamaz. Yalnızca
 `pg_stat_statements.track = all` iken görünür; `pg_catalog` deseni onu Commit 2'den sonra
 sistem sorgusu olarak zaten sınıflandırıyor.
+
+## Faz 31 İŞ 1: index önerisinin bilinen sınırları
+
+- **CTE içinde ifadeden türetilen kolon izlenmiyor.** `WITH x AS (SELECT lower(email) AS le
+  FROM users) SELECT … WHERE le = $1` sorgusunda filtre bulunuyor ama `users ((lower(email)))`
+  önerisine dönüştürülmüyor; sebep "İFADEDEN türetiliyor" diye yazılıyor. İfadeyi CTE
+  projeksiyonundan içeri taşımak mümkün ama bu turda yapılmadı.
+- **Bileşik index sırası kaba kuralla.** Eşitlik → join → aralık → gruplama → sıralama.
+  Aralık kolonundan sonraki kolonlar B-tree araması için işe yaramaz ama öneride kalıyor
+  (Faz 31 öncesi davranış). Seçiciliğe göre sıralama ve aralık sonrası kolonları ayırma
+  ayrı bir iş.
+- **OR yalnızca aynı kolon için birleştiriliyor.** `a = 1 OR a = 2` IN sayılıyor;
+  `a = 1 OR b = 2` "her dal için ayrı index" diye açıklanıyor ama iki ayrı öneri
+  üretilmiyor.
+- **`ORDER BY 1` gibi konumsal sıralama önerilmiyor** (projeksiyon çözümü gerekir).
+- **Çağrı sayısında aynı queryid'nin iç içe satırları:** `track = all` iken dbace'in kendi
+  EXPLAIN'i o sorgunun queryid'sine `toplevel=false` bir satır ekliyor (Commit 3'te
+  ölçülecek). Toplayıcı `toplevel` sütununu saklamadığı için eşik değerlendirmesinde aynı
+  döngüdeki satırların EN BÜYÜĞÜ alınıyor, toplamı değil. Uygulamanın gerçekten iç içe
+  (fonksiyon içinden) çalıştırdığı çağrılar bu yüzden eksik sayılabilir.
+- **İfade index'i doğrulaması SELECT yetkisi istiyor** (geçici tablo `LIKE` kaynak tabloyu
+  okuyor). Yetkisiz izleme kullanıcısında ifade index'i hiç önerilmiyor; sebep ve GRANT
+  komutu yazılıyor. Alternatif (`pg_proc.provolatile` okumak) yetki gerektirmezdi ama
+  cast'lerde yanlış sonuç verirdi.
+
+**Açık soru:** yetkisiz kullanıcıda ifade index'i "doğrulanmadı" etiketiyle yine de
+önerilmeli mi? Şu an önerilmiyor: çalışmayan bir DDL'i canlıda denetmek, hiç önermemekten
+kötü.

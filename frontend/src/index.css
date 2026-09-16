@@ -3828,3 +3828,37 @@ td code,
   text-align: left;
   white-space: normal;
 }
+
+/* Faz 31 İŞ 1 — index önerisi: bulunan filtreler, eşik durumu, ölçüm notları, izleme listesi. */
+.checklist-row.info .checklist-status { color: var(--accent); background: rgba(59, 130, 246, 0.12); }
+.advice-threshold {
+  margin: 0.5rem 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
+}
+.found-predicates { margin-top: 0.75rem; }
+.found-predicates summary,
+.advice-watch-list summary { cursor: pointer; font-weight: 600; }
+.found-predicates code { white-space: nowrap; }
+.measurement-notes {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.advice-watch-list {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.advice-watch { padding: 0.5rem 0; border-top: 1px solid var(--border); }
+.advice-watch:first-of-type { border-top: none; }
+.advice-watch .query-text {
+  display: block;
+  margin-top: 0.25rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+}

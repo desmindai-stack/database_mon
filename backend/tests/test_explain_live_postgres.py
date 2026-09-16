@@ -275,12 +275,13 @@ async def test_index_advisor_measures_benefit_for_a_normalized_query(conn, dsn):
         pytest.skip("hypopg kurulu değil; fayda ölçümü doğrulanamıyor")
 
     advisor = PostgreSQLIndexAdvisor(_target(dsn))
-    advices, reasons = await advisor.advise(
+    result = await advisor.advise(
         "SELECT o.id, o.total FROM orders o WHERE o.status = $1 AND o.created_at > $2 "
         "ORDER BY o.created_at DESC LIMIT $3",
         calls=1000,
     )
-    assert advices, f"öneri üretilmedi: {[r.reason for r in reasons]}"
+    advices = result.recommendations
+    assert advices, f"öneri üretilmedi: {[r.message for r in result.reasons]}"
     measured = [a for a in advices if a.has_hypopg_estimate]
     assert measured, "hypopg ölçümü yapılmadı — yer tutucu şartı geri gelmiş olabilir"
     best = measured[0]
