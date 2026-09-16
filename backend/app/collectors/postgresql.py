@@ -22,6 +22,7 @@ from app.domain.pg_capabilities import (
 )
 from app.domain.waits import classify_postgres_wait
 from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
+from app.collectors.query_marker import connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ class PostgreSQLCollector(BaseCollector):
         # UI only offers "disable"/"require" (see SORULAR.md for why the finer verify-ca/
         # verify-full modes aren't exposed), which maps directly onto that.
         ssl_mode = (self.target.options or {}).get("ssl_mode")
-        conn = await asyncpg.connect(
+        conn = await connect_marked(
             host=self.target.host,
             port=self.target.port,
             database=self.target.database,

@@ -79,6 +79,7 @@ backend/app/
                      PostgreSQL sürüm yetenek matrisi
   collectors/        Hedef veritabanına bağlanan kod
     postgresql.py      asyncpg; statement_timeout ile korunuyor
+    query_marker.py    İzlenen PG'ye TEK bağlantı yolu: her SQL `/* dbace */` imzalı, application_name=dbace
     sqlserver_mongodb.py  aioodbc / motor
     scheduler.py       APScheduler job tanımları
   routers/           HTTP uçları (instances, queries, reports, alerts, …)

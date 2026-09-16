@@ -12,6 +12,7 @@ from app.collectors.base import ConnectionTarget
 from app.services.advice import advice_to_dict
 from app.services.auto_explain import plan_source_caveat, plan_source_label
 from app.services.generic_plan import explain_json
+from app.collectors.query_marker import connect_marked
 from app.services.sql_analysis import (
     humanize_postgres_error,
     plan_explain_strategy,
@@ -203,7 +204,7 @@ class PostgreSQLExplainService:
         self.target = target
 
     async def _connect(self) -> asyncpg.Connection:
-        return await asyncpg.connect(
+        return await connect_marked(
             host=self.target.host,
             port=self.target.port,
             database=self.target.database,

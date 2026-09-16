@@ -7673,6 +7673,94 @@ edilmemiş compose değişikliğini (takma adı) sildi. Sözleşme testi bunu he
 düşürdüğü için fark edildi — test olmasaydı "düzelttim" denip takma adsız bir dosya
 commit edilecekti. Ders: normalleştirme dosya bazlı yapılmalı, `checkout -- .` ile değil.
 
+## Faz 31 — Commit 1: `/* dbace */` imzası ve `application_name`
+
+dbace'in izlenen PostgreSQL'e gönderdiği her sorgu artık `/* dbace */` ile başlıyor ve her
+bağlantı `application_name=dbace` taşıyor. Bu commit TEK BAŞINA davranış değiştirmiyor:
+imzayı tüketen sistem sorgusu deseni Commit 2'de (İŞ 1) ekleniyor.
+
+### Yaklaşım: 70 literal değil, tek sarmalayıcı
+
+`collectors/query_marker.py::connect_marked` izlenen sunucuya bağlanmanın TEK yolu; dönen
+`MarkedConnection` SQL alan her asyncpg metodunda metni imzalıyor. Elle literal düzenlemek
+yarın eklenecek sorguyu korumazdı. 9 bağlantı noktası (8 dosya) dönüştürüldü — liste
+koddan üretiliyor (`tests/test_query_marker.py::connect_marked_call_sites`).
+
+### Ölçümler (PG 17.11 ve 15.19, gerçek konteyner)
+
+**Yorum queryid'ye girmiyor.** Aynı sorgu imzalı ve imzasız çalıştırıldı:
+
+| Sürüm | Sıra | Kayıt | calls | queryid | Saklanan metin |
+|---|---|---|---|---|---|
+| 17.11 | imzasız önce | 1 | 2 | 632677980295431501 | `SELECT count(*) FROM marker_probe WHERE id = $1` |
+| 17.11 | imzalı önce | 1 | 2 | 632677980295431501 | `/* dbace */ SELECT count(*) FROM marker_probe WHERE id = $1` |
+| 15.19 | imzasız önce | 1 | 2 | 185441581575465885 | `SELECT count(*) …` |
+| 15.19 | imzalı önce | 1 | 2 | 185441581575465885 | `/* dbace */ SELECT count(*) …` |
+
+Filtre tasarımına etkisi: imza "bu sorgu ŞEKLİNİ dbace gönderiyor" der, "bu ÇALIŞTIRMA
+dbace'in" demez. Bir uygulama bayt bayt aynı sorguyu gönderirse pg_stat_statements iki
+çalıştırmayı zaten tek satırda birleştiriyor — ayrım kaynakta yok, hiçbir filtre onu geri
+getiremez. dbace'in toplama sorguları katalog sorguları olduğu için bu pratikte
+gerçekleşmiyor; yine de Commit 2'deki yapısal denetim (tüm tablolar
+`pg_catalog`/`information_schema`) imzadan bağımsız ikinci bir güvence. `userid` alternatifi
+SORULAR.md'de.
+
+**`application_name` pg_stat_statements'ta yok**: 17.11'de 49, 15.19'da 43 sütun; hiçbiri
+`application_name` değil. Yavaş sorgu tarafındaki filtre tamamen metindeki imzaya dayanıyor.
+`pg_stat_activity`'de dört bağlantının dördünde de `application_name = 'dbace'` görüldü.
+
+**Kapsam — dbace'in gönderdiği her ifade imzalı mı**: gerçek çağrı yolları
+(`collection.collect_instance`, `wait_sampling._sample_instance`,
+`check_postgresql_prerequisites`, `PostgreSQLExplainService.explain`,
+`PostgreSQLIndexAdvisor.advise`) iki rolle çalıştırıldı, pg_stat_statements `userid` ile
+süzüldü:
+
+| Sürüm | Rol | Üst düzey kayıt | İmzasız |
+|---|---|---|---|
+| 17.11 | superuser | 47 | 0 |
+| 17.11 | yalnızca pg_monitor | 41 | 0 |
+| 15.19 | superuser | 36 | 0 |
+| 15.19 | yalnızca pg_monitor | 35 | 0 |
+
+### Gerçek sunucunun yakaladığı açık
+
+İlk koşuda `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT $1` İMZASIZ göründü (dört koşunun
+dördünde). asyncpg'nin `Transaction` nesnesi bu komutları kendi tuttuğu bağlantı
+referansından gönderiyor ve `__getattr__` o referans olarak ham bağlantıyı veriyordu.
+`MarkedConnection.transaction()` artık işlem nesnesini sarmalayıcıya bağlıyor; iç içe işlem
+durumu (`_top_xact`) ham bağlantıda tutuluyor. Sahte bağlantılı birim testleri bu açığı
+göremezdi.
+
+İnceleme ayrıca iki eksik metot buldu: `fetchmany` ve `copy_from_query` sarılmamıştı.
+`test_every_asyncpg_sql_method_is_wrapped` artık asyncpg'nin `Connection` sınıfını inceleyip
+SQL alan her metodun sarıldığını denetliyor.
+
+### İmzalanamayan tek ifade
+
+`SELECT max(oid) FROM pg_catalog.pg_class WHERE oid < $1` (toplevel=false, yalnızca
+17.11 superuser koşusunda). Kaynağı hypopg: `/* dbace */ SELECT hypopg_create_index(...)`
+tek başına çalıştırıldığında aynı ifade düşüyor. Eklenti sunucu içinden SPI ile
+çalıştırıyor; istemciden imzalanamaz. Yalnızca `pg_stat_statements.track = all` iken görünür
+(test konteyneri komut satırıyla `all`; PostgreSQL varsayılanı `top`). Canlı test bu ifadeyi
+açık bir listeyle kabul ediyor, başka her imzasız iç içe ifade testi kırar.
+
+### pg_monitor turu
+
+Yalnızca `pg_monitor` üyesi rolde toplama, örnekleme ve ön koşul yolları çalıştı. EXPLAIN
+"İzleme kullanıcısının bu nesneye erişim yetkisi yok…" açıklamasıyla reddedildi — "veri yok"
+değil, gerekçeli "yapılamadı". Index önerisinin bu rolde ne döndürdüğü Commit 2'nin konusu.
+
+### Kapsam dışı
+
+SQL Server (`program_name`) bu commit'e dahil değil; gerekçe SORULAR.md'de.
+
+### Test
+
+- `tests/test_query_marker.py` — AST taraması (modül dışında `asyncpg.connect`/`create_pool`
+  yok), asyncpg sınıfı incelemesi, taramanın kendisinin çalıştığının kanıtı; negatif kontrol
+  elle yapıldı (`index_advisor.py`'ye ham `asyncpg.connect` geri konunca test kırmızı).
+- `tests/test_query_marker_live_postgres.py` — yukarıdaki ölçümler; `DBACE_TEST_PG_DSN` ile.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

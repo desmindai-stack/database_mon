@@ -13,6 +13,7 @@ from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.models import AlertEvent, AlertRule, Instance, Node
 from app.services.alert_engine import _compare
 from app.services.credentials import decrypt_secret
+from app.collectors.query_marker import connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -107,9 +108,7 @@ async def _run_query(instance: Instance, query: str) -> float | None:
     )
 
     if instance.engine == "postgresql":
-        import asyncpg
-
-        conn = await asyncpg.connect(
+        conn = await connect_marked(
             host=target.host,
             port=target.port,
             database=target.database,

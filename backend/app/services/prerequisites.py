@@ -19,6 +19,7 @@ from app.domain.pg_capabilities import (
     version_support_note,
 )
 from app.services.pgss import PgStatStatementsProbe, probe_pg_stat_statements
+from app.collectors.query_marker import connect_marked
 
 # status: "ok" | "partial" | "missing" | "unauthorized" | "unknown"
 # "partial": kontrol teknik olarak geçti ama kapsamı kısıtlı — tek örneği pg_stat_statements'ın
@@ -326,11 +327,9 @@ def pg_stat_statements_checks(probe: PgStatStatementsProbe) -> list[Prerequisite
 
 
 async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[PrerequisiteCheck]:
-    import asyncpg
-
     checks: list[PrerequisiteCheck] = []
     ssl_mode = (target.options or {}).get("ssl_mode")
-    conn = await asyncpg.connect(
+    conn = await connect_marked(
         host=target.host,
         port=target.port,
         database=target.database,

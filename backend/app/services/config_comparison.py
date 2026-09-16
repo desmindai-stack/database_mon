@@ -28,6 +28,7 @@ from app.domain.config_drift import (
 )
 from app.models import DailyStateSnapshot, DatabaseGroup, Instance
 from app.services.credentials import decrypt_secret
+from app.collectors.query_marker import connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +39,9 @@ SNAPSHOT_KIND = "config"
 
 async def fetch_postgresql_settings(instance: Instance) -> dict[str, str | None]:
     """Karşılaştırma listesindeki parametreleri okur."""
-    import asyncpg
-
     names = [p.name for p in compared_parameters("postgresql")]
     ssl_mode = (instance.options or {}).get("ssl_mode")
-    conn = await asyncpg.connect(
+    conn = await connect_marked(
         host=instance.host,
         port=instance.port,
         database=instance.database,

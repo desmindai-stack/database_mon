@@ -33,6 +33,7 @@ from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.models import Instance, SlowQuerySample
 from app.services.credentials import decrypt_secret
 from app.services.pgss import PgStatStatementsProbe, probe_pg_stat_statements
+from app.collectors.query_marker import connect_marked
 
 
 # Hangi durumun hangi ön koşul kontrolünden kaynaklandığı (Faz 16-B İŞ 6). Kullanıcı o kontrolü
@@ -191,8 +192,6 @@ async def get_slow_query_availability(session: AsyncSession, instance: Instance)
             last_collected_at=last_at,
         )
 
-    import asyncpg
-
     target = ConnectionTarget(
         host=instance.host,
         port=instance.port,
@@ -203,7 +202,7 @@ async def get_slow_query_availability(session: AsyncSession, instance: Instance)
     )
     ssl_mode = (target.options or {}).get("ssl_mode")
     try:
-        conn = await asyncpg.connect(
+        conn = await connect_marked(
             host=target.host,
             port=target.port,
             database=target.database,

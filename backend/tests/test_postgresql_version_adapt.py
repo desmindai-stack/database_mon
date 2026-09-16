@@ -286,5 +286,7 @@ async def test_connect_applies_statement_timeout(monkeypatch):
     collector = _collector()
     conn = await collector._connect()
 
-    assert conn is fake_conn
+    # Faz 31: bağlantı `MarkedConnection` ile sarılı — giden her SQL `/* dbace */` taşıyor.
+    assert conn.raw_connection is fake_conn
     assert any(f"statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'" in q for q in fake_conn.queries)
+    assert all(q.startswith("/* dbace */ ") for q in fake_conn.queries)

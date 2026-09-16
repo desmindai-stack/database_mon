@@ -11,6 +11,7 @@ import asyncpg
 from app.collectors.base import ConnectionTarget
 from app.services.generic_plan import explain_json
 from app.services.sql_analysis import analyze_query, detect_truncation
+from app.collectors.query_marker import connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class PostgreSQLIndexAdvisor:
         self.target = target
 
     async def _connect(self) -> asyncpg.Connection:
-        conn = await asyncpg.connect(
+        conn = await connect_marked(
             host=self.target.host,
             port=self.target.port,
             database=self.target.database,

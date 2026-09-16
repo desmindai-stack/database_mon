@@ -2318,3 +2318,32 @@ başına oturum ya da savepoint) ayrı bir karar ve istenen iş değildi.
 **Açık soru:** Veritabanı başına ayrı oturum mu, savepoint mi? Ayrı oturum daha basit ve
 daha güvenli; savepoint tek bağlantıyı korur.
 
+## Faz 31: dbace sorgularının ayırt edilmesi — neden `userid` değil imza
+
+pg_stat_statements'ta dbace'in sorgularını ayırmanın en güçlü sinyali `userid` sütunu
+(dbace'in bağlandığı rolün OID'si) — metne değil kimliğe dayanıyor. Kullanılmadı, çünkü
+izleme rolü uygulamayla PAYLAŞILIYOR olabilir (özellikle yönetilen servislerde tek bir
+yönetici rolü yaygın). O durumda `userid` filtresi uygulamanın gerçek sorgularını gizlerdi —
+"sorun yok" gibi görünen bir körlük, izleme aracı için en kötü hata türü.
+
+İmzanın bilinen sınırı (ölçüldü, ILERLEME.md Faz 31 Commit 1): yorum queryid'ye girmiyor,
+yani imza sorgu ŞEKLİNİ işaretliyor, çalıştırmayı değil.
+
+**Açık soru:** dbace'e ayrılmış bir rol zorunlu tutulursa `userid` filtresi eklenebilir ve
+imzadan daha güvenilir olur. Bu bir kurulum şartı değişikliği; karar ürün tarafında.
+
+## Faz 31: SQL Server'da `program_name` / imza yok
+
+İmza ve `application_name` yalnızca PostgreSQL için eklendi. SQL Server'da karşılıkları
+bağlantı dizesindeki `APP=dbace` (→ `sys.dm_exec_sessions.program_name`) ve sorgu metnine
+yorum. Yapılmadı, çünkü İŞ 1'in kapsamı PostgreSQL index önerisi; SQL Server'ın sorgu
+istatistikleri (`sys.dm_exec_query_stats`) ayrı bir toplayıcıdan geliyor ve orada dbace'in
+kendi sorgularının listeye girip girmediği ölçülmedi. Ölçülmeden eklemek, bu turda
+özellikle kaçınılan "yakalanırdı muhtemelen" hatasının aynısı olurdu.
+
+## Faz 31: hypopg'un iç sorgusu imzalanamıyor
+
+`hypopg_create_index()` sunucu içinden `SELECT max(oid) FROM pg_catalog.pg_class WHERE
+oid < $1` çalıştırıyor (toplevel=false). İstemci bu metne dokunamaz. Yalnızca
+`pg_stat_statements.track = all` iken görünür; `pg_catalog` deseni onu Commit 2'den sonra
+sistem sorgusu olarak zaten sınıflandırıyor.

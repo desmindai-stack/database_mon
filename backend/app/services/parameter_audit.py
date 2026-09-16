@@ -9,6 +9,7 @@ import httpx
 
 from app.models import DatabaseGroup, Node
 from app.services.credentials import decrypt_secret
+from app.collectors.query_marker import connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +223,7 @@ async def _pg_connect(node: Node) -> asyncpg.Connection:
         raise ValueError(
             f"Node '{node.name}' bir Instance'a bağlı değil (parametre denetimi bağlantı gerektirir)"
         )
-    conn = await asyncpg.connect(
+    conn = await connect_marked(
         host=instance.host,
         port=instance.port,
         database=instance.database,
@@ -313,12 +314,10 @@ async def collect_instance_parameters(instance) -> dict[str, Any]:
     kapsansın diye). Aynı `CRITICAL_PARAMETERS` baseline'ını ve aynı `_evaluate_parameter`
     değerlendirmesini kullanır — iki yerin farklı sonuç vermesi mümkün değil.
     """
-    import asyncpg
-
     from app.services.credentials import decrypt_secret
 
     ssl_mode = (instance.options or {}).get("ssl_mode")
-    conn = await asyncpg.connect(
+    conn = await connect_marked(
         host=instance.host,
         port=instance.port,
         database=instance.database,
