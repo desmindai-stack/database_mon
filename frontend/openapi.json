@@ -924,11 +924,16 @@
           "index_advice_watch_enabled": {
             "title": "Index Advice Watch Enabled",
             "type": "boolean"
+          },
+          "store_real_query_samples": {
+            "title": "Store Real Query Samples",
+            "type": "boolean"
           }
         },
         "required": [
           "index_advice_min_calls",
-          "index_advice_watch_enabled"
+          "index_advice_watch_enabled",
+          "store_real_query_samples"
         ],
         "title": "AnalysisSettingsOut",
         "type": "object"
@@ -957,6 +962,17 @@
               }
             ],
             "title": "Index Advice Watch Enabled"
+          },
+          "store_real_query_samples": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Store Real Query Samples"
           }
         },
         "title": "AnalysisSettingsUpdate",
@@ -3726,6 +3742,22 @@
             "minLength": 1,
             "title": "Query",
             "type": "string"
+          },
+          "sample_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Id"
+          },
+          "use_sample": {
+            "default": false,
+            "title": "Use Sample",
+            "type": "boolean"
           }
         },
         "required": [
@@ -7507,6 +7539,96 @@
           "node_type"
         ],
         "title": "PlanNodeAnalysisOut",
+        "type": "object"
+      },
+      "PlanSourceOptionOut": {
+        "description": "Tek bir plan kaynağı ve kullanılabilirliği (Faz 31 İŞ 2).",
+        "properties": {
+          "available": {
+            "title": "Available",
+            "type": "boolean"
+          },
+          "caveat": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Caveat"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Detail",
+            "type": "object"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "kind",
+          "available",
+          "label"
+        ],
+        "title": "PlanSourceOptionOut",
+        "type": "object"
+      },
+      "PlanSourcesOut": {
+        "properties": {
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/PlanSourceOptionOut"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
+          },
+          "recommended": {
+            "title": "Recommended",
+            "type": "string"
+          },
+          "sample_id": {
+            "title": "Sample Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sample_id",
+          "queryid",
+          "recommended",
+          "options"
+        ],
+        "title": "PlanSourcesOut",
         "type": "object"
       },
       "PredictionAccuracyOut": {
@@ -15869,6 +15991,65 @@
           }
         ],
         "summary": "Get Query History Detail",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/plan-sources": {
+      "get": {
+        "description": "Bu sorgunun planı hangi kaynaklardan alınabilir — öncelik sırasıyla (Faz 31 İŞ 2).\n\nGET: viewer da görebiliyor. Yanıtta gerçek değerli örnek METNİ yok; yalnızca varlığı,\nzamanı ve süresi.",
+        "operationId": "plan_sources_api_queries__instance_id__plan_sources_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Yavaş sorgu satırının kimliği (SlowQueryOut.id).",
+            "in": "query",
+            "name": "sample_id",
+            "required": true,
+            "schema": {
+              "description": "Yavaş sorgu satırının kimliği (SlowQueryOut.id).",
+              "title": "Sample Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanSourcesOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Plan Sources",
         "tags": [
           "queries"
         ]

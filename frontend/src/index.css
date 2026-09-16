@@ -3862,3 +3862,11 @@ td code,
   word-break: break-word;
   font-size: 0.8rem;
 }
+
+/* Faz 31 İŞ 2 — plan kaynakları: öncelik sırası, kullanılabilirlik ve sebep her zaman görünür. */
+.plan-sources { margin: 0.5rem 0; }
+.plan-source-list { margin: 0.5rem 0; padding-left: 1.25rem; }
+.plan-source { margin-bottom: 0.5rem; }
+.plan-source.unavailable strong { color: var(--muted); }
+.plan-source-head { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+.plan-source .btn { margin-top: 0.25rem; }

@@ -7,13 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
 from app.domain.query_metrics import derive_metrics, flag_metrics, metric_dictionary
-from app.models import CapturedPlan, Instance, Node, Server, SlowQuerySample
+from app.models import CapturedPlan, Instance, Node, Server, SlowQuerySample, WaitQuerySignature
+from app.services.collection import connection_target_for
 from app.schemas import (
     MetricMeaningOut,
     CapturedPlanListOut,
     CapturedPlanOut,
     ExplainOut,
     ExplainRequest,
+    PlanSourcesOut,
     IndexAdviceBatchItemOut,
     IndexAdviceBatchOut,
     IndexAdviceBatchRequest,
@@ -41,6 +43,7 @@ from app.services.plan_analysis import (
 )
 from app.services.advice import advice_to_dict
 from app.services.index_advice_watch import list_watches, run_index_advice, summarize
+from app.services.plan_source import KIND_SAMPLE, captured_unavailable_reason, resolve_plan_sources
 from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
@@ -437,24 +440,33 @@ async def list_captured_plans(
         ],
     )
     if not out.plans:
-        if instance.engine != "postgresql":
-            out.unavailable_reason = (
-                "auto_explain yalnızca PostgreSQL'de var; bu motor için gerçek çalıştırma planı "
-                "yakalanamıyor."
-            )
-        elif not (instance.options or {}).get("agent_url"):
-            out.unavailable_reason = (
-                "Bu instance için host-agent yapılandırılmamış. auto_explain planları sunucu "
-                "log'undan okunuyor ve log'a erişim agent üzerinden sağlanıyor."
-            )
+        # Faz 31: plan kaynakları ile AYNI açıklama (services/plan_source.py).
+        out.unavailable_reason = captured_unavailable_reason(instance)
+        if instance.engine == "postgresql" and not (instance.options or {}).get("agent_url"):
             out.managed_service_guidance = MANAGED_SERVICE_GUIDANCE
-        else:
-            out.unavailable_reason = (
-                "Henüz yakalanmış plan yok. Ön koşullar panelindeki auto_explain kontrollerine "
-                "bakın: kütüphane yüklü, eşik ayarlı ve log_format='json' olmalı. Üçü de "
-                "tamamsa, eşiği aşan bir sorgu çalışana kadar plan birikmez."
-            )
     return out
+
+
+@router.get("/{instance_id}/plan-sources", response_model=PlanSourcesOut)
+async def plan_sources(
+    instance_id: int,
+    sample_id: int = Query(description="Yavaş sorgu satırının kimliği (SlowQueryOut.id)."),
+    db: AsyncSession = Depends(get_db),
+) -> PlanSourcesOut:
+    """Bu sorgunun planı hangi kaynaklardan alınabilir — öncelik sırasıyla (Faz 31 İŞ 2).
+
+    GET: viewer da görebiliyor. Yanıtta gerçek değerli örnek METNİ yok; yalnızca varlığı,
+    zamanı ve süresi.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+    if instance.engine != "postgresql":
+        raise HTTPException(status_code=400, detail="Plan kaynakları yalnızca PostgreSQL için")
+    sample = await db.get(SlowQuerySample, sample_id)
+    if sample is None or sample.instance_id != instance_id:
+        raise HTTPException(status_code=404, detail="Sorgu bulunamadı")
+    return PlanSourcesOut.model_validate(await resolve_plan_sources(db, instance, sample))
 
 
 @router.get("/{instance_id}/captured-plans/{plan_id}", response_model=ExplainOut)
@@ -541,6 +553,9 @@ async def explain_query(
     if instance.engine != "postgresql":
         raise HTTPException(status_code=400, detail="EXPLAIN is only available for PostgreSQL")
 
+    if body.use_sample:
+        return await _explain_with_sample(db, instance, body)
+
     cache_key = ("explain", instance_id, bool(body.analyze), body.query.strip())
     cached = query_cache.get(cache_key)
     if cached is not None:
@@ -564,6 +579,44 @@ async def explain_query(
     out = ExplainOut.model_validate(PostgreSQLExplainService.to_payload(result))
     query_cache.set(cache_key, out, ttl_seconds=_EXPLAIN_CACHE_TTL_SECONDS)
     return out
+
+
+async def _explain_with_sample(db: AsyncSession, instance: Instance, body: ExplainRequest) -> ExplainOut:
+    """Gerçek değerli örnekle EXPLAIN ANALYZE (Faz 31 İŞ 2).
+
+    Karar plan kaynakları servisinde veriliyor — bu uç aynı değerlendirmeyi tekrar yapıyor ki
+    arayüz "kullanılamaz" dediği bir seçeneği doğrudan istek atarak çalıştıramasın. Yetki:
+    POST olduğu için `require_write_access` viewer'ı zaten reddediyor.
+    """
+    if body.sample_id is None:
+        raise HTTPException(status_code=400, detail="Gerçek değerli örnek için sample_id gerekli.")
+    sample = await db.get(SlowQuerySample, body.sample_id)
+    if sample is None or sample.instance_id != instance.id:
+        raise HTTPException(status_code=404, detail="Sorgu bulunamadı")
+    sources = await resolve_plan_sources(db, instance, sample)
+    option = next(o for o in sources["options"] if o["kind"] == KIND_SAMPLE)
+    if not option["available"]:
+        raise HTTPException(status_code=400, detail=option["reason"])
+    signature = (
+        await db.execute(
+            select(WaitQuerySignature).where(
+                WaitQuerySignature.instance_id == instance.id, WaitQuerySignature.queryid == sample.queryid
+            )
+        )
+    ).scalar_one()
+
+    service = PostgreSQLExplainService(connection_target_for(instance))
+    try:
+        result = await service.explain_sample(
+            signature.sample_query_text,
+            captured_at=signature.sample_captured_at,
+            duration_ms=signature.sample_duration_ms,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
+    return ExplainOut.model_validate(PostgreSQLExplainService.to_payload(result))
 
 
 # Önbelleğe yalnızca DURUMU DEĞİŞMEYECEK sonuçlar alınıyor. "Eşik altında" yanıtı

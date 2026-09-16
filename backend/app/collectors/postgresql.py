@@ -22,7 +22,8 @@ from app.domain.pg_capabilities import (
 )
 from app.domain.waits import classify_postgres_wait
 from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
-from app.collectors.query_marker import connect_marked
+from app.services.sql_analysis import normalize_literals
+from app.collectors.query_marker import DBACE_QUERY_MARKER, connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,21 @@ def _as_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _without_dbace_literals(row: dict[str, Any]) -> dict[str, Any]:
+    """dbace'in KENDİ ifadelerindeki sabitleri saklamadan önce yer tutucuya çevirir (Faz 31 İŞ 2).
+
+    GERÇEK SUNUCUDA ÖLÇÜLDÜ: PostgreSQL 15, pg_stat_statements'ta yardımcı ifadelerin (EXPLAIN)
+    sabitlerini NORMALİZE ETMİYOR; 16.15, 17.11 ve 18.6 ediyor. Gerçek değerli örnekle çalışan
+    `EXPLAIN (ANALYZE) SELECT ... 'gizli-değer'` metni 15'te değeriyle birlikte duruyor ve bu
+    toplayıcı onu okuyup dbace'in veritabanına yazıyordu — gizlilik anahtarından BAĞIMSIZ.
+    dbace'in kendi ifadelerinin değerine hiçbir analiz ihtiyaç duymuyor.
+    """
+    query = row.get("query") or ""
+    if DBACE_QUERY_MARKER in query:
+        row["query"] = normalize_literals(query)
+    return row
 
 
 class PostgreSQLCollector(BaseCollector):
@@ -593,7 +609,7 @@ class PostgreSQLCollector(BaseCollector):
             # hem de listede okunamayan bir metin göstermek kafa karıştırır. Neden eksik
             # göründüğünü services/slow_query_status.py açıklıyor.
             return [
-                dict(row)
+                _without_dbace_literals(dict(row))
                 for row in rows
                 if row["query"] and row["query"] != REDACTED_QUERY_TEXT
             ]
@@ -623,8 +639,12 @@ class PostgreSQLCollector(BaseCollector):
         - `pg_blocking_pids()` SADECE kilit bekleyen satırlar için çağrılıyor. Bu fonksiyon
           lock manager'ı dolaşır ve her satır için çağrılırsa örnekleme sorgusunun en pahalı
           parçası olur; oysa cevabı yalnızca `Lock` beklemesinde anlamlı.
-        - Sorgu metni 400 karaktere kırpılıyor: metin sözlüğe (WaitQuerySignature) tek kez
-          yazılıyor, her örnekte taşınmasının anlamı yok.
+        - Sorgu metni 4000 karaktere kırpılıyor (Faz 31 İŞ 2: 400'dü). Metin gerçek değerli
+          örnek olarak EXPLAIN ANALYZE girdisi olabiliyor ve kesik SQL çalıştırılamaz.
+          Sunucunun kendi sınırı `track_activity_query_size`; kesik metin örnek olarak
+          kabul edilmiyor (sql_analysis.detect_truncation).
+        - `elapsed_ms`: çalışmanın o ana kadarki süresi — queryid başına EN YAVAŞ çalıştırmanın
+          örnek olarak saklanabilmesi için.
         """
         has_query_id = bool(conn.capabilities.get("has_query_id"))
         queryid_expr = "a.query_id::text" if has_query_id else "NULL::text"
@@ -634,7 +654,8 @@ class PostgreSQLCollector(BaseCollector):
                 {queryid_expr} AS queryid,
                 a.wait_event_type::text AS wait_event_type,
                 a.wait_event::text AS wait_event,
-                LEFT(a.query, 400) AS query,
+                LEFT(a.query, 4000) AS query,
+                EXTRACT(EPOCH FROM (clock_timestamp() - a.query_start)) * 1000 AS elapsed_ms,
                 CASE
                     WHEN a.wait_event_type = 'Lock'
                     THEN cardinality(pg_blocking_pids(a.pid))
@@ -660,6 +681,7 @@ class PostgreSQLCollector(BaseCollector):
                 {
                     "queryid": row["queryid"] or "",
                     "query": row["query"] or "",
+                    "elapsed_ms": float(row["elapsed_ms"]) if row["elapsed_ms"] is not None else None,
                     "wait_category": str(classify_postgres_wait(row["wait_event_type"])),
                     "wait_event": row["wait_event"] or "",
                     "blocked": blocker_count > 0,

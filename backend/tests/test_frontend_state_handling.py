@@ -123,3 +123,40 @@ def test_index_advice_types_come_from_the_generated_schema():
     for name in ("IndexAdvice", "NoAdviceReason", "IndexAdviceReport", "IndexPredicate", "AnalysisSettings"):
         assert f"export interface {name} " not in api, f"{name} elle yazılmış"
         assert re.search(rf'export type {name} = Gen\["\w+"\];', api), f"{name} şemadan türetilmemiş"
+
+
+# --- Faz 31 İŞ 2: plan kaynakları ----------------------------------------------------------
+
+_PLAN_PANEL = FRONTEND / "components" / "PlanSourcePanel.tsx"
+
+
+def test_every_plan_source_is_listed_with_its_reason_not_filtered_out():
+    panel = _PLAN_PANEL.read_text(encoding="utf-8")
+    assert "sources.options.map(" in panel
+    assert "sources.options.filter(" not in panel, "kullanılamayan kaynak gizlenmemeli"
+    assert "option.reason" in panel and "option.caveat" in panel
+
+
+def test_running_the_query_is_admin_only_and_confirmed_with_the_cost_warning():
+    panel = _PLAN_PANEL.read_text(encoding="utf-8")
+    assert "canWrite" in panel and 'role === "admin"' in panel
+    run = panel[panel.index('option.kind === "sample_analyze" && canWrite') :]
+    assert "confirm(" in run[:600] and "option.caveat" in run[:600]
+
+
+def test_the_plan_shown_always_carries_its_source_label():
+    tree = (FRONTEND / "components" / "ExplainPlanTree.tsx").read_text(encoding="utf-8")
+    assert "source_label" in tree and "source_caveat" in tree
+    page = (FRONTEND / "pages" / "InstanceDetailPage.tsx").read_text(encoding="utf-8")
+    assert "<PlanSourcePanel" in page
+
+
+def test_enabling_real_value_samples_requires_confirmation():
+    admin = (FRONTEND / "pages" / "AdminPage.tsx").read_text(encoding="utf-8")
+    block = admin[admin.index("store_real_query_samples ?? false") :][:900]
+    assert "confirm(" in block and "!e.target.checked ||" in block, "açarken onay istenmeli, kapatırken değil"
+
+
+def test_plan_source_types_come_from_the_generated_schema():
+    api = (FRONTEND / "api.ts").read_text(encoding="utf-8")
+    assert 'export type PlanSources = Gen["PlanSourcesOut"];' in api

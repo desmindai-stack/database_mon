@@ -2375,3 +2375,49 @@ sistem sorgusu olarak zaten sınıflandırıyor.
 **Açık soru:** yetkisiz kullanıcıda ifade index'i "doğrulanmadı" etiketiyle yine de
 önerilmeli mi? Şu an önerilmiyor: çalışmayan bir DDL'i canlıda denetmek, hiç önermemekten
 kötü.
+
+## Faz 31 İŞ 2: gerçek değerli sorgu örneklerinin saklanması — gizlilik
+
+**Karar:** Bekleme örnekleyicisinin gördüğü gerçek değerli sorgu metni yalnızca
+`analysis_store_real_query_samples` açıkken ve yalnızca `wait_query_signatures.sample_*`
+alanlarında saklanıyor. Anahtar **varsayılan kapalı**; açmak DBA'nın bilinçli kararı.
+
+**Neden:** Uygulama değerleri sorgu metnine gömüyorsa (simple protocol, istemci tarafı
+biçimlendirme) metin kimlik numarası, e-posta, IBAN, tutar gibi gerçek veri taşıyor. Bu veri
+izlenen sunucudan dbace'in veritabanına kopyalanıyor ve dbace'in yedeklerine, saklama
+süresine, erişim denetimine tabi oluyor — müşterinin kendi veri sınıflandırmasının dışına
+çıkıyor. Varsayılan açık olsaydı bu kopya kimse fark etmeden oluşurdu.
+
+**Faz 31 öncesinde fark edilmemiş maruziyet:** `wait_query_signatures.query_text` bugüne kadar
+her zaman ham metindi ve veritabanı yükü kırılımında gösteriliyordu. Artık her zaman
+arındırılıyor; worker ilk yazımda eski satırları da arındırıyor.
+
+**Görünmediği yerler (testle sabit):** sağlık raporu, yönetici raporu, rapor dışa aktarımı,
+gösterge paneli, veritabanı yükü kırılımı. Plan kaynakları GET yanıtı (viewer'a açık) örnek
+metni içermiyor. Metin yalnızca admin'in onaylayarak çalıştırdığı EXPLAIN ANALYZE yanıtında
+görünüyor.
+
+**Anahtarın KAPSAMADIĞI yerler (açık konular):**
+
+- **auto_explain planları** (`captured_plans`, Faz 26) planın "Query Text" alanında ve filtre
+  koşullarında gerçek değer taşıyor; bu anahtardan bağımsız saklanıyor ve DPA'da gösteriliyor.
+  Aynı anahtara bağlanmalı mı, yoksa ayrı mı yönetilmeli?
+- **İzlenen sunucunun kendi pg_stat_statements'ı:** PostgreSQL 15 (ölçüldü; 16.15/17.11/18.6
+  değil) EXPLAIN ifadesindeki sabitleri normalize etmiyor. Gerçek değerli örnekle ANALYZE
+  çalıştırılınca değer o sunucunun pg_stat_statements görünümünde kalıyor. dbace kendi
+  tarafında arındırıyor ama sunucudaki kopyaya dokunamaz; onay uyarısı 16 öncesinde bunu
+  söylüyor. 16 öncesi sunucularda bu seçenek tamamen kapatılmalı mı?
+- **Uygulamanın kendi yardımcı ifadeleri:** aynı PG 15 davranışı uygulamanın `EXPLAIN`,
+  `SET x = '…'` gibi ifadelerindeki değerleri de pg_stat_statements'ta bırakıyor ve dbace
+  bunları `slow_query_samples`'a yazıyor. Yalnızca dbace'in kendi (imzalı) satırları
+  arındırılıyor; uygulamanınkiler dokunulmadan saklanıyor.
+- **Örnek saklama süresi** genel saklama politikasına (`last_seen_at`) bağlı; örnekler için
+  daha kısa ayrı bir süre gerekebilir.
+
+**Kapsamı daraltan ölçülmüş gerçek:** bind parametreli sürücüler (JDBC PreparedStatement,
+asyncpg, çoğu ORM) pg_stat_activity'de değer göstermiyor; bu uygulamalar için örnek zaten
+oluşmuyor. Gizlilik riski ve özelliğin faydası aynı uygulama sınıfına (değerleri metne
+gömenler) düşüyor.
+
+**Değiştirmek için gereken:** müşteri bazında (çok müşterili yapıda) anahtar; şu an kurulum
+geneli tek anahtar.

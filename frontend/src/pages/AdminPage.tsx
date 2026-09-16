@@ -609,6 +609,32 @@ export default function AdminPage() {
             />{" "}
             Eşik altındaki sorguları izle ve eşik dolunca öneri üret
           </label>
+
+          <label style={{ display: "block", marginTop: "1rem" }}>
+            <input
+              type="checkbox"
+              checked={analysis?.store_real_query_samples ?? false}
+              disabled={!analysis}
+              onChange={(e) => {
+                if (
+                  !e.target.checked ||
+                  confirm(
+                    "Gerçek değerli sorgu örnekleri saklansın mı?\n\n" +
+                      "Örnek metin, uygulamanın sorguya gömdüğü değerleri (kimlik numarası, e-posta, tutar) " +
+                      "içerebilir ve dbace veritabanına yazılır. Kapatıldığında saklanan örnekler silinir.",
+                  )
+                ) {
+                  saveAnalysis({ store_real_query_samples: e.target.checked });
+                }
+              }}
+            />{" "}
+            Gerçek değerli sorgu örneklerini sakla (varsayılan: kapalı)
+          </label>
+          <p className="muted-note">
+            Açıkken, çalışırken görülen en yavaş sorgunun gerçek değerli metni saklanır ve yönetici bu değerlerle
+            EXPLAIN ANALYZE çalıştırabilir. Örnekler raporlarda ve yönetici görünümünde gösterilmez. Uygulama bind
+            parametresi kullanıyorsa (çoğu sürücü ve ORM) değerler zaten görünmez ve örnek oluşmaz.
+          </p>
         </CollapsibleSection>
       )}
     </SectionsProvider>

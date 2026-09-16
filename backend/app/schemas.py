@@ -1342,6 +1342,33 @@ class ActivityOut(BaseModel):
 class ExplainRequest(BaseModel):
     query: str = Field(min_length=1)
     analyze: bool = False
+    # Faz 31 İŞ 2: bekleme örnekleyicisinin sakladığı GERÇEK DEĞERLİ örnekle EXPLAIN ANALYZE.
+    # `sample_id` yavaş sorgu satırının kimliği; örnek metin sunucuda bulunuyor, istemci
+    # göndermiyor (istemcinin gönderdiği metni "gerçek örnek" diye çalıştırmak etiketi yalan yapardı).
+    use_sample: bool = False
+    sample_id: int | None = None
+
+
+class PlanSourceOptionOut(BaseModel):
+    """Tek bir plan kaynağı ve kullanılabilirliği (Faz 31 İŞ 2)."""
+
+    # captured | sample_analyze | generic | unavailable
+    kind: str
+    available: bool
+    label: str
+    # Kullanılamıyorsa NEDEN — boş bırakılmaz.
+    reason: str | None = None
+    # Kullanılabiliyorsa güvenilirlik sınırı / maliyet uyarısı.
+    caveat: str | None = None
+    detail: dict[str, Any] = {}
+
+
+class PlanSourcesOut(BaseModel):
+    sample_id: int
+    queryid: str | None
+    # İlk kullanılabilir kaynak; hiçbiri yoksa "unavailable".
+    recommended: str
+    options: list[PlanSourceOptionOut]
 
 
 class ExplainPlanNodeOut(BaseModel):
@@ -2190,12 +2217,15 @@ class AnalysisSettingsOut(BaseModel):
 
     index_advice_min_calls: int
     index_advice_watch_enabled: bool
+    # Faz 31 İŞ 2: gerçek değerli sorgu metni saklama — varsayılan KAPALI.
+    store_real_query_samples: bool
     defaults: dict[str, Any] = {}
 
 
 class AnalysisSettingsUpdate(BaseModel):
     index_advice_min_calls: int | None = Field(default=None, ge=1)
     index_advice_watch_enabled: bool | None = None
+    store_real_query_samples: bool | None = None
 
 
 class NoiseSettingsUpdate(BaseModel):

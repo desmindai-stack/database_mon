@@ -218,6 +218,8 @@ export interface ActivitySnapshot {
 // senaryonun aynısı, tek farkı bu sefer sessizce değil derlemede patlaması.
 export type ExplainPlanNode = Gen["ExplainPlanNodeOut"];
 export type ExplainResult = Gen["ExplainOut"];
+/** Faz 31 İŞ 2: planın alınabileceği kaynaklar, öncelik sırasıyla. */
+export type PlanSources = Gen["PlanSourcesOut"];
 
 export interface QueryHistoryPoint {
   collected_at: string;
@@ -1365,6 +1367,14 @@ export const api = {
     request<ExplainResult>(`/api/queries/${id}/explain`, {
       method: "POST",
       body: JSON.stringify({ query, analyze }),
+    }),
+  getPlanSources: (id: number, sampleId: number) =>
+    request<PlanSources>(`/api/queries/${id}/plan-sources?sample_id=${sampleId}`),
+  /** Örnek metni SUNUCU buluyor; istemci yalnızca hangi sorgu olduğunu söylüyor. */
+  explainWithSample: (id: number, query: string, sampleId: number) =>
+    request<ExplainResult>(`/api/queries/${id}/explain`, {
+      method: "POST",
+      body: JSON.stringify({ query, use_sample: true, sample_id: sampleId }),
     }),
   getAlertRules: () => request<AlertRule[]>("/api/alerts/rules"),
   createAlertRule: (data: AlertRuleCreate) =>

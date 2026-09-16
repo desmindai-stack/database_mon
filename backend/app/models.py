@@ -882,9 +882,22 @@ class WaitQuerySignature(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
     queryid: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Faz 31 İŞ 2: HER ZAMAN değerlerden arındırılmış metin (sql_analysis.normalize_literals).
+    # Bu alan veritabanı yükü kırılımında ve teknik raporda görünüyor; gerçek değer yalnızca
+    # aşağıdaki `sample_*` alanlarında, yalnızca ayar açıkken.
     query_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Faz 31 İŞ 2: GERÇEK DEĞERLİ temsili örnek — görülen EN YAVAŞ çalıştırma. Yalnızca
+    # `store_real_query_samples` açıkken yazılıyor; kapatılınca siliniyor. Rapor ve yönetici
+    # görünümü bu alanı OKUMAZ (tests/test_sample_privacy.py). Metinde yer tutucu ($1) varsa
+    # değer yoktur ve örnek olarak saklanmaz.
+    sample_query_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sample_duration_ms: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sample_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Örnekleyici bu sorguyu bind parametreli ($1) hâliyle gördü mü. Değer İÇERMEYEN bir işaret:
+    # "neden örnek yok" sorusuna "uygulama değerleri göstermiyor" cevabını verebilmek için.
+    seen_bind_parameters: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class CapturedPlan(Base):

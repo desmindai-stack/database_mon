@@ -25,7 +25,6 @@ import {
   api,
   ApiError,
   ClusterHealth,
-  ExplainResult,
   formatBytes,
   formatTime,
   IndexAdviceReport,
@@ -51,7 +50,7 @@ import BlockingTreePanel from "../components/BlockingTreePanel";
 import DatabaseLoadPanel from "../components/DatabaseLoadPanel";
 import { AdviceWatchList, IndexAdviceResult } from "../components/IndexAdvicePanel";
 import CopyableAction from "../components/CopyableAction";
-import ExplainPlanTree from "../components/ExplainPlanTree";
+import PlanSourcePanel from "../components/PlanSourcePanel";
 import PredictionPlaybook from "../components/PredictionPlaybook";
 import PredictionReadinessPanel from "../components/PredictionReadinessPanel";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
@@ -200,9 +199,6 @@ export default function InstanceDetailPage() {
   const [adviceWatches, setAdviceWatches] = useState<IndexAdviceWatch[] | null>(null);
   const [adviceWatchesError, setAdviceWatchesError] = useState<string | null>(null);
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
-  const [explain, setExplain] = useState<Record<number, ExplainResult | null>>({});
-  const [explainLoading, setExplainLoading] = useState<Record<number, boolean>>({});
-  const [explainError, setExplainError] = useState<Record<number, string>>({});
   const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
   // Faz 16-B İŞ 3: grafikte sürüklenerek seçilen aralık. Metrik grafikleri bu aralığa
@@ -265,20 +261,6 @@ export default function InstanceDetailPage() {
       setAdviceError((prev) => ({ ...prev, [q.id]: String((e as Error).message || e) }));
     } finally {
       setAdviceLoading((prev) => ({ ...prev, [q.id]: false }));
-    }
-  };
-
-  const loadExplain = async (q: SlowQuery, analyze = false) => {
-    setExplainLoading((prev) => ({ ...prev, [q.id]: true }));
-    setExplainError((prev) => ({ ...prev, [q.id]: "" }));
-    try {
-      const result = await api.explainQuery(instanceId, q.query, analyze);
-      setExplain((prev) => ({ ...prev, [q.id]: result }));
-    } catch (e) {
-      setExplain((prev) => ({ ...prev, [q.id]: null }));
-      setExplainError((prev) => ({ ...prev, [q.id]: String((e as Error).message || e) }));
-    } finally {
-      setExplainLoading((prev) => ({ ...prev, [q.id]: false }));
     }
   };
 
@@ -1687,36 +1669,6 @@ export default function InstanceDetailPage() {
                           </div>
                           <div className="advice-section">
                                 <button
-                                  className="btn"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    loadExplain(q, false);
-                                  }}
-                                  disabled={explainLoading[q.id]}
-                                  title="Sadece planı gösterir, sorguyu çalıştırmaz"
-                                >
-                                  {explainLoading[q.id] ? "EXPLAIN…" : "EXPLAIN plan"}
-                                </button>
-                                <button
-                                  className="btn btn-danger"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (
-                                      confirm(
-                                        "EXPLAIN ANALYZE bu sorguyu GERÇEKTEN ÇALIŞTIRIR (sadece planlamaz) — " +
-                                          "hedef sunucuda gerçek kaynak tüketir ve SELECT dışı yan etkisi olmasa bile " +
-                                          "büyük/yavaş sorgularda yük oluşturabilir. Devam edilsin mi?"
-                                      )
-                                    ) {
-                                      loadExplain(q, true);
-                                    }
-                                  }}
-                                  disabled={explainLoading[q.id]}
-                                  title="Sorguyu gerçekten çalıştırır — dikkatli kullanın"
-                                >
-                                  {explainLoading[q.id] ? "EXPLAIN…" : "EXPLAIN ANALYZE ⚠"}
-                                </button>
-                                <button
                                   className="btn btn-primary"
                                   onClick={(e) => {
                                     e.stopPropagation();
@@ -1726,10 +1678,13 @@ export default function InstanceDetailPage() {
                                 >
                                   {adviceLoading[q.id] ? "İnceleniyor…" : "Index önerisi"}
                                 </button>
-                                {explainError[q.id] && (
-                                  <p className="advice-empty">{explainError[q.id]}</p>
+                                {/* Faz 31 İŞ 2: plan kaynakları öncelik sırasıyla — auto_explain,
+                                    gerçek değerli örnekle ANALYZE, değerden bağımsız plan. */}
+                                {instance.engine === "postgresql" && (
+                                  <div onClick={(e) => e.stopPropagation()}>
+                                    <PlanSourcePanel instanceId={instanceId} query={q} />
+                                  </div>
                                 )}
-                                {explain[q.id] && <ExplainPlanTree result={explain[q.id]!} />}
                                 {adviceError[q.id] && (
                                   <p className="advice-empty">Index önerisi alınamadı: {adviceError[q.id]}</p>
                                 )}

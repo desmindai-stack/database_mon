@@ -100,6 +100,7 @@ backend/app/
 | `explain_service.py`, `index_advisor.py`, `query_diagnostics.py`, `plan_analysis.py` | Sorgu tanısı, plan analizi, index önerisi |
 | `index_advice_watch.py` | Index önerisinin **tek giriş noktası** (tekil, toplu, zamanlayıcı) + çağrı eşiği izleme listesi |
 | `auto_explain.py`, `plan_capture.py` | Gerçek çalıştırma planlarının log'dan yakalanması |
+| `plan_source.py` | Planın alınabileceği kaynaklar, öncelik sırasıyla: auto_explain → gerçek değerli örnekle ANALYZE → değerden bağımsız → sebep |
 | `wait_sampling.py`, `database_load.py`, `wait_advice.py` | Bekleme örnekleme, AAS, bekleme tabanlı öneri |
 | `blocking.py`, `blocking_history.py`, `deadlocks.py` | Bloklama zinciri, geçmiş olaylar, deadlock |
 | `health_report.py` | Rapor motoru: bölüm kaydı, FindingDraft → ReportFinding, fingerprint, öncelik |

@@ -89,6 +89,12 @@ class _MinuteBucket:
     counts: dict[tuple[str, str, str], int] = field(default_factory=dict)
     # queryid -> sorgu metni (sözlüğe yazılacak; dakikada bir kez)
     query_texts: dict[str, str] = field(default_factory=dict)
+    # Faz 31 İŞ 2: queryid -> (gerçek değerli metin, süre ms) — dakika içindeki EN YAVAŞ
+    # çalıştırma. Bellekte her zaman tutuluyor; YAZILIP yazılmayacağına flush anında ayar
+    # karar veriyor (ayar kapatıldıysa o dakikanın örnekleri de atılır).
+    samples: dict[str, tuple[str, float]] = field(default_factory=dict)
+    # Faz 31 İŞ 2: bind parametreli ($1) hâliyle görülen queryid'ler — değer içermeyen işaret.
+    bind_parameter_queryids: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -112,6 +118,8 @@ _instance_cache: list[Instance] = []
 _instance_cache_at: datetime | None = None
 #: Dakikası kapanmış, henüz yazılmamış kovalar.
 _pending_flush: list[tuple[int, _MinuteBucket]] = []
+#: Faz 31 İŞ 2: süreç başına bir kez, saklanmış gerçek değerli metnin temizlenip temizlenmediği.
+_privacy_enforced = False
 
 
 @dataclass
@@ -136,8 +144,9 @@ def reset_state() -> None:
     _buckets.clear()
     _known_signatures.clear()
     _pending_flush.clear()
-    global _stats
+    global _stats, _privacy_enforced
     _stats = _RoundStats()
+    _privacy_enforced = False
     _instance_cache.clear()
     global _instance_cache_at
     _instance_cache_at = None
@@ -223,6 +232,13 @@ async def _sample_instance(instance: Instance, now: datetime) -> None:
         text = row.get("query") or ""
         if queryid and text and queryid not in bucket.query_texts:
             bucket.query_texts[queryid] = text
+        if queryid and text and _has_placeholders(text):
+            bucket.bind_parameter_queryids.add(queryid)
+        elapsed = row.get("elapsed_ms")
+        if queryid and text and elapsed is not None and is_sample_candidate(text):
+            current = bucket.samples.get(queryid)
+            if current is None or elapsed > current[1]:
+                bucket.samples[queryid] = (text, float(elapsed))
 
 
 async def _write_bucket(session: AsyncSession, instance_id: int, bucket: _MinuteBucket) -> None:
@@ -281,11 +297,115 @@ async def _write_bucket(session: AsyncSession, instance_id: int, bucket: _Minute
             row.sample_count += count
 
     await _write_signatures(session, instance_id, bucket.query_texts)
+    await session.flush()
+    if bucket.bind_parameter_queryids:
+        await _mark_bind_parameters(session, instance_id, bucket.bind_parameter_queryids)
+    if bucket.samples and await _store_real_query_samples(session):
+        await _write_samples(session, instance_id, bucket.samples, captured_at=bucket.minute)
+
+
+def _has_placeholders(text: str) -> bool:
+    from app.services.generic_plan import has_placeholders
+
+    return has_placeholders(text)
+
+
+async def _mark_bind_parameters(session: AsyncSession, instance_id: int, queryids: set[str]) -> None:
+    rows = (
+        await session.execute(
+            select(WaitQuerySignature).where(
+                WaitQuerySignature.instance_id == instance_id,
+                WaitQuerySignature.queryid.in_(list(queryids)),
+                WaitQuerySignature.seen_bind_parameters.is_(False),
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        row.seen_bind_parameters = True
+
+
+def is_sample_candidate(text: str) -> bool:
+    """Metin EXPLAIN ANALYZE için temsili gerçek değerli örnek olabilir mi.
+
+    Yer tutucu ($1) içeren metin DEĞER TAŞIMIYOR: bind parametreli (extended protocol)
+    sürücüler pg_stat_activity'de `$1` gösteriyor — PG 17 ve 15'te ölçüldü. Kesik metin
+    çalıştırılamaz; dbace'in kendi sorgusu ve sistem sorguları öneri konusu değil.
+    """
+    from app.services.slow_query_selection import classify_system_query
+    from app.services.sql_analysis import detect_truncation
+
+    if _has_placeholders(text) or classify_system_query(text):
+        return False
+    return not detect_truncation(text).truncated
+
+
+async def _store_real_query_samples(session: AsyncSession) -> bool:
+    from app.services.analysis_settings import get_analysis_settings
+
+    return bool((await get_analysis_settings(session))["store_real_query_samples"])
+
+
+async def _write_samples(
+    session: AsyncSession, instance_id: int, samples: dict[str, tuple[str, float]], *, captured_at: datetime
+) -> None:
+    """Örneği, saklanan örnekten DAHA YAVAŞSA değiştirir: temsili örnek en yavaş çalıştırma."""
+    rows = (
+        await session.execute(
+            select(WaitQuerySignature).where(
+                WaitQuerySignature.instance_id == instance_id,
+                WaitQuerySignature.queryid.in_(list(samples.keys())),
+            )
+        )
+    ).scalars().all()
+    for row in rows:
+        text, elapsed = samples[row.queryid]
+        if row.sample_duration_ms is None or elapsed > row.sample_duration_ms:
+            row.sample_query_text = text
+            row.sample_duration_ms = round(elapsed, 3)
+            row.sample_captured_at = captured_at
+
+
+async def enforce_query_text_privacy(session: AsyncSession) -> int:
+    """Saklanmış gerçek değerli metni temizler.
+
+    - `query_text` HER DURUMDA değerlerden arındırılıyor (yük kırılımında ve teknik raporda
+      görünen alan).
+    - `sample_*` alanları ayar KAPALIYSA siliniyor.
+
+    İki yerden çağrılıyor: ayar kapatıldığında ve süreç başına ilk yazımda. İkincisi
+    yükseltme durumu için: Faz 31 öncesinde `query_text` her zaman ham metindi. İşlem
+    idempotent. Değişen satır sayısını döner.
+    """
+    from app.services.sql_analysis import normalize_literals
+
+    keep_samples = await _store_real_query_samples(session)
+    changed = 0
+    rows = (await session.execute(select(WaitQuerySignature))).scalars().all()
+    for row in rows:
+        normalized = normalize_literals(row.query_text or "")
+        drop_sample = not keep_samples and row.sample_query_text is not None
+        if normalized != row.query_text or drop_sample:
+            row.query_text = normalized
+            if drop_sample:
+                row.sample_query_text = None
+                row.sample_duration_ms = None
+                row.sample_captured_at = None
+            changed += 1
+    await session.commit()
+    return changed
 
 
 async def _write_signatures(session: AsyncSession, instance_id: int, texts: dict[str, str]) -> None:
     """queryid → metin sözlüğünü günceller. Bilinen queryid'ler süreç belleğinde tutuluyor;
-    aynı sorgu için dakikada bir SELECT atmak gereksiz."""
+    aynı sorgu için dakikada bir SELECT atmak gereksiz.
+
+    Faz 31 İŞ 2: sözlüğe HER ZAMAN değerlerden arındırılmış metin yazılıyor — eskiden
+    pg_stat_activity'nin ham metni yazılıyordu ve yük kırılımında gerçek değerler görünüyordu.
+    Gerçek değer yalnızca `sample_*` alanlarında ve yalnızca ayar açıkken.
+    """
+    from app.services.sql_analysis import normalize_literals
+
+    texts = {qid: normalize_literals(text) for qid, text in texts.items()}
     unknown = {qid: text for qid, text in texts.items() if (instance_id, qid) not in _known_signatures}
     if not unknown:
         return
@@ -323,6 +443,13 @@ async def flush_completed_buckets(session: AsyncSession) -> int:
         return 0
     pending = list(_pending_flush)
     _pending_flush.clear()
+    global _privacy_enforced
+    if not _privacy_enforced:
+        try:
+            await enforce_query_text_privacy(session)
+            _privacy_enforced = True
+        except Exception:
+            logger.exception("Sorgu metni gizlilik temizliği başarısız; bir sonraki turda tekrar denenecek")
     for instance_id, bucket in pending:
         if bucket.samples_taken == 0:
             continue

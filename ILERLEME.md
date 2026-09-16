@@ -7904,6 +7904,100 @@ eklendi. Mevcut alanların hiçbiri kaldırılmadı.
 - `test_frontend_state_handling.py`: hata→"öneri yok" dönüşümü yasak, null yüzde, bulunan
   filtreler, izleme ve toplu özet görünür, tipler şemadan (negatif kontrol elle yapıldı).
 
+## Faz 31 — Commit 3: İŞ 2 — plan kaynağı önceliklendirmesi
+
+**Migration:** `supabase/migrations/20260923090000_wait_query_signature_samples.sql` (DEPLOY.md #47).
+
+`GET /api/queries/{id}/plan-sources?sample_id=` dört kaynağı her zaman, öncelik sırasıyla ve
+her birinin durumuyla döndürüyor; arayüzde `PlanSourcePanel` (sorgu satırındaki eski
+"EXPLAIN plan" / "EXPLAIN ANALYZE ⚠" düğmelerinin yerine). Doğrulama PG 17.11 ve 15.19'da,
+süper kullanıcı ve yalnızca `pg_monitor` rolüyle (`tests/test_plan_source_live_postgres.py`, 42).
+
+### Görev tanımındaki öncülün ölçülen sınırı
+
+"pg_stat_activity örnekleyicisi gerçek değerli metin topluyor" — **yalnızca değerleri metne
+gömen uygulamalar için doğru.** Aynı sorgu iki biçimde çalıştırılıp pg_stat_activity okundu:
+
+| Sürüm | Bind parametreli (extended protocol) | Metne gömülü (simple protocol) |
+|---|---|---|
+| 17.11 | `SELECT pg_sleep($1), $2::text AS secret` | `SELECT pg_sleep(1.0), 'tc-12345678901'::text` |
+| 15.19 | `SELECT pg_sleep($1), $2::text AS secret` | `SELECT pg_sleep(1.0), 'tc-12345678901'::text` |
+
+JDBC PreparedStatement, asyncpg ve çoğu ORM ilk sütundaki gibi görünüyor. Bu uygulamalar için
+örnek OLUŞAMAZ; plan kaynakları bunu ayrıca söylüyor ("uygulama bind parametresi kullanıyor").
+Yer tutuculu metin örnek olarak saklanmıyor (değer taşımıyor), yalnızca değer içermeyen
+`seen_bind_parameters` işareti tutuluyor.
+
+### Sürüm başına kullanılan kaynak
+
+| | PG 17.11 | PG 15.19 |
+|---|---|---|
+| 1. auto_explain planı (yakalanmışsa) | kullanıldı, EXPLAIN gönderilmedi (dbace rolünden 0 kayıt) | aynı |
+| 2. Gerçek değerli örnekle ANALYZE | çalıştı, `Actual Rows` var | çalıştı, `Actual Rows` var |
+| 3. Değerden bağımsız plan | PREPARE + force_generic_plan; `EXPLAIN (GENERIC_PLAN)` seçeneği sunucuda VAR ama kullanılmıyor | **GENERIC_PLAN seçeneği YOK** → aynı PREPARE yolu; plan alındı, filtrelerde `$1` korunuyor |
+| Örneğin sunucu istatistiğinde bıraktığı iz | EXPLAIN metni `$1` ile normalize | **EXPLAIN metni gerçek değerle kalıyor** (aşağıda) |
+
+Yakalanmış plan gerçek `auto_explain` çıktısından: konteynerde oturum düzeyinde açıldı, log
+`docker logs` ile okunup gerçek ayrıştırıcı ve kayıt fonksiyonlarından geçirildi.
+
+### Gerçek değerle EXPLAIN ANALYZE — güvenlik katmanları (her biri testle)
+
+`explain_service.run_analyze_safely` sorguyu çalıştıran TEK yol. Faz 31 öncesinde elle
+"EXPLAIN ANALYZE ⚠" işlemsiz ve salt-okunur olmadan çalışıyordu; o yol da buraya bağlandı.
+
+| Katman | Kanıt (iki sürümde) |
+|---|---|
+| Yalnızca veri okuyan ifade | `DELETE`, CTE içinde `DELETE`, `SHOW`, `FOR UPDATE` → 400, sunucuya gitmeden |
+| READ ONLY işlem | `SELECT ps_writer()` (INSERT yapan fonksiyon) → "cannot execute INSERT in a read-only transaction", tablo satır sayısı değişmedi; `SELECT nextval(...)` → reddedildi, dizi değeri değişmedi (ROLLBACK'in geri alamayacağı yan etki) |
+| Her durumda ROLLBACK | pg_stat_statements: `BEGIN READ ONLY`, `SET LOCAL statement_timeout`, `EXPLAIN (ANALYZE…)`, `ROLLBACK` — `COMMIT` yok |
+| statement_timeout | `SELECT pg_sleep(10)` 700 ms sınırla 0,73 sn'de iptal, mesaj "çalıştırma sınırını aştı … geri alındı" |
+| Varsayılan kapalı | ayar kapalıyken seçenek `available=false`, sebep "KAPALI (varsayılan)" |
+| Yalnızca admin | viewer: plan kaynakları GET 200, ANALYZE POST 403 |
+| pg_monitor rolü | örnek saklanıyor (pg_read_all_stats), ANALYZE → "İzleme kullanıcısının bu nesneye erişim yetkisi yok…" |
+
+### EXPLAIN'in pg_stat_statements'taki izi (ölçüm)
+
+dbace rolünün ürettiği kayıtlar, uygulama sorgusunun queryid'sine dokunan satırlar:
+
+| Yol | track=all | track=top |
+|---|---|---|
+| Değerden bağımsız (PREPARE) | 17.11: 10, 15.19: 9 kayıt; uygulamanın queryid'sine dokunan **yok** (iç içe PREPARE kendi kimliğiyle) | 9 / 8 kayıt, hepsi üst düzey, dokunan yok |
+| Gerçek değerli ANALYZE | 5 kayıt; **uygulamanın queryid'sine `toplevel=false`, calls=1 satır ekleniyor** (iki sürümde) | 4 kayıt, dokunan yok |
+
+Yani `track=all` iken her ANALYZE, izlenen sorgunun çağrı sayısına iç içe bir çağrı ekliyor.
+İŞ 1c'nin eşik hesabı aynı döngüdeki satırların en büyüğünü aldığı için bundan etkilenmiyor;
+PostgreSQL varsayılanı `top`.
+
+### Bulunan ve kapatılan sızıntı: PG 15 EXPLAIN metnindeki değeri saklıyor
+
+Yukarıdaki ROLLBACK kanıtında 17.11 EXPLAIN metnini `status = $1` diye, 15.19 ise
+`status = 'secret-slow-…'` diye saklamıştı. Dört sürümde ölçüldü (`EXPLAIN (ANALYZE) SELECT 'tc-SECRET'`):
+
+| 15.19 | 16.15 | 17.11 | 18.6 |
+|---|---|---|---|
+| değerle saklıyor | `$1` | `$1` | `$1` |
+
+dbace'in toplayıcısı pg_stat_statements'ı okuyup `slow_query_samples`'a yazdığı için bu değer
+gizlilik anahtarından BAĞIMSIZ olarak dbace veritabanına giriyordu. Düzeltme: toplayıcı
+`/* dbace */` imzalı satırlardaki sabitleri saklamadan önce yer tutucuya çeviriyor. Negatif
+kontrol: düzeltme kapatılınca 15.19 testi "gerçek değer dbace'in veritabanına yazılmış" ile
+kırmızı. İzlenen sunucunun KENDİ pg_stat_statements'ındaki kopyaya dbace dokunamaz; 16 öncesi
+sunucularda onay uyarısı bunu söylüyor (`leaves_values_in_server_statistics`).
+
+### Gizlilik düzeni (karar SORULAR.md'de)
+
+- `store_real_query_samples` varsayılan KAPALI; açarken arayüz onay istiyor.
+- `WaitQuerySignature.query_text` artık HER ZAMAN değerlerden arındırılmış (yük kırılımında ve
+  teknik raporda görünüyor). İlk tasarımda ayar açıkken ham yazılıyordu; izin listesi testi
+  yazılırken fark edildi ve düzeltildi.
+- Gerçek değer yalnızca `sample_*` alanlarında; yazma/okuma dört modülle sınırlı
+  (`tests/test_sample_privacy.py`), rapor/yönetici/gösterge modülleri erişemiyor.
+- Kapatınca örnekler hemen siliniyor; worker ilk yazımda Faz 31 öncesinin ham metnini arındırıyor.
+- Plan kaynakları GET yanıtı örnek metni taşımıyor (viewer'a açık); metin yalnızca admin'in
+  POST ettiği ANALYZE yanıtında planın sorgusu olarak.
+- Örnekleyici queryid başına EN YAVAŞ çalıştırmayı tutuyor (ölçüldü: 0,6 ve 1,6 sn'lik iki
+  çalıştırmadan 1,6 sn'lik saklandı, süre 1602 / 1592 ms).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

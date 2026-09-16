@@ -487,3 +487,40 @@ def humanize_postgres_error(message: str) -> str:
             groups = match.groups()
             return template.format(*groups) if groups else template
     return f"EXPLAIN başarısız oldu. Sunucudan gelen hata: {message}"
+
+
+# --- Gerçek değerlerin metinden çıkarılması (Faz 31 İŞ 2) ------------------------------------
+
+#: Dizgi sabiti — SQL Server'ın N'...' öneki ve `''` kaçışı dahil.
+_LITERAL_STRING = re.compile(r"(?<![\w$])N?'(?:[^']|'')*'", re.IGNORECASE)
+#: Sayısal sabit. Önünde/arkasında harf, rakam, `$` ya da `.` olan sayılar (tablo1, $1, 1.5.2,
+#: t.col2) sabit DEĞİL.
+_LITERAL_NUMBER = re.compile(r"(?<![\w$.])-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![\w.])")
+_EXISTING_PLACEHOLDER = re.compile(r"\$(\d+)")
+
+
+def normalize_literals(sql: str) -> str:
+    """Sorgu metnindeki dizgi ve sayı sabitlerini `$n` yer tutucularına çevirir.
+
+    NEDEN: bekleme örnekleyicisi sorgu metnini `pg_stat_activity`'den okuyor ve uygulama
+    değerleri metne gömüyorsa (sabit protokol, istemci tarafı biçimlendirme) metin GERÇEK
+    VERİ içeriyor — kimlik numarası, e-posta, tutar. Gerçek değerli metin saklama kapalıyken
+    (varsayılan) sözlüğe bu işlevin çıktısı yazılıyor.
+
+    pg_stat_statements'ın kendi normalleştirmesiyle birebir aynı değil (o, ayrıştırma ağacını
+    kullanıyor); amaç eşleştirme değil DEĞERİN saklanmaması. Mevcut `$n` yer tutucuları
+    korunuyor ve yeni numaralar onların üstünden devam ediyor — işlev iki kez uygulanırsa
+    sonuç değişmiyor.
+    """
+    if not sql:
+        return sql
+    used = [int(m) for m in _EXISTING_PLACEHOLDER.findall(sql)]
+    counter = max(used, default=0)
+
+    def next_placeholder(_match: re.Match[str]) -> str:
+        nonlocal counter
+        counter += 1
+        return f"${counter}"
+
+    text = _LITERAL_STRING.sub(next_placeholder, sql)
+    return _LITERAL_NUMBER.sub(next_placeholder, text)

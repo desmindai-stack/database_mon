@@ -1529,6 +1529,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queries/{instance_id}/plan-sources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan Sources
+         * @description Bu sorgunun planı hangi kaynaklardan alınabilir — öncelik sırasıyla (Faz 31 İŞ 2).
+         *
+         *     GET: viewer da görebiliyor. Yanıtta gerçek değerli örnek METNİ yok; yalnızca varlığı,
+         *     zamanı ve süresi.
+         */
+        get: operations["plan_sources_api_queries__instance_id__plan_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/reports": {
         parameters: {
             query?: never;
@@ -2290,6 +2313,8 @@ export interface components {
             index_advice_min_calls: number;
             /** Index Advice Watch Enabled */
             index_advice_watch_enabled: boolean;
+            /** Store Real Query Samples */
+            store_real_query_samples: boolean;
         };
         /** AnalysisSettingsUpdate */
         AnalysisSettingsUpdate: {
@@ -2297,6 +2322,8 @@ export interface components {
             index_advice_min_calls?: number | null;
             /** Index Advice Watch Enabled */
             index_advice_watch_enabled?: boolean | null;
+            /** Store Real Query Samples */
+            store_real_query_samples?: boolean | null;
         };
         /** ApplicationCreate */
         ApplicationCreate: {
@@ -3398,6 +3425,13 @@ export interface components {
             analyze: boolean;
             /** Query */
             query: string;
+            /** Sample Id */
+            sample_id?: number | null;
+            /**
+             * Use Sample
+             * @default false
+             */
+            use_sample: boolean;
         };
         /** FindingAcknowledgementOut */
         FindingAcknowledgementOut: {
@@ -4736,6 +4770,40 @@ export interface components {
              * @default false
              */
             underestimated: boolean;
+        };
+        /**
+         * PlanSourceOptionOut
+         * @description Tek bir plan kaynağı ve kullanılabilirliği (Faz 31 İŞ 2).
+         */
+        PlanSourceOptionOut: {
+            /** Available */
+            available: boolean;
+            /** Caveat */
+            caveat?: string | null;
+            /**
+             * Detail
+             * @default {}
+             */
+            detail: {
+                [key: string]: unknown;
+            };
+            /** Kind */
+            kind: string;
+            /** Label */
+            label: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** PlanSourcesOut */
+        PlanSourcesOut: {
+            /** Options */
+            options: components["schemas"]["PlanSourceOptionOut"][];
+            /** Queryid */
+            queryid: string | null;
+            /** Recommended */
+            recommended: string;
+            /** Sample Id */
+            sample_id: number;
         };
         /**
          * PredictionAccuracyOut
@@ -8964,6 +9032,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueryHistorySeriesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_sources_api_queries__instance_id__plan_sources_get: {
+        parameters: {
+            query: {
+                /** @description Yavaş sorgu satırının kimliği (SlowQueryOut.id). */
+                sample_id: number;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanSourcesOut"];
                 };
             };
             /** @description Validation Error */

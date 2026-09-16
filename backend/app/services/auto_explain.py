@@ -243,8 +243,12 @@ def plan_source_label(source: str) -> str:
     """Kullanıcıya görünen kaynak açıklaması — iki kaynak farklı güvenilirlikte."""
     if source == "auto_explain":
         return "Gerçek çalıştırmadan yakalandı (auto_explain)"
+    if source == "sample_analyze":
+        return "Gerçek değerlerle yeniden çalıştırıldı (EXPLAIN ANALYZE)"
     if source == "manual_analyze":
         return "Sonradan EXPLAIN ANALYZE ile alındı"
+    if source == "generic":
+        return "Değerden bağımsız plan (çalıştırılmadı)"
     return "Sonradan EXPLAIN ile alındı (tahmini plan)"
 
 
@@ -252,6 +256,12 @@ def plan_source_caveat(source: str) -> str | None:
     """Kaynağın sınırı — kullanıcı planın ne kadarına güvenebileceğini bilsin."""
     if source == "auto_explain":
         return None
+    if source == "sample_analyze":
+        return (
+            "Değerler gerçek bir çalıştırmadan örneklendi ama sorgu YENİDEN çalıştırıldı: gerçek "
+            "satır sayıları doğru, ancak plan yavaşlık anındaki plan olmayabilir (veri, "
+            "istatistik ve yük değişmiş olabilir)."
+        )
     if source == "manual_analyze":
         return (
             "Bu plan sorgu yeniden çalıştırılarak alındı. Gerçek satır sayıları doğru ama plan, "

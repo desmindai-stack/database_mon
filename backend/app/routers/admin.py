@@ -160,6 +160,7 @@ async def update_analysis_settings(
             db,
             index_advice_min_calls=payload.index_advice_min_calls,
             index_advice_watch_enabled=payload.index_advice_watch_enabled,
+            store_real_query_samples=payload.store_real_query_samples,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

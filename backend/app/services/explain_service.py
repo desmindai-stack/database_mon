@@ -11,9 +11,10 @@ import asyncpg
 from app.collectors.base import ConnectionTarget
 from app.services.advice import advice_to_dict
 from app.services.auto_explain import plan_source_caveat, plan_source_label
-from app.services.generic_plan import explain_json
+from app.services.generic_plan import explain_json, has_placeholders
 from app.collectors.query_marker import connect_marked
 from app.services.sql_analysis import (
+    detect_truncation,
     humanize_postgres_error,
     plan_explain_strategy,
 )
@@ -33,6 +34,68 @@ _FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 _ALLOWED_START = re.compile(r"^\s*(with|select|values|table|show)\b", re.IGNORECASE)
+#: Sorguyu GERÇEKTEN çalıştıran yolda (ANALYZE) SHOW da yok — yalnızca veri okuyan ifadeler.
+_ANALYZE_ALLOWED_START = re.compile(r"^\s*(with|select|values|table)\b", re.IGNORECASE)
+
+#: EXPLAIN ANALYZE'ın izlenen sunucuda en fazla ne kadar çalışabileceği. Sorgu gerçekten
+#: yürütüldüğü için bu süre kadar CPU/IO harcayabilir; sınır aşılırsa sunucu iptal eder.
+ANALYZE_STATEMENT_TIMEOUT_MS = 15_000
+
+
+class _AlwaysRollback(Exception):
+    """İşlemi geri almak için içeriden fırlatılıyor — başarılı çalıştırmada bile."""
+
+
+async def run_analyze_safely(conn, query: str) -> Any:
+    """EXPLAIN ANALYZE'ı sorguyu çalıştıran TEK yol (Faz 31 İŞ 2).
+
+    Dört katman, her biri ayrı bir riski kapatıyor:
+
+    1. **Yalnızca veri okuyan ifade** (`validate_analyzable`) — DML/DDL metinde reddediliyor.
+    2. **READ ONLY işlem** — metin denetimini aşan yazmaları SUNUCU reddediyor: veri yazan bir
+       fonksiyon (`SELECT yaz()`), `nextval()`, `SELECT ... FOR UPDATE`. Metin denetimi fonksiyonun
+       içini göremez; salt-okunur işlem görür.
+    3. **Her durumda ROLLBACK** — başarılı çalıştırmada bile işlem geri alınıyor; geçici
+       tablo, danışma kilidi ya da oturum durumu bırakılmıyor.
+    4. **statement_timeout** — işlem içinde `SET LOCAL`; sorgu sınırı aşarsa sunucu iptal eder.
+
+    Faz 31 öncesinde elle EXPLAIN ANALYZE doğrudan (işlemsiz, salt-okunur olmadan)
+    çalıştırılıyordu; gerçek değerli örnek yolu eklenirken iki yol bu fonksiyonda birleşti.
+    """
+    captured: dict[str, Any] = {}
+    try:
+        async with conn.transaction(readonly=True):
+            await conn.execute(f"SET LOCAL statement_timeout = '{ANALYZE_STATEMENT_TIMEOUT_MS}ms'")
+            captured["plan"] = await conn.fetchval(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {query}")
+            raise _AlwaysRollback
+    except _AlwaysRollback:
+        pass
+    raw = captured["plan"]
+    return json.loads(raw) if isinstance(raw, str) else raw
+
+
+def _humanize_analyze_error(exc: Exception) -> str:
+    """ANALYZE yolunun hataları: zaman aşımı burada PLANLAMA değil ÇALIŞTIRMA sınırıdır."""
+    message = str(exc)
+    if "statement timeout" in message.lower():
+        return (
+            f"Sorgu {ANALYZE_STATEMENT_TIMEOUT_MS / 1000:g} sn çalıştırma sınırını aştı ve sunucu "
+            "tarafından iptal edildi (zaman aşımı). EXPLAIN ANALYZE sorguyu gerçekten çalıştırdığı "
+            "için bu sınır izlenen sunucuyu koruyor; işlem geri alındı. Planı çalıştırmadan görmek "
+            "için değerden bağımsız planı kullanın."
+        )
+    return humanize_postgres_error(message)
+
+
+def validate_analyzable(query: str) -> str:
+    """ANALYZE yolu için metin denetimi: `validate_explainable` + SHOW yok + yer tutucu yok."""
+    cleaned = validate_explainable(query)
+    if not _ANALYZE_ALLOWED_START.search(cleaned):
+        raise ValueError(
+            "EXPLAIN ANALYZE yalnızca veri okuyan ifadeler (SELECT / WITH / VALUES / TABLE) için "
+            "çalıştırılır."
+        )
+    return cleaned
 
 
 @dataclass
@@ -65,6 +128,8 @@ class ExplainResult:
     #: Planın alınma biçiminden doğan sınır (ör. GENERIC_PLAN kullanıldı) — kullanıcı
     #: planın neye kadar güvenilir olduğunu bilmeli.
     caveat: str | None = None
+    #: Kaynak etiketi zorlaması (ör. "sample_analyze"); None ise analyzed'e göre belirlenir.
+    source: str | None = None
 
 
 def _strip_comments(sql: str) -> str:
@@ -257,8 +322,17 @@ class PostgreSQLExplainService:
             # ("the server expects N arguments for this query, 0 were passed"); orada
             # PREPARE + force_generic_plan yolu kullanılıyor.
             try:
-                raw = await explain_json(conn, cleaned, options=strategy.options)
+                if use_analyze:
+                    # ANALYZE sorguyu ÇALIŞTIRIYOR: salt-okunur işlem, zaman aşımı, geri alma.
+                    validate_analyzable(cleaned)
+                    raw = await run_analyze_safely(conn, cleaned)
+                else:
+                    raw = await explain_json(conn, cleaned, options=strategy.options)
+            except ValueError:
+                raise
             except Exception as exc:
+                if use_analyze:
+                    raise ValueError(_humanize_analyze_error(exc)) from exc
                 # Ham PostgreSQL metni yerine ne olduğunu/ne yapılacağını söyleyen açıklama.
                 raise ValueError(humanize_postgres_error(str(exc))) from exc
 
@@ -283,12 +357,62 @@ class PostgreSQLExplainService:
         finally:
             await conn.close()
 
+    async def explain_sample(self, sample_query: str, *, captured_at, duration_ms: float | None) -> ExplainResult:
+        """Bekleme örnekleyicisinin yakaladığı GERÇEK DEĞERLİ metinle EXPLAIN ANALYZE.
+
+        Kaynak `sample_analyze` olarak işaretleniyor: sorgu yeniden çalıştırılıyor, değerler
+        gerçek bir çalıştırmadan geliyor ama veri ve yük o günden farklı olabilir.
+        """
+        cleaned = validate_analyzable(sample_query)
+        if has_placeholders(cleaned):
+            raise ValueError(
+                "Saklanan örnek yer tutucu ($1) içeriyor — gerçek değer taşımıyor, EXPLAIN "
+                "ANALYZE ile çalıştırılamaz."
+            )
+        truncation = detect_truncation(cleaned)
+        if truncation.truncated:
+            raise ValueError("Saklanan örnek metin kesik; çalıştırılamaz. " + truncation.reason)
+
+        conn = await self._connect()
+        try:
+            try:
+                raw = await run_analyze_safely(conn, cleaned)
+            except Exception as exc:
+                raise ValueError(_humanize_analyze_error(exc)) from exc
+        finally:
+            await conn.close()
+
+        root = raw[0] if isinstance(raw, list) and raw else {}
+        plan_dict = root.get("Plan") if isinstance(root, dict) else None
+        plan = _parse_node(plan_dict) if isinstance(plan_dict, dict) else None
+        insights: list[str] = []
+        if plan:
+            _collect_insights(plan, insights)
+        when = captured_at.strftime("%Y-%m-%d %H:%M") if captured_at else "bilinmeyen bir anda"
+        return ExplainResult(
+            query=cleaned,
+            analyzed=True,
+            source="sample_analyze",
+            caveat=(
+                f"Parametre değerleri {when} tarihli gerçek bir çalıştırmadan örneklendi"
+                + (f" (örnekleme anında en az {duration_ms:.0f} ms sürüyordu)" if duration_ms else "")
+                + ". Sorgu bu değerlerle ŞİMDİ yeniden çalıştırıldı: salt-okunur işlemde, "
+                f"{ANALYZE_STATEMENT_TIMEOUT_MS // 1000} sn zaman aşımıyla, sonunda geri alınarak."
+            ),
+            planning_time_ms=_f(root.get("Planning Time")) if isinstance(root, dict) else None,
+            execution_time_ms=_f(root.get("Execution Time")) if isinstance(root, dict) else None,
+            total_cost=plan.total_cost if plan else None,
+            plan=plan,
+            insights=insights,
+            raw_plan=raw if isinstance(raw, list) else [raw],
+        )
+
     @staticmethod
     def to_payload(result: ExplainResult) -> dict[str, Any]:
         # Bu servis planı SONRADAN üretiyor — kaynak buna göre işaretleniyor. ANALYZE ile
         # alınan plan gerçek satır sayılarını taşır ama yine de sorgu YENİDEN çalıştırıldığı
         # için yavaşlık anındaki plan olmayabilir; ikisi ayrı etiket.
-        source = "manual_analyze" if result.analyzed else "manual_estimate"
+        source = result.source or ("manual_analyze" if result.analyzed else "manual_estimate")
         plan_dict = _plan_to_dict(result.plan) if result.plan else None
         # Faz 26 İŞ 2: sapma analizi ham EXPLAIN çıktısından yapılıyor, bizim ayrıştırdığımız
         # sadeleştirilmiş ağaçtan değil — `Actual Loops`, `Filter`, `Index Cond` gibi alanlar
