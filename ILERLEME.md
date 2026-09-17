@@ -7512,7 +7512,7 @@ Testler kendi veritabanlarını izole ediyor (diğerlerini `enabled=False` yapı
 kaç veritabanı" sayısı başka testlerden kalan kayıtlara bağlı olsaydı, test kendi
 senaryosunu değil çalışma sırasını ölçerdi.
 
-Migration: `20260921090000_collection_status.sql` (DEPLOY.md satır 45).
+Migration: `20260916090500_collection_status.sql` (DEPLOY.md satır 45).
 
 ## Faz 30 — İŞ 2: SQL Server analizlerinin arayüz karşılığı
 
@@ -7763,7 +7763,7 @@ SQL Server (`program_name`) bu commit'e dahil değil; gerekçe SORULAR.md'de.
 
 ## Faz 31 — Commit 2: İŞ 1 — index önerisi artık üretiliyor
 
-**Migration:** `supabase/migrations/20260922090000_index_advice_watches.sql` (DEPLOY.md #46).
+**Migration:** `supabase/migrations/20260916090600_index_advice_watches.sql` (DEPLOY.md #46).
 
 Üç ayrı sebep, üç ayrı katman. Hepsi PG 17.11 ve 15.19'da, süper kullanıcı ve yalnızca
 `pg_monitor` rolüyle doğrulandı (`tests/test_index_advice_live_postgres.py`, 54 test).
@@ -7906,7 +7906,7 @@ eklendi. Mevcut alanların hiçbiri kaldırılmadı.
 
 ## Faz 31 — Commit 3: İŞ 2 — plan kaynağı önceliklendirmesi
 
-**Migration:** `supabase/migrations/20260923090000_wait_query_signature_samples.sql` (DEPLOY.md #47).
+**Migration:** `supabase/migrations/20260916090700_wait_query_signature_samples.sql` (DEPLOY.md #47).
 
 `GET /api/queries/{id}/plan-sources?sample_id=` dört kaynağı her zaman, öncelik sırasıyla ve
 her birinin durumuyla döndürüyor; arayüzde `PlanSourcePanel` (sorgu satırındaki eski
@@ -7997,6 +7997,124 @@ sunucularda onay uyarısı bunu söylüyor (`leaves_values_in_server_statistics`
   POST ettiği ANALYZE yanıtında planın sorgusu olarak.
 - Örnekleyici queryid başına EN YAVAŞ çalıştırmayı tutuyor (ölçüldü: 0,6 ve 1,6 sn'lik iki
   çalıştırmadan 1,6 sn'lik saklandı, süre 1602 / 1592 ms).
+
+## Faz 31 — Commit 4: zorunlu düzeltmeler, imza filtresinin ters yönü, kararlar
+
+**Migration'lar (yeni ve yeniden adlandırılan):** DEPLOY.md #41–#49. Yeni: #48
+`20260916090800_real_value_cleanup.sql`, #49 `20260916090900_slow_query_sample_origin.sql`.
+
+### 1. Migration adları gelecek tarihliydi
+
+Yalnızca Faz 31'inkiler değil, Faz 28–30'un beşi de (20260917…20260921, bugün 2026-09-16). "Son
+migration'dan sonra ve bugünden önce" koşulu bu yüzden yalnızca yeni dosyalarla sağlanamazdı; yedisi
+de sıra korunarak 2026-09-16 içine taşındı (`git mv`, DEPLOY.md tablosu ve eski/yeni ad eşlemesi,
+`supabase db push` geçmişi için düzeltme SQL'i). `tests/test_migration_order.py`: ad kuralı, gelecek
+tarih, yinelenen zaman damgası, DEPLOY tablosunun dizinle birebir ve ardışık olması. Negatif kontrol:
+eski adlarla test kırmızı.
+
+**Aynı testin yakaladığı ek hata (Commit 3'ten):** `wait_query_signatures.sample_*` ve
+`seen_bind_parameters` kolonları `migrate_schema`'ya eklenmemişti — testler sıfırdan `create_all` ile
+kurulan veritabanında geçti, VAR OLAN yerel SQLite veritabanı kırılırdı. Eklendi; test artık her
+`ADD COLUMN` migration'ının `migrate_schema` karşılığını denetliyor (93 kolondan eksik olan 6'sı
+Faz 31'indi).
+
+### 2. Canlı test ortamı elle kurulmuştu
+
+Roller ve test tabloları fixture'lardaydı ama dört dosyaya dağılmıştı; konteynerler elle ve farklı
+ayarlarla kurulmuştu (17'de track=all, 15'te hypopg yok). `scripts/live_pg.py` konteynerleri aynı
+ayarla, hypopg dahil kuruyor; `tests/live_pg.py` rolleri/şemayı/veriyi idempotent kuruyor.
+
+**Temiz konteynerde koşarken bulunan gizli hata:** `test_explain_live_postgres.py` veri eklerken
+`g %% 3` yazıyordu — PostgreSQL'de böyle bir operatör yok. Tablolar önceden var olduğu için o dal
+hiç koşmamıştı.
+
+`docker rm` + `live_pg.py up --recreate` sonrası ilk koşu (15.19 / 16.15 / 17.11): 1923 geçti,
+2 atlandı. CI: canlı testleri KOŞMUYOR (DSN ve PostgreSQL servisi yok); aynı paket DSN'siz
+1738 geçti / 84 atlandı (83'ü canlı test).
+
+### 3. lock_timeout
+
+`run_analyze_safely` işlemde `SET LOCAL lock_timeout = '2000ms'`. Test: bir oturum `orders`'ta
+ACCESS EXCLUSIVE tutarken ANALYZE isteği 15.19'da 2,03 sn, 16.15'te 2,01 sn, 17.11'de 2,04 sn'de
+400 ile düştü (statement_timeout 15 sn beklenmedi). Negatif kontrol: lock_timeout kaldırılınca
+15,03 sn bekledi ve test kırmızı.
+
+### 4. İmza filtresinin ters yönü
+
+**Ölçüm (15/16/17):** dbace (imzalı) önce, uygulama FARKLI rolde sonra → pg_stat_statements iki ayrı
+satır (userid anahtarın parçası), uygulama satırı imzasız. AYNI rolde → tek satır, imzalı, uygulama
+çağrıları içinde.
+
+**Asıl açık dbace'in kendi seçimindeydi:** satırlar yalnızca queryid ile birleştiriliyordu. Negatif
+kontrol (ayrım kaldırılarak): varsayılan listede uygulama yükü GÖRÜNMEDİ, iç içe ve üst düzey tek
+seride birleşti.
+
+Düzeltme: toplayıcı `userid = current_user` ve `toplevel` okuyor (#49). İmzalı satır yalnızca dbace'in
+rolünden geliyorsa "dbace'in kendi sorgusu"; başka rolden geliyorsa filtrelenmiyor, "İmzalı metin,
+uygulama çağrısı" diye işaretleniyor ve index önerisi imzayı çıkararak üretiliyor. dbace/uygulama ve
+üst düzey/iç içe satırlar ayrı seri; uygulamanın üst düzey anahtarı değişmedi (derin bağlantılar).
+
+**Aynı işte bulunan iki hata (Commit 2'den):** (a) eşik izleme turu çağrı sayısını `collected_at ==`
+eşitliğiyle arıyordu; SQLite sunucu varsayılanını mikrosaniyesiz sakladığı için toplama döngüsünün
+yazdığı satırlarda sonuç hep None'dı — izleme hiç "hazır" olmazdı. (b) Son döngüde yalnızca iç içe
+satır ilk 20'ye girince iç içe çağrılar uygulama çağrısı sayılıyordu (PG 16'da yakalandı). İkisi de
+birim testiyle sabit.
+
+### 5. Sarmalayıcı kapsamı
+
+Parametre adına bakan eski denetim yerine kurulu asyncpg kaynağından çağrı grafiği: protokole SQL koyan
+ilkellere (query/prepare/bind_execute/bind_execute_many/copy_in/copy_out) ulaşan ya da sonradan SQL
+gönderen nesne döndüren her public metot. **Connection'da 19 metot; 10'u sarılıydı, 9'u DEĞİLDİ**
+(add_listener, remove_listener, reset, copy_from_table, copy_to_table, copy_records_to_table,
+set_type_codec, set_builtin_type_codec, reset_type_codec). dbace hiçbirini kullanmıyor → gerekçeli
+ENGELLENDİ.
+
+`cursor()` da engellendi: `Cursor.forward()` `MOVE FORWARD 5 __asyncpg_portal_8__` komutunu imzasız
+gönderiyor (15/16/17'de ölçüldü). `prepare()` artık sarmalanmış PreparedStatement döndürüyor
+(`cursor` orada da engelli); PreparedStatement'ın SQL gönderen altı metodu (fetch, fetchrow, fetchval,
+fetchmany, executemany, explain) canlı testte çalıştırılıp imzalı olduğu doğrulandı. Negatif kontroller:
+`from asyncpg import connect as c` gerçek app ağacına konunca test kırmızı; `import asyncpg as pg`,
+`asyncpg.connection.connect` biçimleri de yakalanıyor; yapay bir dolaylı gönderici grafikte bulunuyor.
+
+### 6. hypopg ve hypopg'siz yol
+
+PG 15'e hypopg kuruldu (atlama gerekçesi ortam eksikliğiydi; atlama kaldırıldı, yerine kurulum
+denetimi). hypopg'siz yol aynı sunucuda `dbace_nohypopg` veritabanında test ediliyor.
+
+**Ölçüm (15/16/17, aynı):** btree önerisi — hypopg ile %34 (maliyet 1167 → 771,45); hypopg'siz
+istatistik formülü %88,6 diyordu. **2,6 kat sapma.** Bankada her öneri bu yoldan geçeceği için
+hypopg yokken yüzde artık üretilmiyor; yalnızca eşitlik filtresinin pg_stats seçiciliği ("fayda
+değil") gösteriliyor (status için %50), aralık kolonları için tahmin yapılmıyor. İfade index'i:
+hypopg ile %67, hypopg'siz yüzde yok.
+
+### 7. Geriye dönük temizlik
+
+Ölçüm SQL'i (salt okunur, mevcut şemada çalışıyor; 15 ve 17'de READ ONLY işlemde doğrulandı)
+DEPLOY.md'de. #48 migration'ı dosyanın KENDİSİ çalıştırılarak doğrulandı: meta veri şeması gerçek
+PostgreSQL'de uygulamanın modellerinden kuruldu, değerli satırlar yazıldı, migration koştu —
+15/16/17'de SQL ve Python arındırıcılarının çıktısı birebir aynı, ayar kapalıyken her şey arındı,
+EXPLAIN olmayan satırlara dokunulmadı, ikinci çalıştırma hiçbir şeyi değiştirmedi, ayar açıkken
+örnekler ve planlar korundu.
+
+### Kararlar
+
+- **auto_explain planları aynı ayara bağlandı:** kapalıyken yakalama anında `strip_plan_values`;
+  mevcutlar worker'ın ilk yazımında ve #48'de. Plan ekranı sabitlerin arındırıldığını söylüyor.
+- **PG < 16'da gerçek değerli ANALYZE yalnızca track_utility=off ölçülünce açık.** Önce ölçüldü
+  (15.19): off iken track=top da all da olsa değer taşıyan kayıt 0; on iken değer kalıyor; 16.15'te
+  hiçbir birleşimde yok. Sınır testi: 15+on → kapalı, POST 400, gerekçe ve açma komutu; 15+off →
+  açık, POST 200, sunucuda değer 0; 16/17 → her iki ayarda açık. Kayıtlı sürüm 16+ ise hedefe
+  bağlanılmıyor (yakalanmış plan varken hedefe sorgu gitmemesi korunuyor).
+- **Yetkisiz kullanıcıda ifade index'i "doğrulanmadı" bölümünde**; "Gereken yetkiler" tablo başına
+  hangi yetkinin hangi ölçüm/doğrulama için gerektiğini ve tek GRANT bloğunu veriyor (pg_monitor
+  rolünde adv_users için iki neden: IMMUTABLE doğrulaması, hypopg fayda ölçümü).
+- **Bind parametreli uygulamada** plan kaynakları panelinde sebep gösteriliyor (statik testle sabit).
+
+### Test
+
+Son durum: üç sürümle (15.19/16.15/17.11) 1983 geçti, 5 atlandı (GENERIC_PLAN 15'te yok; 3 test
+diskten okuyan sorgu olmadığında atlanıyor — veri önbellekte; UI kuralı). DSN'siz 1738 geçti /
+84 atlandı. `npm run build` yeşil, tipler güncel.
 
 ## API uyumluluğu
 

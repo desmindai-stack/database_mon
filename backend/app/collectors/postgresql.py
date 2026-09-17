@@ -551,8 +551,14 @@ class PostgreSQLCollector(BaseCollector):
 
             # `plans` ve `total_plan_time`: planlama maliyeti. Çok sayıda farklı parametreyle
             # çağrılan bir sorguda planlama, yürütmenin yanında ihmal edilebilir olmayabilir.
+            # Faz 31 Commit 4: satırı kimin ürettiği ve iç içe mi olduğu. `userid` anahtarın
+            # parçası: dbace ile uygulama FARKLI rollerdeyse aynı queryid iki ayrı satır olur
+            # (PG 15/16/17'de ölçüldü). `toplevel` 14 ile geldi.
+            toplevel_expr = "s.toplevel" if version_num >= PG_VERSION_ACTIVITY_QUERY_ID else "NULL::boolean"
             common_columns = f"""
                     s.queryid::text,
+                    (s.userid = (SELECT oid FROM pg_roles WHERE rolname = current_user)) AS from_monitoring_role,
+                    {toplevel_expr} AS toplevel,
                     LEFT(s.query, 2000) AS query,
                     s.calls,
                     s.{total_col} AS total_time_ms,

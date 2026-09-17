@@ -34,6 +34,7 @@ from app.services.auto_explain import (
     parse_auto_explain_log,
 )
 from app.services.cluster_health import fetch_agent_logs
+from app.services.sql_analysis import normalize_literals, strip_plan_values
 from app.collectors.registry import get_collector
 from app.services.collection import connection_target_for
 from app.services.deadlocks import (
@@ -103,6 +104,11 @@ async def store_captured_plans(
     if not records:
         return 0
     queryid_index = await _build_queryid_index(session, instance_id)
+    # Faz 31 Commit 4 kararı: auto_explain planları gerçek değerli metin saklama ayarına bağlı.
+    # Kapalıyken (varsayılan) plan ve sorgu metni değerlerden arındırılarak yazılıyor.
+    from app.services.analysis_settings import get_analysis_settings
+
+    store_real = bool((await get_analysis_settings(session))["store_real_query_samples"])
 
     written = 0
     for record in records:
@@ -125,11 +131,11 @@ async def store_captured_plans(
                 captured_at=record.captured_at,
                 source=source,
                 duration_ms=record.duration_ms,
-                query_text=record.query_text[:MAX_QUERY_TEXT],
+                query_text=(record.query_text if store_real else normalize_literals(record.query_text))[:MAX_QUERY_TEXT],
                 query_fingerprint=key,
                 queryid=queryid_index.get(key),
                 has_actual_rows=record.has_actual_rows,
-                plan_json=record.plan_json,
+                plan_json=record.plan_json if store_real else strip_plan_values(record.plan_json),
             )
         )
         written += 1

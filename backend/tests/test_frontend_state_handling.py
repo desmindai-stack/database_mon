@@ -160,3 +160,32 @@ def test_enabling_real_value_samples_requires_confirmation():
 def test_plan_source_types_come_from_the_generated_schema():
     api = (FRONTEND / "api.ts").read_text(encoding="utf-8")
     assert 'export type PlanSources = Gen["PlanSourcesOut"];' in api
+
+
+# --- Faz 31 Commit 4: kararlar ------------------------------------------------------------
+
+
+def test_unverified_advice_is_rendered_in_its_own_section_with_the_reason():
+    """Karar: yetkisi eksik kullanıcıda ifade index'i "doğrulanmadı" etiketiyle AYRI bölümde."""
+    panel = _PANEL.read_text(encoding="utf-8")
+    assert 'a.verified === false' in panel and 'a.verified !== false' in panel
+    assert "Doğrulanmamış öneriler" in panel and "Doğrulanmadı" in panel
+    assert "a.verification_note" in panel
+
+
+def test_required_grants_list_tables_reasons_and_one_command():
+    """Karar: GRANT mesajı hangi tablolar için ve NEDEN gerektiğini açıkça yazsın."""
+    panel = _PANEL.read_text(encoding="utf-8")
+    block = panel[panel.index("function RequiredGrants"):]
+    assert "t.table" in block and "t.reasons.map" in block and "grants.command" in block
+    assert "<RequiredGrants" in panel
+
+
+def test_bind_parameter_and_track_utility_reasons_reach_the_ui_instead_of_an_empty_panel():
+    """Karar: bind parametreli uygulamada örnek yoksa arayüz boş kalmasın, gerekçeyi göstersin.
+    Gerekçe metni sunucuda üretiliyor; panel kullanılamayan her kaynağın sebebini basıyor."""
+    panel = (FRONTEND / "components" / "PlanSourcePanel.tsx").read_text(encoding="utf-8")
+    assert 'option.kind !== "unavailable" && <p className="muted-note">{option.reason}</p>' in panel
+    backend = (FRONTEND.parents[1] / "backend" / "app" / "services" / "plan_source.py").read_text(encoding="utf-8")
+    assert "PARAMETRELİ" in backend and "bind" in backend
+    assert "track_utility" in backend and "okunamadı" in backend.lower()

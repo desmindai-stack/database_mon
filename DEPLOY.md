@@ -98,13 +98,102 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 38 | `20260914090000_backup_monitoring.sql` | **YENİ** — backup_records + backup_probes (yedek izleme). CONCURRENTLY YOK |
 | 39 | `20260915090000_backup_recovery_models.sql` | **YENİ** — backup_probes.recovery_models (FULL recovery + log yedeği uyumu). CONCURRENTLY YOK |
 | 40 | `20260916090000_finding_suppression.sql` | **YENİ** — report_findings.is_root_cause/suppressed/suppressed_by + health_reports.suppression (bağımlılık bastırma). CONCURRENTLY YOK |
-| 41 | `20260917090000_maintenance_windows.sql` | **YENİ** — maintenance_windows (bakım pencereleri, planlı/plansız kesinti ayrımı). CONCURRENTLY YOK |
-| 42 | `20260918090000_sla_targets.sql` | **YENİ** — sla_targets (erişilebilirlik hedefleri ve dönem). CONCURRENTLY YOK |
-| 43 | `20260919090000_pgss_full_columns.sql` | **YENİ** — slow_query_samples'a pg_stat_statements'ın kalan 16 sütunu (I/O süresi, sapma, WAL, planlama, JIT). CONCURRENTLY YOK |
-| 44 | `20260920090000_engine_neutral_query_metrics.sql` | **YENİ** — slow_query_samples'a motordan bağımsız metrikler (CPU süresi, mantıksal/fiziksel okuma, spill, bellek izni). CONCURRENTLY YOK |
-| 45 | `20260921090000_collection_status.sql` | **YENİ** — instances'a toplama durumu (son başarılı toplama, son hata ve hata türü). CONCURRENTLY YOK |
-| 46 | `20260922090000_index_advice_watches.sql` | **YENİ** — index_advice_watches (çağrı eşiğini bekleyen index önerisi sorguları, eşik dolunca üretilen öneri). CONCURRENTLY YOK |
-| 47 | `20260923090000_wait_query_signature_samples.sql` | **YENİ** — wait_query_signatures: gerçek değerli temsili örnek (sample_query_text/duration/captured_at, ayar varsayılan KAPALI) ve seen_bind_parameters. CONCURRENTLY YOK |
+| 41 | `20260916090100_maintenance_windows.sql` | **YENİ** — maintenance_windows (bakım pencereleri, planlı/plansız kesinti ayrımı). CONCURRENTLY YOK |
+| 42 | `20260916090200_sla_targets.sql` | **YENİ** — sla_targets (erişilebilirlik hedefleri ve dönem). CONCURRENTLY YOK |
+| 43 | `20260916090300_pgss_full_columns.sql` | **YENİ** — slow_query_samples'a pg_stat_statements'ın kalan 16 sütunu (I/O süresi, sapma, WAL, planlama, JIT). CONCURRENTLY YOK |
+| 44 | `20260916090400_engine_neutral_query_metrics.sql` | **YENİ** — slow_query_samples'a motordan bağımsız metrikler (CPU süresi, mantıksal/fiziksel okuma, spill, bellek izni). CONCURRENTLY YOK |
+| 45 | `20260916090500_collection_status.sql` | **YENİ** — instances'a toplama durumu (son başarılı toplama, son hata ve hata türü). CONCURRENTLY YOK |
+| 46 | `20260916090600_index_advice_watches.sql` | **YENİ** — index_advice_watches (çağrı eşiğini bekleyen index önerisi sorguları, eşik dolunca üretilen öneri). CONCURRENTLY YOK |
+| 47 | `20260916090700_wait_query_signature_samples.sql` | **YENİ** — wait_query_signatures: gerçek değerli temsili örnek (sample_query_text/duration/captured_at, ayar varsayılan KAPALI) ve seen_bind_parameters. CONCURRENTLY YOK |
+| 48 | `20260916090800_real_value_cleanup.sql` | **YENİ** — geriye dönük temizlik: wait_query_signatures metni, (ayar kapalıysa) örnekler ve auto_explain planları, EXPLAIN satırları değerlerden arındırılır. **ÖNCE ÖLÇÜN** (aşağıda). #47'den SONRA. CONCURRENTLY YOK |
+| 49 | `20260916090900_slow_query_sample_origin.sql` | **YENİ** — slow_query_samples: from_monitoring_role, toplevel (imzalı satırın dbace'in kendi rolünden gelip gelmediği; iç içe çalıştırma). CONCURRENTLY YOK |
+
+## Faz 31: migration adları ve geriye dönük temizlik
+
+### Yeniden adlandırılan migration'lar
+
+Faz 28–31'de yedi migration gelecek tarihle adlandırılmıştı (bugün 2026-09-16 iken 20260917…
+20260923). Sıra korunarak 2026-09-16 günü içine taşındılar (#41–#47). `tests/test_migration_order.py`
+artık gelecek tarihi, yinelenen zaman damgasını ve bu tablonun dizinle birebir aynı olmasını
+denetliyor.
+
+| Eski ad | Yeni ad |
+|---|---|
+| `20260917090000_maintenance_windows.sql` | `20260916090100_maintenance_windows.sql` |
+| `20260918090000_sla_targets.sql` | `20260916090200_sla_targets.sql` |
+| `20260919090000_pgss_full_columns.sql` | `20260916090300_pgss_full_columns.sql` |
+| `20260920090000_engine_neutral_query_metrics.sql` | `20260916090400_engine_neutral_query_metrics.sql` |
+| `20260921090000_collection_status.sql` | `20260916090500_collection_status.sql` |
+| `20260922090000_index_advice_watches.sql` | `20260916090600_index_advice_watches.sql` |
+| `20260923090000_wait_query_signature_samples.sql` | `20260916090700_wait_query_signature_samples.sql` |
+
+**SQL Editor ile elle çalıştıranlar:** dosya adı hiçbir yerde kaydedilmiyor; daha önce
+çalıştırılmış bir migration'ı yeniden çalıştırmak gerekmez (hepsi `IF NOT EXISTS`).
+
+**`supabase db push` kullananlar:** geçmiş tablosu eski sürüm numaralarını tutuyor ve yeni adları
+çalıştırılmamış sanır. Uygulanmış olanları yeni numaralarla işaretleyin:
+
+```sql
+UPDATE supabase_migrations.schema_migrations SET version = CASE version
+    WHEN '20260917090000' THEN '20260916090100' WHEN '20260918090000' THEN '20260916090200'
+    WHEN '20260919090000' THEN '20260916090300' WHEN '20260920090000' THEN '20260916090400'
+    WHEN '20260921090000' THEN '20260916090500' WHEN '20260922090000' THEN '20260916090600'
+    WHEN '20260923090000' THEN '20260916090700' ELSE version END
+WHERE version BETWEEN '20260917090000' AND '20260923090000';
+```
+
+### #48'den önce: temizlik ölçümü
+
+Salt okunur. **Faz 31 migration'larından ÖNCE** (mevcut şemada) çalıştırın; sonuca göre #48'i
+bakım penceresinde mi çalıştıracağınıza karar verin — slow_query_samples'ın EXPLAIN adımı tabloyu
+bir kez tarar.
+
+```sql
+-- Faz 31 — geriye dönük temizlik ÖLÇÜMÜ (salt okunur). Faz 31 migration'larından ÖNCE çalıştırın.
+-- Desenler uygulamadaki normalize_literals ile aynı: dizgi sabiti ve sayısal sabit.
+WITH p AS (
+    SELECT '(?<![[:alnum:]_$])[Nn]?''([^'']|'''')*''' AS s,
+           '(?<![[:alnum:]_$.])-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?(?![[:alnum:]_.])' AS n
+),
+plan_strings AS (
+    -- Plan JSON'undaki METİN değerleri (maliyet/satır gibi sayısal alanlar hariç).
+    SELECT c.id, v #>> '{}' AS value
+    FROM captured_plans c
+    CROSS JOIN LATERAL jsonb_path_query(c.plan_json::jsonb, 'strict $.**') AS v
+    WHERE jsonb_typeof(v) = 'string'
+)
+SELECT '1. wait_query_signatures — toplam satır' AS olcum, count(*)::bigint AS adet FROM wait_query_signatures
+UNION ALL
+SELECT '1. wait_query_signatures — değer taşıyan query_text', count(*)
+FROM wait_query_signatures, p WHERE query_text ~ p.s OR query_text ~ p.n
+UNION ALL
+SELECT '2. captured_plans (auto_explain) — toplam plan', count(*) FROM captured_plans
+UNION ALL
+SELECT '2. captured_plans — değer taşıyan query_text', count(*)
+FROM captured_plans, p WHERE query_text ~ p.s OR query_text ~ p.n
+UNION ALL
+SELECT '2. captured_plans — plan JSON metin alanında değer taşıyan plan (yaklaşık*)', count(DISTINCT ps.id)
+FROM plan_strings ps, p WHERE ps.value ~ p.s OR ps.value ~ p.n
+UNION ALL
+SELECT '3. slow_query_samples — EXPLAIN ile başlayan satır', count(*)
+FROM slow_query_samples WHERE query ~* '^\s*(/\*.*?\*/\s*)*EXPLAIN\M'
+UNION ALL
+SELECT '3. slow_query_samples — değer taşıyan EXPLAIN satırı', count(*)
+FROM slow_query_samples, p
+WHERE query ~* '^\s*(/\*.*?\*/\s*)*EXPLAIN\M' AND (query ~ p.s OR query ~ p.n)
+UNION ALL
+SELECT '3. slow_query_samples — değer taşıyan EXPLAIN satırı, PG < 16 veritabanlarından', count(*)
+FROM slow_query_samples q JOIN instances i ON i.id = q.instance_id, p
+WHERE q.query ~* '^\s*(/\*.*?\*/\s*)*EXPLAIN\M' AND (q.query ~ p.s OR q.query ~ p.n)
+  AND coalesce(i.server_version_num, 0) < 160000
+UNION ALL
+SELECT '4. gerçek değerli metin saklama ayarı açık mı (1 = açık)', count(*)
+FROM app_settings WHERE key = 'analysis_store_real_query_samples' AND value = 'true';
+-- * "yaklaşık": plan JSON'unda yapısal ad taşıyan birkaç alan ("SubPlan 1" gibi) sayı içerebilir;
+--   migration bu alanlara dokunmuyor, ölçüm onları da sayabilir (üst sınır).
+```
+
+#48 çalıştıktan sonra aynı sorgu (1)'de ve ayar kapalıysa (2)/(3)'te **0** vermelidir.
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 

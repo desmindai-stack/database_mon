@@ -20,7 +20,6 @@ Sahte bağlantı yok. Her kaynak gerçek yolundan üretiliyor:
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import subprocess
 import time
@@ -40,14 +39,12 @@ from app.services import wait_sampling
 from app.services.auto_explain import parse_auto_explain_log
 from app.services.credentials import encrypt_secret
 from app.services.plan_capture import store_captured_plans
+from tests.live_pg import LIVE_DSNS, SKIP_REASON, prepare_live_database, target_for
 
 asyncpg = pytest.importorskip("asyncpg")
 
-_DSNS = [d.strip() for d in os.environ.get("DBACE_TEST_PG_DSN", "").split(",") if d.strip()]
-pytestmark = pytest.mark.skipif(not _DSNS, reason="Gerçek PostgreSQL yok. DBACE_TEST_PG_DSN tanımlayın.")
-
-ROLE_PASSWORD = "dbace_it_pw"
-ROLES = {"super": ("dbace_it_super", "SUPERUSER"), "monitor": ("dbace_it_monitor", "IN ROLE pg_monitor")}
+_DSNS = LIVE_DSNS
+pytestmark = pytest.mark.skipif(not _DSNS, reason=SKIP_REASON)
 
 
 def log(title, value) -> None:
@@ -59,32 +56,29 @@ def dsn(request):
     return request.param
 
 
+async def _set_track_utility(conn, value: str | None) -> None:
+    if value is None:
+        await conn.execute("ALTER SYSTEM RESET pg_stat_statements.track_utility")
+    else:
+        await conn.execute(f"ALTER SYSTEM SET pg_stat_statements.track_utility = {value}")
+    await conn.execute("SELECT pg_reload_conf()")
+    await conn.execute("SELECT pg_sleep(0.2)")
+
+
 @pytest.fixture
 async def admin(dsn):
     conn = await asyncpg.connect(dsn, statement_cache_size=0)
-    for name, attrs in ROLES.values():
-        if not await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name):
-            await conn.execute(f"CREATE ROLE {name} LOGIN PASSWORD '{ROLE_PASSWORD}' {attrs}")
-    await conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS orders (
-            id bigserial PRIMARY KEY, customer_id bigint NOT NULL, status text NOT NULL,
-            total numeric NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
-        CREATE TABLE IF NOT EXISTS ps_write_probe (id bigserial PRIMARY KEY, note text);
-        CREATE OR REPLACE FUNCTION ps_writer() RETURNS int LANGUAGE sql AS
-            $$ INSERT INTO ps_write_probe (note) VALUES ('yazıldı') RETURNING 1 $$;
-        """
-    )
-    if not await conn.fetchval("SELECT count(*) FROM orders"):
-        await conn.execute(
-            "INSERT INTO orders (customer_id, status, total, created_at) SELECT (g % 2000) + 1, "
-            "CASE WHEN g % 5 = 0 THEN 'paid' ELSE 'new' END, (g % 900)::numeric, now() - (g || ' minutes')::interval "
-            "FROM generate_series(1, 50000) g"
-        )
-        await conn.execute("ANALYZE orders")
+    await prepare_live_database(conn)
+    # PG < 16'da gerçek değerli ANALYZE yalnızca track_utility=off ÖLÇÜLÜRSE açık (Faz 31 Commit 4).
+    # Bu dosyanın örnek testleri o yolu sınıyor; sınırın KENDİSİ ayrı testte (on/off/16).
+    below_16 = int(await conn.fetchval("SHOW server_version_num")) < 160000
+    if below_16:
+        await _set_track_utility(conn, "off")
     try:
         yield conn
     finally:
+        if below_16:
+            await _set_track_utility(conn, None)
         await conn.close()
 
 
@@ -109,11 +103,7 @@ async def client():
 
 
 def _target(dsn: str, role: str) -> ConnectionTarget:
-    url = urlparse(dsn)
-    return ConnectionTarget(
-        host=url.hostname or "127.0.0.1", port=url.port or 5432,
-        database=(url.path or "/postgres").lstrip("/"), username=ROLES[role][0], password=ROLE_PASSWORD,
-    )
+    return target_for(dsn, role)
 
 
 async def _version(admin) -> str:
@@ -355,7 +345,14 @@ async def test_captured_plan_wins_and_no_explain_is_sent(admin, client, dsn):
     assert sources["recommended"] == "captured"
     assert [o["kind"] for o in sources["options"]] == ["captured", "sample_analyze", "generic", "unavailable"]
     assert plan["source"] == "auto_explain" and "Gerçek çalıştırmadan yakalandı" in plan["source_label"]
-    assert dbace_rows == [], "yakalanmış plan varken hedef sunucuya hiçbir sorgu gönderilmemeli"
+    version_num = int(await admin.fetchval("SHOW server_version_num"))
+    plan_statements = [r["query"] for r in dbace_rows if any(k in r["query"] for k in ("EXPLAIN", "PREPARE", "EXECUTE"))]
+    assert plan_statements == [], "yakalanmış plan varken plan almak için hiçbir ifade gönderilmemeli"
+    if version_num >= 160000:
+        assert dbace_rows == [], "PG 16+'da hedefe hiçbir sorgu gönderilmemeli"
+    else:
+        # PG < 16: yalnızca track_utility bekçisinin ayar okuması (karar gereği ölçülmek zorunda).
+        assert all("current_setting" in r["query"] for r in dbace_rows), [r["query"] for r in dbace_rows]
 
 
 async def test_sample_analyze_through_the_api_returns_actual_rows_and_is_labelled(admin, client, dsn):
@@ -454,20 +451,64 @@ async def test_statement_timeout_cancels_a_long_analyze(admin, client, dsn, monk
     assert "çalıştırma sınırını aştı" in detail and "geri alındı" in detail
 
 
-async def test_analyze_always_rolls_back_measured_in_pg_stat_statements(admin, client, dsn):
+async def test_lock_timeout_gives_up_quickly_behind_an_access_exclusive_lock(admin, client, dsn):
+    """Tabloda ACCESS EXCLUSIVE tutulurken ANALYZE statement_timeout'u (15 sn) BEKLEMEDEN,
+    lock_timeout (2 sn) ile düşmeli — kuyrukta bekleyip uygulama sorgularını bekletmemeli."""
     instance, row, *_ = await _prepare_sample(admin, client, dsn, store=True)
-    await admin.execute("SELECT pg_stat_statements_reset()")
-    assert (await _explain_sample(client, instance.id, row)).status_code == 200
-    rows = await admin.fetch(
-        "SELECT s.query, s.calls FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
-        "WHERE r.rolname = 'dbace_it_super' AND s.toplevel ORDER BY s.query"
-    )
+    locker = await asyncpg.connect(dsn, statement_cache_size=0)
+    try:
+        await locker.execute("BEGIN")
+        await locker.execute("LOCK TABLE orders IN ACCESS EXCLUSIVE MODE")
+        started = time.monotonic()
+        response = await _explain_sample(client, instance.id, row)
+        elapsed = time.monotonic() - started
+        held = await admin.fetchval(
+            "SELECT count(*) FROM pg_locks l JOIN pg_class c ON c.oid = l.relation "
+            "WHERE c.relname = 'orders' AND l.mode = 'AccessExclusiveLock' AND l.granted"
+        )
+    finally:
+        await locker.execute("ROLLBACK")
+        await locker.close()
+    detail = response.json().get("detail", "")
+    log(await _version(admin), f"ACCESS EXCLUSIVE tutuluyor={held == 1} → {response.status_code} {elapsed:.2f} sn {detail[:90]!r}")
+    assert held == 1, "kilit gerçekten tutulmuyordu — test bir şey kanıtlamıyor"
+    assert response.status_code == 400
+    assert elapsed < explain_module.ANALYZE_STATEMENT_TIMEOUT_MS / 1000 / 2, "statement_timeout'a kadar beklendi"
+    assert explain_module.ANALYZE_LOCK_TIMEOUT_MS / 1000 <= elapsed + 0.5
+    assert "kilitlenemedi" in detail
+
+
+async def test_analyze_always_rolls_back_measured_in_pg_stat_statements(admin, client, dsn):
+    """Geri alma güvenli çalıştırıcının özelliği; pg_stat_statements'ta işlem komutlarını görmek için
+    bu rolde track_utility=on gerekiyor (PG < 16'da dosya genelinde off tutuluyor). Bu yüzden
+    çalıştırıcı doğrudan, rol düzeyinde track_utility=on ile çağrılıyor."""
+    from app.collectors.query_marker import connect_marked
+    from app.services.explain_service import run_analyze_safely
+
+    instance, row, marker, fast, slow = await _prepare_sample(admin, client, dsn, store=True)
+    await admin.execute("ALTER ROLE dbace_it_super SET pg_stat_statements.track_utility = on")
+    try:
+        await admin.execute("SELECT pg_stat_statements_reset()")
+        t = _target(dsn, "super")
+        conn = await connect_marked(host=t.host, port=t.port, database=t.database, user=t.username,
+                                    password=t.password, statement_cache_size=0)
+        try:
+            await run_analyze_safely(conn, _slow_sql(marker, slow, 0.01))
+        finally:
+            await conn.close()
+        rows = await admin.fetch(
+            "SELECT s.query FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
+            "WHERE r.rolname = 'dbace_it_super' AND s.toplevel ORDER BY s.query"
+        )
+    finally:
+        await admin.execute("ALTER ROLE dbace_it_super RESET pg_stat_statements.track_utility")
     texts = [r["query"] for r in rows]
     log(await _version(admin), texts)
     assert any("BEGIN READ ONLY" in t for t in texts)
     assert any(t.strip().endswith("ROLLBACK") or "ROLLBACK;" in t for t in texts)
     assert not any("COMMIT" in t for t in texts), "ANALYZE işlemi hiçbir koşulda commit edilmemeli"
     assert any("SET LOCAL statement_timeout" in t for t in texts)
+    assert any("SET LOCAL lock_timeout" in t for t in texts)
 
 
 async def test_viewer_cannot_run_analyze(admin, client, dsn):
@@ -573,29 +614,73 @@ async def test_measure_explain_footprint_in_pg_stat_statements(admin, client, ds
 
 
 
-# --- Ölçülen sızıntı: PG 15 EXPLAIN metnindeki değeri pg_stat_statements'ta tutuyor ----------
+# --- PG < 16: track_utility ölçülmeden gerçek değerli ANALYZE yok (Faz 31 Commit 4) --------
 
 
-async def test_dbace_never_stores_the_value_even_where_the_server_keeps_it(admin, client, dsn):
-    """ÖLÇÜLDÜ: PG 15 yardımcı ifadelerin sabitlerini pg_stat_statements'ta normalize etmiyor
-    (16.15 / 17.11 / 18.6 ediyor). Gerçek değerli örnekle EXPLAIN ANALYZE sonrası:
-    - sunucunun kendi görünümü sürüme göre değeri tutuyor ya da tutmuyor (belgeleniyor),
-    - dbace'in GERÇEK toplama döngüsü o satırı değer OLMADAN saklıyor (her sürümde),
-    - plan kaynakları uyarısı sürüme göre doğru."""
+async def test_below_16_analyze_requires_measured_track_utility_off_and_16_does_not(admin, client, dsn):
+    """Karar: PG < 16'da yalnızca track_utility=off ÖLÇÜLEREK doğrulanırsa açık. Sınır: 15 kapalı/açık,
+    16 açık. Açıkken sunucuda değer taşıyan kayıt kalmadığı da ölçülüyor."""
+    version_num = int(await admin.fetchval("SHOW server_version_num"))
     instance, row, marker, fast, slow = await _prepare_sample(admin, client, dsn, store=True)
-    sources = await _options(client, instance.id, row.id)
-    await admin.execute("SELECT pg_stat_statements_reset()")
-    assert (await _explain_sample(client, instance.id, row)).status_code == 200
+    results = {}
+    try:
+        for setting in ("on", "off"):
+            await _set_track_utility(admin, setting)
+            option = (await _options(client, instance.id, row.id))["by_kind"]["sample_analyze"]
+            await admin.execute("SELECT pg_stat_statements_reset()")
+            response = await _explain_sample(client, instance.id, row)
+            leaked = await admin.fetchval(
+                "SELECT count(*) FROM pg_stat_statements WHERE query LIKE $1", f"%{slow}%"
+            )
+            results[setting] = (option["available"], response.status_code, leaked, option["reason"], option["detail"])
+    finally:
+        await _set_track_utility(admin, "off" if version_num < 160000 else None)
 
-    server_texts = [
-        r["query"] for r in await admin.fetch(
-            "SELECT s.query FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
-            "WHERE r.rolname = 'dbace_it_super' AND s.query LIKE '%EXPLAIN (ANALYZE%'"
+    for setting, (available, status, leaked, reason, detail) in results.items():
+        log(
+            f"{await _version(admin)} track_utility={setting}",
+            f"seçenek açık={available} POST={status} sunucuda değer taşıyan kayıt={leaked} "
+            f"detay={ {k: detail.get(k) for k in ('server_version_num', 'track_utility', 'utility_values_normalized')} } "
+            f"sebep={(reason or '')[:110]!r}",
         )
-    ]
-    server_keeps_value = any(slow in t for t in server_texts)
+    if version_num < 160000:
+        available, status, _, reason, _ = results["on"]
+        assert not available and status == 400 and "track_utility = 'on'" in reason
+        available, status, leaked, _, detail = results["off"]
+        assert available and status == 200 and leaked == 0 and detail["track_utility"] == "off"
+    else:
+        for setting in ("on", "off"):
+            available, status, leaked, _, detail = results[setting]
+            assert available and status == 200 and leaked == 0 and detail["utility_values_normalized"] is True
 
-    await _collect(instance.id)
+
+async def test_dbace_side_never_stores_the_value_even_if_the_server_does(admin, client, dsn):
+    """Derinlemesine savunma: bekçi ATLANIP imzalı EXPLAIN (ANALYZE) doğrudan güvenli çalıştırıcıyla
+    gönderiliyor ve sunucu metni değerle saklıyor olsa bile (PG 15 + track_utility=on), dbace'in GERÇEK
+    toplama döngüsü o satırı değer OLMADAN yazıyor."""
+    from app.collectors.query_marker import connect_marked
+    from app.services.explain_service import run_analyze_safely
+
+    version_num = int(await admin.fetchval("SHOW server_version_num"))
+    instance, row, marker, fast, slow = await _prepare_sample(admin, client, dsn, store=True)
+    if version_num < 160000:
+        await _set_track_utility(admin, "on")
+    try:
+        await admin.execute("SELECT pg_stat_statements_reset()")
+        t = _target(dsn, "super")
+        conn = await connect_marked(host=t.host, port=t.port, database=t.database, user=t.username,
+                                    password=t.password, statement_cache_size=0)
+        try:
+            await run_analyze_safely(conn, _slow_sql(marker, slow, 0.01))
+        finally:
+            await conn.close()
+        server_keeps_value = bool(await admin.fetchval(
+            "SELECT count(*) FROM pg_stat_statements WHERE query LIKE $1", f"%{slow}%"
+        ))
+        await _collect(instance.id)
+    finally:
+        if version_num < 160000:
+            await _set_track_utility(admin, "off")
     async with SessionLocal() as session:
         stored = (
             await session.execute(
@@ -604,14 +689,7 @@ async def test_dbace_never_stores_the_value_even_where_the_server_keeps_it(admin
                 )
             )
         ).scalars().all()
-
-    version_num = int(await admin.fetchval("SELECT current_setting('server_version_num')"))
-    flag = sources["by_kind"]["sample_analyze"]["detail"]["leaves_values_in_server_statistics"]
-    log(
-        await _version(admin),
-        f"sunucu değeri tutuyor={server_keeps_value} | dbace'te saklanan={stored} | uyarı bayrağı={flag}",
-    )
+    log(await _version(admin), f"sunucu değeri tutuyor={server_keeps_value} | dbace'te saklanan={stored}")
     assert server_keeps_value is (version_num < 160000), "ölçülen sürüm davranışı değişmiş"
-    assert flag is (version_num < 160000)
     assert stored, "toplama dbace'in EXPLAIN satırını okumalıydı — test bir şey kanıtlamıyor"
     assert all(slow not in text for text in stored), "gerçek değer dbace'in veritabanına yazılmış"

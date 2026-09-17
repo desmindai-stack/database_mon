@@ -1535,7 +1535,20 @@ export default function InstanceDetailPage() {
                             if (next && q.queryid) loadQueryHistoryDetail(q.queryid);
                           }}
                         >
-                          <td className="query-cell">{queryFingerprint(q.query)}</td>
+                          <td className="query-cell">
+                            {queryFingerprint(q.query)}
+                            {/* Faz 31 Commit 4: imzalı metin ama uygulama çağrısı — gizlenmedi. */}
+                            {q.marker_conflict && (
+                              <span className="tag warn" title={q.marker_note ?? undefined}>
+                                İmzalı metin, uygulama çağrısı
+                              </span>
+                            )}
+                            {q.toplevel === false && (
+                              <span className="tag" title="Fonksiyon ya da başka bir ifadenin içinden çalıştırılmış; ayrı sayaç">
+                                iç içe
+                              </span>
+                            )}
+                          </td>
                           <td>{q.calls.toLocaleString()}</td>
                           <td>{q.mean_time_ms.toFixed(2)}</td>
                           <td>{q.total_time_ms.toFixed(1)}</td>

@@ -2397,20 +2397,25 @@ gösterge paneli, veritabanı yükü kırılımı. Plan kaynakları GET yanıtı
 metni içermiyor. Metin yalnızca admin'in onaylayarak çalıştırdığı EXPLAIN ANALYZE yanıtında
 görünüyor.
 
-**Anahtarın KAPSAMADIĞI yerler (açık konular):**
+**Anahtarın kapsamı — Faz 31 Commit 4 kararlarıyla kapanan konular:**
 
-- **auto_explain planları** (`captured_plans`, Faz 26) planın "Query Text" alanında ve filtre
-  koşullarında gerçek değer taşıyor; bu anahtardan bağımsız saklanıyor ve DPA'da gösteriliyor.
-  Aynı anahtara bağlanmalı mı, yoksa ayrı mı yönetilmeli?
-- **İzlenen sunucunun kendi pg_stat_statements'ı:** PostgreSQL 15 (ölçüldü; 16.15/17.11/18.6
-  değil) EXPLAIN ifadesindeki sabitleri normalize etmiyor. Gerçek değerli örnekle ANALYZE
-  çalıştırılınca değer o sunucunun pg_stat_statements görünümünde kalıyor. dbace kendi
-  tarafında arındırıyor ama sunucudaki kopyaya dokunamaz; onay uyarısı 16 öncesinde bunu
-  söylüyor. 16 öncesi sunucularda bu seçenek tamamen kapatılmalı mı?
-- **Uygulamanın kendi yardımcı ifadeleri:** aynı PG 15 davranışı uygulamanın `EXPLAIN`,
-  `SET x = '…'` gibi ifadelerindeki değerleri de pg_stat_statements'ta bırakıyor ve dbace
-  bunları `slow_query_samples`'a yazıyor. Yalnızca dbace'in kendi (imzalı) satırları
-  arındırılıyor; uygulamanınkiler dokunulmadan saklanıyor.
+- ~~auto_explain planları anahtardan bağımsız~~ → **KARAR: aynı anahtara bağlı.** Kapalıyken
+  plan ve sorgu metni yakalanırken değerlerden arındırılıyor (`strip_plan_values`); mevcut
+  planlar worker'ın ilk yazımında ve #48 migration'ında arındırılıyor. Plan ekranı sabitlerin
+  arındırıldığını söylüyor.
+- ~~PG < 16'da sunucunun pg_stat_statements'ında değer kalıyor~~ → **KARAR: PG < 16'da gerçek
+  değerli ANALYZE yalnızca `pg_stat_statements.track_utility = off` ÖLÇÜLEREK doğrulanırsa açık;
+  okunamıyorsa kapalı.** Ölçüldü (15.19): track_utility=off iken `track` top da all da olsa
+  değer taşıyan kayıt 0; on iken değer kalıyor. 16.15/17.11'de hiçbir birleşimde kalmıyor.
+  Arayüz kapalıyken gerekçeyi ve açma komutunu gösteriyor.
+
+**Hâlâ açık:**
+
+- **Uygulamanın kendi yardımcı ifadeleri:** PG 15 uygulamanın `EXPLAIN`, `SET x = '…'` gibi
+  ifadelerindeki değerleri de pg_stat_statements'ta bırakıyor ve dbace bunları
+  `slow_query_samples`'a yazıyor. Çalışma anında yalnızca dbace'in kendi (imzalı) satırları
+  arındırılıyor. #48 migration'ı EXPLAIN ile başlayan TÜM satırları arındırıyor; `SET` gibi
+  diğerleri kapsam dışı.
 - **Örnek saklama süresi** genel saklama politikasına (`last_seen_at`) bağlı; örnekler için
   daha kısa ayrı bir süre gerekebilir.
 
@@ -2421,3 +2426,63 @@ gömenler) düşüyor.
 
 **Değiştirmek için gereken:** müşteri bazında (çok müşterili yapıda) anahtar; şu an kurulum
 geneli tek anahtar.
+
+## Faz 31 Commit 4: yetkisi eksik izleme kullanıcısında ifade index'i — KARAR
+
+**Karar:** "doğrulanmadı" etiketi ve gerekçesiyle AYRI bölümde öneriliyor (önceden hiç
+önerilmiyordu). Doğrulama (IMMUTABLE denetimi) `CREATE TEMP TABLE … (LIKE tablo)` gerektiriyor ve
+PostgreSQL bunun için kaynak tabloda SELECT istiyor (ölçüldü: pg_monitor rolünde TEMP VAR,
+SELECT YOK). Öneri raporu "Gereken yetkiler" bölümünde tablo başına hangi yetkinin HANGİ
+ölçüm/doğrulama için gerektiğini ve tek bir GRANT bloğunu veriyor.
+
+## Faz 31 Commit 4: hypopg'siz ortamda fayda yüzdesi üretilmiyor
+
+**Ölçüm:** aynı sorgu ve veride istatistik formülü "%88,6 iyileşme" diyordu; hypopg ile ölçülen
+%34 (PG 15/16/17 aynı). 2,6 kat sapma. Bankada hypopg olmayacağı için her öneri bu yoldan geçerdi.
+
+**Karar (bu turda verildi, geri alınabilir):** hypopg yokken yüzde yok. Yalnızca eşitlik
+filtrelerinin pg_stats seçiciliği (1/n_distinct, planlayıcının temeli) "fayda değil, seçicilik"
+diye gösteriliyor; aralık filtreleri için tahmin yapılmıyor. Önceki aralık/sıralama katsayıları
+(×3, ×5) kanıtsızdı ve kaldırıldı.
+
+**Açık soru:** bankada fayda nasıl gösterilecek? Seçenekler: hypopg'nin onaylanması, test
+ortamında ölçüm, ya da index oluşturulduktan sonra EXPLAIN (ANALYZE) karşılaştırması.
+
+## Faz 31 Commit 4: imza filtresinin sınırı — izleme rolü uygulamayla paylaşılıyorsa
+
+**Ölçüldü (15/16/17):** dbace ile uygulama FARKLI rollerdeyse pg_stat_statements aynı queryid'yi
+iki ayrı satırda tutuyor; dbace artık satırın `userid`'sine bakıyor (imzalı ama dbace dışı
+rolden gelen satır gizlenmiyor, "İmzalı metin, uygulama çağrısı" diye işaretleniyor). **AYNI rol**
+paylaşılıyorsa çağrılar kaynakta tek satırda birleşiyor ve ayrılamıyor — uygulama çağrıları
+dbace'in imzalı metni altında "sistem sorgusu" sayılabilir.
+
+**Kurulum önerisi (on-prem):** dbace'e ayrı bir izleme rolü verin; uygulamanın rolünü
+kullandırmayın.
+
+## Faz 31 Commit 4: engellenen asyncpg yolları
+
+`MarkedConnection` şu metotları ENGELLİYOR (çağrılırsa hata; imzasız SQL göndermiyor):
+`cursor` ve `PreparedStatement.cursor` (Cursor.forward `MOVE FORWARD` komutunu imzasız gönderiyor
+— 15/16/17'de ölçüldü), `add_listener`, `remove_listener`, `reset`, `copy_from_table`,
+`copy_to_table`, `copy_records_to_table`, `set_type_codec`, `set_builtin_type_codec`,
+`reset_type_codec`. dbace'in PostgreSQL kodu hiçbirini kullanmıyor. Biri gerekirse önce imzalı
+bir yolu yazılmalı.
+
+## Faz 31 Commit 4: CI canlı PostgreSQL testlerini koşmuyor
+
+CI'da `DBACE_TEST_PG_DSN` ve PostgreSQL servisi yok; 83 canlı test atlanıyor (ölçüldü). Bu
+özellik sınıfındaki hataların hepsi yalnızca canlı testte yakalandı. **Açık soru:** CI'a
+PostgreSQL servis konteyneri (15/16/17 matrisi, hypopg paketiyle) eklensin mi? Süreyi ~5 dk
+uzatır.
+
+## Faz 31 — on-prem kurulum notları (#48 temizlik migration'ı)
+
+- **Önce ölç:** DEPLOY.md "#48'den önce: temizlik ölçümü" SQL'i salt okunur; sonucu görmeden
+  #48'i çalıştırmayın.
+- **Sıra:** #47 → #48 → #49. #48, #47'nin eklediği `sample_*` kolonlarına dokunuyor.
+- **Süre:** #48'in slow_query_samples adımı tabloyu bir kez tarıyor; satır sayısı yüksekse bakım
+  penceresinde çalıştırın. Yardımcı fonksiyonlar `pg_temp`'te, iz bırakmıyor; idempotent.
+- **Ayarı açık tutan kurulum:** gerçek değerli metin saklama AÇIKSA (#48 ölçümündeki (4) = 1)
+  örnekler ve auto_explain planları korunuyor, yalnızca sözlük metni ve EXPLAIN satırları
+  arındırılıyor.
+- **Uygulama sonrası:** aynı ölçüm (1)'de ve ayar kapalıysa (2)/(3)'te 0 vermelidir.

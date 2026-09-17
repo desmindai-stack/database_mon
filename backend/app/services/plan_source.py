@@ -24,13 +24,17 @@ metne gömen uygulamalar için var. Sebep metni bu ayrımı yapıyor.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collectors.base import classify_connection_error
+from app.collectors.query_marker import connect_marked
 from app.models import CapturedPlan, Instance, SlowQuerySample, WaitQuerySignature
 from app.services.analysis_settings import get_analysis_settings
+from app.services.collection import connection_target_for
 from app.services.auto_explain import MANAGED_SERVICE_GUIDANCE, plan_source_caveat, plan_source_label
 from app.services.explain_service import ANALYZE_STATEMENT_TIMEOUT_MS, validate_analyzable, validate_explainable
 from app.services.generic_plan import has_placeholders
@@ -194,25 +198,17 @@ async def _sample_option(session, instance, queryid, *, store_enabled: bool) -> 
     except ValueError as exc:
         return _option(KIND_SAMPLE, False, label=label, reason=f"Örnek çalıştırılamaz: {exc}")
     duration = signature.sample_duration_ms
-    version = instance.server_version_num
-    # Ölçüldü: PG 15 yardımcı ifadelerin (EXPLAIN) sabitlerini pg_stat_statements'ta normalize
-    # ETMİYOR; 16+ ediyor. Sürüm bilinmiyorsa en kötü durum varsayılıyor.
-    leaves_values = version is None or version < 160_000
-    leak_warning = (
-        " DİKKAT: bu sunucu PostgreSQL 16'dan eski (ya da sürüm bilinmiyor) — çalıştırılan EXPLAIN "
-        "ifadesi, içindeki gerçek değerlerle birlikte sunucunun kendi pg_stat_statements "
-        "görünümünde kalır (16 ve sonrası değerleri normalize eder). dbace kendi tarafında bu "
-        "metni değerlerden arındırarak saklar."
-        if leaves_values
-        else ""
-    )
+    guard = await _utility_statement_guard(instance)
+    if not guard.allowed:
+        return _option(KIND_SAMPLE, False, label=label, reason=guard.reason, detail=guard.detail)
     return _option(
         KIND_SAMPLE, True, label=label,
         caveat=(
             "Sorgu izlenen sunucuda GERÇEKTEN çalıştırılacak"
             + (f"; örneklenen çalıştırma en az {duration:.0f} ms sürüyordu" if duration else "")
             + f". Salt-okunur işlemde, {ANALYZE_STATEMENT_TIMEOUT_MS // 1000} sn zaman aşımıyla "
-            "çalıştırılır ve geri alınır. " + (plan_source_caveat(KIND_SAMPLE) or "") + leak_warning
+            "çalıştırılır ve geri alınır. " + (plan_source_caveat(KIND_SAMPLE) or "")
+            + (f" {guard.note}" if guard.note else "")
         ),
         # ÖRNEK METİN BURADA YOK: bu uç viewer'a da açık. Metin yalnızca admin'in POST ettiği
         # EXPLAIN yanıtında (planın sorgusu olarak) görünüyor.
@@ -221,9 +217,107 @@ async def _sample_option(session, instance, queryid, *, store_enabled: bool) -> 
             "duration_ms": duration,
             "timeout_ms": ANALYZE_STATEMENT_TIMEOUT_MS,
             "requires_admin": True,
-            "leaves_values_in_server_statistics": leaves_values,
+            **guard.detail,
         },
     )
+
+
+@dataclass
+class _UtilityGuard:
+    allowed: bool
+    reason: str | None = None
+    note: str | None = None
+    detail: dict[str, Any] = field(default_factory=dict)
+
+
+#: PostgreSQL 16'dan itibaren pg_stat_statements yardımcı ifadelerin (EXPLAIN) sabitlerini
+#: normalize ediyor. ÖLÇÜLDÜ (15.19 / 16.15 / 17.11 / 18.6, track=top ve all):
+#:   15 + track_utility=on  → EXPLAIN metni gerçek değerle saklanıyor
+#:   15 + track_utility=off → değer taşıyan kayıt YOK
+#:   16+                     → her durumda değer taşıyan kayıt yok
+PG_VERSION_UTILITY_NORMALIZED = 160_000
+
+
+async def _utility_statement_guard(instance: Instance) -> _UtilityGuard:
+    """PG < 16'da gerçek değerli ANALYZE yalnızca `track_utility=off` ÖLÇÜLEREK doğrulanırsa açık.
+
+    Karar (Faz 31 Commit 4): değer ölçülemiyorsa kapalı sayılıyor. Kayıtlı sürüm 16+ ise hedefe
+    bağlanılmıyor; bilinmiyor ya da 16 öncesiyse sürüm ve ayar hedeften ÖLÇÜLÜYOR.
+    """
+    stored = instance.server_version_num
+    if stored is not None and stored >= PG_VERSION_UTILITY_NORMALIZED:
+        # Bilinen sürüm 16+: ölçülecek bir şey yok, hedefe BAĞLANILMIYOR (yakalanmış plan varken
+        # sunucuya hiçbir şey gönderilmemesi gerekiyor). Sürüm her toplama döngüsünde güncelleniyor.
+        return _UtilityGuard(True, detail={"server_version_num": stored, "utility_values_normalized": True})
+    try:
+        conn = await connect_marked(**_connect_kwargs(instance))
+    except Exception as exc:  # noqa: BLE001
+        return _UtilityGuard(
+            False,
+            reason=(
+                "Sunucuya bağlanılamadığı için pg_stat_statements.track_utility ayarı ölçülemedi; "
+                f"gerçek değerli ANALYZE kapalı sayılıyor. ({classify_connection_error(exc)})"
+            ),
+            detail={"track_utility": None},
+        )
+    try:
+        row = await conn.fetchrow(
+            "SELECT current_setting('server_version_num')::int AS version, "
+            "current_setting('pg_stat_statements.track_utility', true) AS track_utility"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _UtilityGuard(
+            False,
+            reason=f"pg_stat_statements.track_utility okunamadı ({str(exc)[:160]}); kapalı sayılıyor.",
+            detail={"track_utility": None},
+        )
+    finally:
+        await conn.close()
+
+    version, track_utility = int(row["version"]), row["track_utility"]
+    detail = {"server_version_num": version, "track_utility": track_utility}
+    if version >= PG_VERSION_UTILITY_NORMALIZED:
+        return _UtilityGuard(True, detail=detail | {"utility_values_normalized": True})
+    if track_utility is None:
+        return _UtilityGuard(
+            False,
+            reason=(
+                "Bu sunucu PostgreSQL 16'dan eski ve pg_stat_statements.track_utility ayarı "
+                "OKUNAMADI (eklenti yüklü değil ya da ayar görünmüyor). 16 öncesinde EXPLAIN metni "
+                "gerçek değerleriyle pg_stat_statements'ta saklanabildiği için, ayarın kapalı "
+                "olduğu ölçülemeden gerçek değerli ANALYZE açılmıyor."
+            ),
+            detail=detail,
+        )
+    if track_utility != "off":
+        return _UtilityGuard(
+            False,
+            reason=(
+                f"Bu sunucu PostgreSQL 16'dan eski ve pg_stat_statements.track_utility = "
+                f"'{track_utility}'. Bu sürümde EXPLAIN ifadesi, içindeki gerçek değerlerle birlikte "
+                "sunucunun pg_stat_statements görünümünde saklanır (ölçüldü). Gerçek değerli ANALYZE "
+                "bu yüzden kapalı. Açmak için sunucuda: "
+                "ALTER SYSTEM SET pg_stat_statements.track_utility = off; SELECT pg_reload_conf();"
+            ),
+            detail=detail,
+        )
+    return _UtilityGuard(
+        True,
+        note=(
+            "PostgreSQL 16'dan eski sunucu: pg_stat_statements.track_utility = off ölçüldü — "
+            "EXPLAIN metni gerçek değerleriyle saklanmıyor."
+        ),
+        detail=detail | {"utility_values_normalized": False},
+    )
+
+
+def _connect_kwargs(instance: Instance) -> dict[str, Any]:
+    target = connection_target_for(instance)
+    return {
+        "host": target.host, "port": target.port, "database": target.database,
+        "user": target.username, "password": target.password, "timeout": 10,
+        "statement_cache_size": 0,
+    }
 
 
 def _generic_option(instance: Instance, query: str) -> dict[str, Any]:

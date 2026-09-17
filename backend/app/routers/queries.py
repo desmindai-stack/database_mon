@@ -42,13 +42,14 @@ from app.services.plan_analysis import (
     annotate_plan_dict,
 )
 from app.services.advice import advice_to_dict
+from app.services.analysis_settings import get_analysis_settings
 from app.services.index_advice_watch import list_watches, run_index_advice, summarize
 from app.services.plan_source import KIND_SAMPLE, captured_unavailable_reason, resolve_plan_sources
 from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
 from app.services.noise_settings import get_noise_settings
-from app.services.slow_query_selection import DEFAULT_WINDOW_HOURS, select_slow_queries
+from app.services.slow_query_selection import DEFAULT_WINDOW_HOURS, MARKER_CONFLICT_NOTE, select_slow_queries
 from app.services.slow_query_status import get_slow_query_availability
 
 router = APIRouter(prefix="/queries", tags=["queries"])
@@ -285,6 +286,9 @@ def selection_to_out(selection, window_start: datetime, window_end: datetime) ->
                 exec_sys_time=e.sample.exec_sys_time,
                 is_system=e.is_system,
                 system_reason=e.system_reason,
+                marker_conflict=e.marker_conflict,
+                marker_note=MARKER_CONFLICT_NOTE if e.marker_conflict else None,
+                toplevel=e.sample.toplevel,
                 sample_count=e.sample_count,
                 stddev_time_ms=e.sample.stddev_time_ms,
                 min_time_ms=e.sample.min_time_ms,
@@ -510,15 +514,25 @@ async def get_captured_plan(
         analysis_advice=advice_to_dict(advice_for_analysis(analysis)),
         source=row.source,
         source_label=plan_source_label(row.source),
-        source_caveat=(
-            None
-            if row.has_actual_rows
-            else (
-                "Bu plan gerçek çalıştırmadan yakalandı ama auto_explain.log_analyze kapalı "
-                "olduğu için GERÇEK SATIR SAYISI yok — yalnızca planlayıcının tahmini var. "
-                "Tahmini/gerçek sapma analizi bu planda yapılamaz."
+        source_caveat=" ".join(
+            part
+            for part in (
+                None
+                if row.has_actual_rows
+                else (
+                    "Bu plan gerçek çalıştırmadan yakalandı ama auto_explain.log_analyze kapalı "
+                    "olduğu için GERÇEK SATIR SAYISI yok — yalnızca planlayıcının tahmini var. "
+                    "Tahmini/gerçek sapma analizi bu planda yapılamaz."
+                ),
+                None
+                if (await get_analysis_settings(db))["store_real_query_samples"]
+                else (
+                    "Gerçek değerli metin saklama kapalı: plandaki sabitler ($1, $2 …) "
+                    "değerlerden arındırıldı; plan yapısı ve ölçümler değişmedi."
+                ),
             )
-        ),
+            if part
+        ) or None,
         captured_at=row.captured_at,
     )
 

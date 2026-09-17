@@ -275,27 +275,25 @@ denetim testleriyle korunuyor: `test_navigation_integrity.py`,
 ### Gerçek PostgreSQL'e karşı testler
 
 Bazı davranışlar sahte bağlantıyla **doğrulanamaz**, çünkü kırılan şey sorgunun sunucuya
-hangi protokolle gittiği. EXPLAIN özelliği tam da bu yüzden üç tur boyunca "testler yeşil"
-görünürken canlıda çalışmadı.
+hangi protokolle gittiği, katalogun gerçek cevabı ya da pg_stat_statements'ın gerçekte ne
+sakladığı. EXPLAIN özelliği bu yüzden üç tur boyunca "testler yeşil" görünürken canlıda çalışmadı.
 
-`tests/test_explain_live_postgres.py` gerçek bir sunucuya bağlanır; `DBACE_TEST_PG_DSN`
-tanımlı değilse **atlanır** (CI'da PostgreSQL yok).
+Canlı testler (`tests/*_live_postgres.py`, `tests/test_real_value_cleanup_migration_live.py`)
+`DBACE_TEST_PG_DSN` tanımlı değilse **atlanır**. Konteynerler elle değil betikle kurulur —
+sürümler aynı ayarlarla, hypopg dahil; roller ve test verisi testlerin kendisi tarafından
+idempotent kuruluyor (`tests/live_pg.py`):
 
 ```bash
-docker run -d --name dbace-pg17 -e POSTGRES_PASSWORD=dbace -e POSTGRES_DB=dbace \
-    -p 55432:5432 postgres:17
-# Index önerisinin fayda ölçümü için (isteğe bağlı):
-docker exec -u root dbace-pg17 apt-get update -qq
-docker exec -u root dbace-pg17 apt-get install -y -qq postgresql-17-hypopg
-docker exec dbace-pg17 psql -U postgres -d dbace -c "CREATE EXTENSION hypopg"
-
 cd backend
-DBACE_TEST_PG_DSN=postgresql://postgres:dbace@127.0.0.1:55432/dbace \
-    .venv/Scripts/python.exe -m pytest tests/test_explain_live_postgres.py -v
+python scripts/live_pg.py up                 # PG 15, 16, 17 — eksiği tamamlar
+python scripts/live_pg.py up --recreate      # silip sıfırdan kurar
+# yazdırdığı DSN'i kullanın:
+DBACE_TEST_PG_DSN=postgresql://postgres:dbace@127.0.0.1:55433/dbace,postgresql://postgres:dbace@127.0.0.1:55434/dbace,postgresql://postgres:dbace@127.0.0.1:55432/dbace \
+    .venv/Scripts/python.exe -m pytest tests/ -q
 ```
 
-Birden çok sürümü tek koşuda denemek için DSN'leri virgülle ayırın. Faz 29'da PostgreSQL
-**17.11** ve **15.19** ile koşuldu.
+Her sürümde `dbace_nohypopg` adlı, hypopg'SUZ ikinci bir veritabanı da kuruluyor — hypopg'nin
+olmayacağı ortamlar (banka) bu yoldan geçiyor ve ayrı test ediliyor.
 
 ### Tarayıcı testleri (Playwright)
 
@@ -331,6 +329,8 @@ npx playwright show-trace test-results/<klasör>/trace.zip
 | Frontend (Node 20) | `tsc -b` + `npm run build` |
 | Tip sürüklenmesi | OpenAPI'den tipleri yeniden üretir, commit'lenmiş hâliyle karşılaştırır |
 | Tarayıcı testleri | Push'ta `@critical` akışlar; gecelik ve elle tetiklemede tam paket. Hata kanıtları artifact olarak yüklenir. |
+
+**CI canlı PostgreSQL testlerini KOŞMUYOR:** iş akışında `DBACE_TEST_PG_DSN` ve PostgreSQL servisi yok. Faz 31 Commit 4 sonunda ölçüldü: aynı paket DSN'siz 1738 geçti / 84 atlandı (83'ü canlı test), üç sürümle (15/16/17) 1983 geçti / 5 atlandı. Canlı testler yerelde `scripts/live_pg.py` ile koşuluyor.
 
 ## API tipleri (TypeScript)
 

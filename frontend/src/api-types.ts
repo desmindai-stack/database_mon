@@ -3878,6 +3878,8 @@ export interface components {
             columns: string[];
             /** Estimated Improvement Pct */
             estimated_improvement_pct: number | null;
+            /** Estimated Selectivity Pct */
+            estimated_selectivity_pct?: number | null;
             /** Existing Indexes */
             existing_indexes: string[];
             /** Has Hypopg Estimate */
@@ -3900,6 +3902,13 @@ export interface components {
             schema_name: string;
             /** Table Name */
             table_name: string;
+            /** Verification Note */
+            verification_note?: string | null;
+            /**
+             * Verified
+             * @default true
+             */
+            verified: boolean;
         };
         /** IndexAdviceReportOut */
         IndexAdviceReportOut: {
@@ -3912,6 +3921,7 @@ export interface components {
              * @default []
              */
             predicates: components["schemas"]["IndexPredicateOut"][];
+            required_grants?: components["schemas"]["IndexRequiredGrantsOut"] | null;
             /**
              * Status
              * @default no_advice
@@ -4023,6 +4033,24 @@ export interface components {
             unusable_reason?: string | null;
             /** Usable */
             usable: boolean;
+        };
+        /** IndexRequiredGrantTableOut */
+        IndexRequiredGrantTableOut: {
+            /** Privilege */
+            privilege: string;
+            /** Reasons */
+            reasons: string[];
+            /** Table */
+            table: string;
+        };
+        /** IndexRequiredGrantsOut */
+        IndexRequiredGrantsOut: {
+            /** Command */
+            command: string;
+            /** Note */
+            note: string;
+            /** Tables */
+            tables: components["schemas"]["IndexRequiredGrantTableOut"][];
         };
         /** InstanceCreate */
         InstanceCreate: {
@@ -5604,6 +5632,13 @@ export interface components {
             logical_reads?: number | null;
             /** Logical Writes */
             logical_writes?: number | null;
+            /**
+             * Marker Conflict
+             * @default false
+             */
+            marker_conflict: boolean;
+            /** Marker Note */
+            marker_note?: string | null;
             /** Max Time Ms */
             max_time_ms?: number | null;
             /** Mean Time Ms */
@@ -5661,6 +5696,8 @@ export interface components {
             temp_blks_read: number | null;
             /** Temp Blks Written */
             temp_blks_written: number | null;
+            /** Toplevel */
+            toplevel?: boolean | null;
             /** Total Plan Time Ms */
             total_plan_time_ms?: number | null;
             /** Total Time Ms */

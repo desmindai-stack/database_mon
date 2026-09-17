@@ -89,20 +89,44 @@ class MarkedConnection:
     çağrıların hiçbiri değişmek zorunda kalmıyor.
     """
 
-    #: SQL metnini İLK konumsal argüman olarak alan asyncpg metotları. Bu liste elle
-    #: tutulmuyor gibi düşünülmeli: `tests/test_query_marker.py` asyncpg.Connection'ı
-    #: inceleyip SQL alan HER metodun burada sarıldığını doğruluyor. İlk yazımda
-    #: `fetchmany` ve `copy_from_query` eksikti ve o test sayesinde yakalandı.
+    #: İmzalanarak sarılan, SQL gönderen metotlar.
     SQL_METHODS = (
         "execute", "executemany", "fetch", "fetchmany", "fetchval", "fetchrow",
-        "prepare", "cursor", "copy_from_query",
+        "prepare", "copy_from_query", "transaction",
     )
+
+    #: SQL gönderen ama SARILMAYAN metotlar — çağrılırsa hata verir, sessizce imzasız SQL
+    #: göndermez. Liste ELLE TUTULMUYOR: `tests/test_query_marker.py` kurulu asyncpg'nin
+    #: kaynağından çağrı grafiği çıkarıp (protokole `query/prepare/bind_execute/copy_*` gönderen
+    #: her public metot) her birinin ya sarılı ya da burada gerekçeli olduğunu doğruluyor.
+    #: Faz 31 Commit 4'te bu analiz, önceki (parametre adına bakan) denetimin kaçırdığı dokuz
+    #: metodu buldu. dbace'in PostgreSQL kodu hiçbirini kullanmıyor.
+    BLOCKED_METHODS = {
+        "cursor": (
+            "Cursor.forward() `MOVE FORWARD` komutunu protokole doğrudan, imzasız gönderiyor "
+            "(PG 15/16/17'de ölçüldü); imleç sorgusunu imzalamak yetmiyor."
+        ),
+        "add_listener": "LISTEN komutunu ham bağlantının fetch'iyle gönderiyor.",
+        "remove_listener": "UNLISTEN komutunu ham bağlantının fetch'iyle gönderiyor.",
+        "reset": "RESET ALL / UNLISTEN / CLOSE ALL komutlarını ham bağlantıyla gönderiyor.",
+        "copy_from_table": "COPY komutunu içeride kuruyor; metne imza eklenemiyor.",
+        "copy_to_table": "COPY komutunu içeride kuruyor; metne imza eklenemiyor.",
+        "copy_records_to_table": "COPY komutunu içeride kuruyor; metne imza eklenemiyor.",
+        "set_type_codec": "Tür tanıma (introspection) sorgularını ham bağlantıyla gönderiyor.",
+        "set_builtin_type_codec": "Tür tanıma (introspection) sorgularını ham bağlantıyla gönderiyor.",
+        "reset_type_codec": "Tür tanıma (introspection) sorgularını ham bağlantıyla gönderiyor.",
+    }
 
     def __init__(self, conn: Any) -> None:
         self._conn = conn
 
     def __getattr__(self, name: str) -> Any:
         # Yalnızca yukarıda sarılmayanlar buraya düşer.
+        if name in MarkedConnection.BLOCKED_METHODS:
+            raise AttributeError(
+                f"MarkedConnection.{name} kullanılamaz: {MarkedConnection.BLOCKED_METHODS[name]} "
+                "İzlenen sunucuya imzasız SQL gidebilecek bir yol açmak yerine engelleniyor."
+            )
         return getattr(self._conn, name)
 
     @property
@@ -133,7 +157,8 @@ class MarkedConnection:
         return await self._conn.fetchrow(tag(query), *args, **kwargs)
 
     async def prepare(self, query: str, *args: Any, **kwargs: Any) -> Any:
-        return await self._conn.prepare(tag(query), *args, **kwargs)
+        # Dönen nesne de sarılıyor: PreparedStatement.cursor() aynı imzasız MOVE yoluna çıkıyor.
+        return MarkedPreparedStatement(await self._conn.prepare(tag(query), *args, **kwargs))
 
     def transaction(self, **kwargs: Any) -> Any:
         """İşlem nesnesi SARMALAYICIYA bağlanıyor, ham bağlantıya değil.
@@ -175,10 +200,25 @@ class MarkedConnection:
     def _top_xact(self, value: Any) -> None:
         self._conn._top_xact = value
 
-    def cursor(self, query: str, *args: Any, **kwargs: Any) -> Any:
-        # `cursor()` coroutine DEĞİL: bir CursorFactory döndürüyor ve `async for` ile
-        # kullanılıyor. `await` eklemek onu bozardı.
-        return self._conn.cursor(tag(query), *args, **kwargs)
+
+class MarkedPreparedStatement:
+    """`prepare()` sonucu. Hazırlanan metin zaten imzalı; fetch/fetchrow/fetchval/fetchmany/
+    executemany o metni çalıştırıyor, `explain()` onu gömüyor — canlı testte her biri doğrulandı.
+    Tek açık `cursor()`: imlecin `forward()` metodu MOVE komutunu imzasız gönderiyor."""
+
+    BLOCKED_METHODS = {
+        "cursor": MarkedConnection.BLOCKED_METHODS["cursor"],
+    }
+
+    def __init__(self, statement: Any) -> None:
+        self._statement = statement
+
+    def __getattr__(self, name: str) -> Any:
+        if name in MarkedPreparedStatement.BLOCKED_METHODS:
+            raise AttributeError(
+                f"MarkedPreparedStatement.{name} kullanılamaz: {MarkedPreparedStatement.BLOCKED_METHODS[name]}"
+            )
+        return getattr(self._statement, name)
 
 
 async def connect_marked(**kwargs: Any) -> MarkedConnection:

@@ -41,6 +41,13 @@ _ANALYZE_ALLOWED_START = re.compile(r"^\s*(with|select|values|table)\b", re.IGNO
 #: yürütüldüğü için bu süre kadar CPU/IO harcayabilir; sınır aşılırsa sunucu iptal eder.
 ANALYZE_STATEMENT_TIMEOUT_MS = 15_000
 
+#: EXPLAIN ANALYZE'ın bir kilit için en fazla ne kadar BEKLEYEBİLECEĞİ (Faz 31 Commit 4).
+#: statement_timeout tek başına yetmiyor: tabloda ACCESS EXCLUSIVE tutan bir işlem (ALTER TABLE,
+#: VACUUM FULL, REINDEX) varken sorgu 15 sn boyunca kuyrukta bekler — ve kuyruktaki bu bekleyiş,
+#: ARKASINA gelen uygulama sorgularını da bekletir (kilit kuyruğu sırayla ilerler). İzleme
+#: aracının canlı iş yükünü kilit kuyruğunda tutması kabul edilemez; kısa sürede vazgeçiyoruz.
+ANALYZE_LOCK_TIMEOUT_MS = 2_000
+
 
 class _AlwaysRollback(Exception):
     """İşlemi geri almak için içeriden fırlatılıyor — başarılı çalıştırmada bile."""
@@ -58,6 +65,8 @@ async def run_analyze_safely(conn, query: str) -> Any:
     3. **Her durumda ROLLBACK** — başarılı çalıştırmada bile işlem geri alınıyor; geçici
        tablo, danışma kilidi ya da oturum durumu bırakılmıyor.
     4. **statement_timeout** — işlem içinde `SET LOCAL`; sorgu sınırı aşarsa sunucu iptal eder.
+    5. **lock_timeout** — kilit bekleyişi kısa tutuluyor; ACCESS EXCLUSIVE tutan bir işlemin
+       arkasında kuyruğa girip uygulama sorgularını da bekletmemek için.
 
     Faz 31 öncesinde elle EXPLAIN ANALYZE doğrudan (işlemsiz, salt-okunur olmadan)
     çalıştırılıyordu; gerçek değerli örnek yolu eklenirken iki yol bu fonksiyonda birleşti.
@@ -66,6 +75,7 @@ async def run_analyze_safely(conn, query: str) -> Any:
     try:
         async with conn.transaction(readonly=True):
             await conn.execute(f"SET LOCAL statement_timeout = '{ANALYZE_STATEMENT_TIMEOUT_MS}ms'")
+            await conn.execute(f"SET LOCAL lock_timeout = '{ANALYZE_LOCK_TIMEOUT_MS}ms'")
             captured["plan"] = await conn.fetchval(f"EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) {query}")
             raise _AlwaysRollback
     except _AlwaysRollback:
@@ -77,6 +87,14 @@ async def run_analyze_safely(conn, query: str) -> Any:
 def _humanize_analyze_error(exc: Exception) -> str:
     """ANALYZE yolunun hataları: zaman aşımı burada PLANLAMA değil ÇALIŞTIRMA sınırıdır."""
     message = str(exc)
+    if "lock timeout" in message.lower():
+        return (
+            f"Sorgunun okuduğu bir tablo {ANALYZE_LOCK_TIMEOUT_MS / 1000:g} sn içinde kilitlenemedi "
+            "(başka bir işlem tabloyu yazmaya ya da şemasını değiştirmeye kilitlemiş — ör. ALTER TABLE, "
+            "VACUUM FULL, REINDEX). EXPLAIN ANALYZE beklemek yerine vazgeçti: beklemeye devam etseydi "
+            "arkasındaki uygulama sorgularını da kilit kuyruğunda bekletirdi. İşlem geri alındı; "
+            "kilit bırakıldıktan sonra tekrar deneyin."
+        )
     if "statement timeout" in message.lower():
         return (
             f"Sorgu {ANALYZE_STATEMENT_TIMEOUT_MS / 1000:g} sn çalıştırma sınırını aştı ve sunucu "

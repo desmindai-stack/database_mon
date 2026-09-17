@@ -58,6 +58,13 @@ from app.services.sql_predicates import (
 
 logger = logging.getLogger(__name__)
 
+#: Yetki gerekçeleri — "Gereken yetkiler" bölümünde tablo başına listeleniyor.
+GRANT_REASON_STATS = "seçicilik: PostgreSQL pg_stats görünümünde tablo okuma yetkisi olmayan kolonları göstermiyor"
+GRANT_REASON_BENEFIT = "fayda ölçümü: hypopg ile EXPLAIN, sorgunun okuduğu tabloda SELECT yetkisi istiyor"
+GRANT_REASON_IMMUTABLE = (
+    "ifade index'i doğrulaması: IMMUTABLE denetimi geçici tabloda CREATE TEMP TABLE … (LIKE tablo) gerektiriyor ve PostgreSQL bunun için kaynak tabloda SELECT yetkisi istiyor"
+)
+
 #: Ayar okunamazsa kullanılan varsayılan. Geçerli değer `analysis_settings`'ten gelir.
 DEFAULT_MIN_SAMPLE_CALLS = 5
 
@@ -105,6 +112,13 @@ class IndexAdvice:
     index_kind: str = "btree"
     #: Neyin ölçülemediği ve neden ("pg_stats bu kolonu göstermiyor: SELECT yetkisi yok").
     measurement_notes: list[str] = field(default_factory=list)
+    #: hypopg yokken: eşitlik filtrelerinin pg_stats'tan seçiciliği (satırların yüzde kaçı).
+    #: FAYDA DEĞİL — bkz. `_measure`.
+    estimated_selectivity_pct: float | None = None
+    #: False = sunucuda DOĞRULANAMADI (ör. ifade index'inin IMMUTABLE olduğu yetki eksikliğinden
+    #: denetlenemedi). Arayüz bu önerileri ayrı bölümde, gerekçesiyle gösteriyor.
+    verified: bool = True
+    verification_note: str | None = None
 
 
 @dataclass
@@ -126,6 +140,8 @@ class AdviceResult:
     #: Eşik değerlendirmesi yapıldıysa: (şu anki çağrı, eşik).
     calls_now: int | None = None
     threshold: int | None = None
+    #: Ölçüm ya da doğrulama için gereken yetkiler: tablo → NEDEN gerektiği (Faz 31 Commit 4).
+    required_grants: dict[str, set[str]] = field(default_factory=dict)
 
 
 class PostgreSQLIndexAdvisor:
@@ -265,6 +281,7 @@ class PostgreSQLIndexAdvisor:
                 by_table.setdefault(pred.source, []).append(pred)
 
         recommendations: list[IndexAdvice] = []
+        self._grants: dict[str, set[str]] = {}
         for source, preds in by_table.items():
             info = await _table_info(conn, source)
             if info is None:
@@ -328,6 +345,7 @@ class PostgreSQLIndexAdvisor:
             recommendations=recommendations,
             reasons=list(reasons.values()),
             predicates=predicates,
+            required_grants=self._grants,
         )
 
     async def _resolve_tables(self, conn, analysis, reasons) -> dict[tuple[str, str], str]:
@@ -469,26 +487,32 @@ class PostgreSQLIndexAdvisor:
         Sunucunun kendisine sormak hem kesin hem de sözdizimi hatalarını da yakalıyor. Geçici
         tablo boş ve işlem geri alınıyor; gerçek tabloya kilit alınmıyor.
         """
+        verified = True
+        verification_note = None
         if not info.can_select:
             # Doğrulama (geçici tabloda CREATE INDEX) `CREATE TEMP TABLE ... (LIKE tablo)`
             # gerektiriyor ve PostgreSQL bunun için kaynak tabloda SELECT yetkisi istiyor —
             # gerçek sunucuda ölçüldü: TEMP yetkisi VAR, SELECT yok → "permission denied for
-            # table". Başarısız olacağı bilinen denemeyi yapmak yerine sebebi doğrudan söylüyoruz.
-            for pred in preds:
-                pred.mark_unusable(
-                    f"İfade index'inin geçerliliği (IMMUTABLE olup olmadığı) ölçülemedi: izleme "
-                    f"kullanıcısının {info.qualified} tablosuna SELECT yetkisi yok ve PostgreSQL "
-                    "doğrulama için bunu istiyor. Doğrulanmamış bir ifade index'i önerilmiyor. "
-                    f"Çözüm: GRANT SELECT ON {info.qualified} TO <izleme_kullanıcısı>;"
-                )
-            return None
-        verdict = await _probe_expression_index(conn, info, expression)
-        if not verdict.ok:
-            for pred in preds:
-                pred.mark_unusable(verdict.reason)
-            return None
-
-        canonical = verdict.canonical_key
+            # table". Karar (Faz 31 Commit 4): öneri YİNE üretiliyor ama "doğrulanmadı" etiketiyle
+            # ve ayrı bölümde; kullanıcı hangi denetimin yapılamadığını görüyor.
+            self._need_grant(info, GRANT_REASON_IMMUTABLE)
+            verified = False
+            verification_note = (
+                f"DOĞRULANMADI: '{expression}' ifadesinin IMMUTABLE olduğu (yani index'lenebildiği) "
+                f"sunucuda denetlenemedi — izleme kullanıcısının {info.qualified} tablosuna SELECT "
+                "yetkisi yok. Sonucu oturum ayarına bağlı bir ifade (ör. timestamptz üzerinde "
+                "date_trunc) CREATE INDEX sırasında 'functions in index expression must be marked "
+                "IMMUTABLE' hatası verir. Uygulamadan önce bir test ortamında deneyin ya da "
+                "gereken yetkiyi verip öneriyi yeniden alın."
+            )
+            canonical = None
+        else:
+            verdict = await _probe_expression_index(conn, info, expression)
+            if not verdict.ok:
+                for pred in preds:
+                    pred.mark_unusable(verdict.reason)
+                return None
+            canonical = verdict.canonical_key
         for idx in info.indexes:
             if canonical and _indexdef_key(idx["indexdef"]) == canonical:
                 for pred in preds:
@@ -505,12 +529,14 @@ class PostgreSQLIndexAdvisor:
             index_ddl=ddl,
             reason=(
                 f"Filtre kolonun kendisine değil bir ifadeye uygulanıyor ({expression}). Normal "
-                f"bir '{column}' index'i bu koşulda KULLANILMAZ; ifade index'i gerekir. "
-                "İfadenin IMMUTABLE olduğu sunucuda doğrulandı."
+                f"bir '{column}' index'i bu koşulda KULLANILMAZ; ifade index'i gerekir."
+                + (" İfadenin IMMUTABLE olduğu sunucuda doğrulandı." if verified else "")
             ),
             estimated_improvement_pct=None,
             existing_indexes=[r["indexdef"] for r in info.indexes],
             index_kind="expression",
+            verified=verified,
+            verification_note=verification_note,
         )
         advice.measurement_notes.append(
             "İfade index'i sorgudaki ifadeyle BİREBİR aynı yazılmalı; farklı bir sabit "
@@ -576,17 +602,23 @@ class PostgreSQLIndexAdvisor:
         )
         return advice
 
+    def _need_grant(self, info, reason: str) -> None:
+        self._grants.setdefault(info.qualified, set()).add(reason)
+
     # --- Ölçüm ----------------------------------------------------------------------------
 
     async def _measure(self, conn, env, info, advice, ordered_cols, kinds_by_col, query_text, *,
                        hypo_body: str, use_stats: bool = True) -> None:
         """Fayda tahmini — önce hypopg (ölçüm), yoksa istatistik (tahmin). İkisi de yoksa None."""
         if not info.can_select:
+            if use_stats:
+                self._need_grant(info, GRANT_REASON_STATS)
+            if env.has_hypopg:
+                self._need_grant(info, GRANT_REASON_BENEFIT)
             advice.measurement_notes.append(
-                f"Seçicilik ölçülemedi: izleme kullanıcısının {info.qualified} tablosuna SELECT "
-                "yetkisi yok. PostgreSQL pg_stats görünümünde bu kolonları göstermiyor ve "
-                "EXPLAIN çalıştırılamıyor. Öneri sorgu yapısına dayanıyor; faydası ölçülmedi. "
-                f"Çözüm: GRANT SELECT ON {info.qualified} TO <izleme_kullanıcısı>;"
+                f"Seçicilik ve fayda ölçülemedi: izleme kullanıcısının {info.qualified} tablosuna "
+                "SELECT yetkisi yok. Öneri sorgu yapısına dayanıyor. Gereken yetkiler ve nedenleri "
+                "'Gereken yetkiler' bölümünde."
             )
 
         if env.has_hypopg and info.can_select:
@@ -605,21 +637,38 @@ class PostgreSQLIndexAdvisor:
                     "Fayda (hypopg) ölçülemedi: " + humanize_postgres_error(str(exc))
                 )
         elif not env.has_hypopg:
+            # YÜZDE ÜRETİLMİYOR (Faz 31 Commit 4). Önceden istatistikten bir "tahmini
+            # iyileştirme" yüzdesi hesaplanıyordu. Aynı sorgu ve veriyle ölçüldü (PG 15/16/17):
+            # istatistik formülü %88,6 diyordu, hypopg ile ölçülen %34 — 2,6 kat sapma. hypopg'nin
+            # kurulu olmayacağı (banka) ortamda her öneri bu yoldan geçerdi.
             advice.measurement_notes.append(
-                "hypopg kurulu değil: fayda ÖLÇÜLMEDİ. Aşağıdaki yüzde, istatistiklerden "
-                "hesaplanan bir TAHMİN."
+                "hypopg kurulu değil: fayda ÖLÇÜLMEDİ ve yüzde üretilmiyor — istatistikten "
+                "hesaplanan yüzde, ölçülen faydadan büyük ölçüde sapıyordu. Faydayı görmek için "
+                "hypopg kurulu bir test ortamında ya da index'i oluşturduktan sonra "
+                "EXPLAIN (ANALYZE) ile karşılaştırın."
             )
 
         if not use_stats or not info.can_select or not ordered_cols:
             return
-        selectivity, missing = await _estimate_selectivity(conn, info, ordered_cols, kinds_by_col)
+        selectivity, missing, range_columns = await _estimate_selectivity(conn, info, ordered_cols, kinds_by_col)
         if missing:
             advice.measurement_notes.append(
                 f"İstatistik yok ({', '.join(missing)}): tablo hiç ANALYZE edilmemiş olabilir. "
-                f"Tahmin üretilmedi. Çözüm: ANALYZE {info.qualified};"
+                f"Çözüm: ANALYZE {info.qualified};"
             )
             return
-        advice.estimated_improvement_pct = _estimate_improvement(info.row_count, ordered_cols, kinds_by_col, selectivity)
+        if selectivity is not None:
+            advice.estimated_selectivity_pct = round(selectivity * 100, 3)
+            advice.measurement_notes.append(
+                f"pg_stats'a göre eşitlik filtreleri tablonun yaklaşık %{advice.estimated_selectivity_pct:g} "
+                f"satırına denk geliyor ({info.row_count:,} satırdan). Bu bir fayda ölçümü değil; "
+                "planlayıcının kullandığı istatistikten okunan seçicilik."
+            )
+        if range_columns:
+            advice.measurement_notes.append(
+                f"Aralık filtreleri ({', '.join(range_columns)}) değere bağlı; seçicilikleri "
+                "tahmin edilmedi."
+            )
 
     async def _hypopg_estimate(self, conn, qualified: str, body: str, query_text: str):
         # hypopg'un sanal index'i yalnızca onu yaratan oturumda yaşar; işlem, havuzlayıcı
@@ -800,11 +849,14 @@ def _system_reason(detail: str) -> NoAdviceReason:
     )
 
 
-async def _estimate_selectivity(conn, info: _TableInfo, ordered_cols, kinds_by_col) -> tuple[float, list[str]]:
-    """Önde gelen kolonların kaba seçiciliği ve istatistiği OLMAYAN kolonlar.
+async def _estimate_selectivity(conn, info: _TableInfo, ordered_cols, kinds_by_col):
+    """Eşitlik filtrelerinin pg_stats'tan seçiciliği.
 
-    İstatistiği olmayan kolon için artık varsayılan 0.1 UYDURULMUYOR; çağıran bu kolonlar
-    varsa tahmin üretmiyor.
+    Döner: (seçicilik ya da None, istatistiği OLMAYAN kolonlar, aralık kolonları).
+    Yalnızca eşitlik/IN/join/IS NULL kolonları hesaba katılıyor: `1 / n_distinct` PostgreSQL
+    planlayıcısının da kullandığı temel. Aralık ve sıralama kolonları için değer bilinmeden
+    seçicilik söylenemez — önceki "×3 / ×5" katsayıları uydurmaydı ve kaldırıldı.
+    İstatistiği olmayan kolon için varsayılan UYDURULMUYOR.
     """
     rows = await conn.fetch(
         "SELECT attname, n_distinct, null_frac FROM pg_stats "
@@ -816,45 +868,27 @@ async def _estimate_selectivity(conn, info: _TableInfo, ordered_cols, kinds_by_c
     stats = {r["attname"]: r for r in rows}
     missing = [c for c in ordered_cols if c not in stats]
     if missing:
-        return 1.0, missing
+        return None, missing, []
+
+    equality = {KIND_EQ, KIND_IN, KIND_JOIN, KIND_IS_NULL}
+    range_columns = [c for c in ordered_cols if not (kinds_by_col.get(c, set()) & equality)]
+    equality_columns = [c for c in ordered_cols if kinds_by_col.get(c, set()) & equality]
+    if not equality_columns:
+        return None, [], range_columns
 
     combined = 1.0
     row_count = max(info.row_count, 1)
-    for col in ordered_cols:
-        kinds = kinds_by_col.get(col, set())
+    for col in equality_columns:
         n_distinct = stats[col]["n_distinct"]
         null_frac = float(stats[col]["null_frac"] or 0)
         if not n_distinct:
             sel = 1.0
         elif n_distinct < 0:
-            sel = max(0.001, min(1.0, 1.0 / (abs(n_distinct) * row_count)))
+            sel = min(1.0, 1.0 / (abs(n_distinct) * row_count))
         else:
-            sel = max(0.001, min(1.0, 1.0 / float(n_distinct)))
-        if kinds & {KIND_EQ, KIND_IN, KIND_JOIN, KIND_IS_NULL}:
-            pass
-        elif KIND_RANGE in kinds:
-            sel = min(0.3, max(0.01, sel * 3))
-        else:
-            sel = min(0.5, max(0.01, sel * 5))
-        combined *= sel * (1 - null_frac) if null_frac < 1 else sel
-    return max(0.001, combined), []
-
-
-def _estimate_improvement(row_count, ordered_cols, kinds_by_col, selectivity) -> float:
-    if row_count < 1000:
-        return 10.0
-    base = (1 - selectivity) * 80.0
-    if row_count > 1_000_000:
-        base += 10.0
-    elif row_count > 100_000:
-        base += 7.0
-    elif row_count > 10_000:
-        base += 4.0
-    if ordered_cols and KIND_EQ in kinds_by_col.get(ordered_cols[0], set()):
-        base += 5.0
-    if any(KIND_JOIN in k for k in kinds_by_col.values()):
-        base += 5.0
-    return min(95.0, max(10.0, base))
+            sel = min(1.0, 1.0 / float(n_distinct))
+        combined *= sel * (1 - null_frac)
+    return combined, [], range_columns
 
 
 def _total_cost(plan: Any) -> float | None:

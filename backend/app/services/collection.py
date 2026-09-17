@@ -208,6 +208,8 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
                 instance_id=instance.id,
                 queryid=row.get("queryid"),
                 query=row["query"],
+                from_monitoring_role=row.get("from_monitoring_role"),
+                toplevel=row.get("toplevel"),
                 calls=int(row.get("calls") or 0),
                 total_time_ms=float(row.get("total_time_ms") or 0),
                 mean_time_ms=float(row.get("mean_time_ms") or 0),

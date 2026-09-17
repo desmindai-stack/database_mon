@@ -19,10 +19,8 @@ ve onları dbace'in sorgularından ayırmanın tek güvenilir yolu `userid`:
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
 import pytest
 
@@ -36,16 +34,17 @@ from app.services.credentials import encrypt_secret
 from app.services.explain_service import PostgreSQLExplainService
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.prerequisites import check_postgresql_prerequisites
+from tests.live_pg import LIVE_DSNS, ROLES, SKIP_REASON, prepare_live_database, target_for
 
 asyncpg = pytest.importorskip("asyncpg")
 
-_DSNS = [d.strip() for d in os.environ.get("DBACE_TEST_PG_DSN", "").split(",") if d.strip()]
+_DSNS = LIVE_DSNS
 
-pytestmark = pytest.mark.skipif(
-    not _DSNS, reason="Gerçek PostgreSQL yok. DBACE_TEST_PG_DSN tanımlayın."
-)
+#: PreparedStatement'ın SQL gönderen metotları — bu dosya HER birini gerçek sunucuda çalıştırıyor.
+#: `tests/test_query_marker.py` kurulu asyncpg'den çıkardığı listeyle bu kümeyi karşılaştırıyor.
+PREPARED_STATEMENT_METHODS_EXERCISED = ("explain", "executemany", "fetch", "fetchmany", "fetchrow", "fetchval")
 
-ROLE_PASSWORD = "dbace_it_pw"
+pytestmark = pytest.mark.skipif(not _DSNS, reason=SKIP_REASON)
 
 #: İstemciden İMZALANAMAYAN iç içe (toplevel=false) ifadeler. Bunları dbace göndermiyor:
 #: bir eklenti, dbace'in (imzalı) çağrısı sırasında sunucu içinden SPI ile çalıştırıyor.
@@ -55,10 +54,6 @@ EXTENSION_INTERNAL_STATEMENTS = {
     # PG 17.11'de doğrulandı: `/* dbace */ SELECT hypopg_create_index(...)` tek başına
     # çalıştırıldığında bu ifade toplevel=false olarak düşüyor.
     "SELECT max(oid) FROM pg_catalog.pg_class WHERE oid < $1": "hypopg_create_index iç sorgusu",
-}
-ROLES = {
-    "super": ("dbace_it_super", "SUPERUSER"),
-    "monitor": ("dbace_it_monitor", "IN ROLE pg_monitor"),
 }
 
 
@@ -70,17 +65,7 @@ def dsn(request):
 @pytest.fixture
 async def admin(dsn):
     conn = await asyncpg.connect(dsn, statement_cache_size=0)
-    for name, attrs in ROLES.values():
-        exists = await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name)
-        if not exists:
-            await conn.execute(f"CREATE ROLE {name} LOGIN PASSWORD '{ROLE_PASSWORD}' {attrs}")
-    await conn.execute(
-        "CREATE TABLE IF NOT EXISTS marker_probe (id int PRIMARY KEY, note text)"
-    )
-    await conn.execute(
-        "INSERT INTO marker_probe SELECT g, 'n'||g FROM generate_series(1, 100) g "
-        "ON CONFLICT DO NOTHING"
-    )
+    await prepare_live_database(conn)
     try:
         yield conn
     finally:
@@ -88,14 +73,7 @@ async def admin(dsn):
 
 
 def _target(dsn: str, role: str) -> ConnectionTarget:
-    url = urlparse(dsn)
-    return ConnectionTarget(
-        host=url.hostname or "127.0.0.1",
-        port=url.port or 5432,
-        database=(url.path or "/postgres").lstrip("/"),
-        username=ROLES[role][0],
-        password=ROLE_PASSWORD,
-    )
+    return target_for(dsn, role)
 
 
 async def _server_label(admin) -> str:
@@ -258,3 +236,80 @@ async def test_every_statement_dbace_sends_is_marked(admin, dsn, role):
     assert top, "hiç kayıt yok — gerçek yollar çalışmadı, test bir şey kanıtlamıyor"
     assert not unmarked_top
     assert not unexplained_nested
+
+
+
+# --- Faz 31 Commit 4: PreparedStatement ve imleç yolları --------------------------------------
+
+
+async def _marked_connection(dsn):
+    t = target_for(dsn, "super")
+    return await connect_marked(
+        host=t.host, port=t.port, database=t.database, user=t.username, password=t.password,
+        statement_cache_size=0,
+    )
+
+
+async def test_every_prepared_statement_sender_is_marked(admin, dsn):
+    await admin.execute("SELECT pg_stat_statements_reset()")
+    conn = await _marked_connection(dsn)
+    try:
+        statement = await conn.prepare("SELECT id FROM marker_probe WHERE id > $1 ORDER BY id LIMIT 3")
+        calls = {
+            "fetch": lambda: statement.fetch(1),
+            "fetchrow": lambda: statement.fetchrow(1),
+            "fetchval": lambda: statement.fetchval(1),
+            "fetchmany": lambda: statement.fetchmany([(1,), (2,)]),
+            "executemany": lambda: statement.executemany([(1,), (2,)]),
+            "explain": lambda: statement.explain(1),
+        }
+        assert set(calls) == set(PREPARED_STATEMENT_METHODS_EXERCISED)
+        for call in calls.values():
+            await call()
+    finally:
+        await conn.close()
+    rows = await admin.fetch(
+        "SELECT s.toplevel, s.query FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
+        "WHERE r.rolname = 'dbace_it_super' ORDER BY s.query"
+    )
+    unmarked = [r["query"] for r in rows if r["toplevel"] and DBACE_QUERY_MARKER not in r["query"]]
+    print(f"\n  [{await _server_label(admin)}] PreparedStatement yolları: {len(rows)} kayıt, imzasız: {unmarked}")
+    for r in rows:
+        print(f"    {r['query'][:110]!r}")
+    assert rows and not unmarked
+    assert any(r["query"].startswith("EXPLAIN") and DBACE_QUERY_MARKER in r["query"] for r in rows), (
+        "explain() metni imzayı başta değil içinde taşıyor; desen her yerde arıyor"
+    )
+
+
+async def test_cursor_forward_sends_move_unsigned_which_is_why_cursor_is_blocked(admin, dsn):
+    """ENGELİN GEREKÇESİ ÖLÇÜLÜYOR: imleç sorgusu imzalı olsa bile forward() MOVE komutunu imzasız
+    gönderiyor. Ham asyncpg ile ölçülüyor (sarmalayıcı imleci zaten engelliyor)."""
+    await admin.execute("SELECT pg_stat_statements_reset()")
+    t = target_for(dsn, "super")
+    raw = await asyncpg.connect(
+        host=t.host, port=t.port, database=t.database, user=t.username, password=t.password, statement_cache_size=0
+    )
+    try:
+        async with raw.transaction():
+            cur = await raw.cursor(f"{DBACE_QUERY_MARKER} SELECT id FROM marker_probe ORDER BY id")
+            await cur.forward(5)
+            await cur.fetch(2)
+    finally:
+        await raw.close()
+    rows = await admin.fetch(
+        "SELECT s.query FROM pg_stat_statements s JOIN pg_roles r ON r.oid = s.userid "
+        "WHERE r.rolname = 'dbace_it_super' AND s.query ILIKE '%MOVE%'"
+    )
+    print(f"\n  [{await _server_label(admin)}] imleç forward(): {[r['query'] for r in rows]}")
+    assert rows and all(DBACE_QUERY_MARKER not in r["query"] for r in rows)
+
+    wrapped = await _marked_connection(dsn)
+    try:
+        with pytest.raises(AttributeError, match="kullanılamaz"):
+            wrapped.cursor("SELECT 1")
+        statement = await wrapped.prepare("SELECT 1")
+        with pytest.raises(AttributeError, match="kullanılamaz"):
+            statement.cursor()
+    finally:
+        await wrapped.close()

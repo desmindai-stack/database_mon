@@ -45,7 +45,6 @@ ediyor. Geliştirme sırasında PostgreSQL 17.11 ve 15.19 ile koşuldu; ikisinde
 from __future__ import annotations
 
 import json
-import os
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -55,18 +54,13 @@ from app.collectors.base import ConnectionTarget
 from app.services.explain_service import PostgreSQLExplainService
 from app.services.generic_plan import explain_json
 from app.services.index_advisor import PostgreSQLIndexAdvisor
+from tests.live_pg import LIVE_DSNS, SKIP_REASON, prepare_live_database
 
 asyncpg = pytest.importorskip("asyncpg")
 
-_DSNS = [d.strip() for d in os.environ.get("DBACE_TEST_PG_DSN", "").split(",") if d.strip()]
+_DSNS = LIVE_DSNS
 
-pytestmark = pytest.mark.skipif(
-    not _DSNS,
-    reason=(
-        "Gerçek PostgreSQL yok. DBACE_TEST_PG_DSN tanımlayın "
-        "(ör. postgresql://postgres:dbace@127.0.0.1:55432/dbace)."
-    ),
-)
+pytestmark = pytest.mark.skipif(not _DSNS, reason=SKIP_REASON)
 
 JOIN_QUERY = (
     "SELECT o.id, o.total, c.name FROM orders o JOIN customers c ON c.id = o.customer_id "
@@ -99,29 +93,9 @@ def dsn(request):
 @pytest.fixture
 async def conn(dsn):
     connection = await asyncpg.connect(dsn, statement_cache_size=0)
-    # Test verisi: her koşuda yeniden kurulabilir olmalı, çünkü konteyner taze olabilir.
-    await connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS customers (
-            id bigserial PRIMARY KEY, name text NOT NULL, segment text NOT NULL);
-        CREATE TABLE IF NOT EXISTS orders (
-            id bigserial PRIMARY KEY, customer_id bigint NOT NULL, status text NOT NULL,
-            total numeric NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
-        """
-    )
-    count = await connection.fetchval("SELECT count(*) FROM orders")
-    if not count:
-        await connection.execute(
-            "INSERT INTO customers (name, segment) SELECT 'c'||g, "
-            "CASE WHEN g %% 3 = 0 THEN 'gold' ELSE 'std' END FROM generate_series(1, 2000) g"
-        )
-        await connection.execute(
-            "INSERT INTO orders (customer_id, status, total, created_at) "
-            "SELECT (g %% 2000) + 1, CASE WHEN g %% 5 = 0 THEN 'paid' ELSE 'new' END, "
-            "(g %% 900)::numeric, now() - (g || ' minutes')::interval "
-            "FROM generate_series(1, 50000) g"
-        )
-        await connection.execute("ANALYZE")
+    # Ortak, idempotent kurulum (tests/live_pg.py). Buradaki eski kurulum `g %% 3` yazıyordu —
+    # PostgreSQL'de böyle bir operatör yok; temiz konteynerde kırılırdı.
+    await prepare_live_database(connection)
     try:
         yield connection
     finally:
@@ -271,8 +245,11 @@ async def test_index_advisor_measures_benefit_for_a_normalized_query(conn, dsn):
     has_hypopg = await conn.fetchval(
         "SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'hypopg')"
     )
-    if not has_hypopg:
-        pytest.skip("hypopg kurulu değil; fayda ölçümü doğrulanamıyor")
+    # Faz 31 Commit 4: ATLAMA YOK. Eski atlama gerekçesi ("hypopg kurulu değil") ortamın
+    # eksikliğiydi, özelliğin değil — PG 15 konteynerine hypopg hiç kurulmamıştı. Kurulum artık
+    # `scripts/live_pg.py`'de; hypopg'SUZ yol ayrıca `dbace_nohypopg` veritabanında test ediliyor
+    # (test_index_advice_live_postgres.py::test_without_hypopg_...).
+    assert has_hypopg, "canlı test ortamında hypopg yok — `python scripts/live_pg.py up` çalıştırın"
 
     advisor = PostgreSQLIndexAdvisor(_target(dsn))
     result = await advisor.advise(

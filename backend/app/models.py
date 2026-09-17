@@ -273,6 +273,13 @@ class SlowQuerySample(Base):
 
     queryid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     query: Mapped[str] = mapped_column(Text, nullable=False)
+    # Faz 31 Commit 4: satırı dbace'in KENDİ rolü mü üretti (pg_stat_statements.userid = toplayıcının
+    # rolü). `/* dbace */` imzası sorgu ŞEKLİNİ işaretliyor; imzalı bir satırın gerçekten dbace'e
+    # ait olduğunun kanıtı bu alan. None = bilinmiyor (Faz 31 öncesi satır).
+    from_monitoring_role: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # pg_stat_statements.toplevel (PG 14+): False = fonksiyon/EXPLAIN içinde iç içe çalıştırma.
+    # Üst düzey ve iç içe satırlar AYRI sayaçlar; tek seride birleştirilirse fark hesabı bozulur.
+    toplevel: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     calls: Mapped[int] = mapped_column(Integer, default=0)
     total_time_ms: Mapped[float] = mapped_column(Float, default=0.0)
     mean_time_ms: Mapped[float] = mapped_column(Float, default=0.0)

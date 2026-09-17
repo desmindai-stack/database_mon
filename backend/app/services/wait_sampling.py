@@ -371,6 +371,8 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
     - `query_text` HER DURUMDA değerlerden arındırılıyor (yük kırılımında ve teknik raporda
       görünen alan).
     - `sample_*` alanları ayar KAPALIYSA siliniyor.
+    - auto_explain planları (`captured_plans`) ayar KAPALIYSA değerlerden arındırılıyor
+      (Faz 31 Commit 4 kararı: planlar aynı ayara bağlı).
 
     İki yerden çağrılıyor: ayar kapatıldığında ve süreç başına ilk yazımda. İkincisi
     yükseltme durumu için: Faz 31 öncesinde `query_text` her zaman ham metindi. İşlem
@@ -391,6 +393,18 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
                 row.sample_duration_ms = None
                 row.sample_captured_at = None
             changed += 1
+    if not keep_samples:
+        from app.models import CapturedPlan
+        from app.services.sql_analysis import strip_plan_values
+
+        plans = (await session.execute(select(CapturedPlan))).scalars().all()
+        for plan in plans:
+            text = normalize_literals(plan.query_text or "")
+            body = strip_plan_values(plan.plan_json) if plan.plan_json is not None else None
+            if text != plan.query_text or body != plan.plan_json:
+                plan.query_text = text
+                plan.plan_json = body
+                changed += 1
     await session.commit()
     return changed
 

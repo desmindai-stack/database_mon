@@ -4941,6 +4941,17 @@
             ],
             "title": "Estimated Improvement Pct"
           },
+          "estimated_selectivity_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Selectivity Pct"
+          },
           "existing_indexes": {
             "items": {
               "type": "string"
@@ -4980,6 +4991,22 @@
           "table_name": {
             "title": "Table Name",
             "type": "string"
+          },
+          "verification_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification Note"
+          },
+          "verified": {
+            "default": true,
+            "title": "Verified",
+            "type": "boolean"
           }
         },
         "required": [
@@ -5020,6 +5047,16 @@
             },
             "title": "Predicates",
             "type": "array"
+          },
+          "required_grants": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/IndexRequiredGrantsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "status": {
             "default": "no_advice",
@@ -5411,6 +5448,58 @@
           "usable"
         ],
         "title": "IndexPredicateOut",
+        "type": "object"
+      },
+      "IndexRequiredGrantTableOut": {
+        "properties": {
+          "privilege": {
+            "title": "Privilege",
+            "type": "string"
+          },
+          "reasons": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Reasons",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          }
+        },
+        "required": [
+          "table",
+          "privilege",
+          "reasons"
+        ],
+        "title": "IndexRequiredGrantTableOut",
+        "type": "object"
+      },
+      "IndexRequiredGrantsOut": {
+        "properties": {
+          "command": {
+            "title": "Command",
+            "type": "string"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "tables": {
+            "items": {
+              "$ref": "#/components/schemas/IndexRequiredGrantTableOut"
+            },
+            "title": "Tables",
+            "type": "array"
+          }
+        },
+        "required": [
+          "tables",
+          "command",
+          "note"
+        ],
+        "title": "IndexRequiredGrantsOut",
         "type": "object"
       },
       "InstanceCreate": {
@@ -9886,6 +9975,22 @@
             ],
             "title": "Logical Writes"
           },
+          "marker_conflict": {
+            "default": false,
+            "title": "Marker Conflict",
+            "type": "boolean"
+          },
+          "marker_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Marker Note"
+          },
           "max_time_ms": {
             "anyOf": [
               {
@@ -10095,6 +10200,17 @@
               }
             ],
             "title": "Temp Blks Written"
+          },
+          "toplevel": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Toplevel"
           },
           "total_plan_time_ms": {
             "anyOf": [

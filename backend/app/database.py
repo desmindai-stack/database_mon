@@ -283,6 +283,18 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "report_findings", "is_root_cause", "is_root_cause BOOLEAN DEFAULT 0")
         await _sqlite_add_column_if_missing(conn, "report_findings", "suppressed", "suppressed BOOLEAN DEFAULT 0")
         await _sqlite_add_column_if_missing(conn, "report_findings", "suppressed_by", "suppressed_by VARCHAR(64)")
+        # Faz 31 İŞ 2 — gerçek değerli örnek (20260916090700). Commit 3'te EKSİK kalmıştı: testler
+        # sıfırdan `create_all` ile kurulan veritabanında geçiyordu, var olan yerel SQLite
+        # veritabanı kırılırdı. tests/test_migration_order.py artık bu eşleşmeyi denetliyor.
+        await _sqlite_add_column_if_missing(conn, "wait_query_signatures", "sample_query_text", "sample_query_text TEXT")
+        await _sqlite_add_column_if_missing(conn, "wait_query_signatures", "sample_duration_ms", "sample_duration_ms FLOAT")
+        await _sqlite_add_column_if_missing(conn, "wait_query_signatures", "sample_captured_at", "sample_captured_at DATETIME")
+        await _sqlite_add_column_if_missing(
+            conn, "wait_query_signatures", "seen_bind_parameters", "seen_bind_parameters BOOLEAN NOT NULL DEFAULT 0"
+        )
+        # Faz 31 Commit 4 — yavaş sorgu satırının kaynağı (20260916090900).
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "from_monitoring_role", "from_monitoring_role BOOLEAN")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "toplevel", "toplevel BOOLEAN")
         # Eski "acknowledged" bayrağını yeni durum modeline taşı — yoksa yükseltmeden sonra
         # daha önce susturulmuş bulgular topluca kritik olarak geri döner.
         await conn.execute(

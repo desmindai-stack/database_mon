@@ -3870,3 +3870,14 @@ td code,
 .plan-source.unavailable strong { color: var(--muted); }
 .plan-source-head { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .plan-source .btn { margin-top: 0.25rem; }
+
+/* Faz 31 Commit 4 — doğrulanmamış öneriler ve gereken yetkiler ayrı bölümlerde. */
+.advice-unverified,
+.advice-grants {
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px dashed var(--warning);
+  border-radius: 6px;
+}
+.advice-card.unverified { opacity: 0.95; }
+.advice-grants ul { margin: 0.25rem 0; padding-left: 1.25rem; }

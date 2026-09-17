@@ -524,3 +524,33 @@ def normalize_literals(sql: str) -> str:
 
     text = _LITERAL_STRING.sub(next_placeholder, sql)
     return _LITERAL_NUMBER.sub(next_placeholder, text)
+
+
+#: Plan JSON'unda YAPISAL adlar taşıyan anahtarlar — değer içermez, dokunulmaz. Geri kalan her
+#: metin alanı (Query Text, Filter, Index Cond, Recheck Cond, Join Filter, Hash Cond, Output,
+#: Sort Key …) sabit taşıyabilir ve arındırılır. Liste bilerek DAR: bilinmeyen bir anahtar
+#: arındırılır — gerekenden fazla arındırmak, değer sızdırmaktan iyidir.
+PLAN_STRUCTURAL_KEYS = frozenset({
+    "Node Type", "Relation Name", "Schema", "Alias", "Index Name", "Strategy", "Join Type",
+    "Parent Relationship", "Scan Direction", "Partial Mode", "Sort Method", "Sort Space Type",
+    "Subplan Name", "CTE Name", "Function Name", "Operation", "Command", "Trigger Name",
+    "Constraint Name", "Relation",
+})
+
+
+def strip_plan_values(plan):
+    """Plan JSON'undaki metin alanlarından gerçek değerleri çıkarır (Faz 31 Commit 4).
+
+    auto_explain planı gerçek çalıştırmanın planı olduğu için "Query Text" ve koşul alanları
+    (`Filter: (tc_no = '12345678901'::text)`) gerçek değer taşır. Gerçek değerli metin saklama
+    kapalıyken planlar da bu işlevden geçiyor. Sayısal alanlar (maliyet, satır, süre) metin
+    değil, dokunulmuyor. İdempotent. `supabase/migrations/20260916090800_real_value_cleanup.sql`
+    aynı kuralı SQL'de uyguluyor; ikisinin çıktısı canlı testte karşılaştırılıyor.
+    """
+    if isinstance(plan, dict):
+        return {k: (v if k in PLAN_STRUCTURAL_KEYS else strip_plan_values(v)) for k, v in plan.items()}
+    if isinstance(plan, list):
+        return [strip_plan_values(v) for v in plan]
+    if isinstance(plan, str):
+        return normalize_literals(plan)
+    return plan

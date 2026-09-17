@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.collectors.query_marker import DBACE_QUERY_MARKER
 from app.database import SessionLocal
 from app.domain.engines import DatabaseEngine
 from app.models import IndexAdviceWatch, Instance, SlowQuerySample
@@ -68,6 +69,7 @@ async def run_index_advice(
     """Öneriyi üretir, eşik altındaysa izlemeye alır; API şemasına uygun sözlük döner."""
     settings = await get_analysis_settings(session)
     threshold = int(settings["index_advice_min_calls"])
+    query = await _application_text(session, instance.id, query=query, queryid=queryid)
     calls = await current_calls(session, instance.id, query=query, queryid=queryid)
     if calls is None:
         calls = client_calls
@@ -87,36 +89,66 @@ async def run_index_advice(
     return report_payload(result, watch=watch, watch_enabled=settings["index_advice_watch_enabled"])
 
 
+async def _application_text(session: AsyncSession, instance_id: int, *, query: str, queryid: str | None) -> str:
+    """İmzalı metin ama bu queryid için dbace DIŞI rolden çağrı varsa imza metinden çıkarılıyor.
+
+    Aksi hâlde danışman imzayı görüp sorguyu "dbace'in kendi sorgusu" diye reddederdi — listede
+    işaretli gösterilen uygulama yükü için öneri üretilemezdi.
+    """
+    if not queryid or DBACE_QUERY_MARKER not in query:
+        return query
+    application_row = (
+        await session.execute(
+            select(SlowQuerySample.id).where(
+                SlowQuerySample.instance_id == instance_id,
+                SlowQuerySample.queryid == queryid,
+                SlowQuerySample.from_monitoring_role.is_(False),
+            ).limit(1)
+        )
+    ).first()
+    return query.replace(DBACE_QUERY_MARKER, "").strip() if application_row else query
+
+
 async def current_calls(
     session: AsyncSession, instance_id: int, *, query: str, queryid: str | None
 ) -> int | None:
     """Sorgunun son toplanan KÜMÜLATİF çağrı sayısı (pg_stat_statements.calls).
 
-    Aynı queryid için aynı toplama döngüsünde birden çok satır olabilir (pg_stat_statements
-    `toplevel` ayrımı; iç içe çalıştırmalar ayrı satır). EN BÜYÜĞÜ alınıyor: toplamak,
-    dbace'in kendi EXPLAIN'inin iç içe satırını da uygulama çağrısı sayardı.
+    Aynı queryid için aynı toplama döngüsünde birden çok satır olabilir. Faz 31 Commit 4'ten
+    beri satırın KİMDEN geldiği ve iç içe olup olmadığı biliniyor:
+    - dbace'in kendi rolünden gelen satırlar SAYILMIYOR (ör. gerçek değerli EXPLAIN ANALYZE,
+      `track=all` iken uygulama queryid'sine iç içe bir çağrı ekliyor — ölçüldü),
+    - üst düzey satır varsa o esas; yoksa (yalnızca fonksiyon içinden çağrılan sorgu) iç içe.
+    Bu bilgi olmayan eski satırlarda önceki davranış: en büyüğü.
     """
     since = datetime.now(UTC) - _CALLS_LOOKBACK
     if queryid:
-        latest = (
+        # `collected_at == latest` EŞİTLİK SORGUSU KULLANILMIYOR (Faz 31 Commit 4): SQLite sunucu
+        # varsayılanını '2026-09-16 17:25:25' diye saklıyor, geri bağlanan değer '.000000' ile
+        # gidiyor ve metin karşılaştırması eşleşmiyordu — toplama döngüsünün yazdığı satırlarda
+        # çağrı sayısı hep None dönüyor, izleme hiç "hazır" olmuyordu. Commit 2'nin testi
+        # collected_at'i Python'dan verdiği için görmedi.
+        rows = (
             await session.execute(
-                select(SlowQuerySample.collected_at)
-                .where(SlowQuerySample.instance_id == instance_id, SlowQuerySample.queryid == queryid)
-                .order_by(SlowQuerySample.collected_at.desc())
-                .limit(1)
-            )
-        ).scalar_one_or_none()
-        if latest is not None:
-            values = (
-                await session.execute(
-                    select(SlowQuerySample.calls).where(
-                        SlowQuerySample.instance_id == instance_id,
-                        SlowQuerySample.queryid == queryid,
-                        SlowQuerySample.collected_at == latest,
-                    )
+                select(SlowQuerySample.collected_at, SlowQuerySample.calls, SlowQuerySample.toplevel)
+                .where(
+                    SlowQuerySample.instance_id == instance_id,
+                    SlowQuerySample.queryid == queryid,
+                    SlowQuerySample.from_monitoring_role.is_not(True),
                 )
-            ).scalars().all()
-            return max(int(v or 0) for v in values) if values else None
+                .order_by(SlowQuerySample.collected_at.desc())
+                .limit(50)
+            )
+        ).all()
+        if rows:
+            # Üst düzey satır varsa EN SON üst düzey döngü esas; yalnızca hiç yoksa iç içe.
+            # "En son döngü" yetmiyor: toplayıcı ortalama süreye göre ilk 20'yi okuyor ve bir
+            # döngüde yalnızca iç içe satır listeye girebiliyor (PG 16'da ölçüldü — iç içe
+            # çağrılar uygulama çağrısı diye sayıldı).
+            top_rows = [(at, int(c or 0)) for at, c, toplevel in rows if toplevel is not False]
+            chosen = top_rows or [(at, int(c or 0)) for at, c, _ in rows]
+            latest = chosen[0][0]
+            return max(c for at, c in chosen if at == latest)
 
     key = fingerprint(query)
     rows = (
@@ -301,8 +333,24 @@ def report_payload(result: AdviceResult, *, watch: IndexAdviceWatch | None, watc
             {"code": r.code, "message": r.message, "what_to_do": r.what_to_do} for r in result.reasons
         ],
         "predicates": [_predicate_payload(p) for p in result.predicates],
+        "required_grants": _grants_payload(result.required_grants),
         "threshold": threshold,
         "watch": _watch_payload(watch) | {"report": None} if watch is not None else None,
+    }
+
+
+def _grants_payload(grants: dict[str, set[str]]) -> dict[str, Any] | None:
+    """Tablo başına hangi yetki, NEDEN — ve hepsini kapsayan tek komut bloğu."""
+    if not grants:
+        return None
+    tables = sorted(grants)
+    return {
+        "tables": [{"table": table, "privilege": "SELECT", "reasons": sorted(grants[table])} for table in tables],
+        "command": "\n".join(f"GRANT SELECT ON {table} TO <izleme_kullanıcısı>;" for table in tables),
+        "note": (
+            "SELECT yetkisi yalnızca OKUMA verir; izleme kullanıcısı veri değiştiremez. Vermek "
+            "istemiyorsanız öneriler yine üretilir, ama yukarıdaki ölçümler yapılamaz."
+        ),
     }
 
 
@@ -335,6 +383,9 @@ def _advice_payload(r: IndexAdvice) -> dict[str, Any]:
         "existing_indexes": r.existing_indexes,
         "index_kind": r.index_kind,
         "measurement_notes": r.measurement_notes,
+        "estimated_selectivity_pct": r.estimated_selectivity_pct,
+        "verified": r.verified,
+        "verification_note": r.verification_note,
         "advice": _standard_advice(r),
     }
 
@@ -362,6 +413,8 @@ def _standard_advice(recommendation: IndexAdvice) -> dict:
         )
     if recommendation.index_kind == "trigram":
         cautions.append("GIN index yazma işlemlerini B-tree'den belirgin biçimde yavaşlatır.")
+    if recommendation.verification_note:
+        cautions.insert(0, recommendation.verification_note)
     cautions.extend(recommendation.measurement_notes)
     return advice_to_dict(
         Advice(

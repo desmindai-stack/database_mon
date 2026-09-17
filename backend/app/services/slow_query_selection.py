@@ -64,6 +64,16 @@ def query_fingerprint(query: str) -> str:
 # optimize edebileceği bir şey değiller; raporda "en pahalı sorgu" olarak çıkmaları gürültü.
 # Varsayılan olarak filtreleniyorlar, ayardan açılabiliyorlar (Faz 18 İŞ 2).
 
+#: İmza deseninin etiketi — sınıflandırma sonucu bu etiketse satırın KİMDEN geldiğine bakılıyor.
+DBACE_MARKER_LABEL = "dbace'in kendi sorgusu"
+
+#: İmzalı metin ama dbace DIŞI rolden çağrı: filtrelenmiyor, işaretleniyor.
+MARKER_CONFLICT_NOTE = (
+    "Sorgu metni dbace imzası (/* dbace */) taşıyor ama çağrılar dbace'in izleme rolünden DEĞİL, "
+    "başka bir rolden geliyor. Uygulama yükü olduğu için gizlenmedi. Olası sebep: dbace'in "
+    "bağlandığı rol ile aynı adı taşıyan bir istemci ya da imzayı kopyalayan bir araç."
+)
+
 _SYSTEM_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\bpg_catalog\.", "pg_catalog"),
     (r"\bpg_stat_[a-z_]+", "pg_stat_* görünümleri"),
@@ -95,7 +105,7 @@ _SYSTEM_PATTERNS: tuple[tuple[str, str], ...] = (
     # dbace'in KENDİ toplama sorguları — kendi gürültüsünü raporlamamalı.
     # Faz 31: izlenen sunucuya giden HER sorgu bu imzayı taşıyor (collectors/query_marker.py).
     # İmza queryid'ye girmiyor, sorgu ŞEKLİNİ işaretliyor — ILERLEME.md Faz 31 Commit 1.
-    (r"/\*\s*dbace\s*\*/", "dbace'in kendi sorgusu"),
+    (r"/\*\s*dbace\s*\*/", DBACE_MARKER_LABEL),
     (r"--\s*ext:", "dbace ön koşul denetimi"),
     (r"\bhypopg_", "dbace index danışmanı (hypopg)"),
 )
@@ -139,6 +149,8 @@ class SlowQueryEntry:
     system_reason: str | None = None
     # Penceredeki örnek sayısı; 1 ise fark hesaplanamamıştır (bkz. `mode`).
     sample_count: int = 0
+    # İmzalı metin, dbace dışı rolden çağrı — filtrelenmedi, gösteriliyor (Faz 31 Commit 4).
+    marker_conflict: bool = False
 
     @property
     def is_system(self) -> bool:
@@ -172,9 +184,15 @@ def _merge_key(row: SlowQuerySample, text_to_key: dict[str, str]) -> str:
     birleştirilir. Böylece pg_stat_statements'ın bazı satırlarda queryid'yi NULL döndürmesi
     tek sorguyu ikiye bölmez.
     """
-    text_key = query_fingerprint(row.query)
+    # Faz 31 Commit 4: dbace'in kendi satırı ve iç içe çalıştırma AYRI grup. Aynı queryid'yi
+    # taşısalar da ayrı pg_stat_statements sayaçları; birleştirildiklerinde fark hesabı iki
+    # seriyi karıştırıyordu ve imzalı dbace satırının metni uygulama yükünü "sistem sorgusu"
+    # diye gizleyebiliyordu. Uygulamanın üst düzey satırı eski anahtarı koruyor (rapor derin
+    # bağlantıları bozulmasın).
+    suffix = (":dbace" if row.from_monitoring_role else "") + (":nested" if row.toplevel is False else "")
+    text_key = query_fingerprint(row.query) + suffix
     if row.queryid:
-        key = f"id:{row.queryid}"
+        key = f"id:{row.queryid}{suffix}"
         # Aynı metin için daha önce bir kimlik belirlendiyse ona bağlan.
         return text_to_key.setdefault(text_key, key)
     return text_to_key.setdefault(text_key, text_key)
@@ -257,6 +275,9 @@ async def select_slow_queries(
             system_reason=classify_system_query(last.query),
             sample_count=len(group),
         )
+        if entry.system_reason == DBACE_MARKER_LABEL and last.from_monitoring_role is False:
+            entry.system_reason = None
+            entry.marker_conflict = True
 
         if entry.is_system and not include_system:
             filtered_system += 1

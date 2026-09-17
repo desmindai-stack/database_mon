@@ -111,7 +111,82 @@ function Reasons({ report }: { report: IndexAdviceReport }) {
   );
 }
 
+function AdviceItem({ advice: a }: { advice: IndexAdviceReport["advice"][number] }) {
+  return (
+    <div className={`advice-card${a.verified === false ? " unverified" : ""}`}>
+      <div className="advice-header">
+        <span className="advice-table">
+          {a.schema_name}.{a.table_name} · {INDEX_KIND_LABELS[a.index_kind ?? "btree"] ?? a.index_kind}
+        </span>
+        {a.verified === false && <span className="tag warn">Doğrulanmadı</span>}
+        <span className="advice-pill">
+          {a.estimated_improvement_pct != null ? (
+            <>
+              Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong> (hypopg ile ölçüldü)
+            </>
+          ) : a.estimated_selectivity_pct != null ? (
+            <>
+              Fayda ölçülmedi · seçicilik: satırların <strong>%{a.estimated_selectivity_pct}</strong>'i
+            </>
+          ) : (
+            <>Fayda ölçülemedi</>
+          )}
+        </span>
+      </div>
+      {a.verification_note && <p className="advice-empty">{a.verification_note}</p>}
+      {a.advice ? (
+        <AdviceCard advice={a.advice} defaultOpen={false} />
+      ) : (
+        <>
+          <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
+          <p className="recommendation-reason">{a.reason}</p>
+          <CopyableAction command={a.index_ddl} />
+        </>
+      )}
+      {a.before_cost != null && a.after_cost != null && (
+        <div className="advice-costs">
+          <span>
+            Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}
+          </span>
+        </div>
+      )}
+      {(a.measurement_notes ?? []).length > 0 && (
+        <ul className="measurement-notes">
+          {(a.measurement_notes ?? []).map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// Faz 31 Commit 4: hangi tabloda hangi yetki NEDEN gerekiyor — hepsi tek yerde, tek komut bloğuyla.
+function RequiredGrants({ grants }: { grants: NonNullable<IndexAdviceReport["required_grants"]> }) {
+  return (
+    <section className="advice-grants">
+      <h4>Gereken yetkiler</h4>
+      <ul>
+        {grants.tables.map((t) => (
+          <li key={t.table}>
+            <code>{t.table}</code> — {t.privilege}
+            <ul>
+              {t.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+      <CopyableAction command={grants.command} />
+      <p className="muted-note">{grants.note}</p>
+    </section>
+  );
+}
+
 export function IndexAdviceResult({ report }: { report: IndexAdviceReport }) {
+  const verified = report.advice.filter((a) => a.verified !== false);
+  const unverified = report.advice.filter((a) => a.verified === false);
   return (
     <div className="advice-results">
       <p className="muted-note">
@@ -129,48 +204,22 @@ export function IndexAdviceResult({ report }: { report: IndexAdviceReport }) {
         </p>
       )}
       <Reasons report={report} />
-      {report.advice.map((a) => (
-        <div className="advice-card" key={a.index_ddl}>
-          <div className="advice-header">
-            <span className="advice-table">
-              {a.schema_name}.{a.table_name} · {INDEX_KIND_LABELS[a.index_kind ?? "btree"] ?? a.index_kind}
-            </span>
-            <span className="advice-pill">
-              {a.estimated_improvement_pct != null ? (
-                <>
-                  Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong>
-                  {a.has_hypopg_estimate ? " (hypopg ile ölçüldü)" : " (istatistik tahmini)"}
-                </>
-              ) : (
-                <>Fayda ölçülemedi</>
-              )}
-            </span>
-          </div>
-          {a.advice ? (
-            <AdviceCard advice={a.advice} defaultOpen={false} />
-          ) : (
-            <>
-              <RecommendationHeader title={`${a.schema_name}.${a.table_name} için index ekleyin`} />
-              <p className="recommendation-reason">{a.reason}</p>
-              <CopyableAction command={a.index_ddl} />
-            </>
-          )}
-          {a.before_cost != null && a.after_cost != null && (
-            <div className="advice-costs">
-              <span>
-                Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}
-              </span>
-            </div>
-          )}
-          {(a.measurement_notes ?? []).length > 0 && (
-            <ul className="measurement-notes">
-              {(a.measurement_notes ?? []).map((note) => (
-                <li key={note}>{note}</li>
-              ))}
-            </ul>
-          )}
-        </div>
+      {verified.map((a) => (
+        <AdviceItem key={a.index_ddl} advice={a} />
       ))}
+      {unverified.length > 0 && (
+        <section className="advice-unverified">
+          <h4>Doğrulanmamış öneriler</h4>
+          <p className="muted-note">
+            Bu öneriler sorgu yapısından üretildi ama sunucuda DOĞRULANAMADI. Her kartta hangi denetimin neden
+            yapılamadığı yazıyor; uygulamadan önce bir test ortamında deneyin.
+          </p>
+          {unverified.map((a) => (
+            <AdviceItem key={a.index_ddl} advice={a} />
+          ))}
+        </section>
+      )}
+      {report.required_grants && <RequiredGrants grants={report.required_grants} />}
       {report.status !== "system" && <FoundPredicates predicates={report.predicates ?? []} />}
     </div>
   );

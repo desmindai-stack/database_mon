@@ -16,10 +16,8 @@ DSN kullanıcısı yalnızca kurulum ve doğrulama için. dbace tarafı iki roll
 
 from __future__ import annotations
 
-import os
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
 import pytest
 
@@ -32,30 +30,19 @@ from app.services.credentials import encrypt_secret
 from app.services.index_advice_watch import index_advice_watch_tick
 from app.services.index_advisor import PostgreSQLIndexAdvisor
 from app.services.slow_query_selection import select_slow_queries
+from tests.live_pg import (
+    LIVE_DSNS,
+    NO_HYPOPG_DATABASE,
+    SKIP_REASON,
+    prepare_live_database,
+    target_for,
+    with_database,
+)
 
 asyncpg = pytest.importorskip("asyncpg")
 
-_DSNS = [d.strip() for d in os.environ.get("DBACE_TEST_PG_DSN", "").split(",") if d.strip()]
-pytestmark = pytest.mark.skipif(not _DSNS, reason="Gerçek PostgreSQL yok. DBACE_TEST_PG_DSN tanımlayın.")
-
-ROLE_PASSWORD = "dbace_it_pw"
-ROLES = {"super": ("dbace_it_super", "SUPERUSER"), "monitor": ("dbace_it_monitor", "IN ROLE pg_monitor")}
-
-SETUP_SQL = """
-CREATE TABLE IF NOT EXISTS customers (id bigserial PRIMARY KEY, name text NOT NULL, segment text NOT NULL);
-CREATE TABLE IF NOT EXISTS orders (
-    id bigserial PRIMARY KEY, customer_id bigint NOT NULL, status text NOT NULL,
-    total numeric NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
-CREATE TABLE IF NOT EXISTS adv_users (id bigserial PRIMARY KEY, email text NOT NULL, name text NOT NULL, note text);
-CREATE TABLE IF NOT EXISTS adv_events (id bigserial PRIMARY KEY, kind text NOT NULL, happened_at timestamp NOT NULL);
-CREATE SCHEMA IF NOT EXISTS adv_other;
-CREATE TABLE IF NOT EXISTS adv_other.adv_invoices (id bigserial PRIMARY KEY, state text NOT NULL);
-CREATE SCHEMA IF NOT EXISTS adv_third;
-DROP TABLE IF EXISTS public.adv_ledger;
-CREATE TABLE IF NOT EXISTS adv_other.adv_ledger (id bigserial PRIMARY KEY, amount numeric);
-CREATE TABLE IF NOT EXISTS adv_third.adv_ledger (id bigserial PRIMARY KEY, amount numeric);
-"""
-
+_DSNS = LIVE_DSNS
+pytestmark = pytest.mark.skipif(not _DSNS, reason=SKIP_REASON)
 
 def log(title: str, value) -> None:
     print(f"\n  [{title}] {value}")
@@ -69,33 +56,7 @@ def dsn(request):
 @pytest.fixture
 async def admin(dsn):
     conn = await asyncpg.connect(dsn, statement_cache_size=0)
-    for name, attrs in ROLES.values():
-        if not await conn.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", name):
-            await conn.execute(f"CREATE ROLE {name} LOGIN PASSWORD '{ROLE_PASSWORD}' {attrs}")
-    await conn.execute(SETUP_SQL)
-    if not await conn.fetchval("SELECT count(*) FROM orders"):
-        await conn.execute(
-            "INSERT INTO customers (name, segment) SELECT 'c'||g, CASE WHEN g % 3 = 0 THEN 'gold' ELSE 'std' END "
-            "FROM generate_series(1, 2000) g"
-        )
-        await conn.execute(
-            "INSERT INTO orders (customer_id, status, total, created_at) SELECT (g % 2000) + 1, "
-            "CASE WHEN g % 5 = 0 THEN 'paid' ELSE 'new' END, (g % 900)::numeric, now() - (g || ' minutes')::interval "
-            "FROM generate_series(1, 50000) g"
-        )
-    if not await conn.fetchval("SELECT count(*) FROM adv_users"):
-        await conn.execute(
-            "INSERT INTO adv_users (email, name) SELECT 'User'||g||'@Example.com', 'n'||g FROM generate_series(1, 30000) g"
-        )
-        await conn.execute(
-            "INSERT INTO adv_events (kind, happened_at) SELECT 'k'||(g % 7), timestamp '2026-01-01' + (g || ' minutes')::interval "
-            "FROM generate_series(1, 30000) g"
-        )
-        await conn.execute("INSERT INTO adv_other.adv_invoices (state) SELECT 's'||(g % 11) FROM generate_series(1, 5000) g")
-    await conn.execute("ANALYZE")
-    # Önceki koşudan kalmış olabilecek doğrulama index'leri.
-    for row in await conn.fetch("SELECT schemaname, indexname FROM pg_indexes WHERE indexname LIKE 'idx_dbace_%'"):
-        await conn.execute(f'DROP INDEX IF EXISTS {row["schemaname"]}."{row["indexname"]}"')
+    await prepare_live_database(conn)
     try:
         yield conn
     finally:
@@ -103,11 +64,7 @@ async def admin(dsn):
 
 
 def _target(dsn: str, role: str = "super") -> ConnectionTarget:
-    url = urlparse(dsn)
-    return ConnectionTarget(
-        host=url.hostname or "127.0.0.1", port=url.port or 5432,
-        database=(url.path or "/postgres").lstrip("/"), username=ROLES[role][0], password=ROLE_PASSWORD,
-    )
+    return target_for(dsn, role)
 
 
 async def _advise(dsn, query, role="super", calls=1000):
@@ -314,22 +271,43 @@ async def test_monitor_role_gets_measurement_notes_not_fabricated_numbers(admin,
     advice = result.recommendations[0]
     assert advice.estimated_improvement_pct is None, "ölçülemeyen fayda için yüzde uydurulmamalı"
     assert any("SELECT" in note and "yetki" in note for note in advice.measurement_notes)
+    assert set(result.required_grants) == {"public.orders"}
+    assert len(result.required_grants["public.orders"]) == 2, "seçicilik ve fayda ölçümü — iki ayrı neden"
 
 
-async def test_monitor_role_expression_probe_is_measured_or_explained(admin, dsn):
+async def test_monitor_role_expression_index_is_proposed_as_unverified_with_grant_reasons(admin, dsn):
+    """Karar (Faz 31 Commit 4): yetkisi eksik kullanıcıda ifade index'i "doğrulanmadı" etiketiyle ve
+    gerekçesiyle ayrı önerilir; GRANT mesajı hangi tablo için ve NEDEN gerektiğini yazar.
+    Gerçek sunucuda ölçüldü: pg_monitor rolünün TEMP yetkisi VAR, adv_users'ta SELECT'i YOK — ilk
+    yazım GRANT TEMPORARY öneriyordu (yanlış)."""
+    from app.services.index_advice_watch import report_payload
+    from app.services.index_advisor import GRANT_REASON_BENEFIT, GRANT_REASON_IMMUTABLE
+
     result = await _advise(dsn, "SELECT id FROM adv_users WHERE lower(email) = $1", role="monitor")
-    pred = next(p for p in result.predicates if p.expression)
     expression = [a for a in result.recommendations if a.index_kind == "expression"]
-    log(await _version(admin), f"öneri={[a.index_ddl for a in expression]} sebep={pred.unusable_reason} notlar={[a.measurement_notes for a in expression]}")
-    # Gerçek sunucuda ölçüldü: pg_monitor rolünün TEMP yetkisi VAR, adv_users'ta SELECT'i YOK.
-    # Sebep ve çözüm doğru yetkiyi göstermeli — ilk yazım GRANT TEMPORARY öneriyordu (yanlış).
-    assert await admin.fetchval(
-        "SELECT has_database_privilege('dbace_it_monitor', current_database(), 'TEMP')"
+    grants = report_payload(result, watch=None, watch_enabled=True)["required_grants"]
+    log(
+        await _version(admin),
+        f"öneri={[(a.index_ddl, a.verified) for a in expression]} not={expression[0].verification_note[:80] if expression else None!r} "
+        f"yetkiler={grants}",
     )
-    assert not expression
-    assert "ölçülemedi" in pred.unusable_reason
-    assert "GRANT SELECT ON public.adv_users" in pred.unusable_reason
-    assert "TEMPORARY" not in pred.unusable_reason
+    assert await admin.fetchval("SELECT has_database_privilege('dbace_it_monitor', current_database(), 'TEMP')")
+    assert len(expression) == 1 and expression[0].verified is False
+    assert expression[0].verification_note.startswith("DOĞRULANMADI")
+    # İki ayrı neden: IMMUTABLE doğrulaması ve (hypopg kurulu olduğu için) fayda ölçümü.
+    assert grants["tables"] == [{
+        "table": "public.adv_users", "privilege": "SELECT",
+        "reasons": sorted([GRANT_REASON_BENEFIT, GRANT_REASON_IMMUTABLE]),
+    }]
+    assert grants["command"] == "GRANT SELECT ON public.adv_users TO <izleme_kullanıcısı>;"
+    assert "TEMPORARY" not in str(grants)
+
+
+async def test_super_role_expression_index_is_verified_and_needs_no_grants(admin, dsn):
+    result = await _advise(dsn, "SELECT id FROM adv_users WHERE lower(email) = $1", role="super")
+    expression = [a for a in result.recommendations if a.index_kind == "expression"]
+    assert len(expression) == 1 and expression[0].verified is True and expression[0].verification_note is None
+    assert result.required_grants == {}
 
 
 # --- API → servis → PG: toplu öneri, eşik izleme, ayar, dbace'in kendi sorguları --------------
@@ -460,3 +438,50 @@ async def test_slow_query_list_filters_dbaces_own_marked_queries(admin, dsn):
     assert marked_hidden == []
     assert marked_shown, "toplama dbace imzalı sorgu üretmeliydi — test bir şey kanıtlamıyor"
     assert hidden.filtered_system >= len(marked_shown)
+
+
+
+# --- hypopg'SUZ yol (Faz 31 Commit 4) ---------------------------------------------------------
+#
+# Bankacılık ortamında hypopg büyük olasılıkla KURULU OLMAYACAK (üçüncü taraf eklenti, onay
+# süreci). Aynı sunucuda eklenti veritabanı başına kurulduğu için hypopg'siz yol ayrı bir
+# veritabanında (`dbace_nohypopg`, scripts/live_pg.py) ve aynı sürümde sınanıyor.
+
+
+@pytest.mark.parametrize(
+    "query, index_kind",
+    [
+        ("SELECT id FROM orders WHERE status = $1 AND created_at > $2", "btree"),
+        ("SELECT id FROM adv_users u WHERE lower(u.email) = $1", "expression"),
+    ],
+    ids=["btree", "ifade"],
+)
+async def test_without_hypopg_advice_is_an_estimate_and_says_so(admin, dsn, query, index_kind):
+    no_hypopg = await asyncpg.connect(with_database(dsn, NO_HYPOPG_DATABASE), statement_cache_size=0)
+    try:
+        await prepare_live_database(no_hypopg)
+        assert not await no_hypopg.fetchval("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'hypopg')")
+    finally:
+        await no_hypopg.close()
+
+    with_ext = await PostgreSQLIndexAdvisor(target_for(dsn, "super")).advise(query, 1000, min_calls=5)
+    without = await PostgreSQLIndexAdvisor(target_for(dsn, "super", database=NO_HYPOPG_DATABASE)).advise(query, 1000, min_calls=5)
+
+    a = next(x for x in with_ext.recommendations if x.index_kind == index_kind)
+    b = next(x for x in without.recommendations if x.index_kind == index_kind)
+    log(
+        f"{await _version(admin)} {index_kind}",
+        f"hypopg VAR: %{a.estimated_improvement_pct} ölçüm={a.has_hypopg_estimate} maliyet={a.before_cost}→{a.after_cost} | "
+        f"hypopg YOK: %{b.estimated_improvement_pct} seçicilik=%{b.estimated_selectivity_pct} ölçüm={b.has_hypopg_estimate} "
+        f"notlar={b.measurement_notes}",
+    )
+    assert a.index_ddl == b.index_ddl, "öneri hypopg'nin varlığından bağımsız aynı olmalı"
+    assert a.has_hypopg_estimate and a.before_cost and a.after_cost
+    assert not b.has_hypopg_estimate and b.before_cost is None and b.after_cost is None
+    assert any("hypopg kurulu değil" in note and "ÖLÇÜLMEDİ" in note for note in b.measurement_notes)
+    # Ölçüm yoksa YÜZDE YOK: istatistik formülü ölçülen faydadan 2,6 kat sapıyordu (%88,6 / %34).
+    assert b.estimated_improvement_pct is None
+    if index_kind == "btree":
+        # Eşitlik filtresinin (status) pg_stats seçiciliği veriliyor; aralık (created_at) için değil.
+        assert b.estimated_selectivity_pct is not None and 0 < b.estimated_selectivity_pct <= 100
+        assert any("Aralık filtreleri (created_at)" in note for note in b.measurement_notes)

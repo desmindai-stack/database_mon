@@ -614,6 +614,11 @@ class SlowQueryOut(BaseModel):
     # Faz 18 İŞ 2: sistem/platform sorgusu mu, öyleyse hangi kurala takıldı.
     is_system: bool = False
     system_reason: str | None = None
+    # Faz 31 Commit 4: imzalı metin ama dbace dışı rolden çağrı — gizlenmedi, işaretli.
+    marker_conflict: bool = False
+    marker_note: str | None = None
+    # pg_stat_statements.toplevel: False = iç içe çalıştırma (ayrı sayaç). None = bilinmiyor.
+    toplevel: bool | None = None
     # Pencerede kaç örnek görüldü — 1 ise fark hesaplanamamıştır.
     sample_count: int = 0
 
@@ -1161,6 +1166,11 @@ class IndexAdviceOut(BaseModel):
     # btree | expression | like_prefix | trigram
     index_kind: str = "btree"
     measurement_notes: list[str] = []
+    # hypopg yokken eşitlik filtrelerinin pg_stats seçiciliği (satırların %'si). Fayda DEĞİL.
+    estimated_selectivity_pct: float | None = None
+    # False = sunucuda doğrulanamadı; arayüzde ayrı bölüm (Faz 31 Commit 4).
+    verified: bool = True
+    verification_note: str | None = None
     # Faz 17 Ek İŞ B: rapor ve dashboard ile AYNI öneri yapısı — arayüzde tek bileşen.
     advice: AdviceOut | None = None
 
@@ -1189,6 +1199,19 @@ class IndexPredicateOut(BaseModel):
     text: str = ""
     usable: bool
     unusable_reason: str | None = None
+
+
+class IndexRequiredGrantTableOut(BaseModel):
+    table: str
+    privilege: str
+    # Bu yetkinin NEDEN gerektiği — hangi ölçüm/doğrulama yapılamadı.
+    reasons: list[str]
+
+
+class IndexRequiredGrantsOut(BaseModel):
+    tables: list[IndexRequiredGrantTableOut]
+    command: str
+    note: str
 
 
 class IndexAdviceThresholdOut(BaseModel):
@@ -1221,6 +1244,7 @@ class IndexAdviceReportOut(BaseModel):
     advice: list[IndexAdviceOut]
     no_advice_reasons: list[NoAdviceReasonOut]
     predicates: list[IndexPredicateOut] = []
+    required_grants: IndexRequiredGrantsOut | None = None
     threshold: IndexAdviceThresholdOut | None = None
     watch: IndexAdviceWatchOut | None = None
 
