@@ -189,3 +189,25 @@ def test_bind_parameter_and_track_utility_reasons_reach_the_ui_instead_of_an_emp
     backend = (FRONTEND.parents[1] / "backend" / "app" / "services" / "plan_source.py").read_text(encoding="utf-8")
     assert "PARAMETRELİ" in backend and "bind" in backend
     assert "track_utility" in backend and "okunamadı" in backend.lower()
+
+
+def test_no_percentage_without_hypopg_and_measured_outcomes_are_shown():
+    """Faz 31 Commit 5 kararı: hypopg yokken yüzde yok (seçicilik yüzdesi dahil); ölçülmüş etki
+    kendi bölümünde, kaynak etiketiyle."""
+    panel = (FRONTEND / "components" / "IndexAdvicePanel.tsx").read_text(encoding="utf-8")
+    assert "estimated_selectivity_pct" not in panel
+    assert "hypopg ile ölçüldü" in panel and "hypopg tahmini" in panel
+    assert "export function AdviceOutcomeList" in panel and "outcomes[0].source_label" in panel
+    assert 'o.status === "measured"' in panel
+    page = (FRONTEND / "pages" / "InstanceDetailPage.tsx").read_text(encoding="utf-8")
+    assert "<AdviceOutcomeList" in page and "adviceOutcomesError" in page
+
+
+def test_shared_monitoring_role_and_capture_state_reach_the_ui():
+    page = (FRONTEND / "pages" / "InstanceDetailPage.tsx").read_text(encoding="utf-8")
+    assert 'monitoring_role.status === "shared"' in page and "setup_command" in page
+    assert 'monitoring_role.status === "unmeasured"' in page
+    panel = (FRONTEND / "components" / "PlanSourcePanel.tsx").read_text(encoding="utf-8")
+    for kind in ("not_measured", "disabled_on_target", "no_plans_yet"):
+        assert kind in panel
+    assert "unavailable_kind" in panel

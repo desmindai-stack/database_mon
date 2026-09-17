@@ -331,10 +331,13 @@ def is_sample_candidate(text: str) -> bool:
     sürücüler pg_stat_activity'de `$1` gösteriyor — PG 17 ve 15'te ölçüldü. Kesik metin
     çalıştırılamaz; dbace'in kendi sorgusu ve sistem sorguları öneri konusu değil.
     """
+    from app.services.query_text_privacy import is_utility_statement
     from app.services.slow_query_selection import classify_system_query
     from app.services.sql_analysis import detect_truncation
 
-    if _has_placeholders(text) or classify_system_query(text):
+    # Yardımcı ifade (SET, DO, ALTER ROLE ...) ANALYZE edilemez ve değer taşıyor — ayar açık olsa
+    # bile örnek olarak saklanmıyor (Faz 31 Commit 5: DO bloğunun metni saklanıyordu).
+    if _has_placeholders(text) or classify_system_query(text) or is_utility_statement(text):
         return False
     return not detect_truncation(text).truncated
 
@@ -349,6 +352,8 @@ async def _write_samples(
     session: AsyncSession, instance_id: int, samples: dict[str, tuple[str, float]], *, captured_at: datetime
 ) -> None:
     """Örneği, saklanan örnekten DAHA YAVAŞSA değiştirir: temsili örnek en yavaş çalıştırma."""
+    from app.services.query_text_privacy import sanitize_stored_query
+
     rows = (
         await session.execute(
             select(WaitQuerySignature).where(
@@ -360,7 +365,8 @@ async def _write_samples(
     for row in rows:
         text, elapsed = samples[row.queryid]
         if row.sample_duration_ms is None or elapsed > row.sample_duration_ms:
-            row.sample_query_text = text
+            # Yardımcı ifade örneğe hiç girmiyor (is_sample_candidate); ikinci savunma.
+            row.sample_query_text = sanitize_stored_query(text, keep_values=True)
             row.sample_duration_ms = round(elapsed, 3)
             row.sample_captured_at = captured_at
 
@@ -378,13 +384,13 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
     yükseltme durumu için: Faz 31 öncesinde `query_text` her zaman ham metindi. İşlem
     idempotent. Değişen satır sayısını döner.
     """
-    from app.services.sql_analysis import normalize_literals
+    from app.services.query_text_privacy import sanitize_stored_query
 
     keep_samples = await _store_real_query_samples(session)
     changed = 0
     rows = (await session.execute(select(WaitQuerySignature))).scalars().all()
     for row in rows:
-        normalized = normalize_literals(row.query_text or "")
+        normalized = sanitize_stored_query(row.query_text or "", keep_values=False)
         drop_sample = not keep_samples and row.sample_query_text is not None
         if normalized != row.query_text or drop_sample:
             row.query_text = normalized
@@ -399,7 +405,7 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
 
         plans = (await session.execute(select(CapturedPlan))).scalars().all()
         for plan in plans:
-            text = normalize_literals(plan.query_text or "")
+            text = sanitize_stored_query(plan.query_text or "", keep_values=False)
             body = strip_plan_values(plan.plan_json) if plan.plan_json is not None else None
             if text != plan.query_text or body != plan.plan_json:
                 plan.query_text = text
@@ -417,9 +423,8 @@ async def _write_signatures(session: AsyncSession, instance_id: int, texts: dict
     pg_stat_activity'nin ham metni yazılıyordu ve yük kırılımında gerçek değerler görünüyordu.
     Gerçek değer yalnızca `sample_*` alanlarında ve yalnızca ayar açıkken.
     """
-    from app.services.sql_analysis import normalize_literals
+    from app.services.query_text_privacy import sanitize_stored_query
 
-    texts = {qid: normalize_literals(text) for qid, text in texts.items()}
     unknown = {qid: text for qid, text in texts.items() if (instance_id, qid) not in _known_signatures}
     if not unknown:
         return
@@ -443,7 +448,7 @@ async def _write_signatures(session: AsyncSession, instance_id: int, texts: dict
             WaitQuerySignature(
                 instance_id=instance_id,
                 queryid=queryid,
-                query_text=text,
+                query_text=sanitize_stored_query(text, keep_values=False),
                 first_seen_at=now,
                 last_seen_at=now,
             )

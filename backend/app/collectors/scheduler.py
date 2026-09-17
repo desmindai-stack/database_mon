@@ -25,6 +25,7 @@ from app.services.health_report import run_scheduled_reports
 from app.services.settings import get_dashboard_refresh_interval, get_health_report_schedule
 from app.services.prediction_accuracy import evaluate_due_outcomes
 from app.services.backup_collection import backup_collection_tick
+from app.services.index_advice_outcome import outcome_tick as run_index_advice_outcome_tick
 from app.services.index_advice_watch import index_advice_watch_tick as run_index_advice_watch_tick
 from app.services.plan_capture import capture_plans_tick
 from app.services.wait_sampling import sampling_tick, shutdown_sampling
@@ -42,6 +43,7 @@ WAIT_SAMPLING_JOB_ID = "wait_event_sampling"
 PLAN_CAPTURE_JOB_ID = "auto_explain_plan_capture"
 BACKUP_JOB_ID = "backup_monitoring"
 INDEX_ADVICE_WATCH_JOB_ID = "index_advice_watch"
+STORED_TEXT_CLEANUP_JOB_ID = "stored_query_text_cleanup"
 # Fixed tick for custom alert rules — each rule's own interval_seconds is honored inside
 # evaluate_custom_alert_rules (per-rule "due" check), not by scheduling one job per rule.
 CUSTOM_RULES_TICK_SECONDS = 10
@@ -199,6 +201,24 @@ async def index_advice_watch_tick() -> None:
             )
     except Exception:
         logger.exception("Index önerisi izleme turu başarısız")
+    # Faz 31 Commit 5: kurulan index'in ölçülmüş etkisi — izleme ayarından bağımsız.
+    try:
+        measured = await run_index_advice_outcome_tick()
+        if measured.get("measured"):
+            logger.info("Index etkisi ölçüldü: %s kayıt", measured["measured"])
+    except Exception:
+        logger.exception("Index etkisi ölçüm turu başarısız")
+
+
+async def stored_text_cleanup_tick() -> None:
+    """Faz 31 Commit 5: var olan satırlardaki yardımcı ifade değerlerinin tek seferlik temizliği."""
+    from app.services.query_text_privacy import run_stored_text_cleanup
+
+    async with SessionLocal() as session:
+        try:
+            await run_stored_text_cleanup(session)
+        except Exception:
+            logger.exception("Saklanan sorgu metni temizliği başarısız")
 
 
 async def backup_tick() -> None:
@@ -350,6 +370,15 @@ async def start_scheduler() -> None:
             next_run_time=datetime.now(),
         )
 
+    # Tek seferlik: tamamlanınca sürüm anahtarı yazılıyor, sonraki başlangıçlarda anında dönüyor.
+    scheduler.add_job(
+        stored_text_cleanup_tick,
+        "date",
+        run_date=datetime.now(),
+        id=STORED_TEXT_CLEANUP_JOB_ID,
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.add_job(
         daily_health_report_tick,
         "cron",

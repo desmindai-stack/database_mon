@@ -107,6 +107,8 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 47 | `20260916090700_wait_query_signature_samples.sql` | **YENİ** — wait_query_signatures: gerçek değerli temsili örnek (sample_query_text/duration/captured_at, ayar varsayılan KAPALI) ve seen_bind_parameters. CONCURRENTLY YOK |
 | 48 | `20260916090800_real_value_cleanup.sql` | **YENİ** — geriye dönük temizlik: wait_query_signatures metni, (ayar kapalıysa) örnekler ve auto_explain planları, EXPLAIN satırları değerlerden arındırılır. **ÖNCE ÖLÇÜN** (aşağıda). #47'den SONRA. CONCURRENTLY YOK |
 | 49 | `20260916090900_slow_query_sample_origin.sql` | **YENİ** — slow_query_samples: from_monitoring_role, toplevel (imzalı satırın dbace'in kendi rolünden gelip gelmediği; iç içe çalıştırma). CONCURRENTLY YOK |
+| 50 | `20260917090000_instance_observation_status.sql` | **YENİ** — instances: izleme rolü paylaşımı (monitoring_role_checked_at/shared_at/shared_apps) ve plan yakalama durumu (auto_explain_loaded, plan_capture_checked_at/error/found). CONCURRENTLY YOK |
+| 51 | `20260917090100_index_advice_outcomes.sql` | **YENİ** — index_advice_outcomes: index önerisinin ölçülmüş etkisi (index kurulmadan önce ve sonra aynı sorgunun planlayıcı maliyeti). CONCURRENTLY YOK |
 
 ## Faz 31: migration adları ve geriye dönük temizlik
 
@@ -194,6 +196,133 @@ FROM app_settings WHERE key = 'analysis_store_real_query_samples' AND value = 't
 ```
 
 #48 çalıştıktan sonra aynı sorgu (1)'de ve ayar kapalıysa (2)/(3)'te **0** vermelidir.
+
+## Faz 31 Commit 5: ölçüm SQL'leri (hepsi salt okunur)
+
+Hepsi `BEGIN READ ONLY … ROLLBACK` içinde; yerelde gerçek PostgreSQL'de (15/16/17) uygulamanın
+şemasıyla doğrulandı.
+
+### Yardımcı ifade değerleri (SET, ALTER/CREATE ROLE PASSWORD, DO)
+
+pg_stat_statements `track_utility=on` iken bu ifadeleri DEĞERLERİYLE saklıyor (15.19/16.15/17.11
+ölçüldü) ve dbace eskiden slow_query_samples, blocking_episodes ve deadlock_events'e ham yazıyordu.
+Yeni sürümün worker'ı ilk açılışta mevcut satırları BİR KEZ arındırır (`app_settings.
+stored_query_text_cleanup_version`); migration gerekmez. Parçalı çalışır (2000'er satır).
+
+```sql
+-- Faz 31 Commit 5 — dbace veritabanında yardımcı ifade (SET, ALTER/CREATE ROLE, DO …) değeri ÖLÇÜMÜ (SALT OKUNUR).
+-- Worker yeni sürümle ilk açıldığında tek seferlik temizlik bunları arındırır; sonra ilk beş satır 0 olmalı.
+-- Dolar tırnaklı sabit sayılmıyor: arındırılmış DO gövdesi $$ sınırlarını koruyor (yanlış pozitif olurdu).
+BEGIN READ ONLY;
+WITH p AS (
+    SELECT '(?<![[:alnum:]_$])[EeNn]?''([^'']|'''')*''' AS s,
+           'PASSWORD içeren ifade — metin saklanmadı' AS redacted,
+           '^\s*(/\*.*?\*/\s*|--[^\n]*\n\s*|\(\s*)*(select|insert|update|delete|merge|with|values|table)\M' AS plannable
+)
+SELECT 'slow_query_samples — PASSWORD içeren yardımcı ifade' AS olcum, count(*) AS adet
+FROM slow_query_samples, p
+WHERE query ~* '\mpassword\M' AND query !~* p.plannable AND position(p.redacted IN query) = 0
+UNION ALL
+SELECT 'slow_query_samples — dizgi sabiti taşıyan yardımcı ifade', count(*)
+FROM slow_query_samples, p
+WHERE query !~* p.plannable AND query ~ p.s AND position(p.redacted IN query) = 0
+UNION ALL
+SELECT 'blocking_episodes — dizgi sabiti taşıyan kök sorgu', count(*)
+FROM blocking_episodes, p WHERE root_query ~ p.s
+UNION ALL
+SELECT 'deadlock_events — dizgi sabiti taşıyan kurban/kazanan ya da PASSWORD içeren ayrıntı', count(*)
+FROM deadlock_events, p
+WHERE victim_query ~ p.s OR winner_query ~ p.s
+   OR (raw_detail ~* '\mpassword\M' AND position(p.redacted IN raw_detail) = 0)
+UNION ALL
+SELECT 'wait_query_signatures — örnekte yardımcı ifade', count(*)
+FROM wait_query_signatures, p WHERE sample_query_text IS NOT NULL AND sample_query_text !~* p.plannable
+UNION ALL
+SELECT 'tek seferlik temizlik tamamlandı mı (1 = evet)', count(*)
+FROM app_settings WHERE key = 'stored_query_text_cleanup_version' AND value = '1';
+ROLLBACK;
+```
+
+Worker açıldıktan sonra son satır 1, ilk beş satır 0 olmalı.
+
+### wait_query_signatures — #48 sonrası değer taşıyan satır
+
+Beklenen `deger_tasiyan = 0`. #48 ÖNCESİ ölçümdeki "78 satırın 40'ı" dbace'in KENDİ kod sabitlerini
+de sayıyordu (`'client backend'`, `'active'`, `LEFT(query, 4000)`, `COALESCE(…, 0)`, `'8000ms'`) —
+ayrım burada `deger_tasiyan_dbace_imzali` sütununda.
+
+```sql
+-- Faz 31 Commit 5 — #48 SONRASI wait_query_signatures doğrulaması (SALT OKUNUR). Beklenen: deger_tasiyan = 0.
+-- Desenler #48 ölçüm SQL'iyle aynı. dbace'in KENDİ sorguları ayrı sayılıyor: #48 ÖNCESİ ölçümde
+-- (78 satırın 40'ı) dbace'in kod sabitleri ('client backend', 'active', LEFT(query, 4000), 0 …)
+-- da "değer" sayılıyordu — bunlar kullanıcı verisi değil.
+BEGIN READ ONLY;
+WITH p AS (
+    SELECT '(?<![[:alnum:]_$])[Nn]?''([^'']|'''')*''' AS s,
+           '(?<![[:alnum:]_$.])-?[0-9]+(\.[0-9]+)?([eE][-+]?[0-9]+)?(?![[:alnum:]_.])' AS n
+),
+x AS (
+    SELECT (w.query_text ~ p.s OR w.query_text ~ p.n) AS deger,
+           position('/* dbace */' IN w.query_text) > 0 AS dbace
+    FROM wait_query_signatures w, p
+)
+SELECT count(*)                                   AS toplam,
+       count(*) FILTER (WHERE deger)              AS deger_tasiyan,
+       count(*) FILTER (WHERE deger AND dbace)     AS deger_tasiyan_dbace_imzali,
+       count(*) FILTER (WHERE deger AND NOT dbace) AS deger_tasiyan_uygulama
+FROM x;
+ROLLBACK;
+```
+
+### captured_plans = 0 ve slow_query_samples saklama durumu
+
+#50'den önce de çalışır:
+
+```sql
+BEGIN READ ONLY;
+-- 6a. captured_plans = 0: hangi durum? (#50 ÖNCESİ de çalışır)
+SELECT i.id, i.name,
+       (i.options::jsonb ->> 'agent_url') IS NOT NULL                     AS agent_tanimli,
+       (SELECT count(*) FROM captured_plans c WHERE c.instance_id = i.id) AS yakalanan_plan,
+       i.last_collect_ok_at                                               AS son_basarili_toplama
+FROM instances i
+WHERE i.engine = 'postgresql' AND i.enabled
+ORDER BY i.id;
+-- 6b. saklama politikası çalışıyor mu (slow_query_samples)
+SELECT (SELECT value FROM app_settings WHERE key = 'metrics_retention_days')        AS saklama_gun_ayari,
+       (SELECT value FROM app_settings WHERE key = 'retention_last_run_at')         AS son_temizlik,
+       (SELECT value FROM app_settings WHERE key = 'retention_last_deleted_count')  AS son_silinen,
+       count(*)                                                                     AS satir,
+       min(collected_at)                                                            AS en_eski,
+       max(collected_at)                                                            AS en_yeni,
+       count(*) FILTER (WHERE collected_at < now() - make_interval(days =>
+           coalesce((SELECT value::int FROM app_settings WHERE key = 'metrics_retention_days'), 30))) AS pencere_disinda,
+       pg_size_pretty(pg_total_relation_size('slow_query_samples'))                 AS toplam_boyut,
+       pg_size_pretty(pg_relation_size('slow_query_samples'))                       AS tablo_boyutu,
+       round(avg(octet_length(query)))                                              AS ort_metin_bayt,
+       count(DISTINCT coalesce(queryid, md5(query)))                                AS farkli_sorgu
+FROM slow_query_samples;
+SELECT instance_id, count(*) AS satir, min(collected_at) AS en_eski, max(collected_at) AS en_yeni,
+       count(DISTINCT collected_at) AS toplama_dongusu,
+       round(count(*)::numeric / greatest(count(DISTINCT collected_at), 1), 1) AS dongu_basina_satir
+FROM slow_query_samples GROUP BY instance_id ORDER BY satir DESC;
+ROLLBACK;
+```
+
+#50 çalıştırılıp worker bir tur döndükten sonra (arayüzün gösterdiği ayrımın kaynağı):
+
+```sql
+BEGIN READ ONLY;
+-- 6a (#50 SONRASI ve worker bir tur çalıştıktan sonra): arayüzün gösterdiği ayrım
+SELECT i.id, i.name,
+       (i.options::jsonb ->> 'agent_url') IS NOT NULL AS agent_tanimli,
+       i.auto_explain_loaded, i.plan_capture_checked_at, i.plan_capture_error, i.plan_capture_found,
+       (SELECT count(*) FROM captured_plans c WHERE c.instance_id = i.id) AS yakalanan_plan
+FROM instances i
+WHERE i.engine = 'postgresql' AND i.enabled
+ORDER BY i.id;
+ROLLBACK;
+```
 
 ## CONCURRENTLY kullanan migration'lar — SQL Editor'den ÇALIŞTIRILAMAZ
 

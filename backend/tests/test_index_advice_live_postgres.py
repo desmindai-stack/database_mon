@@ -272,7 +272,7 @@ async def test_monitor_role_gets_measurement_notes_not_fabricated_numbers(admin,
     assert advice.estimated_improvement_pct is None, "ölçülemeyen fayda için yüzde uydurulmamalı"
     assert any("SELECT" in note and "yetki" in note for note in advice.measurement_notes)
     assert set(result.required_grants) == {"public.orders"}
-    assert len(result.required_grants["public.orders"]) == 2, "seçicilik ve fayda ölçümü — iki ayrı neden"
+    assert len(result.required_grants["public.orders"]) == 2, "istatistik denetimi ve fayda ölçümü — iki ayrı neden"
 
 
 async def test_monitor_role_expression_index_is_proposed_as_unverified_with_grant_reasons(admin, dsn):
@@ -472,7 +472,7 @@ async def test_without_hypopg_advice_is_an_estimate_and_says_so(admin, dsn, quer
     log(
         f"{await _version(admin)} {index_kind}",
         f"hypopg VAR: %{a.estimated_improvement_pct} ölçüm={a.has_hypopg_estimate} maliyet={a.before_cost}→{a.after_cost} | "
-        f"hypopg YOK: %{b.estimated_improvement_pct} seçicilik=%{b.estimated_selectivity_pct} ölçüm={b.has_hypopg_estimate} "
+        f"hypopg YOK: %{b.estimated_improvement_pct} ölçüm={b.has_hypopg_estimate} "
         f"notlar={b.measurement_notes}",
     )
     assert a.index_ddl == b.index_ddl, "öneri hypopg'nin varlığından bağımsız aynı olmalı"
@@ -482,6 +482,7 @@ async def test_without_hypopg_advice_is_an_estimate_and_says_so(admin, dsn, quer
     # Ölçüm yoksa YÜZDE YOK: istatistik formülü ölçülen faydadan 2,6 kat sapıyordu (%88,6 / %34).
     assert b.estimated_improvement_pct is None
     if index_kind == "btree":
-        # Eşitlik filtresinin (status) pg_stats seçiciliği veriliyor; aralık (created_at) için değil.
-        assert b.estimated_selectivity_pct is not None and 0 < b.estimated_selectivity_pct <= 100
+        # Faz 31 Commit 5: seçicilik yüzdesi de yok; aralık kolonu için gerekçe kalıyor.
+        assert not hasattr(b, "estimated_selectivity_pct")
+        assert not any("%" in note for note in b.measurement_notes), b.measurement_notes
         assert any("Aralık filtreleri (created_at)" in note for note in b.measurement_notes)

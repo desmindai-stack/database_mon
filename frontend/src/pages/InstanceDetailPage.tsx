@@ -28,6 +28,7 @@ import {
   formatBytes,
   formatTime,
   IndexAdviceReport,
+  IndexAdviceOutcome,
   IndexAdviceWatch,
   Instance,
   InstanceSummary,
@@ -48,7 +49,7 @@ import ActivityPanel from "../components/ActivityPanel";
 import ClusterHealthPanel from "../components/ClusterHealthPanel";
 import BlockingTreePanel from "../components/BlockingTreePanel";
 import DatabaseLoadPanel from "../components/DatabaseLoadPanel";
-import { AdviceWatchList, IndexAdviceResult } from "../components/IndexAdvicePanel";
+import { AdviceOutcomeList, AdviceWatchList, IndexAdviceResult } from "../components/IndexAdvicePanel";
 import CopyableAction from "../components/CopyableAction";
 import PlanSourcePanel from "../components/PlanSourcePanel";
 import PredictionPlaybook from "../components/PredictionPlaybook";
@@ -198,6 +199,8 @@ export default function InstanceDetailPage() {
   const [bulkAdviceSummary, setBulkAdviceSummary] = useState<string | null>(null);
   const [adviceWatches, setAdviceWatches] = useState<IndexAdviceWatch[] | null>(null);
   const [adviceWatchesError, setAdviceWatchesError] = useState<string | null>(null);
+  const [adviceOutcomes, setAdviceOutcomes] = useState<IndexAdviceOutcome[] | null>(null);
+  const [adviceOutcomesError, setAdviceOutcomesError] = useState<string | null>(null);
   const [adviceLoading, setAdviceLoading] = useState<Record<number, boolean>>({});
   const [bulkAdviceRunning, setBulkAdviceRunning] = useState(false);
   const [selectedTime, setSelectedTime] = useState<string | null>(null);
@@ -240,6 +243,12 @@ export default function InstanceDetailPage() {
       setAdviceWatchesError(null);
     } catch (e) {
       setAdviceWatchesError(String((e as Error).message || e));
+    }
+    try {
+      setAdviceOutcomes(await api.getAdviceOutcomes(instanceId));
+      setAdviceOutcomesError(null);
+    } catch (e) {
+      setAdviceOutcomesError(String((e as Error).message || e));
     }
   };
 
@@ -1468,6 +1477,23 @@ export default function InstanceDetailPage() {
           >
             {bulkAdviceSummary && <p className="advice-threshold">{bulkAdviceSummary}</p>}
             <AdviceWatchList watches={adviceWatches} error={adviceWatchesError} />
+            <AdviceOutcomeList outcomes={adviceOutcomes} error={adviceOutcomesError} />
+            {/* Faz 31 Commit 5: izleme rolü uygulamayla paylaşılıyorsa köken ayrımı ölçülemez. */}
+            {queryList?.monitoring_role && queryList.monitoring_role.status === "shared" && (
+              <div className="advice-grants">
+                <p className="advice-empty">
+                  {queryList.monitoring_role.message}
+                  {queryList.monitoring_role.applications.length > 0 &&
+                    ` Görülen uygulama: ${queryList.monitoring_role.applications.join(", ")}.`}
+                </p>
+                {queryList.monitoring_role.setup_command && (
+                  <CopyableAction command={queryList.monitoring_role.setup_command} />
+                )}
+              </div>
+            )}
+            {queryList?.monitoring_role && queryList.monitoring_role.status === "unmeasured" && (
+              <p className="muted-note">{queryList.monitoring_role.message}</p>
+            )}
             {/* Faz 18 İŞ 1: hangi pencereye bakıldığı ve neyin filtrelendiği açıkça yazılı —
                 rapor ile DPA'nın aynı veriyi gösterdiğini kullanıcı buradan doğrulayabiliyor. */}
             <p className="muted-note">

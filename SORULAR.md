@@ -2440,13 +2440,18 @@ SELECT YOK). Öneri raporu "Gereken yetkiler" bölümünde tablo başına hangi 
 **Ölçüm:** aynı sorgu ve veride istatistik formülü "%88,6 iyileşme" diyordu; hypopg ile ölçülen
 %34 (PG 15/16/17 aynı). 2,6 kat sapma. Bankada hypopg olmayacağı için her öneri bu yoldan geçerdi.
 
-**Karar (bu turda verildi, geri alınabilir):** hypopg yokken yüzde yok. Yalnızca eşitlik
-filtrelerinin pg_stats seçiciliği (1/n_distinct, planlayıcının temeli) "fayda değil, seçicilik"
-diye gösteriliyor; aralık filtreleri için tahmin yapılmıyor. Önceki aralık/sıralama katsayıları
-(×3, ×5) kanıtsızdı ve kaldırıldı.
+**KARAR (Faz 31 Commit 5, kullanıcı):** hypopg yokken HİÇBİR yüzde gösterilmiyor — eşitlik
+seçiciliği yüzdesi de kaldırıldı. Asıl fayda yolu: öneri anında sorgunun değerden bağımsız planı
+("önce") kaydediliyor; index hedefte kurulunca aynı sorgunun planı yeniden alınıyor ("sonra") ve
+planlayıcı maliyeti karşılaştırılıyor (`index_advice_outcomes`, #51). Etiket: "Ölçüldü … sorgu
+çalıştırılmadı, planlayıcı maliyeti; çalışma süresi değil". hypopg varsa öneri anındaki tahmin
+"hypopg tahmini" etiketiyle ek seçenek olarak kalıyor.
 
-**Açık soru:** bankada fayda nasıl gösterilecek? Seçenekler: hypopg'nin onaylanması, test
-ortamında ölçüm, ya da index oluşturulduktan sonra EXPLAIN (ANALYZE) karşılaştırması.
+**Bilinen sınırlar:** (1) Karşılaştırılan maliyet, süre değil — gerçek süre farkı için
+pg_stat_statements'ta index öncesi/sonrası ortalama süre ayrıca izlenebilir (yapılmadı). (2) "Sonra"
+ölçümü, kayıtta olmayan ve anahtar kolonları öneriyle BAŞLAYAN geçerli bir index görülünce
+alınıyor; farklı kolon sırasıyla kurulan index eşleşmez. (3) Yer tutuculu sorguda generic plan
+kullanılıyor; değere bağlı seçicilik farkı yansımaz.
 
 ## Faz 31 Commit 4: imza filtresinin sınırı — izleme rolü uygulamayla paylaşılıyorsa
 
@@ -2459,6 +2464,15 @@ dbace'in imzalı metni altında "sistem sorgusu" sayılabilir.
 **Kurulum önerisi (on-prem):** dbace'e ayrı bir izleme rolü verin; uygulamanın rolünü
 kullandırmayın.
 
+**Faz 31 Commit 5 — artık ölçülüyor:** toplayıcı her döngüde dbace'in rolünde `application_name`
+'dbace' olmayan istemci oturumu arıyor. Görülürse yavaş sorgu listesi "Ölçülemedi: izleme rolü
+uygulamayla paylaşılıyor" diyor ve CREATE ROLE + GRANT pg_monitor bloğunu veriyor; kanıt 24 saat
+geçerli (gece çalışan iş). Hiç ölçülmediyse ya da son kontrol 1 saatten eskiyse "ölçülmedi" —
+"ayrı" varsayılmıyor. **Sınır:** imzasız sorgu METNİNE bakılmıyor (asyncpg'nin iç tip sorguları
+dbace bağlantısında imzasız görünür ve yanlış alarm verirdi); `application_name`'i 'dbace' yapan
+bir uygulama yakalanmaz. Anlık oturum görünümü: toplama anında bağlı olmayan kısa ömürlü bağlantı
+kaçabilir.
+
 ## Faz 31 Commit 4: engellenen asyncpg yolları
 
 `MarkedConnection` şu metotları ENGELLİYOR (çağrılırsa hata; imzasız SQL göndermiyor):
@@ -2468,12 +2482,74 @@ kullandırmayın.
 `reset_type_codec`. dbace'in PostgreSQL kodu hiçbirini kullanmıyor. Biri gerekirse önce imzalı
 bir yolu yazılmalı.
 
-## Faz 31 Commit 4: CI canlı PostgreSQL testlerini koşmuyor
+## Faz 31: CI'da canlı PostgreSQL — KARAR (Commit 5)
 
-CI'da `DBACE_TEST_PG_DSN` ve PostgreSQL servisi yok; 83 canlı test atlanıyor (ölçüldü). Bu
-özellik sınıfındaki hataların hepsi yalnızca canlı testte yakalandı. **Açık soru:** CI'a
-PostgreSQL servis konteyneri (15/16/17 matrisi, hypopg paketiyle) eklensin mi? Süreyi ~5 dk
-uzatır.
+**Karar (kullanıcı):** CI'a 15/16/17 matrisi, hypopg dahil, `scripts/live_pg.py` ile aynı kurulum.
+`live-postgres` işi GitHub `services:` değil betiğin kendisini çalıştırıyor: servis konteynerine
+sunucu argümanı (`shared_preload_libraries`) verilemiyor. DSN tanımlıyken bir canlı test sürüm
+koşulu dışında bir sebeple atlanırsa oturum kırmızı (`tests/conftest.py`). **Doğrulanmadı:** iş
+push edilmediği için GitHub'da henüz koşmadı; yerelde aynı komutlarla sürüm başına koşuldu
+(ILERLEME.md). Olası CI'a özgü sorun: `docker exec … apt-get install postgresql-N-hypopg` ağ
+erişimi ister.
+
+## Faz 31 Commit 5: yardımcı ifadelerde değer sızıntısı — ölçüm ve kural
+
+**Ölçüldü (15.19/16.15/17.11, track_utility=on):** `SET x = 'gizli'`, `ALTER ROLE r PASSWORD 'gizli'`,
+`CREATE ROLE r2 PASSWORD 'gizli'`, `DO $$ … 'gizli' … $$` pg_stat_statements'ta birebir, değeriyle
+saklanıyor (16+'da normalize edilen yalnızca EXPLAIN sabitleriydi). Gerçek yollarla dbace'e yazılan
+yerler: slow_query_samples.query (ALTER/CREATE ROLE PASSWORD, DO), blocking_episodes.root_query
+(kök engelleyicinin SET'i), deadlock_events.victim_query/winner_query/raw_detail (sunucu log'u),
+wait_query_signatures.sample_query_text (ayar açıkken DO). Ayar kapalıyken de.
+
+**Kural:** yardımcı ifade + PASSWORD → metin saklanmıyor, yalnızca ifade türü; diğer yardımcı
+ifadelerde dizgi/E''/dolar tırnak/sayı sabitleri `$n` (ayardan bağımsız); pg_stat_activity ve log
+kaynaklı metin (bloklama, deadlock) planlanabilir olsa da her zaman arındırılıyor. Mevcut satırlar
+worker'ın ilk açılışında bir kez.
+
+**Sınırlar:** (1) "Yardımcı ifade" ilk kelimeden anlaşılıyor (SELECT/INSERT/UPDATE/DELETE/MERGE/
+WITH/VALUES/TABLE dışı); `SELECT … INTO` PostgreSQL'de yardımcıdır ama planlanabilir sayılıyor.
+(2) PASSWORD kelimesi olmadan parola taşıyan biçimler (ör. `CREATE SERVER … OPTIONS (secret 'x')`)
+yalnızca sabit arındırmasıyla korunuyor. (3) Planlanabilir ifadenin pg_stat_statements metnine
+dokunulmuyor (PostgreSQL zaten normalize ediyor).
+
+## Faz 31 Commit 5: on-prem YENİ kurulumda şema eksik — ÇÖZÜLMEDİ (deploy/ kapsam dışı)
+
+**Ölçüldü (gerçek PostgreSQL, `tests/test_schema_parity_live_postgres.py`):** `supabase/migrations`
+tamamı modellerle tablo+kolon düzeyinde birebir (33 tablo, 435 kolon, fark yok). SQLite yolu da
+(`create_all` + `migrate_schema`) sıfırdan ve yükseltmede birebir. **On-prem yeni kurulum yolu
+farklı:** `deploy/onprem/docker-compose.yml` initdb'ye yalnızca ilk DÖRT migration'ı bağlıyor,
+uygulama açılışta `create_all` çalıştırıyor — `create_all` var olan tabloya kolon eklemiyor ve
+`migrate_schema` PostgreSQL'de no-op. Sonuç: alert_events, alert_rules, instances,
+prediction_insights, slow_query_samples'ta **60 kolon eksik**; toplayıcı şema hatası verir.
+KURULUM.md "uygulama eksik kolonları kendisi oluşturur" diyor — PostgreSQL'de doğru değil.
+
+**Öneri (uygulanmadı):** on-prem compose initdb'ye bütün migration'ları sırayla bağlamak ya da
+kurulum betiğinde DEPLOY.md sırasıyla uygulamak. Test `xfail(strict=True)`: düzeltilince kırmızıya
+döner ve işaret kaldırılmalı.
+
+## Faz 31 Commit 5: slow_query_samples saklama — ÖNERİ (uygulanmadı)
+
+**Durum (koddan):** politika VAR — `run_retention_cleanup` slow_query_samples'ı `collected_at`'e göre
+siliyor, varsayılan 30 gün, her gece 03:00 cron (worker yeniden başlasa da kaçmıyor). Bugüne kadar
+hiçbir test işin SİLDİĞİNİ sınamıyordu; `tests/test_retention_cleanup_runs.py` eklendi. Canlıda
+çalışıp çalışmadığı DEPLOY.md "captured_plans = 0 ve slow_query_samples saklama durumu" SQL'iyle
+görülür (`son_temizlik`, `pencere_disinda`).
+
+**Neden büyük (hesap):** 329 MB / 393 bin satır ≈ 840 bayt/satır; çoğu sorgu METNİ ve her döngüde
+aynı metin yeniden yazılıyor (5 dk'da bir 20 satır = veritabanı başına günde 5.760 satır, 30 günde
+~173 bin). **Öneriler:** (1) Sorgu metnini queryid başına bir kez saklamak (wait_query_signatures
+gibi sözlük) — satır boyutu ~10 kat düşer. (2) Çağrı sayısı değişmeyen sorgu için satır
+yazmamak. (3) Ham örnekler 7 gün, daha eskisi günlük özet (rollup zaten var, sorgular için yok).
+(4) `pencere_disinda > 0` ise temizlik çalışmıyor demektir: önce `son_temizlik` değerine bakın.
+
+## Faz 31 Commit 5: "yakalanan plan yok" durumları
+
+Eskiden agent tanımlıysa her durumda "henüz yakalanmış plan yok" deniyordu: log hiç okunamıyorsa
+ya da iş hiç çalışmıyorsa da. Artık dört durum ayrı (`unavailable_kind`): `disabled_on_target`
+(toplayıcının okuduğu shared_preload_libraries'te auto_explain yok), `not_measured` (iş hiç
+çalışmadı / 3 aralıktan uzun süredir çalışmadı / log okunamıyor / ayar kapalı), `no_plans_yet`
+(log okunuyor), `no_agent`. **Sınır:** pg_read_all_settings'siz rol preload'u okuyamıyor
+(ölçüldü); o durumda "yüklü olup olmadığı okunamadı" deniyor.
 
 ## Faz 31 — on-prem kurulum notları (#48 temizlik migration'ı)
 

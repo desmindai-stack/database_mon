@@ -330,7 +330,7 @@ npx playwright show-trace test-results/<klasör>/trace.zip
 | Tip sürüklenmesi | OpenAPI'den tipleri yeniden üretir, commit'lenmiş hâliyle karşılaştırır |
 | Tarayıcı testleri | Push'ta `@critical` akışlar; gecelik ve elle tetiklemede tam paket. Hata kanıtları artifact olarak yüklenir. |
 
-**CI canlı PostgreSQL testlerini KOŞMUYOR:** iş akışında `DBACE_TEST_PG_DSN` ve PostgreSQL servisi yok. Faz 31 Commit 4 sonunda ölçüldü: aynı paket DSN'siz 1738 geçti / 84 atlandı (83'ü canlı test), üç sürümle (15/16/17) 1983 geçti / 5 atlandı. Canlı testler yerelde `scripts/live_pg.py` ile koşuluyor.
+**CI canlı PostgreSQL testlerini koşuyor (Faz 31 Commit 5):** `live-postgres` işi 15/16/17 matrisiyle `scripts/live_pg.py` kurulumunu kullanıyor; DSN tanımlıyken sürüm koşulu dışında atlanan canlı test oturumu kırmızıya çeviriyor (`tests/conftest.py`). Yerel eşdeğer koşu: PG 15 1887 geçti / 2 atlandı / 1 xfail, PG 16 ve 17 1888 / 1 / 1; DSN'siz 1791 geçti / 99 atlandı. Yerelde: `python scripts/live_pg.py up`, sonra yazdırdığı `DBACE_TEST_PG_DSN` ile `pytest`.
 
 ## API tipleri (TypeScript)
 

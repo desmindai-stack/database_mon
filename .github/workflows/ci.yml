@@ -61,6 +61,48 @@ jobs:
       - name: Testler
         run: python -m pytest tests/ -q
 
+  live-postgres:
+    name: Canlı PostgreSQL ${{ matrix.pg }}
+    # Faz 31 Commit 5: canlı testler CI'da da koşuyor. Kurulum YEREL İLE AYNI betikten
+    # (scripts/live_pg.py): pg_stat_statements önyüklü, track_activity_query_size, compute_query_id,
+    # logging_collector, hypopg ve hypopg'siz ikinci veritabanı. GitHub'ın `services:` konteynerine
+    # sunucu argümanı (shared_preload_libraries) verilemediği için servis değil, betik kullanılıyor.
+    #
+    # DSN tanımlıyken bir canlı test sürüm koşulu DIŞINDA bir sebeple atlanırsa oturum kırmızı
+    # (tests/conftest.py) — "koştu sanılan ama atlanan" kanıt CI'da görünür.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [15, 16, 17]
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.12 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements-dev.txt
+
+      - name: PostgreSQL ${{ matrix.pg }} konteynerini kur (hypopg dahil)
+        run: python scripts/live_pg.py up --versions ${{ matrix.pg }}
+
+      - name: DSN
+        run: python scripts/live_pg.py dsn --versions ${{ matrix.pg }} | tail -n 1 >> "$GITHUB_ENV"
+
+      - name: Testler (canlı dahil)
+        run: python -m pytest tests/ -q -rs
+
   frontend:
     name: Frontend (Node 20)
     runs-on: ubuntu-latest

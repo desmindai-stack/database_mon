@@ -45,6 +45,7 @@ ediyor. Geliştirme sırasında PostgreSQL 17.11 ve 15.19 ile koşuldu; ikisinde
 from __future__ import annotations
 
 import json
+import uuid
 from types import SimpleNamespace
 from urllib.parse import urlparse
 
@@ -54,7 +55,7 @@ from app.collectors.base import ConnectionTarget
 from app.services.explain_service import PostgreSQLExplainService
 from app.services.generic_plan import explain_json
 from app.services.index_advisor import PostgreSQLIndexAdvisor
-from tests.live_pg import LIVE_DSNS, SKIP_REASON, prepare_live_database
+from tests.live_pg import LIVE_DSNS, SKIP_REASON, prepare_live_database, skip_below_version
 
 asyncpg = pytest.importorskip("asyncpg")
 
@@ -147,8 +148,7 @@ async def test_binding_nulls_would_produce_a_meaningless_plan(conn):
     döndürmez" sonucunu çıkarıyor. Bu test, o yolun neden seçilmediğinin kalıcı kanıtı.
     """
     version = await conn.fetchval("SELECT current_setting('server_version_num')::int")
-    if version < 160_000:
-        pytest.skip("GENERIC_PLAN seçeneği PostgreSQL 16 ile geldi; bu yol burada zaten yok")
+    skip_below_version(version, 160_000, "GENERIC_PLAN seçeneği PostgreSQL 16 ile geldi; bu yol burada zaten yok")
     raw = await conn.fetchval(
         f"EXPLAIN (GENERIC_PLAN, FORMAT JSON) {JOIN_QUERY}", *([None] * 5)
     )
@@ -324,14 +324,19 @@ async def test_io_timing_distinguishes_off_from_no_io(conn, dsn):
     from app.domain.query_metrics import derive_metrics
 
     setting = await conn.fetchval("SHOW track_io_timing")
+    # DİSKTEN OKUMA DETERMİNİSTİK (Faz 31 Commit 5): eskiden "diskten blok okuyan sorgu yoksa atla"
+    # deniyordu ve üç sürümde de veri önbellekte olduğu için test HİÇ koşmuyordu. VACUUM FULL
+    # tabloyu paylaşımlı tamponu atlayarak yeniden yazıyor; ardından gelen okuma diskten.
+    tag = f"io_probe_{uuid.uuid4().hex[:8]}"
+    await conn.execute("CREATE TABLE IF NOT EXISTS io_timing_probe AS SELECT g AS id, repeat('x', 200) AS pad "
+                       "FROM generate_series(1, 20000) g")
+    await conn.execute("VACUUM FULL io_timing_probe")
+    await conn.fetchval(f"SELECT count(*) AS {tag} FROM io_timing_probe WHERE (SELECT pg_sleep(0.05)) IS NOT NULL")
     collector = PostgreSQLCollector(_target(dsn))
-    rows = await collector.collect_slow_queries(limit=20)
-    # Diskten gerçekten blok okumuş bir satır arıyoruz; yoksa ayrım test edilemez.
-    candidate = next(
-        (r for r in rows if float(r.get("shared_blks_read") or 0) > 0), None
-    )
-    if candidate is None:
-        pytest.skip("Bu sunucuda diskten blok okuyan bir sorgu yok; ayrım test edilemiyor")
+    rows = await collector.collect_slow_queries(limit=100)
+    candidate = next((r for r in rows if tag in (r.get("query") or "")), None)
+    assert candidate is not None, "sorgu pg_stat_statements'ta yok"
+    assert float(candidate.get("shared_blks_read") or 0) > 0, "VACUUM FULL sonrası okuma diskten olmalıydı"
 
     derived = derive_metrics(SimpleNamespace(**candidate))
     if str(setting).lower() in ("on", "true"):

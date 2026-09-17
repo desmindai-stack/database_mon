@@ -4,7 +4,7 @@
 //   1. Sonucun DURUMU (öneri / eşik altında / sistem sorgusu / çözümlenemedi …),
 //   2. Sorguda BULUNAN filtreler ve her birinin neden index'e dönüştürülemediği,
 //   3. Ölçülemeyen şeyler (yetki, istatistik) — uydurma bir yüzde yerine gerekçe.
-import type { IndexAdviceReport, IndexAdviceWatch, IndexPredicate } from "../api";
+import type { IndexAdviceOutcome, IndexAdviceReport, IndexAdviceWatch, IndexPredicate } from "../api";
 import AdviceCard from "./AdviceCard";
 import CopyableAction from "./CopyableAction";
 import RecommendationHeader from "./RecommendationHeader";
@@ -124,10 +124,6 @@ function AdviceItem({ advice: a }: { advice: IndexAdviceReport["advice"][number]
             <>
               Tahmini iyileştirme: <strong>%{a.estimated_improvement_pct}</strong> (hypopg ile ölçüldü)
             </>
-          ) : a.estimated_selectivity_pct != null ? (
-            <>
-              Fayda ölçülmedi · seçicilik: satırların <strong>%{a.estimated_selectivity_pct}</strong>'i
-            </>
           ) : (
             <>Fayda ölçülemedi</>
           )}
@@ -146,7 +142,7 @@ function AdviceItem({ advice: a }: { advice: IndexAdviceReport["advice"][number]
       {a.before_cost != null && a.after_cost != null && (
         <div className="advice-costs">
           <span>
-            Plan maliyeti: {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}
+            Plan maliyeti (hypopg tahmini, index kurulmadan): {a.before_cost.toFixed(1)} → {a.after_cost.toFixed(1)}
           </span>
         </div>
       )}
@@ -219,9 +215,73 @@ export function IndexAdviceResult({ report }: { report: IndexAdviceReport }) {
           ))}
         </section>
       )}
+      {(report.outcomes ?? []).length > 0 && (
+        <p className="muted-note">
+          {(report.outcomes ?? []).every((o) => o.status === "not_measurable")
+            ? `Etki ölçümü: ${(report.outcomes ?? [])[0].note ?? "ölçülemedi"}`
+            : "Etki ölçümü: öneri anındaki plan kaydedildi. Index kurulunca dbace aynı sorgunun planını yeniden alır; sonuç \"Kurulan index'lerin ölçülen etkisi\" bölümünde görünür."}
+        </p>
+      )}
       {report.required_grants && <RequiredGrants grants={report.required_grants} />}
       {report.status !== "system" && <FoundPredicates predicates={report.predicates ?? []} />}
     </div>
+  );
+}
+
+const OUTCOME_STATUS_LABELS: Record<string, string> = {
+  waiting_for_index: "Index bekleniyor",
+  measured: "Ölçüldü",
+  not_measurable: "Ölçülemedi",
+};
+
+// Faz 31 Commit 5 — asıl fayda yolu: index kurulduktan sonra AYNI sorgunun önce/sonra planı.
+// Yüzde yalnızca ölçüldüyse ve kaynağıyla birlikte gösteriliyor.
+export function AdviceOutcomeList({
+  outcomes,
+  error,
+}: {
+  outcomes: IndexAdviceOutcome[] | null;
+  error: string | null;
+}) {
+  if (error) {
+    return <p className="advice-empty">Index etkisi ölçümleri yüklenemedi: {error}</p>;
+  }
+  if (!outcomes || outcomes.length === 0) {
+    return null;
+  }
+  const measured = outcomes.filter((o) => o.status === "measured").length;
+  return (
+    <details className="advice-watch-list" open={measured > 0}>
+      <summary>
+        Kurulan index'lerin ölçülen etkisi: {outcomes.length} öneri
+        {measured > 0 ? ` — ${measured} tanesi ölçüldü` : ""}
+      </summary>
+      <p className="muted-note">{outcomes[0].source_label}</p>
+      {outcomes.map((o) => (
+        <div key={o.id} className={`advice-watch ${o.status}`}>
+          <div className="advice-header">
+            <span className="advice-pill">{OUTCOME_STATUS_LABELS[o.status] ?? o.status}</span>
+            <span className="advice-table">{o.table_name}</span>
+          </div>
+          <code className="query-text">{o.index_ddl}</code>
+          {o.status === "measured" && o.before_cost != null && o.after_cost != null && (
+            <p>
+              Plan maliyeti: <strong>{o.before_cost.toFixed(1)} → {o.after_cost.toFixed(1)}</strong>
+              {o.measured_cost_reduction_pct != null && ` (%${o.measured_cost_reduction_pct} azalma)`} ·{" "}
+              {o.after_uses_new_index
+                ? `plan yeni index'i (${o.after_index_name}) kullanıyor`
+                : `plan yeni index'i (${o.after_index_name}) KULLANMIYOR`}
+            </p>
+          )}
+          {o.status === "waiting_for_index" && o.before_cost != null && (
+            <p className="muted-note">
+              Önce: plan maliyeti {o.before_cost.toFixed(1)}. Index hedefte kurulunca sonraki plan otomatik alınır.
+            </p>
+          )}
+          {o.note && <p className="advice-empty">{o.note}</p>}
+        </div>
+      ))}
+    </details>
   );
 }
 

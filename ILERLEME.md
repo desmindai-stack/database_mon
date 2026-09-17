@@ -8116,6 +8116,86 @@ Son durum: üç sürümle (15.19/16.15/17.11) 1983 geçti, 5 atlandı (GENERIC_P
 diskten okuyan sorgu olmadığında atlanıyor — veri önbellekte; UI kuralı). DSN'siz 1738 geçti /
 84 atlandı. `npm run build` yeşil, tipler güncel.
 
+## Faz 31 — Commit 5: yardımcı ifade sızıntısı, şema eşliği, izleme rolü, CI'da canlı test, ölçülmüş index etkisi
+
+**Migration'lar (yeni, sırayla):** #50 `20260917090000_instance_observation_status.sql`,
+#51 `20260917090100_index_advice_outcomes.sql`. İkisi de CONCURRENTLY yok.
+
+### 1. Yardımcı ifadelerde değer sızıntısı
+
+**Ölçüm (15.19/16.15/17.11, track_utility=on):** SET, ALTER ROLE PASSWORD, CREATE ROLE PASSWORD ve DO
+bloğu pg_stat_statements'ta değeriyle saklanıyor (üç sürümde aynı). Gerçek toplayıcı/örnekleyici/
+bloklama/deadlock yollarıyla dbace'e yazılan yerler: slow_query_samples.query, blocking_episodes.
+root_query, deadlock_events.victim_query/winner_query/raw_detail, wait_query_signatures.
+sample_query_text (ayar açıkken) — ayar kapalıyken de ilk dördü.
+
+**Düzeltme:** `services/query_text_privacy.py` tek arındırıcı; PASSWORD içeren yardımcı ifadenin
+metni saklanmıyor (yalnızca tür), diğerlerinde dizgi/E''/dolar tırnak/sayı `$n`, DO gövdesi yapısı
+korunarak. Altı yazma yolu bağlandı; kaynak ağacı taraması (kolonlar modellerden) her yazımın
+arındırıcıdan geçtiğini denetliyor. Mevcut satırlar worker'ın ilk açılışında bir kez (sürüm
+anahtarı), migration yok. Canlı test (15/16/17): sentinel dbace'in BÜTÜN metin kolonlarında 0;
+negatif kontrol (arındırıcı etkisiz) 7 kolonda buldu. **Testin kendisinin bulduğu:** ilk senaryo
+değeri `application_name` ile taşıyordu ve genel tarama `blocking_episodes.root_application`'da
+buldu — o alan uygulama adını bilerek saklıyor; senaryo özel ayara (`privacy_it.token`) çevrildi.
+
+### 2. Şema eşliği
+
+`tests/test_schema_parity_live_postgres.py`: iki şema çalışma anında çıkarılıyor. Migration'lar ↔
+SQLite sıfırdan: 33 tablo / 435 kolon, fark yok. SQLite yükseltme (ilk migration şeması + init_db):
+migrate_schema'nın eklemesi gereken 60 kolonun hepsi var. Negatif kontroller: migrate_schema'sız
+60 fark; son ADD COLUMN migration'ı atlanınca 2 fark. **On-prem yeni kurulum:** initdb'de yalnızca
+ilk 4 migration + create_all → 60 kolon eksik (strict xfail, SORULAR.md; deploy/ kapsam dışı).
+
+### 3. İzleme rolü = uygulama rolü
+
+Toplayıcı her döngüde kendi rolünde application_name 'dbace' olmayan oturum arıyor (#50). API
+`monitoring_role`: separate / shared ("Ölçülemedi: izleme rolü uygulamayla paylaşılıyor" + CREATE
+ROLE + GRANT pg_monitor) / unmeasured. Canlı (15/16/17): toplanmamış → unmeasured; ayrı rol + dbace'in
+kendi ek bağlantısı → separate; aynı rolde uygulama → shared, uygulama adıyla.
+
+### 4. CI
+
+`live-postgres` işi (15/16/17 matrisi) `scripts/live_pg.py` ile kuruyor. DSN tanımlıyken sürüm dışı
+atlama oturumu kırmızıya çeviriyor (conftest; gerekçe gerçek sürüm numaralarını taşıyor ve yeniden
+karşılaştırılıyor). Denetim alt süreçte gerçek pytest ile sınandı (çevre atlaması → kırmızı, gerçek
+sürüm koşulu → yeşil, uydurma sürüm metni → kırmızı, skipif işareti → kırmızı).
+
+**Denetimin ortaya çıkardığı üç sessiz atlama düzeltildi:** plan kaynağı testi `docker logs`
+okuyordu (docker yoksa atlıyordu) → `pg_read_file` (logging_collector=on); I/O zamanlaması testi
+"diskten okuyan sorgu yoksa atla" diyordu ve üç sürümde de hiç koşmamıştı → VACUUM FULL ile diskten
+okuma deterministik.
+
+**Sayılar (CI işinin yerel eşdeğeri — aynı betik, aynı komut, sürüm başına tek DSN; GitHub'da henüz
+koşmadı, push yok):** PG 15.19: 1887 geçti / 2 atlandı / 1 xfail (atlamalar: GENERIC_PLAN sürüm
+koşulu, statik UI testi); PG 16.15: 1888 / 1 / 1; PG 17.11: 1888 / 1 / 1. 98 canlı test toplandı,
+denetime takılan atlama 0. DSN'siz (backend işi): 1791 geçti / 99 atlandı.
+
+### 5. wait_query_signatures ölçümü
+
+dbace'in gönderdiği bütün ifadeler (log_statement=all, gerçek toplayıcı/örnekleyici/danışman)
+ölçüm regex'inden geçirildi: PG 15'te 37 ifadenin 21'i, 16'da 38'in 22'si, 17'de 40'ın 23'ü "değer
+taşıyor" sayıldı — hepsi dbace'in KOD sabitleri ('client backend', 'active', LEFT(query, 4000),
+COALESCE(…, 0), '8000ms'). Yani #48 öncesi "78'in 40'ı" gerçek değer sayısını abartıyordu.
+Salt okunur doğrulama SQL'i (dbace imzalı / uygulama ayrımıyla) DEPLOY.md'de; PostgreSQL meta
+veritabanında #48 dosyası çalıştırılarak doğrulandı: öncesi 15–17 (2'si uygulama), sonrası READ ONLY
+işlemde 0 (15/16/17).
+
+### 6. captured_plans = 0 ve saklama
+
+Arayüz ayırt ETMİYORDU: agent tanımlıysa her durumda "henüz plan yok". Artık `unavailable_kind`
+(#50): disabled_on_target / not_measured (iş çalışmadı, bayat, log okunamıyor) / no_plans_yet /
+no_agent — plan kaynakları paneli etiketliyor. Canlı (15/16/17): iş çalışmadan not_measured;
+gerçek toplayıcı preload'u okuyunca disabled_on_target (konteynerde auto_explain yok); ayar
+okuyamayan rol + erişilemeyen agent → not_measured; log okunuyor → no_plans_yet. Saklama: politika
+var (30 gün, 03:00), ama hiçbir test sildiğini sınamıyordu — test eklendi; öneri SORULAR.md'de.
+
+### Karar A: ölçülmüş index etkisi
+
+hypopg yokken seçicilik yüzdesi de kaldırıldı. `index_advice_outcomes` (#51): öneri anında "önce"
+planı, tur yeni index'i görünce "sonra". Canlı (15/16/17, adv_users.email): önce 625,0 → sonra 8,3,
+yeni index planda, %98,7 azalma; index kurulmadan tur ölçüm üretmedi (negatif kontrol); ikinci öneri
+isteği önce değerini ezmedi; pg_monitor rolünde "Ölçülemedi … GRANT SELECT ON public.orders".
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

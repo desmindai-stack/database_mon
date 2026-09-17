@@ -10,6 +10,15 @@ import ExplainPlanTree from "./ExplainPlanTree";
 
 type Props = { instanceId: number; query: SlowQuery };
 
+// Faz 31 Commit 5: "yakalanan plan yok" üç ayrı durumdu ve aynı metinle gösteriliyordu.
+const CAPTURE_UNAVAILABLE_LABELS: Record<string, string> = {
+  not_measured: "Ölçülemedi",
+  disabled_on_target: "Hedefte kapalı",
+  no_plans_yet: "Henüz plan yok",
+  no_agent: "Agent yok",
+  not_postgresql: "Desteklenmiyor",
+};
+
 export default function PlanSourcePanel({ instanceId, query }: Props) {
   const canWrite = useAuth().user?.role === "admin";
   const [sources, setSources] = useState<PlanSources | null>(null);
@@ -67,6 +76,12 @@ export default function PlanSourcePanel({ instanceId, query }: Props) {
                 <span className="advice-pill">
                   {option.available ? (recommended ? "Önerilen" : "Kullanılabilir") : "Kullanılamıyor"}
                 </span>
+                {!option.available && option.kind === "captured" && option.detail?.unavailable_kind != null && (
+                  <span className="tag warn">
+                    {CAPTURE_UNAVAILABLE_LABELS[String(option.detail.unavailable_kind)] ??
+                      String(option.detail.unavailable_kind)}
+                  </span>
+                )}
               </div>
               {option.available ? (
                 option.caveat && <p className="muted-note">{option.caveat}</p>

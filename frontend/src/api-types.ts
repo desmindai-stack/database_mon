@@ -1345,6 +1345,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queries/{instance_id}/advice-outcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Advice Outcomes
+         * @description Index önerilerinin ölçülmüş etkisi: kurulmadan önce/sonra aynı sorgunun planı (Faz 31 Commit 5).
+         */
+        get: operations["list_advice_outcomes_api_queries__instance_id__advice_outcomes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queries/{instance_id}/advice-watches": {
         parameters: {
             query?: never;
@@ -2592,6 +2612,8 @@ export interface components {
              * @default []
              */
             plans: components["schemas"]["CapturedPlanOut"][];
+            /** Unavailable Kind */
+            unavailable_kind?: string | null;
             /** Unavailable Reason */
             unavailable_reason?: string | null;
         };
@@ -3878,8 +3900,6 @@ export interface components {
             columns: string[];
             /** Estimated Improvement Pct */
             estimated_improvement_pct: number | null;
-            /** Estimated Selectivity Pct */
-            estimated_selectivity_pct?: number | null;
             /** Existing Indexes */
             existing_indexes: string[];
             /** Has Hypopg Estimate */
@@ -3910,12 +3930,67 @@ export interface components {
              */
             verified: boolean;
         };
+        /**
+         * IndexAdviceOutcomeOut
+         * @description Index önerisinin ÖLÇÜLMÜŞ etkisi (Faz 31 Commit 5).
+         */
+        IndexAdviceOutcomeOut: {
+            /** After Cost */
+            after_cost?: number | null;
+            /** After Index Name */
+            after_index_name?: string | null;
+            /**
+             * After Indexes Used
+             * @default []
+             */
+            after_indexes_used: string[];
+            /** After Measured At */
+            after_measured_at?: string | null;
+            /** After Uses New Index */
+            after_uses_new_index?: boolean | null;
+            /** Before Cost */
+            before_cost?: number | null;
+            /**
+             * Before Indexes Used
+             * @default []
+             */
+            before_indexes_used: string[];
+            /** Before Measured At */
+            before_measured_at?: string | null;
+            /** Id */
+            id: number;
+            /** Index Columns */
+            index_columns: string[];
+            /** Index Ddl */
+            index_ddl: string;
+            /** Measured Cost Reduction Pct */
+            measured_cost_reduction_pct?: number | null;
+            /** Note */
+            note?: string | null;
+            /** Query Text */
+            query_text: string;
+            /** Queryid */
+            queryid?: string | null;
+            /** Registered At */
+            registered_at?: string | null;
+            /** Source Label */
+            source_label: string;
+            /** Status */
+            status: string;
+            /** Table Name */
+            table_name: string;
+        };
         /** IndexAdviceReportOut */
         IndexAdviceReportOut: {
             /** Advice */
             advice: components["schemas"]["IndexAdviceOut"][];
             /** No Advice Reasons */
             no_advice_reasons: components["schemas"]["NoAdviceReasonOut"][];
+            /**
+             * Outcomes
+             * @default []
+             */
+            outcomes: components["schemas"]["IndexAdviceOutcomeOut"][];
             /**
              * Predicates
              * @default []
@@ -4471,6 +4546,27 @@ export interface components {
             temp_bytes: number;
             /** Transactions Per Sec */
             transactions_per_sec: number;
+        };
+        /**
+         * MonitoringRoleOut
+         * @description İzleme rolü uygulamayla paylaşılıyor mu (Faz 31 Commit 5, services/monitoring_role.py).
+         */
+        MonitoringRoleOut: {
+            /**
+             * Applications
+             * @default []
+             */
+            applications: string[];
+            /** Checked At */
+            checked_at?: string | null;
+            /** Message */
+            message: string;
+            /** Setup Command */
+            setup_command?: string | null;
+            /** Shared Seen At */
+            shared_seen_at?: string | null;
+            /** Status */
+            status: string;
         };
         /** NoAdviceReasonOut */
         NoAdviceReasonOut: {
@@ -5580,6 +5676,7 @@ export interface components {
              * @default delta
              */
             mode: string;
+            monitoring_role?: components["schemas"]["MonitoringRoleOut"] | null;
             /** Window End */
             window_end?: string | null;
             /** Window Start */
@@ -8769,6 +8866,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IndexAdviceReportOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_advice_outcomes_api_queries__instance_id__advice_outcomes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IndexAdviceOutcomeOut"][];
                 };
             };
             /** @description Validation Error */

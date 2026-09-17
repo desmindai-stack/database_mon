@@ -34,7 +34,8 @@ from app.services.auto_explain import (
     parse_auto_explain_log,
 )
 from app.services.cluster_health import fetch_agent_logs
-from app.services.sql_analysis import normalize_literals, strip_plan_values
+from app.services.query_text_privacy import sanitize_deadlock_detail, sanitize_stored_query
+from app.services.sql_analysis import strip_plan_values
 from app.collectors.registry import get_collector
 from app.services.collection import connection_target_for
 from app.services.deadlocks import (
@@ -131,7 +132,7 @@ async def store_captured_plans(
                 captured_at=record.captured_at,
                 source=source,
                 duration_ms=record.duration_ms,
-                query_text=(record.query_text if store_real else normalize_literals(record.query_text))[:MAX_QUERY_TEXT],
+                query_text=(sanitize_stored_query(record.query_text, keep_values=store_real) or "")[:MAX_QUERY_TEXT],
                 query_fingerprint=key,
                 queryid=queryid_index.get(key),
                 has_actual_rows=record.has_actual_rows,
@@ -214,11 +215,14 @@ async def store_deadlocks(
                 source=record.source,
                 fingerprint=record.fingerprint,
                 victim_pid=record.victim_pid,
-                victim_query=record.victim_query[:4000],
+                # Log/XML metni gerçek değer taşıyor; ayardan bağımsız arındırılıyor (Faz 31
+                # Commit 5 — DO bloğunun 'gizli' sabiti üç alanda da saklanıyordu). Parmak izi
+                # yukarıda HAM metinden hesaplandı: tekrar yazımı önleme davranışı değişmedi.
+                victim_query=(sanitize_stored_query(record.victim_query, keep_values=False) or "")[:4000],
                 winner_pid=record.winner_pid,
-                winner_query=record.winner_query[:4000],
+                winner_query=(sanitize_stored_query(record.winner_query, keep_values=False) or "")[:4000],
                 participants=record.participants,
-                raw_detail=record.raw_detail,
+                raw_detail=sanitize_deadlock_detail(record.raw_detail, source=record.source),
             )
         )
         written += 1
@@ -254,6 +258,14 @@ async def capture_sqlserver_deadlocks(session: AsyncSession, instance: Instance)
     outcome["found"] = len(records)
     outcome["written"] = await store_deadlocks(session, instance.id, records)
     return outcome
+
+
+def record_capture_outcome(instance: Instance, outcome: dict, *, now: datetime | None = None) -> None:
+    """Son log okuma denemesi (Faz 31 Commit 5). "Plan yok" gerekçesi bunu okuyor: log okunamıyor
+    ya da iş çalışmıyorsa "auto_explain kapalı" ya da "henüz plan yok" DENMİYOR."""
+    instance.plan_capture_checked_at = now or datetime.now(UTC)
+    instance.plan_capture_error = (outcome.get("error") or None) and str(outcome["error"])[:1000]
+    instance.plan_capture_found = outcome.get("found")
 
 
 async def capture_plans_tick() -> dict:
@@ -301,7 +313,9 @@ async def capture_plans_tick() -> dict:
                 totals["deadlocks"] += outcome.get("deadlocks", 0)
                 if outcome["error"]:
                     logger.debug("Plan yakalama atlandı (%s): %s", instance.name, outcome["error"])
-            except Exception:
+            except Exception as exc:
                 logger.exception("Plan yakalama başarısız (instance %s)", instance.name)
+                outcome = {"found": None, "error": f"plan yakalama hatası: {exc}"}
+            record_capture_outcome(instance, outcome)
         await session.commit()
     return totals

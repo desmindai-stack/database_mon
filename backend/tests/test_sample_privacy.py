@@ -33,6 +33,7 @@ ALLOWED = {
     "models.py": "tanım",
     "database.py": "yerel SQLite'ta kolonun eklenmesi (migrate_schema) — veri okumuyor",
     "services/wait_sampling.py": "yazma ve silme",
+    "services/query_text_privacy.py": "geriye dönük temizlik: yardımcı ifade/PASSWORD arındırması (metin yanıta konmuyor)",
     "services/plan_source.py": "varlığını ve çalıştırılabilirliğini değerlendirme (metin yanıta konmuyor)",
     "routers/queries.py": "admin'in POST ettiği EXPLAIN ANALYZE çağrısına girdi",
 }

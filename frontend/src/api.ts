@@ -94,6 +94,8 @@ export interface SlowQueryList {
   window_end: string | null;
   filtered_system: number;
   filtered_insignificant: number;
+  /** Faz 31 Commit 5 — üretilen şemadan. */
+  monitoring_role?: Gen["SlowQueryListOut"]["monitoring_role"];
 }
 
 /**
@@ -140,6 +142,8 @@ export type IndexPredicate = Gen["IndexPredicateOut"];
 export type IndexAdviceReport = Gen["IndexAdviceReportOut"];
 export type IndexAdviceBatch = Gen["IndexAdviceBatchOut"];
 export type IndexAdviceWatch = Gen["IndexAdviceWatchListItemOut"];
+export type IndexAdviceOutcome = Gen["IndexAdviceOutcomeOut"];
+export type MonitoringRole = Gen["MonitoringRoleOut"];
 export type AnalysisSettings = Gen["AnalysisSettingsOut"];
 
 export interface PerformanceInsight {
@@ -1322,6 +1326,7 @@ export const api = {
       }),
     }),
   getAdviceWatches: (id: number) => request<IndexAdviceWatch[]>(`/api/queries/${id}/advice-watches`),
+  getAdviceOutcomes: (id: number) => request<IndexAdviceOutcome[]>(`/api/queries/${id}/advice-outcomes`),
   getInsights: (id: number) => request<TuningReport>(`/api/instances/${id}/insights`),
   getActivity: (id: number) => request<ActivitySnapshot>(`/api/instances/${id}/activity`),
   getClusterHealth: (id: number) => request<ClusterHealth>(`/api/instances/${id}/cluster-health`),

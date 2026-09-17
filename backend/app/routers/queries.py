@@ -7,9 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
 from app.domain.query_metrics import derive_metrics, flag_metrics, metric_dictionary
-from app.models import CapturedPlan, Instance, Node, Server, SlowQuerySample, WaitQuerySignature
+from app.models import CapturedPlan, IndexAdviceOutcome, Instance, Node, Server, SlowQuerySample, WaitQuerySignature
 from app.services.collection import connection_target_for
 from app.schemas import (
+    IndexAdviceOutcomeOut,
+    MonitoringRoleOut,
     MetricMeaningOut,
     CapturedPlanListOut,
     CapturedPlanOut,
@@ -43,8 +45,10 @@ from app.services.plan_analysis import (
 )
 from app.services.advice import advice_to_dict
 from app.services.analysis_settings import get_analysis_settings
+from app.services.index_advice_outcome import outcome_payload
 from app.services.index_advice_watch import list_watches, run_index_advice, summarize
-from app.services.plan_source import KIND_SAMPLE, captured_unavailable_reason, resolve_plan_sources
+from app.services.monitoring_role import monitoring_role_status
+from app.services.plan_source import KIND_SAMPLE, captured_unavailable, resolve_plan_sources
 from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
@@ -206,7 +210,9 @@ async def get_slow_queries(
         min_total_ms=noise["list_min_total_ms"],
         min_calls=noise["list_min_calls"],
     )
-    return selection_to_out(selection, window_start, window_end)
+    out = selection_to_out(selection, window_start, window_end)
+    out.monitoring_role = MonitoringRoleOut(**monitoring_role_status(instance))
+    return out
 
 
 def _metric_fields(entry, total_time_all_ms: float | None) -> dict:
@@ -445,7 +451,9 @@ async def list_captured_plans(
     )
     if not out.plans:
         # Faz 31: plan kaynakları ile AYNI açıklama (services/plan_source.py).
-        out.unavailable_reason = captured_unavailable_reason(instance)
+        unavailable = captured_unavailable(instance)
+        out.unavailable_reason = unavailable["reason"]
+        out.unavailable_kind = unavailable["kind"]
         if instance.engine == "postgresql" and not (instance.options or {}).get("agent_url"):
             out.managed_service_guidance = MANAGED_SERVICE_GUIDANCE
     return out
@@ -702,6 +710,24 @@ async def advise_indexes_batch(
             )
             statuses.append("failed")
     return IndexAdviceBatchOut(summary=IndexAdviceBatchSummaryOut(**summarize(statuses)), items=items)
+
+
+@router.get("/{instance_id}/advice-outcomes", response_model=list[IndexAdviceOutcomeOut])
+async def list_advice_outcomes(
+    instance_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[IndexAdviceOutcomeOut]:
+    """Index önerilerinin ölçülmüş etkisi: kurulmadan önce/sonra aynı sorgunun planı (Faz 31 Commit 5)."""
+    await _postgres_instance(db, instance_id)
+    rows = (
+        await db.execute(
+            select(IndexAdviceOutcome)
+            .where(IndexAdviceOutcome.instance_id == instance_id)
+            .order_by(IndexAdviceOutcome.registered_at.desc())
+            .limit(100)
+        )
+    ).scalars().all()
+    return [IndexAdviceOutcomeOut(**outcome_payload(row)) for row in rows]
 
 
 @router.get("/{instance_id}/advice-watches", response_model=list[IndexAdviceWatchListItemOut])

@@ -25,6 +25,7 @@ metne gömen uygulamalar için var. Sebep metni bu ayrımı yapıyor.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -32,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import classify_connection_error
 from app.collectors.query_marker import connect_marked
+from app.config import settings as app_settings
 from app.models import CapturedPlan, Instance, SlowQuerySample, WaitQuerySignature
 from app.services.analysis_settings import get_analysis_settings
 from app.services.collection import connection_target_for
@@ -51,24 +53,73 @@ KIND_GENERIC = "generic"
 KIND_UNAVAILABLE = "unavailable"
 
 
-def captured_unavailable_reason(instance: Instance) -> str:
-    """auto_explain planı neden yok — `captured-plans` listesi ile plan kaynakları AYNI metni
-    kullanıyor (iki ayrı açıklama zamanla ayrışırdı)."""
+#: "Yakalanan plan yok" durumunun türleri (Faz 31 Commit 5). Eskiden agent tanımlıysa her durumda
+#: "henüz plan yok" deniyordu: log hiç okunamıyorsa, iş hiç çalışmıyorsa ya da hedefte auto_explain
+#: kapalıysa da. Üçü farklı sorun, farklı çözüm.
+CAPTURE_NOT_POSTGRESQL = "not_postgresql"
+CAPTURE_NO_AGENT = "no_agent"
+CAPTURE_NOT_MEASURED = "not_measured"
+CAPTURE_DISABLED_ON_TARGET = "disabled_on_target"
+CAPTURE_NO_PLANS_YET = "no_plans_yet"
+
+#: Plan yakalama işinin son denemesi bu kadar aralıktan eskiyse iş çalışmıyor sayılıyor.
+CAPTURE_STALE_FACTOR = 3
+
+
+def captured_unavailable(instance: Instance, *, now: datetime | None = None) -> dict[str, str]:
+    """auto_explain planı neden yok — `captured-plans` listesi ile plan kaynakları AYNI sonucu
+    kullanıyor (iki ayrı açıklama zamanla ayrışırdı). {"kind", "reason"}."""
+    now = now or datetime.now(UTC)
     if instance.engine != "postgresql":
-        return (
+        return {"kind": CAPTURE_NOT_POSTGRESQL, "reason": (
             "auto_explain yalnızca PostgreSQL'de var; bu motor için gerçek çalıştırma planı "
             "yakalanamıyor."
-        )
+        )}
     if not (instance.options or {}).get("agent_url"):
-        return (
+        return {"kind": CAPTURE_NO_AGENT, "reason": (
             "Bu veritabanı için host-agent yapılandırılmamış. auto_explain planları sunucu "
             "log'undan okunuyor ve log'a erişim agent üzerinden sağlanıyor."
-        )
-    return (
-        "Bu sorgu için henüz yakalanmış plan yok. Ön koşullar panelindeki auto_explain "
-        "kontrollerine bakın: kütüphane yüklü, eşik ayarlı ve log_format='json' olmalı. Üçü de "
-        "tamamsa, sorgu eşiği aşan bir sürede çalışana kadar plan birikmez."
+        )}
+    if instance.auto_explain_loaded is False:
+        return {"kind": CAPTURE_DISABLED_ON_TARGET, "reason": (
+            "auto_explain hedefte KAPALI: toplayıcının okuduğu shared_preload_libraries'te "
+            "auto_explain yok. Plan yakalanması için kütüphane yüklenmeli (yeniden başlatma "
+            "gerekir) — ön koşullar panelinde komutu var."
+        )}
+    checked = instance.plan_capture_checked_at
+    if checked is not None and checked.tzinfo is None:
+        checked = checked.replace(tzinfo=UTC)
+    interval = max(60, app_settings.plan_capture_interval_seconds)
+    if not app_settings.plan_capture_enabled:
+        return {"kind": CAPTURE_NOT_MEASURED, "reason": (
+            "Ölçülemedi: plan yakalama işi bu kurulumda KAPALI (PLAN_CAPTURE_ENABLED=false). "
+            "auto_explain'in hedefte açık olup olmadığı bu yüzden bilinmiyor."
+        )}
+    if checked is None:
+        return {"kind": CAPTURE_NOT_MEASURED, "reason": (
+            "Ölçülemedi: plan yakalama işi bu veritabanının log'unu henüz hiç okumadı (worker "
+            "çalışmıyor olabilir). 'Plan yok' sonucu henüz bir ölçüm değil."
+        )}
+    if now - checked > timedelta(seconds=interval * CAPTURE_STALE_FACTOR):
+        return {"kind": CAPTURE_NOT_MEASURED, "reason": (
+            f"Ölçülemedi: plan yakalama işi en son {checked:%Y-%m-%d %H:%M} UTC'de çalıştı "
+            f"(beklenen aralık {interval // 60} dk). Worker çalışıyor mu kontrol edin."
+        )}
+    if instance.plan_capture_error:
+        return {"kind": CAPTURE_NOT_MEASURED, "reason": (
+            f"Ölçülemedi: sunucu log'u okunamıyor — {instance.plan_capture_error}. auto_explain "
+            "açık olsa bile plan buraya gelemez."
+        )}
+    loaded_note = (
+        "auto_explain yüklü (shared_preload_libraries)."
+        if instance.auto_explain_loaded
+        else "auto_explain'in yüklü olup olmadığı okunamadı (izleme kullanıcısının ayarları okuma yetkisi yok)."
     )
+    return {"kind": CAPTURE_NO_PLANS_YET, "reason": (
+        f"Log okunuyor (son okuma {checked:%Y-%m-%d %H:%M} UTC) ve {loaded_note} Bu sorgu için "
+        "henüz yakalanmış plan yok: eşik (log_min_duration) aşılmadı ya da log_format='json' değil "
+        "— ön koşullar panelindeki auto_explain kontrollerine bakın."
+    )}
 
 
 def _option(kind: str, available: bool, *, label: str, reason: str | None = None,
@@ -129,7 +180,9 @@ async def _captured_option(session, instance, query, queryid) -> dict[str, Any]:
         detail = {}
         if instance.engine == "postgresql" and not (instance.options or {}).get("agent_url"):
             detail["managed_service_guidance"] = MANAGED_SERVICE_GUIDANCE
-        return _option(KIND_CAPTURED, False, label=label, reason=captured_unavailable_reason(instance), detail=detail)
+        unavailable = captured_unavailable(instance)
+        detail["unavailable_kind"] = unavailable["kind"]
+        return _option(KIND_CAPTURED, False, label=label, reason=unavailable["reason"], detail=detail)
     caveat = plan_source_caveat("auto_explain")
     if not plan.has_actual_rows:
         caveat = (

@@ -18,6 +18,8 @@ from app.services.cluster_health import (
 )
 from app.services.credentials import decrypt_secret
 from app.services.prediction import run_predictions
+from app.services.monitoring_role import record_observation
+from app.services.query_text_privacy import sanitize_stored_query
 
 logger = logging.getLogger(__name__)
 
@@ -196,6 +198,11 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
     server_version_num = metrics.pop("_server_version_num", None)
     if server_version_num:
         instance.server_version_num = int(server_version_num)
+    # Faz 31 Commit 5 — yalnızca PostgreSQL toplayıcısı bu anahtarları üretiyor.
+    if "_monitoring_role_apps" in metrics:
+        record_observation(instance, metrics.pop("_monitoring_role_apps"), now=now)
+    if "_auto_explain_loaded" in metrics:
+        instance.auto_explain_loaded = metrics.pop("_auto_explain_loaded")
 
     sample = MetricSample(instance_id=instance.id)
     _apply_metrics_to_sample(sample, metrics)
@@ -207,7 +214,10 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
             SlowQuerySample(
                 instance_id=instance.id,
                 queryid=row.get("queryid"),
-                query=row["query"],
+                # Faz 31 Commit 5: pg_stat_statements yardımcı ifadeleri (SET, ALTER ROLE PASSWORD,
+                # DO) DEĞERLERİYLE saklıyor — 15/16/17'de ölçüldü. Planlanabilir ifadenin metni
+                # zaten normalize; ona dokunulmuyor.
+                query=sanitize_stored_query(row["query"], keep_values=True),
                 from_monitoring_role=row.get("from_monitoring_role"),
                 toplevel=row.get("toplevel"),
                 calls=int(row.get("calls") or 0),

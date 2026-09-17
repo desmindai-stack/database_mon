@@ -660,6 +660,19 @@ class SlowQueryOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MonitoringRoleOut(BaseModel):
+    """İzleme rolü uygulamayla paylaşılıyor mu (Faz 31 Commit 5, services/monitoring_role.py)."""
+
+    # separate | shared | unmeasured
+    status: str
+    message: str
+    applications: list[str] = []
+    checked_at: datetime | None = None
+    shared_seen_at: datetime | None = None
+    # Paylaşılıyorsa ayrı rol için CREATE ROLE + GRANT pg_monitor bloğu.
+    setup_command: str | None = None
+
+
 class SlowQueryListOut(BaseModel):
     """Yavaş sorgu listesi + pencerenin kendisi hakkında bilgi (Faz 18 İŞ 1).
 
@@ -675,6 +688,8 @@ class SlowQueryListOut(BaseModel):
     window_end: datetime | None = None
     filtered_system: int = 0
     filtered_insignificant: int = 0
+    # Faz 31 Commit 5: köken ayrımının (dbace/uygulama) ölçülebilir olup olmadığı.
+    monitoring_role: MonitoringRoleOut | None = None
 
 
 class QueryDiagnosisOut(BaseModel):
@@ -1166,8 +1181,6 @@ class IndexAdviceOut(BaseModel):
     # btree | expression | like_prefix | trigram
     index_kind: str = "btree"
     measurement_notes: list[str] = []
-    # hypopg yokken eşitlik filtrelerinin pg_stats seçiciliği (satırların %'si). Fayda DEĞİL.
-    estimated_selectivity_pct: float | None = None
     # False = sunucuda doğrulanamadı; arayüzde ayrı bölüm (Faz 31 Commit 4).
     verified: bool = True
     verification_note: str | None = None
@@ -1238,6 +1251,34 @@ class IndexAdviceWatchOut(BaseModel):
     last_error: str | None
 
 
+class IndexAdviceOutcomeOut(BaseModel):
+    """Index önerisinin ÖLÇÜLMÜŞ etkisi (Faz 31 Commit 5)."""
+
+    id: int
+    queryid: str | None = None
+    query_text: str
+    table_name: str
+    index_columns: list[str]
+    index_ddl: str
+    # waiting_for_index | measured | not_measurable
+    status: str
+    source_label: str
+    before_cost: float | None = None
+    before_indexes_used: list[str] = []
+    before_measured_at: datetime | None = None
+    after_cost: float | None = None
+    after_indexes_used: list[str] = []
+    after_index_name: str | None = None
+    # Sonraki planda kurulan index kullanılıyor mu (ölçüldüyse).
+    after_uses_new_index: bool | None = None
+    after_measured_at: datetime | None = None
+    # Yalnızca ölçüldüyse: planlayıcı maliyetindeki azalma yüzdesi.
+    measured_cost_reduction_pct: float | None = None
+    # Ölçülemediyse / son denemede hata olduysa gerekçe.
+    note: str | None = None
+    registered_at: datetime | None = None
+
+
 class IndexAdviceReportOut(BaseModel):
     # advised | no_advice | below_threshold | system | unparsable | truncated | empty
     status: str = "no_advice"
@@ -1247,6 +1288,8 @@ class IndexAdviceReportOut(BaseModel):
     required_grants: IndexRequiredGrantsOut | None = None
     threshold: IndexAdviceThresholdOut | None = None
     watch: IndexAdviceWatchOut | None = None
+    # Öneri anında "önce" ölçümü alınan kayıtlar; index kurulunca "sonra" eklenir.
+    outcomes: list[IndexAdviceOutcomeOut] = []
 
 
 class IndexAdviceWatchListItemOut(IndexAdviceWatchOut):
@@ -1502,6 +1545,8 @@ class CapturedPlanListOut(BaseModel):
     # Hiç plan yoksa NEDEN yok — boş liste gösterip susmak, kullanıcıyı "özellik bozuk mu"
     # sorusuyla baş başa bırakırdı.
     unavailable_reason: str | None = None
+    # Faz 31 Commit 5: not_postgresql | no_agent | not_measured | disabled_on_target | no_plans_yet
+    unavailable_kind: str | None = None
     # Yönetilen servislerde (Supabase, RDS) log erişimi hiç yok; orada ne yapılabileceği.
     managed_service_guidance: str | None = None
 

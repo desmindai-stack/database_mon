@@ -20,12 +20,9 @@ Sahte bağlantı yok. Her kaynak gerçek yolundan üretiliyor:
 from __future__ import annotations
 
 import asyncio
-import shutil
-import subprocess
 import time
 import uuid
 from datetime import UTC, datetime
-from urllib.parse import urlparse
 
 import pytest
 from sqlalchemy import select
@@ -287,23 +284,13 @@ async def test_bind_parameter_application_gets_no_sample_and_is_told_why(admin, 
 # --- 3.1 / 3.2: öncelik ve auto_explain ------------------------------------------------------
 
 
-def _container_for(dsn: str) -> str:
-    if not shutil.which("docker"):
-        pytest.skip("docker CLI yok — auto_explain log'u okunamıyor")
-    port = urlparse(dsn).port
-    name = subprocess.run(
-        ["docker", "ps", "--filter", f"publish={port}", "--format", "{{.Names}}"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    if not name:
-        pytest.skip(f"{port} portunu yayınlayan konteyner bulunamadı")
-    return name
-
-
 async def _capture_real_auto_explain_plan(admin, dsn, instance_id: int, sql: str) -> int:
-    container = _container_for(dsn)
-    since = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    time.sleep(0.05)
+    # Sunucu log'u SQL'le okunuyor (logging_collector=on, scripts/live_pg.py). Faz 31 Commit 5'e kadar
+    # `docker logs` okunuyordu: docker CLI ya da konteyner adı bulunamazsa test ATLANIYORDU — CI'da
+    # sessizce koşmayan bir kanıt.
+    logfile = await admin.fetchval("SELECT pg_current_logfile()")
+    assert logfile, "logging_collector kapalı: `python scripts/live_pg.py up` konteyneri günceller"
+    offset = await admin.fetchval("SELECT (pg_stat_file($1)).size", logfile)
     conn = await asyncpg.connect(dsn, statement_cache_size=0)
     try:
         await conn.execute("LOAD 'auto_explain'")
@@ -314,10 +301,10 @@ async def _capture_real_auto_explain_plan(admin, dsn, instance_id: int, sql: str
     finally:
         await conn.close()
     time.sleep(0.3)
-    lines = subprocess.run(
-        ["docker", "logs", "--since", since, container], capture_output=True, text=True, encoding="utf-8",
+    server_log = await admin.fetchval(
+        "SELECT pg_read_file($1, $2, (pg_stat_file($1)).size - $2)", logfile, offset
     )
-    parsed = parse_auto_explain_log((lines.stdout + lines.stderr).splitlines())
+    parsed = parse_auto_explain_log(server_log.splitlines())
     async with SessionLocal() as session:
         written = await store_captured_plans(session, instance_id, parsed.plans)
         await session.commit()

@@ -12,7 +12,10 @@ Konteynerlerin kendisi: `scripts/live_pg.py up`.
 from __future__ import annotations
 
 import os
+import re
 from urllib.parse import urlparse, urlunparse
+
+import pytest
 
 from app.collectors.base import ConnectionTarget
 
@@ -21,6 +24,23 @@ SKIP_REASON = (
     "Gerçek PostgreSQL yok. `python scripts/live_pg.py up` ile konteynerleri kurup yazdırdığı "
     "DBACE_TEST_PG_DSN değerini tanımlayın."
 )
+
+#: DSN tanımlıyken canlı testte İZİN VERİLEN tek atlama: sunucu sürümü özelliği desteklemiyor.
+#: Atlama gerekçesi sunucunun GERÇEK sürüm numarasını ve gereken asgari sürümü taşıyor;
+#: `conftest.py` denetimi ikisini yeniden karşılaştırıyor — elle yazılmış bir istisna listesi yok.
+VERSION_SKIP_PATTERN = re.compile(r"sürüm koşulu: sunucu (\d+) < (\d+)")
+
+
+def skip_below_version(server_version_num: int, minimum: int, feature: str) -> None:
+    if int(server_version_num) < int(minimum):
+        pytest.skip(f"sürüm koşulu: sunucu {int(server_version_num)} < {int(minimum)} — {feature}")
+
+
+def disallowed_live_skip(reason: str) -> bool:
+    """Canlı testin atlanma gerekçesi bir sürüm koşulu DEĞİLSE True."""
+    match = VERSION_SKIP_PATTERN.search(reason or "")
+    return not (match and int(match.group(1)) < int(match.group(2)))
+
 
 ROLE_PASSWORD = "dbace_it_pw"
 #: rol anahtarı → (rol adı, CREATE ROLE öznitelikleri)

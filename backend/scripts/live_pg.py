@@ -14,7 +14,7 @@ Kullanım (backend/ içinden):
 
 Kurulan her şey:
 - `postgres:<sürüm>` resmî imajı, `shared_preload_libraries=pg_stat_statements`,
-  `track_activity_query_size=2048`, `compute_query_id=on`. `pg_stat_statements.track`
+  `track_activity_query_size=2048`, `compute_query_id=on`, `logging_collector=on`. `pg_stat_statements.track`
   VARSAYILANDA (`top`) bırakılıyor — bankadaki gerçekçi kurulum; `all` gerektiren ölçüm testleri
   kendi rolleri için oturum düzeyinde açıyor.
 - hypopg: resmî imajın zaten tanımlı PGDG deposundan `postgresql-<sürüm>-hypopg` paketi.
@@ -37,6 +37,16 @@ SERVER_ARGS = [
     "-c", "shared_preload_libraries=pg_stat_statements",
     "-c", "track_activity_query_size=2048",
     "-c", "compute_query_id=on",
+    # Faz 31 Commit 5: deadlock testi sunucu log'unu SQL'le okuyor (pg_read_file). Deadlock'taki
+    # sorgu metni istemciye gönderilmiyor, yalnızca log'a yazılıyor.
+    "-c", "logging_collector=on",
+]
+#: Var olan konteynerde de doğrulanan ayarlar: (ayar, beklenen, yalnızca yeniden başlatmayla mı).
+REQUIRED_SETTINGS = [
+    ("shared_preload_libraries", "pg_stat_statements", True),
+    ("track_activity_query_size", "2048", True),
+    ("compute_query_id", "on", False),
+    ("logging_collector", "on", True),
 ]
 
 
@@ -87,6 +97,18 @@ def up(version: int, recreate: bool) -> None:
     else:
         run("docker", "start", container, quiet=True)
     wait_ready(version)
+
+    # Eski ayarlarla kurulmuş konteyner: ALTER SYSTEM + yeniden başlatma (silmeden).
+    drift = [(n, v, r) for n, v, r in REQUIRED_SETTINGS if psql(version, f"SELECT setting FROM pg_settings WHERE name = '{n}'") != v]
+    if drift:
+        for setting, value, _ in drift:
+            print(f"[{container}] {setting} = {value} ayarlanıyor")
+            psql(version, f"ALTER SYSTEM SET {setting} = '{value}'")
+        run("docker", "restart", container, quiet=True)
+        wait_ready(version)
+        still = [n for n, v, _ in REQUIRED_SETTINGS if psql(version, f"SELECT setting FROM pg_settings WHERE name = '{n}'") != v]
+        if still:
+            sys.exit(f"{container}: ayarlar uygulanamadı: {still} — --recreate ile kurun")
 
     control = f"/usr/share/postgresql/{version}/extension/hypopg.control"
     if run("docker", "exec", container, "test", "-f", control, check=False, quiet=True).returncode != 0:

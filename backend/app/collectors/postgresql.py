@@ -23,7 +23,7 @@ from app.domain.pg_capabilities import (
 from app.domain.waits import classify_postgres_wait
 from app.services.pgss import REDACTED_QUERY_TEXT, qualified_view, resolve_extension_schema
 from app.services.sql_analysis import normalize_literals
-from app.collectors.query_marker import DBACE_QUERY_MARKER, connect_marked
+from app.collectors.query_marker import DBACE_APPLICATION_NAME, DBACE_QUERY_MARKER, connect_marked
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +93,36 @@ def _without_dbace_literals(row: dict[str, Any]) -> dict[str, Any]:
 class PostgreSQLCollector(BaseCollector):
     def __init__(self, target: ConnectionTarget) -> None:
         self.target = target
+
+    @staticmethod
+    async def _foreign_sessions_in_own_role(conn) -> list[str] | None:
+        """dbace'in rolündeki dbace DIŞI istemci oturumlarının application_name'leri."""
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT coalesce(nullif(application_name, ''), '(adsız)') AS app
+                FROM pg_stat_activity
+                WHERE usename = current_user
+                  AND pid <> pg_backend_pid()
+                  AND backend_type = 'client backend'
+                  AND application_name IS DISTINCT FROM $1
+                LIMIT 5
+                """,
+                DBACE_APPLICATION_NAME,
+            )
+        except Exception as exc:  # noqa: BLE001 — ölçüm yok, toplama sürmeli
+            logger.debug("İzleme rolü denetlenemedi: %s", exc)
+            return None
+        return [row["app"] for row in rows]
+
+    @staticmethod
+    async def _auto_explain_loaded(conn) -> bool | None:
+        try:
+            preload = await conn.fetchval("SHOW shared_preload_libraries")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("shared_preload_libraries okunamadı: %s", exc)
+            return None
+        return "auto_explain" in {p.strip() for p in (preload or "").split(",")}
 
     async def _connect(self) -> asyncpg.Connection:
         # asyncpg's `ssl` kwarg is bool/SSLContext, not libpq's 6-value sslmode string — the
@@ -472,6 +502,10 @@ class PostgreSQLCollector(BaseCollector):
 
             metrics["_server_version"] = version_string
             metrics["_server_version_num"] = version_num
+            # Faz 31 Commit 5: izleme rolü paylaşımı ve auto_explain yüklü mü (services/monitoring_role.py,
+            # services/plan_source.py). Okunamazsa None — "yok" değil "ölçülemedi".
+            metrics["_monitoring_role_apps"] = await self._foreign_sessions_in_own_role(conn)
+            metrics["_auto_explain_loaded"] = await self._auto_explain_loaded(conn)
             metrics["_unsupported_metrics"] = unsupported
             # Hangi metriğin nereden alındığı — arayüz kaynağı gösteriyor ki kullanıcı
             # "bu sayı nereden geliyor" sorusunu ekrandan cevaplayabilsin.

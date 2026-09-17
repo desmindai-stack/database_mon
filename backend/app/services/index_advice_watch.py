@@ -45,6 +45,7 @@ from app.services.index_advisor import (
     PostgreSQLIndexAdvisor,
 )
 from app.services.plan_capture import fingerprint
+from app.services.query_text_privacy import sanitize_stored_query
 
 WATCH_WAITING = "waiting"
 WATCH_READY = "ready"
@@ -86,7 +87,16 @@ async def run_index_advice(
         # canlı üretildi, bekleyen kayıt kafa karıştırırdı.
         watch = await _resolve_watch(session, instance.id, query, result)
 
-    return report_payload(result, watch=watch, watch_enabled=settings["index_advice_watch_enabled"])
+    payload = report_payload(result, watch=watch, watch_enabled=settings["index_advice_watch_enabled"])
+    # Faz 31 Commit 5: fayda yüzdesi hypopg yoksa yok; asıl fayda yolu önce/sonra ölçümü.
+    from app.services.index_advice_outcome import outcome_payload, register_outcomes
+
+    outcomes = await register_outcomes(
+        session, instance, query=query, queryid=queryid, recommendations=result.recommendations
+    )
+    await session.commit()
+    payload["outcomes"] = [outcome_payload(o) for o in outcomes]
+    return payload
 
 
 async def _application_text(session: AsyncSession, instance_id: int, *, query: str, queryid: str | None) -> str:
@@ -186,7 +196,7 @@ async def _upsert_watch(session, instance_id, *, query, queryid, calls, threshol
             instance_id=instance_id,
             queryid=queryid,
             query_fingerprint=key,
-            query_text=query,
+            query_text=sanitize_stored_query(query, keep_values=True) or "",
             threshold=threshold,
             calls_at_registration=calls,
             calls_seen=calls,
@@ -308,6 +318,12 @@ async def index_advice_watch_tick() -> dict[str, int]:
             watch.ready_at = now
             watch.last_error = None
             watch.advice_json = report_payload(result, watch=None, watch_enabled=True)
+            from app.services.index_advice_outcome import register_outcomes
+
+            await register_outcomes(
+                session, instance, query=watch.query_text, queryid=watch.queryid,
+                recommendations=result.recommendations,
+            )
             totals["ready"] += 1
         await session.commit()
     return totals
@@ -383,7 +399,6 @@ def _advice_payload(r: IndexAdvice) -> dict[str, Any]:
         "existing_indexes": r.existing_indexes,
         "index_kind": r.index_kind,
         "measurement_notes": r.measurement_notes,
-        "estimated_selectivity_pct": r.estimated_selectivity_pct,
         "verified": r.verified,
         "verification_note": r.verification_note,
         "advice": _standard_advice(r),

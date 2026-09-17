@@ -1639,6 +1639,17 @@
             "title": "Plans",
             "type": "array"
           },
+          "unavailable_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Kind"
+          },
           "unavailable_reason": {
             "anyOf": [
               {
@@ -4941,17 +4952,6 @@
             ],
             "title": "Estimated Improvement Pct"
           },
-          "estimated_selectivity_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Estimated Selectivity Pct"
-          },
           "existing_indexes": {
             "items": {
               "type": "string"
@@ -5024,6 +5024,182 @@
         "title": "IndexAdviceOut",
         "type": "object"
       },
+      "IndexAdviceOutcomeOut": {
+        "description": "Index önerisinin ÖLÇÜLMÜŞ etkisi (Faz 31 Commit 5).",
+        "properties": {
+          "after_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Cost"
+          },
+          "after_index_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Index Name"
+          },
+          "after_indexes_used": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "After Indexes Used",
+            "type": "array"
+          },
+          "after_measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Measured At"
+          },
+          "after_uses_new_index": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "After Uses New Index"
+          },
+          "before_cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Cost"
+          },
+          "before_indexes_used": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Before Indexes Used",
+            "type": "array"
+          },
+          "before_measured_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Before Measured At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "index_columns": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Index Columns",
+            "type": "array"
+          },
+          "index_ddl": {
+            "title": "Index Ddl",
+            "type": "string"
+          },
+          "measured_cost_reduction_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Cost Reduction Pct"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "query_text": {
+            "title": "Query Text",
+            "type": "string"
+          },
+          "queryid": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queryid"
+          },
+          "registered_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registered At"
+          },
+          "source_label": {
+            "title": "Source Label",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "table_name": {
+            "title": "Table Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "query_text",
+          "table_name",
+          "index_columns",
+          "index_ddl",
+          "status",
+          "source_label"
+        ],
+        "title": "IndexAdviceOutcomeOut",
+        "type": "object"
+      },
       "IndexAdviceReportOut": {
         "properties": {
           "advice": {
@@ -5038,6 +5214,14 @@
               "$ref": "#/components/schemas/NoAdviceReasonOut"
             },
             "title": "No Advice Reasons",
+            "type": "array"
+          },
+          "outcomes": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/IndexAdviceOutcomeOut"
+            },
+            "title": "Outcomes",
             "type": "array"
           },
           "predicates": {
@@ -6706,6 +6890,68 @@
           "temp_bytes"
         ],
         "title": "MetricSampleOut",
+        "type": "object"
+      },
+      "MonitoringRoleOut": {
+        "description": "İzleme rolü uygulamayla paylaşılıyor mu (Faz 31 Commit 5, services/monitoring_role.py).",
+        "properties": {
+          "applications": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Applications",
+            "type": "array"
+          },
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "setup_command": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Command"
+          },
+          "shared_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Seen At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "message"
+        ],
+        "title": "MonitoringRoleOut",
         "type": "object"
       },
       "NoAdviceReasonOut": {
@@ -9785,6 +10031,16 @@
             "default": "delta",
             "title": "Mode",
             "type": "string"
+          },
+          "monitoring_role": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MonitoringRoleOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "window_end": {
             "anyOf": [
@@ -15558,6 +15814,58 @@
           }
         ],
         "summary": "Advise Indexes",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/advice-outcomes": {
+      "get": {
+        "description": "Index önerilerinin ölçülmüş etkisi: kurulmadan önce/sonra aynı sorgunun planı (Faz 31 Commit 5).",
+        "operationId": "list_advice_outcomes_api_queries__instance_id__advice_outcomes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IndexAdviceOutcomeOut"
+                  },
+                  "title": "Response List Advice Outcomes Api Queries  Instance Id  Advice Outcomes Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Advice Outcomes",
         "tags": [
           "queries"
         ]

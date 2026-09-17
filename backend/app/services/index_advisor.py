@@ -59,7 +59,7 @@ from app.services.sql_predicates import (
 logger = logging.getLogger(__name__)
 
 #: Yetki gerekçeleri — "Gereken yetkiler" bölümünde tablo başına listeleniyor.
-GRANT_REASON_STATS = "seçicilik: PostgreSQL pg_stats görünümünde tablo okuma yetkisi olmayan kolonları göstermiyor"
+GRANT_REASON_STATS = "istatistik denetimi (tablo ANALYZE edilmiş mi): PostgreSQL pg_stats görünümünde tablo okuma yetkisi olmayan kolonları göstermiyor"
 GRANT_REASON_BENEFIT = "fayda ölçümü: hypopg ile EXPLAIN, sorgunun okuduğu tabloda SELECT yetkisi istiyor"
 GRANT_REASON_IMMUTABLE = (
     "ifade index'i doğrulaması: IMMUTABLE denetimi geçici tabloda CREATE TEMP TABLE … (LIKE tablo) gerektiriyor ve PostgreSQL bunun için kaynak tabloda SELECT yetkisi istiyor"
@@ -112,9 +112,6 @@ class IndexAdvice:
     index_kind: str = "btree"
     #: Neyin ölçülemediği ve neden ("pg_stats bu kolonu göstermiyor: SELECT yetkisi yok").
     measurement_notes: list[str] = field(default_factory=list)
-    #: hypopg yokken: eşitlik filtrelerinin pg_stats'tan seçiciliği (satırların yüzde kaçı).
-    #: FAYDA DEĞİL — bkz. `_measure`.
-    estimated_selectivity_pct: float | None = None
     #: False = sunucuda DOĞRULANAMADI (ör. ifade index'inin IMMUTABLE olduğu yetki eksikliğinden
     #: denetlenemedi). Arayüz bu önerileri ayrı bölümde, gerekçesiyle gösteriyor.
     verified: bool = True
@@ -643,27 +640,20 @@ class PostgreSQLIndexAdvisor:
             # kurulu olmayacağı (banka) ortamda her öneri bu yoldan geçerdi.
             advice.measurement_notes.append(
                 "hypopg kurulu değil: fayda ÖLÇÜLMEDİ ve yüzde üretilmiyor — istatistikten "
-                "hesaplanan yüzde, ölçülen faydadan büyük ölçüde sapıyordu. Faydayı görmek için "
-                "hypopg kurulu bir test ortamında ya da index'i oluşturduktan sonra "
-                "EXPLAIN (ANALYZE) ile karşılaştırın."
+                "hesaplanan yüzde, ölçülen faydadan büyük ölçüde sapıyordu. Index kurulduğunda "
+                "dbace aynı sorgunun planını yeniden alıp önce/sonra maliyetini ölçer ("
+                "'Kurulan index'lerin ölçülen etkisi')."
             )
 
         if not use_stats or not info.can_select or not ordered_cols:
             return
-        selectivity, missing, range_columns = await _estimate_selectivity(conn, info, ordered_cols, kinds_by_col)
+        missing, range_columns = await _statistics_gaps(conn, info, ordered_cols, kinds_by_col)
         if missing:
             advice.measurement_notes.append(
                 f"İstatistik yok ({', '.join(missing)}): tablo hiç ANALYZE edilmemiş olabilir. "
                 f"Çözüm: ANALYZE {info.qualified};"
             )
             return
-        if selectivity is not None:
-            advice.estimated_selectivity_pct = round(selectivity * 100, 3)
-            advice.measurement_notes.append(
-                f"pg_stats'a göre eşitlik filtreleri tablonun yaklaşık %{advice.estimated_selectivity_pct:g} "
-                f"satırına denk geliyor ({info.row_count:,} satırdan). Bu bir fayda ölçümü değil; "
-                "planlayıcının kullandığı istatistikten okunan seçicilik."
-            )
         if range_columns:
             advice.measurement_notes.append(
                 f"Aralık filtreleri ({', '.join(range_columns)}) değere bağlı; seçicilikleri "
@@ -849,46 +839,26 @@ def _system_reason(detail: str) -> NoAdviceReason:
     )
 
 
-async def _estimate_selectivity(conn, info: _TableInfo, ordered_cols, kinds_by_col):
-    """Eşitlik filtrelerinin pg_stats'tan seçiciliği.
+async def _statistics_gaps(conn, info: _TableInfo, ordered_cols, kinds_by_col):
+    """İstatistiği OLMAYAN kolonlar ve değere bağlı (aralık/sıralama) kolonlar.
 
-    Döner: (seçicilik ya da None, istatistiği OLMAYAN kolonlar, aralık kolonları).
-    Yalnızca eşitlik/IN/join/IS NULL kolonları hesaba katılıyor: `1 / n_distinct` PostgreSQL
-    planlayıcısının da kullandığı temel. Aralık ve sıralama kolonları için değer bilinmeden
-    seçicilik söylenemez — önceki "×3 / ×5" katsayıları uydurmaydı ve kaldırıldı.
-    İstatistiği olmayan kolon için varsayılan UYDURULMUYOR.
+    Faz 31 Commit 5 kararı: hypopg yokken YÜZDE GÖSTERİLMİYOR — eşitlik seçiciliği yüzdesi de
+    kaldırıldı. Ölçülmüş fayda, index kurulduktan sonra aynı sorgunun önce/sonra planından geliyor
+    (services/index_advice_outcome.py). Burada yalnızca "istatistik eksik" gibi eyleme dönük
+    bulgular kalıyor.
     """
     rows = await conn.fetch(
-        "SELECT attname, n_distinct, null_frac FROM pg_stats "
-        "WHERE schemaname = $1 AND tablename = $2 AND attname = ANY($3::text[])",
+        "SELECT attname FROM pg_stats WHERE schemaname = $1 AND tablename = $2 AND attname = ANY($3::text[])",
         info.schema,
         info.table,
         ordered_cols,
     )
-    stats = {r["attname"]: r for r in rows}
-    missing = [c for c in ordered_cols if c not in stats]
+    present = {r["attname"] for r in rows}
+    missing = [c for c in ordered_cols if c not in present]
     if missing:
-        return None, missing, []
-
+        return missing, []
     equality = {KIND_EQ, KIND_IN, KIND_JOIN, KIND_IS_NULL}
-    range_columns = [c for c in ordered_cols if not (kinds_by_col.get(c, set()) & equality)]
-    equality_columns = [c for c in ordered_cols if kinds_by_col.get(c, set()) & equality]
-    if not equality_columns:
-        return None, [], range_columns
-
-    combined = 1.0
-    row_count = max(info.row_count, 1)
-    for col in equality_columns:
-        n_distinct = stats[col]["n_distinct"]
-        null_frac = float(stats[col]["null_frac"] or 0)
-        if not n_distinct:
-            sel = 1.0
-        elif n_distinct < 0:
-            sel = min(1.0, 1.0 / (abs(n_distinct) * row_count))
-        else:
-            sel = min(1.0, 1.0 / float(n_distinct))
-        combined *= sel * (1 - null_frac)
-    return combined, [], range_columns
+    return [], [c for c in ordered_cols if not (kinds_by_col.get(c, set()) & equality)]
 
 
 def _total_cost(plan: Any) -> float | None:

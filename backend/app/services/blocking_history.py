@@ -26,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import BlockingEpisode
 from app.services.blocking import BlockingTree
+from app.services.query_text_privacy import sanitize_stored_query
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +102,9 @@ async def record_tree(
                 # yaklaşım transaction'ının açıldığı an; yoksa şu an.
                 started_at=_estimate_start(root, moment),
                 last_seen_at=moment,
-                root_query=root.query,
+                # pg_stat_activity metni: gerçek değer taşıyor, ayardan bağımsız arındırılıyor
+                # (Faz 31 Commit 5 — kök engelleyicinin `SET ... = 'gizli'` metni yazılıyordu).
+                root_query=sanitize_stored_query(root.query, keep_values=False) or "",
                 root_username=root.username,
                 root_application=root.application,
                 root_was_idle=root.is_idle_in_transaction,
@@ -119,7 +122,7 @@ async def record_tree(
             # olan odur.
             episode.root_was_idle = episode.root_was_idle or root.is_idle_in_transaction
             if root.query and not episode.root_query:
-                episode.root_query = root.query
+                episode.root_query = sanitize_stored_query(root.query, keep_values=False) or ""
 
         episode.max_blocked_sessions = max(episode.max_blocked_sessions, root.blocked_total)
         episode.max_chain_depth = max(episode.max_chain_depth, tree.max_depth)
@@ -176,7 +179,7 @@ async def _insert(session: AsyncSession, episode: _OpenEpisode, moment: datetime
         ended_at=None,
         duration_seconds=_duration(episode, moment),
         root_pid=episode.root_pid,
-        root_query=episode.root_query[:4000],
+        root_query=(sanitize_stored_query(episode.root_query, keep_values=False) or "")[:4000],
         root_username=episode.root_username,
         root_application=episode.root_application,
         root_was_idle=episode.root_was_idle,
@@ -200,7 +203,7 @@ async def _refresh(session: AsyncSession, episode: _OpenEpisode, moment: datetim
     row.max_chain_depth = episode.max_chain_depth
     row.root_was_idle = episode.root_was_idle
     if episode.root_query and not row.root_query:
-        row.root_query = episode.root_query[:4000]
+        row.root_query = (sanitize_stored_query(episode.root_query, keep_values=False) or "")[:4000]
 
 
 async def _close(session: AsyncSession, episode: _OpenEpisode) -> None:
@@ -216,7 +219,7 @@ async def _close(session: AsyncSession, episode: _OpenEpisode) -> None:
     row.max_chain_depth = episode.max_chain_depth
     row.root_was_idle = episode.root_was_idle
     if episode.root_query:
-        row.root_query = episode.root_query[:4000]
+        row.root_query = (sanitize_stored_query(episode.root_query, keep_values=False) or "")[:4000]
 
 
 async def close_all(session: AsyncSession) -> int:

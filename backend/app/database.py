@@ -209,6 +209,14 @@ async def migrate_schema() -> None:
         # Faz 30 İŞ 1: veritabanı başına toplama durumu.
         await _sqlite_add_column_if_missing(conn, "instances", "last_collect_ok_at", "last_collect_ok_at DATETIME")
         await _sqlite_add_column_if_missing(conn, "instances", "last_collect_error", "last_collect_error TEXT")
+        # Faz 31 Commit 5 — 20260917090000_instance_observation_status.sql
+        await _sqlite_add_column_if_missing(conn, "instances", "monitoring_role_checked_at", "monitoring_role_checked_at DATETIME")
+        await _sqlite_add_column_if_missing(conn, "instances", "monitoring_role_shared_at", "monitoring_role_shared_at DATETIME")
+        await _sqlite_add_column_if_missing(conn, "instances", "monitoring_role_shared_apps", "monitoring_role_shared_apps JSON")
+        await _sqlite_add_column_if_missing(conn, "instances", "auto_explain_loaded", "auto_explain_loaded BOOLEAN")
+        await _sqlite_add_column_if_missing(conn, "instances", "plan_capture_checked_at", "plan_capture_checked_at DATETIME")
+        await _sqlite_add_column_if_missing(conn, "instances", "plan_capture_error", "plan_capture_error TEXT")
+        await _sqlite_add_column_if_missing(conn, "instances", "plan_capture_found", "plan_capture_found INTEGER")
         await _sqlite_add_column_if_missing(
             conn, "instances", "last_collect_error_at", "last_collect_error_at DATETIME"
         )

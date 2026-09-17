@@ -206,6 +206,20 @@ class Instance(Base):
     last_collect_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_collect_error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # Faz 31 Commit 5: izleme rolü uygulamayla paylaşılıyor mu (services/monitoring_role.py).
+    # Toplayıcı her döngüde bakıyor; NULL checked_at = hiç ölçülmedi ("ayrı" DEĞİL).
+    monitoring_role_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    monitoring_role_shared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Yalnızca application_name'ler (en fazla 5) — sorgu metni saklanmıyor.
+    monitoring_role_shared_apps: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+
+    # Faz 31 Commit 5: "yakalanan plan yok" durumunu ayırmak için (plan_source.captured_unavailable).
+    # NULL auto_explain_loaded = toplayıcı shared_preload_libraries'i okuyamadı.
+    auto_explain_loaded: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    plan_capture_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    plan_capture_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    plan_capture_found: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -988,6 +1002,46 @@ class IndexAdviceWatch(Base):
     registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ready_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class IndexAdviceOutcome(Base):
+    """Index önerisinin ÖLÇÜLMÜŞ etkisi: önce/sonra planı (Faz 31 Commit 5).
+
+    hypopg yokken fayda yüzdesi üretilmiyor. Asıl fayda yolu: öneri anında sorgunun değerden
+    bağımsız planı ("önce"), index hedefte kurulduktan sonra AYNI sorgunun planı ("sonra").
+    Sorgu çalıştırılmıyor; planlayıcı maliyeti karşılaştırılıyor ve kaynak etiketi bunu söylüyor.
+    Bkz. services/index_advice_outcome.py.
+    """
+
+    __tablename__ = "index_advice_outcomes"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "query_fingerprint", "index_ddl", name="uq_index_advice_outcome"),
+        Index("ix_index_advice_outcomes_status", "status"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), index=True, nullable=False)
+    queryid: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    query_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    query_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    table_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    index_columns: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    index_ddl: Mapped[str] = mapped_column(Text, nullable=False)
+    index_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="btree")
+    # Kayıt anında tabloda VAR OLAN index adları — sonradan kurulanı ayırmak için.
+    existing_indexes: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    # waiting_for_index | measured | not_measurable
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="waiting_for_index")
+    before_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    before_indexes_used: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    before_measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    after_cost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    after_indexes_used: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    after_index_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    after_measured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class BlockingEpisode(Base):
