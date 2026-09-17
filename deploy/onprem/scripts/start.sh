@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# İnternet bağlantılı sunucuda hızlı kurulum (geliştirme / pilot)
+# İnternet bağlantılı sunucuda hızlı kurulum (geliştirme / pilot) — bankadaki kurulumla AYNI yol (Faz 31 Commit 8):
+# çevrimdışı bağımlılıklar indirilir, imajlar ağ kapalı derlenir, migration'lar açılışta uygulanır.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -10,16 +11,11 @@ fi
 
 if [ ! -f .env ]; then
   cp .env.example .env
-  echo ".env oluşturuldu — DBACE_DB_PASSWORD ve CREDENTIALS_MASTER_KEY değiştirin!"
-  read -r -p "Devam etmek için Enter (şifreleri düzenledikten sonra tekrar çalıştırın)..."
+  echo ".env oluşturuldu — ZORUNLU değerleri (DBACE_DB_PASSWORD, CREDENTIALS_MASTER_KEY, JWT_SECRET, ADMIN_PASSWORD) düzenleyip tekrar çalıştırın."
   exit 0
 fi
 
-docker compose -f docker-compose.yml up -d --build
-
-IP=$(hostname -I 2>/dev/null | awk '{print $1}')
-echo ""
-echo "dbace çalışıyor."
-echo "  Arayüz: http://${IP:-localhost}:${HTTP_PORT:-8080}"
-echo "  Demo DB eklemek için: docker compose -f docker-compose.yml -f docker-compose.demo-db.yml up -d"
-echo "  Demo Postgres: host=demo-postgres veya sunucu IP port 5433, user/pass postgres"
+if [ ! -f vendor/requirements.lock ]; then
+  ./scripts/prepare-offline-artifacts.sh
+fi
+./scripts/install-offline.sh

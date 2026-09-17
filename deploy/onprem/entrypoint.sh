@@ -27,6 +27,10 @@ async def wait():
     sys.exit(1)
 asyncio.run(wait())
 PY
+  # Faz 31 Commit 8: şema migration'larla kuruluyor/yükseltiliyor — yeni kurulum ve yükseltme aynı yol.
+  # Eskiden initdb'ye yalnızca ilk dört migration bağlıydı ve `create_all` var olan tabloya kolon
+  # eklemediği için yeni kurulum 60 kolon eksik açılıyordu. Hata olursa uygulama BAŞLAMIYOR.
+  python -m app.migrations_runner /app/migrations
 fi
 
 PORT="${PORT:-8000}"

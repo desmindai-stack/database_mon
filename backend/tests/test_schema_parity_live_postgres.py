@@ -12,9 +12,10 @@ tablo ve kolon düzeyinde AYNI mı (Faz 31 Commit 5).
 
 SQLite tarafı AYRI SÜREÇTE (`DATABASE_URL` o dosyaya) koşuyor: uygulamanın motoru süreç başına tek.
 
-On-prem'in şema yolu (deploy/onprem/docker-compose.yml, okunarak): PostgreSQL 16; YENİ kurulumda
-`docker-entrypoint-initdb.d`'ye yalnızca İLK DÖRT migration bağlı, ardından uygulama açılışta
-`create_all` çalıştırıyor (`migrate_schema` PostgreSQL'de no-op). Bu yol da aşağıda ölçülüyor.
+On-prem'in şema yolu (Faz 31 Commit 8): konteyner açılışında `deploy/onprem/entrypoint.sh`
+`python -m app.migrations_runner /app/migrations` çalıştırıyor, ardından uygulama `create_all`. Test bu
+yolu entrypoint'ten OKUYARAK doğruluyor ve aynı çalıştırıcıyla kuruyor. Commit 5'te buradaki strict xfail
+eski yolu (initdb'ye bağlı ilk dört migration + `create_all`) ölçüyordu: 60 kolon eksikti.
 """
 
 from __future__ import annotations
@@ -185,38 +186,66 @@ def test_negative_control_a_missing_migration_is_detected(dsn, migration_files, 
     assert diff
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="On-prem YENİ kurulum yalnızca ilk dört migration + create_all ile kuruluyor; sonradan "
-    "eklenen kolonlar oluşmuyor (SORULAR.md, Faz 31 Commit 5). deploy/ bu işin kapsamı dışında; "
-    "düzeltildiğinde bu test geçer ve strict xfail KIRMIZI olur — işaret kaldırılmalı.",
-)
-def test_onprem_fresh_install_path_matches_supabase_migrations(dsn, migration_files, full_pg):
-    mounted = re.findall(r"supabase/migrations/([^:]+\.sql):/docker-entrypoint-initdb\.d", ONPREM_COMPOSE.read_text(encoding="utf-8"))
-    assert mounted, "on-prem compose'ta initdb migration'ı bulunamadı"
+ONPREM_ENTRYPOINT = BACKEND.parent / "deploy" / "onprem" / "entrypoint.sh"
+ONPREM_DOCKERFILE = BACKEND.parent / "deploy" / "onprem" / "Dockerfile.backend"
 
-    async def build():
-        conn = await _fresh(dsn)
-        try:
-            for name in mounted:
-                await apply_migration(conn, MIGRATIONS / name)
-        finally:
-            await conn.close()
-        from sqlalchemy.ext.asyncio import create_async_engine
 
-        from app.models import Base
+async def _onprem_install(dsn: str, directory: Path, *, rerun_without_registry: bool = False) -> tuple[dict, list, list]:
+    """Konteyner açılışının aynısı: migration çalıştırıcısı, sonra uygulamanın `create_all`'u."""
+    from sqlalchemy.ext.asyncio import create_async_engine
 
-        url = with_database(dsn, DATABASE).replace("postgresql://", "postgresql+asyncpg://", 1)
-        engine = create_async_engine(url)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        await engine.dispose()
-        conn = await asyncpg.connect(with_database(dsn, DATABASE))
-        try:
-            return await pg_schema(conn)
-        finally:
-            await conn.close()
+    from app.migrations_runner import META_SCHEMA, apply_migrations
+    from app.models import Base
 
-    diff = schema_diff(asyncio.run(build()), full_pg)
-    log("on-prem yeni kurulum ↔ migration'lar", f"initdb: {mounted}; {len(diff)} fark: {diff}")
+    conn = await _fresh(dsn)
+    try:
+        first = await apply_migrations(conn, directory)
+        if rerun_without_registry:
+            # Kayıt tablosu olmayan ESKİ kurulum: bütün dosyalar dolu şemaya yeniden uygulanıyor.
+            await conn.execute(f"DROP SCHEMA {META_SCHEMA} CASCADE")
+            first = await apply_migrations(conn, directory)
+        second = await apply_migrations(conn, directory)
+    finally:
+        await conn.close()
+    url = with_database(dsn, DATABASE).replace("postgresql://", "postgresql+asyncpg://", 1)
+    engine = create_async_engine(url)
+    async with engine.begin() as sa_conn:
+        await sa_conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+    conn = await asyncpg.connect(with_database(dsn, DATABASE))
+    try:
+        return await pg_schema(conn), first, second
+    finally:
+        await conn.close()
+
+
+def test_onprem_install_path_is_the_migration_runner():
+    """Paketin gerçekten bu yolu kullandığı dosyalardan: entrypoint çalıştırıcıyı çağırıyor, imaj migration'ları
+    kopyalıyor, compose initdb'ye migration BAĞLAMIYOR (iki yol yarışmasın)."""
+    entrypoint = ONPREM_ENTRYPOINT.read_text(encoding="utf-8")
+    dockerfile = ONPREM_DOCKERFILE.read_text(encoding="utf-8")
+    compose = ONPREM_COMPOSE.read_text(encoding="utf-8")
+    assert re.search(r"^\s*python -m app\.migrations_runner /app/migrations\s*$", entrypoint, re.M)
+    assert re.search(r"^COPY supabase/migrations \./migrations\s*$", dockerfile, re.M)
+    assert "docker-entrypoint-initdb.d" not in compose
+
+
+@pytest.mark.parametrize("rerun_without_registry", [False, True], ids=["yeni-kurulum", "kayitsiz-eski-kurulum"])
+def test_onprem_install_path_matches_supabase_migrations(dsn, migration_files, full_pg, rerun_without_registry):
+    schema, first, second = asyncio.run(_onprem_install(dsn, MIGRATIONS, rerun_without_registry=rerun_without_registry))
+    diff = schema_diff(schema, full_pg)
+    log("on-prem kurulum ↔ migration'lar",
+        f"ilk tur {len(first)} dosya, ikinci tur {len(second)}; {len(schema)} tablo; fark: {diff or 'yok'}")
+    assert len(first) == len(migration_files) and second == []
     assert diff == []
+
+
+def test_negative_control_onprem_path_without_an_add_column_migration_is_detected(dsn, migration_files, full_pg, tmp_path):
+    skipped = next(p for p in reversed(migration_files) if "ADD COLUMN" in p.read_text(encoding="utf-8").upper())
+    for path in migration_files:
+        if path != skipped:
+            (tmp_path / path.name).write_bytes(path.read_bytes())
+    schema, _, _ = asyncio.run(_onprem_install(dsn, tmp_path))
+    diff = schema_diff(schema, full_pg)
+    log("negatif kontrol: on-prem, atlanan migration", f"{skipped.name} → {diff}")
+    assert diff

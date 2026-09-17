@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import pytest
@@ -61,6 +62,9 @@ ROLES = {
     "monitor": ("dbace_it_monitor", "IN ROLE pg_monitor"),
     # dbace DIŞI bir uygulama rolü: imza filtresinin ters yönünü (farklı userid) ölçmek için.
     "app": ("dbace_it_app", ""),
+    # Faz 31 Commit 8: HİÇBİR yetkisi olmayan rol (yalnızca PUBLIC) — yetki matrisinde "ek yetki gerekmiyor"
+    # sonucunu ölçmek için. Tablolarda SELECT'i de yok.
+    "bare": ("dbace_it_bare", ""),
 }
 
 #: Test verisinin kurulduğu, hypopg'SUZ ikinci veritabanı (bkz. scripts/live_pg.py).
@@ -128,6 +132,70 @@ async def prepare_live_database(conn) -> None:
     # Önceki koşudan kalmış olabilecek doğrulama index'leri (ifade index'i testleri gerçek DDL çalıştırıyor).
     for row in await conn.fetch("SELECT schemaname, indexname FROM pg_indexes WHERE indexname LIKE 'idx_dbace_%'"):
         await conn.execute(f'DROP INDEX IF EXISTS {row["schemaname"]}."{row["indexname"]}"')
+
+
+#: Faz 31 Commit 8 — bankadaki kısıtın gerçek karşılığı: TEMP/CREATE PUBLIC'ten alınmış veritabanı ve
+#: rolü PAKETİN KENDİ kurulum SQL'iyle (deploy/onprem/sql/postgresql-monitor-role.sql) kurulan izleme kullanıcısı.
+RESTRICTED_DATABASE = "dbace_restricted"
+RESTRICTED_ROLE = "dbace_monitor"
+#: Rolün SELECT yetkisi OLMAYAN tablo — yetkisiz tabloda EXPLAIN ANALYZE ne dönüyor.
+UNGRANTED_TABLE = "secret_ledger"
+PACKAGE_ROLE_SQL = Path(__file__).resolve().parents[2] / "deploy" / "onprem" / "sql" / "postgresql-monitor-role.sql"
+
+
+def render_role_sql(sql: str, *, database: str, schema: str, password: str) -> str:
+    """DBA'nın psql ile yapacağı yer değiştirmeleri: `:'monitor_password'`, <izlenen_veritabanı>, <şema>."""
+    return (
+        sql.replace(":'monitor_password'", "'" + password.replace("'", "''") + "'")
+        .replace("<izlenen_veritabanı>", database)
+        .replace("<şema>", schema)
+    )
+
+
+async def prepare_restricted_database(dsn: str) -> None:
+    """Kısıtlı veritabanını kurar ve paket rol SQL'ini SIFIRDAN çalıştırır — idempotent."""
+    import asyncpg
+
+    server = await asyncpg.connect(dsn, statement_cache_size=0)
+    try:
+        if not await server.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", RESTRICTED_DATABASE):
+            await server.execute(f"CREATE DATABASE {RESTRICTED_DATABASE}")
+        await server.execute(f"REVOKE TEMPORARY, CREATE ON DATABASE {RESTRICTED_DATABASE} FROM PUBLIC")
+    finally:
+        await server.close()
+    db = await asyncpg.connect(with_database(dsn, RESTRICTED_DATABASE), statement_cache_size=0)
+    try:
+        await db.execute("CREATE EXTENSION IF NOT EXISTS pg_stat_statements")
+        await db.execute("CREATE EXTENSION IF NOT EXISTS hypopg")
+        await prepare_live_database(db)
+        await db.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+        await db.execute(f"CREATE TABLE IF NOT EXISTS {UNGRANTED_TABLE} (id int PRIMARY KEY, amount numeric)")
+        await db.execute(f"INSERT INTO {UNGRANTED_TABLE} SELECT g, g FROM generate_series(1, 10) g ON CONFLICT DO NOTHING")
+        await db.execute("CREATE TABLE IF NOT EXISTS deadlock_probe (id int PRIMARY KEY, v int)")
+        await db.execute("INSERT INTO deadlock_probe VALUES (1, 0), (2, 0) ON CONFLICT DO NOTHING")
+        if await db.fetchval("SELECT 1 FROM pg_roles WHERE rolname = $1", RESTRICTED_ROLE):
+            # Rol başka veritabanında yetki taşımıyor (yalnızca burada kuruluyor).
+            await db.execute(f"DROP OWNED BY {RESTRICTED_ROLE}")
+            await db.execute(f"REVOKE CONNECT ON DATABASE {RESTRICTED_DATABASE} FROM {RESTRICTED_ROLE}")
+            await db.execute(f"DROP ROLE {RESTRICTED_ROLE}")
+        await db.execute(render_role_sql(
+            PACKAGE_ROLE_SQL.read_text(encoding="utf-8"),
+            database=RESTRICTED_DATABASE, schema="public", password=ROLE_PASSWORD,
+        ))
+        # Paket SQL'i ŞEMADAKİ tüm tabloları açıyor; bu tablo yetkisiz tablo senaryosu için geri alınıyor.
+        # Yalnızca-SELECT rolü (yetki matrisi karşılaştırması) paket rolüyle AYNI tabloları görsün.
+        await db.execute(f"GRANT SELECT ON ALL TABLES IN SCHEMA public TO {ROLES['app'][0]}")
+        await db.execute(f"REVOKE ALL ON {UNGRANTED_TABLE} FROM {RESTRICTED_ROLE}, {ROLES['app'][0]}")
+    finally:
+        await db.close()
+
+
+def restricted_target(dsn: str) -> ConnectionTarget:
+    url = urlparse(dsn)
+    return ConnectionTarget(
+        host=url.hostname or "127.0.0.1", port=url.port or 5432, database=RESTRICTED_DATABASE,
+        username=RESTRICTED_ROLE, password=ROLE_PASSWORD,
+    )
 
 
 def with_database(dsn: str, database: str) -> str:

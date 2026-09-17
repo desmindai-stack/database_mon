@@ -25,7 +25,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -61,9 +60,6 @@ logger = logging.getLogger(__name__)
 #: Yetki gerekçeleri — "Gereken yetkiler" bölümünde tablo başına listeleniyor.
 GRANT_REASON_STATS = "istatistik denetimi (tablo ANALYZE edilmiş mi): PostgreSQL pg_stats görünümünde tablo okuma yetkisi olmayan kolonları göstermiyor"
 GRANT_REASON_BENEFIT = "fayda ölçümü: hypopg ile EXPLAIN, sorgunun okuduğu tabloda SELECT yetkisi istiyor"
-GRANT_REASON_IMMUTABLE = (
-    "ifade index'i doğrulaması: IMMUTABLE denetimi geçici tabloda CREATE TEMP TABLE … (LIKE tablo) gerektiriyor ve PostgreSQL bunun için kaynak tabloda SELECT yetkisi istiyor"
-)
 
 #: Ayar okunamazsa kullanılan varsayılan. Geçerli değer `analysis_settings`'ten gelir.
 DEFAULT_MIN_SAMPLE_CALLS = 5
@@ -475,41 +471,36 @@ class PostgreSQLIndexAdvisor:
         return advice, None
 
     async def _build_expression(self, conn, env, info, expression, preds, query_text):
-        """İfade filtresi için ifade index'i — PostgreSQL'in KENDİ doğrulamasıyla.
+        """İfade filtresi için ifade index'i — PostgreSQL'in KENDİ doğrulamasıyla, SALT OKUNUR.
 
-        Değişmezlik (IMMUTABLE) denetimi `pg_proc.provolatile` okunarak DEĞİL, boş bir geçici
-        tabloda gerçekten `CREATE INDEX` denenerek yapılıyor. Sebep: fonksiyon aşırı yüklemeleri
-        ve tür dönüşümleri (`timestamptz::date` bir cast fonksiyonu üzerinden STABLE) katalogdan
-        doğru çözmek için PostgreSQL'in ifade çözümleyicisini yeniden yazmak gerekirdi.
-        Sunucunun kendisine sormak hem kesin hem de sözdizimi hatalarını da yakalıyor. Geçici
-        tablo boş ve işlem geri alınıyor; gerçek tabloya kilit alınmıyor.
+        Değişmezlik (IMMUTABLE) denetimi `pg_proc.provolatile` okunarak yapılmıyor: fonksiyon aşırı
+        yüklemeleri ve tür dönüşümleri (`timestamptz::date` bir cast fonksiyonu üzerinden STABLE)
+        katalogdan doğru çözülemez. Sunucuya soruluyor — ama Faz 31 Commit 8'den beri geçici tabloda
+        `CREATE INDEX` DENENMİYOR: bankada izleme kullanıcısının TEMP/CREATE yetkisi yok (ölçüldü:
+        "permission denied to create temporary tables"). hypopg aynı doğrulamayı sanal index'te yapıyor
+        ("functions in index expression must be marked IMMUTABLE") ve SELECT ya da TEMP istemiyor
+        (15/16/17'de ölçüldü). hypopg kurulu değilse öneri "doğrulanmadı" etiketiyle, gerekçesiyle.
         """
         verified = True
         verification_note = None
-        if not info.can_select:
-            # Doğrulama (geçici tabloda CREATE INDEX) `CREATE TEMP TABLE ... (LIKE tablo)`
-            # gerektiriyor ve PostgreSQL bunun için kaynak tabloda SELECT yetkisi istiyor —
-            # gerçek sunucuda ölçüldü: TEMP yetkisi VAR, SELECT yok → "permission denied for
-            # table". Karar (Faz 31 Commit 4): öneri YİNE üretiliyor ama "doğrulanmadı" etiketiyle
-            # ve ayrı bölümde; kullanıcı hangi denetimin yapılamadığını görüyor.
-            self._need_grant(info, GRANT_REASON_IMMUTABLE)
-            verified = False
-            verification_note = (
-                f"DOĞRULANMADI: '{expression}' ifadesinin IMMUTABLE olduğu (yani index'lenebildiği) "
-                f"sunucuda denetlenemedi — izleme kullanıcısının {info.qualified} tablosuna SELECT "
-                "yetkisi yok. Sonucu oturum ayarına bağlı bir ifade (ör. timestamptz üzerinde "
-                "date_trunc) CREATE INDEX sırasında 'functions in index expression must be marked "
-                "IMMUTABLE' hatası verir. Uygulamadan önce bir test ortamında deneyin ya da "
-                "gereken yetkiyi verip öneriyi yeniden alın."
-            )
-            canonical = None
-        else:
+        if env.has_hypopg:
             verdict = await _probe_expression_index(conn, info, expression)
             if not verdict.ok:
                 for pred in preds:
                     pred.mark_unusable(verdict.reason)
                 return None
             canonical = verdict.canonical_key
+        else:
+            verified = False
+            verification_note = (
+                f"DOĞRULANMADI: '{expression}' ifadesinin IMMUTABLE olduğu (yani index'lenebildiği) "
+                "sunucuda denetlenemedi — salt okunur izleme kullanıcısıyla bu denetim yalnızca hypopg "
+                "eklentisiyle yapılabiliyor ve bu veritabanında hypopg kurulu değil (TEMP/CREATE yetkisi "
+                "İSTENMİYOR). Sonucu oturum ayarına bağlı bir ifade (ör. timestamptz üzerinde date_trunc) "
+                "CREATE INDEX sırasında 'functions in index expression must be marked IMMUTABLE' hatası "
+                "verir. Uygulamadan önce bir test ortamında deneyin ya da DBA'dan hypopg kurulumunu isteyin."
+            )
+            canonical = None
         for idx in info.indexes:
             if canonical and _indexdef_key(idx["indexdef"]) == canonical:
                 for pred in preds:
@@ -762,23 +753,18 @@ class _ProbeVerdict:
     canonical_key: str | None = None
 
 
-class _Rollback(Exception):
-    pass
-
-
 async def _probe_expression_index(conn, info: _TableInfo, expression: str) -> _ProbeVerdict:
-    suffix = uuid.uuid4().hex[:12]
-    tmp_table = f"dbace_probe_{suffix}"
-    tmp_index = f"dbace_probe_idx_{suffix}"
-    captured: dict[str, str] = {}
+    """hypopg sanal index'i: IMMUTABLE ve sözdizimi doğrulaması, kanonik tanım. Hiçbir nesne yazılmıyor
+    (sanal index yalnızca bu oturumun belleğinde) ve hemen düşürülüyor."""
     try:
-        async with conn.transaction():
-            await conn.execute(f"CREATE TEMP TABLE {tmp_table} (LIKE {info.qualified}) ON COMMIT DROP")
-            await conn.execute(f"CREATE INDEX {tmp_index} ON {tmp_table} (({expression}))")
-            captured["def"] = await conn.fetchval("SELECT pg_get_indexdef($1::regclass)", tmp_index)
-            raise _Rollback
-    except _Rollback:
-        return _ProbeVerdict(True, canonical_key=_indexdef_key(captured.get("def", "")))
+        indexrelid = await conn.fetchval(
+            "SELECT indexrelid FROM hypopg_create_index($1)", f"CREATE INDEX ON {info.qualified} (({expression}))"
+        )
+        try:
+            definition = await conn.fetchval("SELECT hypopg_get_indexdef($1)", indexrelid)
+        finally:
+            await conn.execute("SELECT hypopg_drop_index($1)", indexrelid)
+        return _ProbeVerdict(True, canonical_key=_indexdef_key(definition or ""))
     except asyncpg.PostgresError as exc:
         message = str(exc)
         if "IMMUTABLE" in message.upper():
@@ -791,17 +777,11 @@ async def _probe_expression_index(conn, info: _TableInfo, expression: str) -> _P
                 "index kurmak, ya da hesaplanmış (GENERATED) bir kolon eklemek.",
             )
         if isinstance(exc, asyncpg.InsufficientPrivilegeError):
-            # Hangi yetkinin eksik olduğu HATA METNİNDEN okunuyor, varsayılmıyor. İlk yazımda
-            # "geçici tablo yetkisi yok" deniyordu; gerçek sunucuda sebep SELECT çıktı ve
-            # önerilen GRANT yanlış yetkiyi veriyordu.
-            if "temporary" in message.lower():
-                fix = "GRANT TEMPORARY ON DATABASE <veritabanı> TO <izleme_kullanıcısı>;"
-            else:
-                fix = f"GRANT SELECT ON {info.qualified} TO <izleme_kullanıcısı>;"
             return _ProbeVerdict(
                 False,
-                "İfade index'inin geçerliliği ölçülemedi: yetki eksik (PostgreSQL: "
-                f"\"{message}\"). Doğrulanmamış bir ifade index'i önerilmiyor. Çözüm: {fix}",
+                "İfade index'inin geçerliliği ölçülemedi: hypopg fonksiyonlarını çalıştırma yetkisi yok "
+                f"(PostgreSQL: \"{message}\"). Doğrulanmamış bir ifade index'i önerilmiyor. Çözüm: "
+                "GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA <hypopg şeması> TO <izleme_kullanıcısı>;",
             )
         return _ProbeVerdict(
             False,

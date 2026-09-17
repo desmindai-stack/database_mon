@@ -144,6 +144,14 @@ Kapalı ortam (on-prem) paketi tam yığını — PostgreSQL metadata veritaban�
 nginx arkasında dashboard — tek komutla kurar:
 **[deploy/onprem/KURULUM.md](deploy/onprem/KURULUM.md)**.
 
+Paket **internetsiz** kuruluyor (Faz 31 Commit 8): `scripts/make-release-package.sh v0.x.x` internetli
+makinede kaynağı ve çevrimdışı bağımlılıkları (`vendor/`: Python wheel'leri + sürüm kilidi, ODBC Driver 18
+.deb'leri, derlenmiş arayüz, taban imajlar) paketliyor; kapalı sunucuda `scripts/install-offline.sh`
+imajları `docker build --network none` ile derleyip yığını başlatıyor. Şema açılışta migration'larla
+kuruluyor/yükseltiliyor (`app/migrations_runner.py`), kurulum ve yükseltme aynı komut. İzlenen
+veritabanları için DBA'nın çalıştıracağı **yalnızca okuma yetkili** rol dosyaları ve hangi yetkinin hangi
+özellik için gerektiğini gösteren ölçülmüş yetki matrisi `deploy/onprem/sql/` altında.
+
 Kök dizindeki `docker-compose.yml` de tam yığını (demo PostgreSQL + API/worker + nginx
 arkasında dashboard) ayağa kaldırır:
 
@@ -329,6 +337,7 @@ npx playwright show-trace test-results/<klasör>/trace.zip
 | Frontend (Node 20) | `tsc -b` + `npm run build` |
 | Tip sürüklenmesi | OpenAPI'den tipleri yeniden üretir, commit'lenmiş hâliyle karşılaştırır |
 | Tarayıcı testleri | Push'ta `@critical` akışlar; gecelik ve elle tetiklemede tam paket. Hata kanıtları artifact olarak yüklenir. |
+| On-prem paketi | Gecelik/elle: sürüm paketi ağı kapalı `docker:dind` içinde sıfırdan kuruluyor ve eski sürümden yükseltiliyor (Faz 31 Commit 8). Paket ↔ uygulama ayrışması (migration yolu, ayarlar, servisler, yetki matrisi) her push'ta backend işinde. |
 
 **CI canlı PostgreSQL testlerini koşuyor (Faz 31 Commit 5):** `live-postgres` işi 15/16/17 matrisiyle `scripts/live_pg.py` kurulumunu kullanıyor; DSN tanımlıyken sürüm koşulu dışında atlanan canlı test oturumu kırmızıya çeviriyor (`tests/conftest.py`). Faz 31 Commit 6'dan beri her sürüme streaming replika da kuruluyor (`DBACE_TEST_PG_REPLICA_DSN`); SQL Server topoloji testleri `scripts/live_mssql.py` ile yalnızca yerelde. Yerel eşdeğer koşu (Commit 7): PG 15 1931 geçti / 2 atlandı / 1 xfail, PG 16 ve 17 1932 / 1 / 1; DSN'siz 1827 geçti / 107 atlandı. Gerçek veriyle e2e: `DBACE_TEST_PG_DSN=... npx playwright test e2e/live-counts.spec.ts`. Yerelde: `python scripts/live_pg.py up`, sonra yazdırdığı `DBACE_TEST_PG_DSN` ile `pytest`.
 

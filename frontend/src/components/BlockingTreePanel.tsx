@@ -301,6 +301,13 @@ function HistorySection({ history }: { history: BlockingHistory | null }) {
         </div>
       )}
 
+      {history.deadlock_detail_reason && (
+        <div className="card">
+          <h3 className="chart-title">Deadlock'lar (son 7 gün)</h3>
+          <p className="muted-note">{history.deadlock_detail_reason}</p>
+        </div>
+      )}
+
       {history.deadlocks.length > 0 && (
         <div className="card">
           <h3 className="chart-title">Deadlock'lar (son 7 gün)</h3>

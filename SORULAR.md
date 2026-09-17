@@ -2512,7 +2512,7 @@ WITH/VALUES/TABLE dışı); `SELECT … INTO` PostgreSQL'de yardımcıdır ama p
 yalnızca sabit arındırmasıyla korunuyor. (3) Planlanabilir ifadenin pg_stat_statements metnine
 dokunulmuyor (PostgreSQL zaten normalize ediyor).
 
-## Faz 31 Commit 5: on-prem YENİ kurulumda şema eksik — ÇÖZÜLMEDİ (deploy/ kapsam dışı)
+## Faz 31 Commit 5: on-prem YENİ kurulumda şema eksik — ÇÖZÜLDÜ (Commit 8)
 
 **Ölçüldü (gerçek PostgreSQL, `tests/test_schema_parity_live_postgres.py`):** `supabase/migrations`
 tamamı modellerle tablo+kolon düzeyinde birebir (33 tablo, 435 kolon, fark yok). SQLite yolu da
@@ -2523,9 +2523,13 @@ uygulama açılışta `create_all` çalıştırıyor — `create_all` var olan t
 prediction_insights, slow_query_samples'ta **60 kolon eksik**; toplayıcı şema hatası verir.
 KURULUM.md "uygulama eksik kolonları kendisi oluşturur" diyor — PostgreSQL'de doğru değil.
 
-**Öneri (uygulanmadı):** on-prem compose initdb'ye bütün migration'ları sırayla bağlamak ya da
-kurulum betiğinde DEPLOY.md sırasıyla uygulamak. Test `xfail(strict=True)`: düzeltilince kırmızıya
-döner ve işaret kaldırılmalı.
+**Çözüm (Commit 8, kullanıcı `deploy/onprem/` için açık izin verdi):** şema artık migration
+çalıştırıcısıyla kuruluyor — `deploy/onprem/entrypoint.sh` açılışta `python -m app.migrations_runner
+/app/migrations` çalıştırıyor, uygulanan dosyalar `dbace_meta.applied_migrations`'ta. initdb bağlaması
+kaldırıldı (iki şema yolu yarışmasın). `xfail(strict=True)` işareti kaldırıldı; yerine gerçek yol
+ölçülüyor (yeni kurulum + kayıt tablosu olmayan eski kurulum) ve atlanan bir migration'ı gören negatif
+kontrol eklendi. Gerçek konteynerde de doğrulandı: `tests/test_onprem_package_live.py` (52/52 uygulandı,
+şema farkı 0).
 
 ## Faz 31 Commit 5: slow_query_samples saklama — ÖNERİ (uygulanmadı)
 
@@ -2618,3 +2622,51 @@ PostgreSQL olmadığı için orada atlanıyor (Playwright atlaması pytest atlam
   örnekler ve auto_explain planları korunuyor, yalnızca sözlük metni ve EXPLAIN satırları
   arındırılıyor.
 - **Uygulama sonrası:** aynı ölçüm (1)'de ve ayar kapalıysa (2)/(3)'te 0 vermelidir.
+
+## Faz 31 Commit 8: on-prem paketi — bilerek yapılmayanlar ve sınırlar
+
+**Kapsam istisnası:** bu iş `deploy/onprem/` altını değiştiriyor (CLAUDE.md "deploy/'a dokunma" kuralı,
+kullanıcının açık talebiyle bu iş için askıya alındı). `railway.toml`, `frontend/vercel.json`, kök
+`docker-compose.yml` ve `deploy/cloud/` ELLENMEDİ; `Dockerfile.web` (bulut/kök compose kullanıyor) olduğu
+gibi duruyor, on-prem artık `Dockerfile.web.offline` kullanıyor.
+
+**Paket hazır imaj taşımıyor**, kaynak + çevrimdışı bağımlılık taşıyor (`vendor/`: wheel, .deb, web-dist,
+taban imajlar) ve imajlar bankada `docker build --network none` ile derleniyor. Gerekçe: pakette ne olduğu
+okunabilir kalıyor ve imaj kayıt defteri (registry) gerekmiyor. Bedeli: kurulum birkaç dakika sürüyor ve
+sunucuda Docker derleme yapabilmeli.
+
+**Sürüm sabitleme yalnızca pakette:** `backend/requirements.txt` hâlâ alt sınır (`>=`) veriyor; paketin
+kurduğu tam sürümler `vendor/requirements.lock` dosyasında (paket üretilirken `pip freeze`). Yani aynı
+paket her yerde aynı sürümleri kuruyor, ama iki farklı tarihte üretilen paket farklı sürümler taşıyabilir.
+Depoya lock koymamanın sebebi: bulut (Railway/Supabase) yolu bu dosyayı kullanmıyor ve ikinci bir bağımlılık
+kaynağı ayrışma riski demek.
+
+**Bu kısıtla ölçülemeyen özellikler** (hepsi ekranda "ölçülemedi + gerekçe + gereken yetki" dönüyor,
+`permission-matrix.md` ve KURULUM.md 6.3'te):
+- auto_explain planları ve PostgreSQL deadlock AYRINTISI: yalnızca sunucu log'unda. Veritabanı üzerinden
+  okumak `pg_read_file` → `pg_read_server_files` ister; bankada verilmiyor. Tek yol host-agent. Deadlock
+  SAYISI `pg_stat_database.deadlocks`'tan ölçülüyor (pg_monitor yeterli) ve arayüzde bu sayı gösteriliyor.
+- İfade index'i doğrulaması `hypopg` ister. `CREATE EXTENSION` yetkisi yok: eklenti DBA tarafından
+  kurulmamışsa öneri "doğrulanmadı" damgasıyla dönüyor (TEMP/CREATE İSTENMİYOR — Commit 8'de bu yol kaldırıldı).
+- `pg_current_logfile` PG 15/16'da pg_monitor'e kapalı, 17'de açık (ölçüldü). dbace log'u zaten agent'tan
+  okuduğu için sonucu değiştirmiyor.
+
+**Yetki matrisinin ölçüm sınırı:** ölçüm BİRİNCİL sunucuda yapılıyor; `pg_stat_wal_receiver` gibi yalnızca
+replikada dolan görünümler orada boş döndüğü için "ek yetki yok" çıkıyor. Replikada pg_monitor gerekiyor
+(Commit 6 canlı testleri replikada koşuyor ve bunu ayrıca kanıtlıyor).
+
+**SQL Server'da VIEW DATABASE STATE:** ölçüm, VIEW SERVER STATE'in izlenen veritabanındaki DMV'leri de
+açtığını gösteriyor (2022). Login SQL'i yine de VIEW DATABASE STATE veriyor: sunucu genelinde yetki
+kısıtlanan kurulumlarda (ör. yalnızca belirli veritabanı) gerekli ve zararsız.
+
+**Kurulum/yükseltme testleri ağı kapalı `docker:dind` içinde koşuyor** (`DBACE_TEST_ONPREM=1`). Her push'ta
+değil, gecelik CI işinde: süresi ~10 dk ve privileged konteyner istiyor. Paket ↔ uygulama ayrışması her
+push'ta `tests/test_onprem_package_drift.py` ile denetleniyor (migration yolu, ayarlar, servisler, yetki
+matrisi; her denetimin negatif kontrolü var).
+
+**Yükseltme testi eski sürümü kendi (internetli) yoluyla derliyor:** eski paketin imajları o günün
+Dockerfile'larıyla ve internetten kuruluyor — bankadaki eski kurulumun karşılığı bu. Yalnızca YENİ paketin
+kurulumu internetsiz.
+
+**docker-compose.demo-db.yml ve host-agent compose dosyası sürüm paketine girmiyor** (pilot/geliştirme
+içindir); ihtiyaç olursa depodan alınır.

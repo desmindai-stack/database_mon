@@ -8303,6 +8303,90 @@ katalog sorgusuydu; teşhis panelindeki 8 satır dbace'in kendi imzalı sorgular
 PG 16.15 ve 17.11 1932 / 1 / 1; 106 canlı test, denetime takılan atlama 0. DSN'siz: 1827 geçti / 107 atlandı.
 E2E `live-counts.spec.ts` (PG 17): geçti.
 
+## Faz 31 — Commit 8: on-prem paketi (bankaya giden kurulum)
+
+**Migration:** yok (şema değişmedi). Commit 6'nın #52'si son migration; bu iş migration'ların NASIL
+uygulandığını değiştiriyor.
+
+**Kapsam istisnası:** bu iş `deploy/onprem/` altını değiştiriyor — CLAUDE.md'nin "deploy/'a dokunma"
+kuralı kullanıcının açık talebiyle bu iş için askıya alındı. `railway.toml`, `frontend/vercel.json`, kök
+`docker-compose.yml`, `deploy/cloud/` ve `Dockerfile.web` ellenmedi.
+
+### Envanter: paketin bildiği ile master'ın gerektirdiği (koddan, kod yazmadan önce)
+
+| Konu | Paket (önce) | Uygulama (master) | Sonuç |
+|---|---|---|---|
+| Migration | initdb'ye bağlı 4 dosya + `create_all` | 52 dosya | **60 kolon eksik**; gerçek kurulumda veritabanı bile eklenemiyor |
+| Ayarlar | 20 anahtar | `Settings` 40 alan | 20'si belgesiz; `JWT_SECRET` yok (koddaki geliştirme sırrı), `ADMIN_PASSWORD` yok |
+| Servisler | dbace-db, dbace-app (`RUN_MODE=all`), dbace-web | api + worker rolleri | karşılanıyor (tek süreç) |
+| Python | 3.12-slim | 3.12 | uyumlu |
+| Bağımlılık | 18 paket `>=`, npm `install` (lock'suz), ODBC sürücüsü YOK | SQL Server toplayıcısı pyodbc/aioodbc istiyor | SQL Server izleme imajda çalışmazdı |
+| Zamanlanmış işler | — | 12 iş (toplama, yavaş sorgu, bekleme örnekleyici, yedek, plan yakalama, eşik izleme, retention 03:00, açılış temizliği) | `RUN_MODE=all` hepsini çalıştırıyor |
+| Supabase bağımlılığı | — | auth/RLS/storage KULLANILMIYOR (`SUPABASE_*` kodda okunmuyor, RLS yorumda) | on-prem karşılığı gerekmiyor |
+
+### Yetki matrisi (koddan + ölçülerek)
+
+`backend/scripts/permission_inventory.py`: `app/` altındaki her hedef bağlantı çağrısı AST ile bulunuyor,
+SQL metni sabit/f-string/`.format`/ada bağlı biçimlerde tanımına kadar çözülüyor (öneri METİNLERİNDE geçen
+nesneler sayılmıyor — ilk sürüm `msdb.dbo.sysjobs` için gereksiz yetki istiyordu). Çıkan 71 nesnenin her biri
+üç rolle okunuyor ve paket rolüyle AYNI sonucu veren EN AZ yetkili rolün yetkisi "gereken yetki" olarak
+yazılıyor: `deploy/onprem/sql/permission-matrix.md`. Özet: PostgreSQL'de yalnızca `pg_settings`,
+`pg_stat_activity`, `pg_stat_replication`, `pg_stat_statements` pg_monitor istiyor, `pg_stats` tabloda SELECT
+istiyor, kalan 33 nesne ek yetki istemiyor; SQL Server'da 21 DMV VIEW SERVER STATE istiyor, katalog görünümleri
+ve msdb yedek geçmişi public. **Hedef veritabanına yazan ifade: YOK** (testle denetleniyor).
+
+### Yapılanlar
+
+1. **Şema yolu:** `app/migrations_runner.py` — `dbace_meta.applied_migrations` kaydıyla, dosya başına işlem,
+   `CONCURRENTLY` içeren dosyalar işlem dışında. `entrypoint.sh` açılışta çağırıyor; initdb bağlaması kaldırıldı.
+   Commit 5'teki strict xfail kaldırıldı, yerine gerçek yol (yeni kurulum + kayıt tablosu olmayan eski kurulum)
+   ve atlanan migration'ı gören negatif kontrol.
+2. **Salt-okunur kısıt:** `hypopg` yoksa ifade index'i "doğrulanmadı" diyor (TEMP/CREATE yolu kaldırıldı);
+   yetkisiz tabloda EXPLAIN artık "Ölçülemedi ... GRANT SELECT ON <tablo> ..." diyor; auto_explain planı ve
+   PostgreSQL deadlock AYRINTISI için "ölçülemedi + host-agent gerekiyor + pg_read_server_files bilerek
+   verilmiyor" ve **deadlock SAYISI** `pg_stat_database`'den (yeni `deadlock_counter` alanı, arayüzde görünüyor);
+   SQL Server'da system_health okunamadığında sessiz boş liste yerine gerçek hatadan türetilen gereken yetki.
+3. **Paket:** `prepare-offline-artifacts.sh` (wheel + sürüm kilidi, ODBC .deb'leri, `npm ci` ile arayüz, taban
+   imajlar) → `build-images-offline.sh` (`docker build --network none`) → `install-offline.sh` (kurulum ve
+   yükseltme aynı komut) → `make-release-package.sh` (kaynak + vendor arşivi). `.env.example` bütün ayarları
+   belgeliyor; `JWT_SECRET`, `ADMIN_PASSWORD`, `CREDENTIALS_MASTER_KEY` compose'ta zorunlu.
+4. **Rol SQL'leri:** `sql/postgresql-monitor-role.sql`, `sql/sqlserver-monitor-login.sql` — her GRANT'ın yanında
+   hangi özellik için gerektiği; "bilerek içermez" bölümü.
+5. **Ayrışma koruması:** `tests/test_onprem_package_drift.py` (migration yolu, `Settings` ↔ `.env.example`,
+   servis rolleri/sağlık ucu/nginx vekili, matris ↔ kod envanteri + rol SQL'i), her denetimin negatif kontrolü.
+
+### Ölçümler (gerçek sunucular)
+
+**Kısıtlı rol (PG 15.19/16.15/17.11, rol PAKETİN SQL'iyle kuruldu):** `rolsuper=f`, pg_monitor=t, TEMP=f,
+CREATE=f, `pg_read_server_files`=f, yazma=f; CREATE TEMP TABLE / CREATE TABLE / CREATE EXTENSION /
+`pg_read_file` / INSERT → hepsi InsufficientPrivilege. Aynı rolle: toplama hatasız, topoloji ölçüldü
+(gerçek replikayla "cluster/healthy"), başka rolün sorgu metni okunabiliyor, 17 ön koşulun hepsi gerekçeli,
+ifade index'i önerisi hypopg ile DOĞRULANDI, `EXPLAIN ANALYZE` yetkili tabloda 200, yetkisiz tabloda 400 +
+`GRANT SELECT ON secret_ledger TO ...`, plan yakalama `no_agent` + gerekçe, gerçek deadlock üretildi →
+sayaç 1 + "ayrıntı ölçülemedi" gerekçesi.
+
+**SQL Server 2022 (login PAKETİN SQL'iyle):** sysadmin/db_owner/CONTROL SERVER = 0, VIEW SERVER STATE/
+VIEW DATABASE STATE = 1, tabloya INSERT = 0. Gerçek deadlock üretildi (Msg 1205) → system_health'ten
+okundu ve kurban/kazanan sorgularıyla ekrana geldi. Yetkisiz login: `master`'da "GRANT VIEW SERVER STATE",
+kullanıcısı olmayan veritabanında "USE [db]; CREATE USER ..." — gereken yetki gerçek hatadan.
+
+**İnternetsiz kurulum (ağı kapalı `docker:dind`, 213 MB paket):** derleme ve kurulum ağa hiç çıkmadan
+tamamlandı (`pypi.org` erişimi: kapalı), 52/52 migration uygulandı, şema modellerle birebir (fark 0),
+dbace-db/dbace-app/dbace-web sağlıklı, arayüz ve `/api` vekili çalışıyor, kısıtlı rolle eklenen hedeften
+toplama turu veri üretti (`last_collect_error` yok, topoloji "tek sunucu").
+
+**Yükseltme (Faz 30 sonu, 45 migration → 52):** eski paketin YENİ kurulumunda veritabanı eklenemiyor
+(`column "server_version" of relation "instances" does not exist` — Commit 5 bulgusunun gerçek konteynerdeki
+hâli); DBA migration'ları elle uygulamış hâlden yükseltildi: 52 migration uygulandı, 56 kolon eklendi,
+**kayıp satır 0**, şema farkı 0, eski kullanıcı girebiliyor, şifreli kimlik bilgisi çözülüp toplama sürüyor.
+İçeriği değişen tek şey #48'in bilerek arındırdığı iki sorgu metni (`SET statement_timeout = $1` ve parola
+taşıyan ifade → "metin saklanmadı"). **Negatif kontroller:** bir satır silinince kayıp görülüyor, bir kolon
+düşürülünce şema farkı görülüyor; rol SQL'ine `GRANT pg_read_server_files` eklenince statik denetim kırmızı.
+
+**Sayılar:** CI eşdeğeri (sürüm başına DSN + replika + SQL Server hedefleri): PG 15.19 1976 geçti / 4 atlandı,
+PG 16.15 ve 17.11 1977 / 3; xfail kalmadı (Commit 5'in strict xfail'i gerçek ölçüme dönüştü). DSN'siz:
+1862 geçti / 118 atlandı. On-prem paket testleri (`DBACE_TEST_ONPREM=1`): 2 geçti, 3 dk 6 sn.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

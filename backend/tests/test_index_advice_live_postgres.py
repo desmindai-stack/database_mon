@@ -275,32 +275,35 @@ async def test_monitor_role_gets_measurement_notes_not_fabricated_numbers(admin,
     assert len(result.required_grants["public.orders"]) == 2, "istatistik denetimi ve fayda ölçümü — iki ayrı neden"
 
 
-async def test_monitor_role_expression_index_is_proposed_as_unverified_with_grant_reasons(admin, dsn):
-    """Karar (Faz 31 Commit 4): yetkisi eksik kullanıcıda ifade index'i "doğrulanmadı" etiketiyle ve
-    gerekçesiyle ayrı önerilir; GRANT mesajı hangi tablo için ve NEDEN gerektiğini yazar.
-    Gerçek sunucuda ölçüldü: pg_monitor rolünün TEMP yetkisi VAR, adv_users'ta SELECT'i YOK — ilk
-    yazım GRANT TEMPORARY öneriyordu (yanlış)."""
+async def test_monitor_role_expression_index_is_verified_by_hypopg_without_select_or_temp(admin, dsn):
+    """Faz 31 Commit 8: IMMUTABLE denetimi geçici tabloda CREATE INDEX ile yapılıyordu — bankada izleme
+    kullanıcısının TEMP/CREATE yetkisi yok. hypopg aynı denetimi SELECT ve TEMP olmadan yapıyor (ölçüldü).
+    pg_monitor rolünün adv_users'ta SELECT'i yok: öneri DOĞRULANMIŞ, gereken tek yetki fayda ölçümü için."""
     from app.services.index_advice_watch import report_payload
-    from app.services.index_advisor import GRANT_REASON_BENEFIT, GRANT_REASON_IMMUTABLE
+    from app.services.index_advisor import GRANT_REASON_BENEFIT
 
     result = await _advise(dsn, "SELECT id FROM adv_users WHERE lower(email) = $1", role="monitor")
     expression = [a for a in result.recommendations if a.index_kind == "expression"]
     grants = report_payload(result, watch=None, watch_enabled=True)["required_grants"]
-    log(
-        await _version(admin),
-        f"öneri={[(a.index_ddl, a.verified) for a in expression]} not={expression[0].verification_note[:80] if expression else None!r} "
-        f"yetkiler={grants}",
-    )
-    assert await admin.fetchval("SELECT has_database_privilege('dbace_it_monitor', current_database(), 'TEMP')")
-    assert len(expression) == 1 and expression[0].verified is False
-    assert expression[0].verification_note.startswith("DOĞRULANMADI")
-    # İki ayrı neden: IMMUTABLE doğrulaması ve (hypopg kurulu olduğu için) fayda ölçümü.
-    assert grants["tables"] == [{
-        "table": "public.adv_users", "privilege": "SELECT",
-        "reasons": sorted([GRANT_REASON_BENEFIT, GRANT_REASON_IMMUTABLE]),
-    }]
-    assert grants["command"] == "GRANT SELECT ON public.adv_users TO <izleme_kullanıcısı>;"
+    log(await _version(admin), f"öneri={[(a.index_ddl, a.verified) for a in expression]} yetkiler={grants}")
+    assert len(expression) == 1 and expression[0].verified is True and expression[0].verification_note is None
+    assert grants["tables"] == [{"table": "public.adv_users", "privilege": "SELECT", "reasons": [GRANT_REASON_BENEFIT]}]
     assert "TEMPORARY" not in str(grants)
+
+
+async def test_without_hypopg_expression_index_is_unverified_and_asks_for_hypopg_not_temp(admin, dsn):
+    no_hypopg = await asyncpg.connect(with_database(dsn, NO_HYPOPG_DATABASE), statement_cache_size=0)
+    try:
+        await prepare_live_database(no_hypopg)
+    finally:
+        await no_hypopg.close()
+    result = await PostgreSQLIndexAdvisor(target_for(dsn, "monitor", database=NO_HYPOPG_DATABASE)).advise(
+        "SELECT id FROM adv_users WHERE lower(email) = $1", 1000, min_calls=5)
+    expression = [a for a in result.recommendations if a.index_kind == "expression"]
+    log(await _version(admin), f"öneri={[(a.index_ddl, a.verified) for a in expression]} not={expression[0].verification_note[:120] if expression else None!r}")
+    assert len(expression) == 1 and expression[0].verified is False
+    note = expression[0].verification_note
+    assert note.startswith("DOĞRULANMADI") and "hypopg" in note and "TEMP/CREATE yetkisi İSTENMİYOR" in note
 
 
 async def test_super_role_expression_index_is_verified_and_needs_no_grants(admin, dsn):

@@ -1,0 +1,10 @@
+# dbace web — ÇEVRİMDIŞI (Faz 31 Commit 8). npm yok: `scripts/prepare-offline-artifacts.sh` frontend'i
+# internetli makinede `npm ci && npm run build` ile derleyip `vendor/web-dist/` altına koyar; burada
+# yalnızca nginx'e kopyalanır. `docker build --network none` ile kurulur.
+FROM nginx:1.27-alpine
+
+COPY deploy/onprem/nginx.conf /etc/nginx/conf.d/default.conf
+COPY deploy/onprem/vendor/web-dist/ /usr/share/nginx/html/
+RUN test -f /usr/share/nginx/html/index.html
+
+EXPOSE 80

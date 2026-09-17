@@ -551,3 +551,28 @@ Migration'ları Supabase'e uyguladıktan sonra, backend'i Supabase'e karşı bir
 kere yerelde çalıştırıp (`DATABASE_URL` prod değerine ayarlanmış, dikkatli
 kullanın) `GET /api/health` ve bir `GET /api/predictions` ile en azından yeni
 kolonların gerçekten okunabildiğini doğrulayın.
+
+## On-prem: migration'lar artık açılışta uygulanıyor (Faz 31 Commit 8)
+
+`deploy/onprem` kurulumunda migration'ları ELLE uygulamayın: `dbace-app` her açılışta
+`supabase/migrations/` altındaki uygulanmamış dosyaları ad sırasıyla uyguluyor
+(`app/migrations_runner.py`; kayıt `dbace_meta.applied_migrations`). Kurulum ve yükseltme aynı komut:
+`deploy/onprem/scripts/install-offline.sh`.
+
+- Hata olursa o dosya geri alınıyor ve **uygulama başlamıyor** — `docker logs dbace-app`.
+- `CREATE INDEX CONCURRENTLY` içeren dosyalar işlem bloğu dışında, komut komut uygulanıyor.
+- Migration kaydı olmayan eski kurulumda (Commit 8 öncesi) bütün dosyalar sırayla yeniden uygulanıyor;
+  hepsi `IF NOT EXISTS` ile yazılı ve bu yol gerçek veriyle test edildi.
+- **Bu bölüm yalnızca on-prem içindir.** Supabase (bulut) tarafında migration'lar bu tablodaki sırayla
+  ELLE uygulanmaya devam ediyor; çalıştırıcı `DATABASE_URL` PostgreSQL değilse (SQLite) hiçbir şey yapmıyor.
+
+On-prem `.env`'de **zorunlu** hâle gelenler: `JWT_SECRET` ve `ADMIN_PASSWORD` (öncesinde verilmezse
+uygulama koddaki geliştirme sırrıyla açılıyordu — oturum jetonu taklit edilebilirdi), `CREDENTIALS_MASTER_KEY`,
+`DBACE_DB_PASSWORD`. Bütün ayarların açıklaması `deploy/onprem/.env.example`'da; `Settings` modeliyle
+ayrışması CI'da denetleniyor.
+
+### İzlenen veritabanında izleme kullanıcısı
+
+DBA tek dosya çalıştırıyor — `deploy/onprem/sql/postgresql-monitor-role.sql` (PostgreSQL) ya da
+`sqlserver-monitor-login.sql` (SQL Server). Yalnızca okuma yetkisi verirler; hangi yetkinin hangi özellik
+için gerektiği satır sonu yorumlarında ve `deploy/onprem/sql/permission-matrix.md` tablosunda (ölçülmüş).

@@ -1336,6 +1336,28 @@
       },
       "BlockingHistoryOut": {
         "properties": {
+          "deadlock_counter": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadlock Counter"
+          },
+          "deadlock_detail_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadlock Detail Reason"
+          },
           "deadlocks": {
             "default": [],
             "items": {

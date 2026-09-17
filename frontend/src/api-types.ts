@@ -2474,6 +2474,10 @@ export interface components {
         };
         /** BlockingHistoryOut */
         BlockingHistoryOut: {
+            /** Deadlock Counter */
+            deadlock_counter?: number | null;
+            /** Deadlock Detail Reason */
+            deadlock_detail_reason?: string | null;
             /**
              * Deadlocks
              * @default []

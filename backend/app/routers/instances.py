@@ -692,6 +692,83 @@ async def get_blocking_tree(
     )
 
 
+async def _deadlock_counter_delta(db: AsyncSession, instance_id: int, start: datetime, end: datetime) -> int | None:
+    """Pencere içindeki deadlock sayısı, toplanan `pg_stat_database.deadlocks` KÜMÜLATİF sayacından.
+
+    Sayaç sıfırlanırsa (pg_stat_reset, yeniden başlatma) düşüşten sonraki artış da sayılıyor.
+    Pencerede iki örnek yoksa ölçüm yok: None.
+    """
+    values = (
+        await db.execute(
+            select(MetricSample.deadlocks)
+            .where(
+                MetricSample.instance_id == instance_id,
+                MetricSample.collected_at >= start,
+                MetricSample.collected_at <= end,
+            )
+            .order_by(MetricSample.collected_at)
+        )
+    ).scalars().all()
+    if len(values) < 2:
+        return None
+    total = 0
+    for previous, current in zip(values, values[1:]):
+        previous, current = int(previous or 0), int(current or 0)
+        total += current - previous if current >= previous else current
+    return total
+
+
+def _postgres_deadlock_detail_reason(instance: Instance, counter: int | None) -> str | None:
+    """PostgreSQL deadlock ayrıntısı neden ölçülemiyor (Faz 31 Commit 8) — ölçülüyorsa None.
+
+    Ayrıntı yalnızca sunucu log'unda. Log'u VERİTABANI üzerinden okumak `pg_read_file` ister, o da
+    pg_read_server_files rolü — bankada izleme kullanıcısına bilerek verilmiyor. Tek yol host-agent.
+    """
+    from app.services.plan_capture import agent_configured
+
+    if agent_configured(instance) and not instance.plan_capture_error:
+        return None
+    counted = (
+        f"Deadlock SAYISI veritabanının kendi sayacından ölçülüyor (pg_stat_database.deadlocks, pg_monitor "
+        f"yeterli): bu pencerede {counter}."
+        if counter is not None
+        else "Deadlock sayısı için de bu pencerede yeterli metrik örneği yok (en az iki toplama turu gerekir)."
+    )
+    cause = (
+        "bu veritabanı için host-agent yapılandırılmamış"
+        if not agent_configured(instance)
+        else f"host-agent log'u okuyamadı — {instance.plan_capture_error}"
+    )
+    return (
+        f"Deadlock ayrıntısı (kurban/kazanan sorgu) ölçülemedi: {cause}. Ayrıntı yalnızca sunucu log'unda; "
+        "log'u veritabanı üzerinden okumak pg_read_server_files yetkisi ister ve izleme kullanıcısına "
+        "bilerek verilmiyor. Gereken: sunucuya host-agent kurulumu (veritabanı yetkisi değil). " + counted
+    )
+
+
+def _sqlserver_deadlock_detail_reason(instance: Instance) -> str | None:
+    """SQL Server deadlock'ları system_health XE halka tamponundan SORGUYLA okunuyor (VIEW SERVER STATE).
+    Okuma denenmediyse ya da başarısızsa "ölçülemedi" — boş liste "deadlock olmadı" DEMEK DEĞİL."""
+    if instance.plan_capture_checked_at is None:
+        return (
+            "Deadlock geçmişi ölçülemedi: system_health okuma işi bu veritabanı için henüz çalışmadı "
+            "(worker çalışmıyor ya da PLAN_CAPTURE_ENABLED=false)."
+        )
+    error = instance.plan_capture_error
+    if error:
+        if "Cannot open database" in error or "(4060)" in error:
+            cause = f"izleme login'i '{instance.database}' veritabanını açamıyor (veritabanında kullanıcısı yok)"
+            grant = f"USE [{instance.database}]; CREATE USER [<izleme_login>] FOR LOGIN [<izleme_login>];"
+        elif "permission" in error.lower() or "(300)" in error or "(297)" in error:
+            cause = "system_health oturumunu okuma yetkisi yok"
+            grant = "GRANT VIEW SERVER STATE TO [<izleme_login>];"
+        else:
+            cause = f"system_health oturumu okunamadı ({error.splitlines()[0][:300]})"
+            grant = "GRANT VIEW SERVER STATE TO [<izleme_login>]; ve system_health oturumunun açık olması"
+        return f"Deadlock geçmişi ölçülemedi: {cause}. Gereken yetki: {grant}"
+    return None
+
+
 @router.get("/{instance_id}/blocking-history", response_model=BlockingHistoryOut)
 async def get_blocking_history(
     instance_id: int,
@@ -762,6 +839,11 @@ async def get_blocking_history(
             for d in deadlocks
         ],
     )
+    if instance.engine == "postgresql":
+        out.deadlock_counter = await _deadlock_counter_delta(db, instance_id, start, end)
+        out.deadlock_detail_reason = _postgres_deadlock_detail_reason(instance, out.deadlock_counter)
+    elif instance.engine == "sqlserver":
+        out.deadlock_detail_reason = _sqlserver_deadlock_detail_reason(instance)
     if not out.episodes and not out.deadlocks:
         # "Olay olmadı" ile "olay ölçülmedi" farklı şeyler; ikincisini sessizce boş liste
         # göstermek, kullanıcıya yanlış bir güvence verirdi.
@@ -776,11 +858,15 @@ async def get_blocking_history(
                 "MongoDB'de kilit bekleme zinciri ve deadlock kaydı bu şekilde toplanmıyor."
             )
         else:
+            # Deadlock ölçülemiyorsa "deadlock görülmedi" DENMİYOR (Faz 31 Commit 8).
+            seen = "bloklama olayı" if out.deadlock_detail_reason else "bloklama olayı ya da deadlock"
             out.unavailable_reason = (
-                f"Son {hours} saatte kayda değer bloklama olayı ya da deadlock görülmedi. "
+                f"Son {hours} saatte kayda değer {seen} görülmedi. "
                 "Kısa süreli kilit beklemeleri (5 saniyenin altı) bilerek kaydedilmiyor — "
                 "kilit beklemesi veritabanının normal çalışmasının parçası."
             )
+            if out.deadlock_detail_reason:
+                out.unavailable_reason += " " + out.deadlock_detail_reason
     return out
 
 

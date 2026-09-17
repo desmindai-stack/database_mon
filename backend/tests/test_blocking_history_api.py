@@ -305,3 +305,56 @@ async def test_postgres_instances_are_refused_by_the_sqlserver_path():
     async with SessionLocal() as session:
         outcome = await plan_capture.capture_sqlserver_deadlocks(session, instance)
     assert "SQL Server" in outcome["error"]
+
+
+# --- Faz 31 Commit 8: deadlock ölçülemiyorsa "deadlock olmadı" denmiyor ------------------------------
+
+
+async def _history(instance_id: int) -> dict:
+    async with await authed_client() as client:
+        return (await client.get(f"/api/instances/{instance_id}/blocking-history")).json()
+
+
+async def _update(instance_id: int, **fields) -> None:
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance_id)
+        for key, value in fields.items():
+            setattr(row, key, value)
+        await session.commit()
+
+
+async def test_postgres_without_agent_says_deadlock_detail_not_measured_and_counts_from_the_counter():
+    from app.models import MetricSample
+
+    instance = await _instance()
+    async with SessionLocal() as session:
+        # Kümülatif sayaç 5 → 7, sonra sıfırlanıyor (yeniden başlatma) → 1: pencerede 2 + 1 = 3 deadlock.
+        for minutes, value in ((30, 5), (20, 7), (10, 1)):
+            session.add(MetricSample(instance_id=instance.id, collected_at=NOW - timedelta(minutes=minutes), deadlocks=value))
+        await session.commit()
+    body = await _history(instance.id)
+    assert body["deadlock_counter"] == 3
+    reason = body["deadlock_detail_reason"]
+    assert "ölçülemedi" in reason and "host-agent" in reason and "pg_read_server_files" in reason and "bu pencerede 3" in reason
+    assert "ya da deadlock görülmedi" not in body["unavailable_reason"] and reason in body["unavailable_reason"]
+
+
+async def test_postgres_with_working_agent_has_no_deadlock_reason_and_negative_control_failing_agent():
+    instance = await _instance()
+    await _update(instance.id, options={"agent_url": "http://agent:9105"})
+    assert (await _history(instance.id))["deadlock_detail_reason"] is None
+    await _update(instance.id, plan_capture_error="log çekilemedi: bağlantı reddedildi")
+    assert "host-agent log'u okuyamadı" in (await _history(instance.id))["deadlock_detail_reason"]
+
+
+@pytest.mark.parametrize(("error", "grant"), [
+    (None, None),
+    ("deadlock okunamadı: ('42000', 'VIEW SERVER STATE permission was denied on object (300)')", "GRANT VIEW SERVER STATE TO"),
+    ("deadlock okunamadı: ('42000', 'Cannot open database \"app\" requested by the login. (4060)')", "CREATE USER"),
+])
+async def test_sqlserver_deadlock_reason_names_the_grant_from_the_real_error(error, grant):
+    instance = await _instance(engine="sqlserver")
+    assert "henüz çalışmadı" in (await _history(instance.id))["deadlock_detail_reason"]
+    await _update(instance.id, plan_capture_checked_at=NOW, plan_capture_error=error)
+    reason = (await _history(instance.id))["deadlock_detail_reason"]
+    assert reason is None if grant is None else grant in reason

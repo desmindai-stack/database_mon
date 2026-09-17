@@ -1,9 +1,9 @@
 # dbace — On-Prem Kurulum (Tek Linux Sunucu, İnternetsiz)
 
-> **Bu doküman Faz 3 içindir.** Önce bulutta geliştirme/test: [YASAM-DONGUSU.md](../../docs/YASAM-DONGUSU.md) ve [BULUT-KURULUM.md](../cloud/BULUT-KURULUM.md).  
-> Paket almak için: `deploy/onprem/scripts/make-release-package.sh v0.x.x`
+Bu rehber **DBA** için yazıldı. Hedef: **tek bir Linux sunucuda**, **internete kapalı** ortamda dbace çalışsın ve
+izlenen veritabanlarına **yalnızca okuma yetkili** bir kullanıcıyla bağlansın.
 
-Bu rehber **DBA** perspektifinden yazıldı. Hedef: **tek bir Linux sunucuda**, **internete kapalı** ortamda dbace çalışsın.
+> Paketi üretmek (internetli makinede, geliştirici): `deploy/onprem/scripts/make-release-package.sh v0.x.x`
 
 ---
 
@@ -11,13 +11,12 @@ Bu rehber **DBA** perspektifinden yazıldı. Hedef: **tek bir Linux sunucuda**, 
 
 | Bileşen | Görev | Sunucuda |
 |---------|--------|----------|
-| **dbace-db** | Uygulamanın kendi veritabanı (instance listesi, metrikler, alarmlar) | Docker container |
-| **dbace-app** | Metrik toplama + API | Docker container |
-| **dbace-web** | Web arayüzü (tarayıcıdan) | Docker container, port **8080** |
+| **dbace-db** | Uygulamanın kendi veritabanı (kayıtlar, metrikler, alarmlar) | Docker konteyneri (PostgreSQL 16) |
+| **dbace-app** | API + toplayıcı (tek süreç, `RUN_MODE=all`); açılışta şema migration'larını uygular | Docker konteyneri |
+| **dbace-web** | Web arayüzü + `/api` vekili | Docker konteyneri, port **8080** |
 
-İzlediğiniz **üretim PostgreSQL / SQL Server / MongoDB** ayrı sunucularda olabilir; dbace onlara sadece **iç ağ** üzerinden bağlanır (internet gerekmez).
-
-**Not:** Geliştirme önce Supabase/Railway/Vercel ile yapılır; bu kurulum **paket halinde** on-prem’e taşınır ([YASAM-DONGUSU.md](../../docs/YASAM-DONGUSU.md)).
+İzlediğiniz PostgreSQL / SQL Server sunucuları ayrı makinelerde olabilir; dbace onlara yalnızca **iç ağ** üzerinden
+bağlanır.
 
 ---
 
@@ -28,260 +27,183 @@ Bu rehber **DBA** perspektifinden yazıldı. Hedef: **tek bir Linux sunucuda**, 
 | CPU | 2 çekirdek | 4 |
 | RAM | 4 GB | 8 GB |
 | Disk | 40 GB | 100 GB+ (metrik geçmişi büyür) |
-| OS | RHEL 8+, Ubuntu 22.04+, Rocky, Alma | aynı |
-| Yazılım | **Docker Engine** + **Docker Compose v2** | |
+| OS | x86_64 Linux: RHEL 8+, Ubuntu 22.04+, Rocky, Alma | aynı |
+| Yazılım | **Docker Engine** + **Docker Compose v2**, `bash`, `tar` | |
 
-Firewall: kullanıcıların tarayıcısı → sunucu **8080** (veya `.env` içindeki `HTTP_PORT`).
-
----
-
-## 3. İki senaryo
-
-### Senaryo A — Sunucuda internet **var** (pilot / ilk kurulum)
-
-Doğrudan repodan derleyip başlatırsınız.
-
-### Senaryo B — Sunucu **tamamen kapalı** (air-gap)
-
-1. İnterneti olan başka bir Linux’ta imajları **paketlersiniz** (`export-images.sh`).
-2. `.tar` dosyasını USB / iç ağ ile kapalı sunucuya taşırsınız.
-3. Kapalı sunucuda `import-and-start.sh` ile açarsınız.
-
-Aşağıdaki adımlarda her iki yol da numaralandı.
+Firewall: kullanıcıların tarayıcısı → sunucu **8080** (ya da `.env` içindeki `HTTP_PORT`); dbace sunucusu → izlenen
+veritabanlarının portu (5432 / 1433).
 
 ---
 
-## 4. Dosyalar nerede?
-
-Proje içinde:
+## 3. Paketin içeriği
 
 ```text
-deploy/onprem/
-├── docker-compose.yml          ← ana stack
-├── docker-compose.demo-db.yml  ← isteğe bağlı test PostgreSQL
-├── .env.example                ← şifre şablonu
-├── KURULUM.md                  ← bu dosya
-└── scripts/
-    ├── start.sh                ← internetli hızlı başlat
-    ├── export-images.sh        ← air-gap paketle
-    └── import-and-start.sh     ← air-gap yükle + başlat
+dbace-onprem-<sürüm>/
+├── VERSION, COMMIT, BUILD_TIME, PAKET-OKU.txt
+├── backend/app, backend/requirements.txt   ← uygulama kaynağı (imaj burada derlenir)
+├── supabase/migrations/                    ← şema migration'ları (açılışta sırayla uygulanır)
+└── deploy/onprem/
+    ├── docker-compose.yml
+    ├── .env.example                        ← BÜTÜN ayarlar, açıklamalı
+    ├── Dockerfile.backend, Dockerfile.web.offline, entrypoint.sh, nginx.conf
+    ├── sql/
+    │   ├── postgresql-monitor-role.sql     ← DBA: izleme rolü (yalnızca okuma)
+    │   ├── sqlserver-monitor-login.sql     ← DBA: izleme login'i (yalnızca okuma)
+    │   └── permission-matrix.md            ← hangi nesne hangi yetkiyi istiyor (ölçülmüş)
+    ├── scripts/
+    │   ├── install-offline.sh              ← KURULUM ve YÜKSELTME (tek komut)
+    │   ├── build-images-offline.sh         ← imajları ağ kapalı derler (install çağırır)
+    │   ├── prepare-offline-artifacts.sh    ← yalnızca paketi üreten internetli makinede
+    │   ├── make-release-package.sh         ← yalnızca paketi üreten internetli makinede
+    │   └── start.sh                        ← internetli pilot sunucu için kısayol
+    └── vendor/                             ← çevrimdışı bağımlılıklar
+        ├── wheels/, requirements.lock      ← Python paketleri (sürümleri sabit)
+        ├── debs/                           ← ODBC Driver 18 for SQL Server + bağımlılıkları
+        ├── web-dist/                       ← derlenmiş web arayüzü
+        └── base-images.tar                 ← python:3.12-slim-bookworm, nginx:1.27-alpine, postgres:16-alpine
 ```
+
+Pakette hazır imaj değil **kaynak + çevrimdışı bağımlılıklar** var: imajlar sunucunuzda `docker build --network none`
+ile derlenir. Derleme internetten bir şey indirmeye kalkarsa **kırılır** — yani sunucunuz internete hiç çıkmaz.
 
 ---
 
-## 5. Adım adım kurulum (Senaryo A — internetli sunucu)
-
-### Adım 5.1 — Docker kurulu mu?
-
-Terminalde:
+## 4. Kurulum
 
 ```bash
-docker --version
-docker compose version
-```
-
-Çıkmıyorsa: işletim sisteminize göre “Docker Engine install” (IT’den kurulum isteyebilirsiniz).
-
-### Adım 5.2 — Projeyi sunucuya alın
-
-Örnek:
-
-```bash
-cd /opt
-git clone https://github.com/desmindai-stack/database_mon.git dbace
-cd dbace/deploy/onprem
-```
-
-(Git yoksa ZIP’i `/opt/dbace` olarak açın.)
-
-### Adım 5.3 — Şifre dosyasını hazırlayın
-
-```bash
+tar -xzf dbace-onprem-<sürüm>.tar.gz -C /opt
+cd /opt/dbace-onprem-<sürüm>/deploy/onprem
 cp .env.example .env
-nano .env   # veya vi
+vi .env
 ```
 
-**Mutlaka değiştirin:**
+**ZORUNLU** (verilmezse kurulum başlamaz):
 
-- `DBACE_DB_PASSWORD` — dbace’ın iç veritabanı şifresi  
-- `CREDENTIALS_MASTER_KEY` — en az 32 karakter rastgele (not edin, yedekleyin)
+| Değişken | Ne | Not |
+|---|---|---|
+| `DBACE_DB_PASSWORD` | dbace'in kendi veritabanı şifresi | |
+| `CREDENTIALS_MASTER_KEY` | izlenen veritabanı şifrelerini şifreler | **Yedekleyin.** Değişirse kayıtlı şifreler okunamaz. |
+| `JWT_SECRET` | oturum jetonlarını imzalar | `openssl rand -hex 32` |
+| `ADMIN_PASSWORD` | ilk yönetici şifresi (`ADMIN_USERNAME`, varsayılan `admin`) | ilk girişte değiştirmeniz istenir |
 
-Kaydedin.
-
-### Adım 5.4 — Başlatın
+Diğer bütün ayarlar `.env.example`'da açıklamalı; varsayılanlar üretim için uygundur.
 
 ```bash
-chmod +x scripts/*.sh
-./scripts/start.sh
+./scripts/install-offline.sh
 ```
 
-İlk seferde birkaç dakika sürebilir (derleme).
-
-#### Şema güncellemeleri (yükseltme yaparken)
-
-Yeni kurulumda gerekmez: uygulama açılışta eksik tabloları ve kolonları kendisi oluşturur.
-**Var olan bir kurulumu yükseltiyorsanız** `supabase/migrations/` altındaki dosyaları
-`DEPLOY.md`'deki sırayla uygulayın.
-
-⚠️ **`CREATE INDEX CONCURRENTLY` kullanan migration'lar bir istisnadır.** PostgreSQL bu komutu
-bir transaction bloğunun içinde çalıştırmaz; tek bir dosya olarak (`psql -f`) ya da bir
-transaction'a saran herhangi bir araçla verildiğinde şu hatayı alırsınız:
-
-```
-ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
-```
-
-Bu komutları **tek tek, ayrı `-c` çağrılarıyla** gönderin:
-
-```bash
-# On-prem'de veritabanı compose içindeki postgres servisidir:
-docker compose exec -T postgres \
-  psql -U dbace -d dbace \
-  -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_metric_samples_instance_collected ON metric_samples (instance_id, collected_at);"
-
-docker compose exec -T postgres \
-  psql -U dbace -d dbace \
-  -c "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_slow_query_samples_instance_collected ON slow_query_samples (instance_id, collected_at);"
-```
-
-Büyük tablolarda her komut dakikalar sürebilir; bu süre boyunca tabloya **yazma devam eder**
-(CONCURRENTLY'nin varlık sebebi budur). Kilitleyen normal `CREATE INDEX` toplama döngüsünü
-durdurur — yalnızca planlı bakım penceresinde tercih edin.
-
-Doğrulama:
-
-```bash
-docker compose exec -T postgres psql -U dbace -d dbace -c "\di+ ix_slow_query_samples_instance_collected"
-```
-
-Bir indeks `INVALID` görünüyorsa (CONCURRENTLY yarıda kalmışsa olur) `DROP INDEX CONCURRENTLY`
-ile düşürüp tekrar oluşturun. Ayrıntılar ve Supabase/bulut karşılığı için `DEPLOY.md`'deki
-"CONCURRENTLY kullanan migration'lar" bölümüne bakın.
-
-### Adım 5.5 — Tarayıcıdan açın
+Komut sırasıyla: taban imajları yükler → imajları ağ kapalı derler → servisleri başlatır → `dbace-app` sağlıklı olana
+kadar bekler. Başarılıysa son satırlar şöyledir:
 
 ```text
-http://SUNUCUNUN_IP_ADRESI:8080
+migration: 52 yeni uygulandı, toplam 52 (...)
+dbace çalışıyor: http://SUNUCU_IP:8080
 ```
 
-Örnek: `http://192.168.10.50:8080`
+Tarayıcıdan `http://SUNUCU_IP:8080` → `admin` / `ADMIN_PASSWORD` → yeni şifre.
 
-### Adım 5.6 — (İsteğe bağlı) Test PostgreSQL
+### Şema
 
-Kendi üretim DB’niz yokken denemek için:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.demo-db.yml up -d
-```
-
-UI’da yeni instance:
-
-| Alan | Değer |
-|------|--------|
-| Motor | PostgreSQL |
-| Host | `demo-postgres` (aynı Docker ağı) **veya** sunucu IP |
-| Port | `5432` (container içi) / dışarıdan **5433** |
-| Database | postgres |
-| User / Pass | postgres / postgres |
-
-1–2 dakika sonra Dashboard’da metrik görünmeli.
+Şema **migration'larla** kurulur: `dbace-app` her açılışta `supabase/migrations/` altındaki uygulanmamış dosyaları
+ad sırasıyla uygular (kayıt: `dbace_meta.applied_migrations` tablosu). Bir migration hata verirse o dosya geri alınır
+ve uygulama **başlamaz** (`docker logs dbace-app`). `CREATE INDEX CONCURRENTLY` içeren dosyalar işlem bloğu dışında,
+komut komut uygulanır — elle bir şey yapmanız gerekmez. (PostgreSQL bu komutu işlem içinde çalıştırmaz: elle
+`psql -f` ile verirseniz `ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block` alırsınız.
+Yarıda kalmış bir index `INVALID` görünürse `DROP INDEX CONCURRENTLY` ile düşürüp kurulumu tekrar çalıştırın.)
 
 ---
 
-## 6. Adım adım kurulum (Senaryo B — air-gap)
+## 5. Yükseltme
 
-### Adım 6.1 — İnternetli “paketleme” makinesi
-
-Repoyu alın, `.env` oluşturun (şifreler kapalı ortamda da geçerli olacak — **aynı `.env` dosyasını** kapalı sunucuya götürün).
-
-```bash
-cd dbace/deploy/onprem
-cp .env.example .env
-# .env düzenle
-chmod +x scripts/export-images.sh
-./scripts/export-images.sh
-```
-
-Çıktı: `deploy/dist/dbace-images-YYYYMMDD.tar` (büyük dosya).
-
-### Adım 6.2 — Taşıma
-
-USB veya iç dosya sunucusu ile kapalı sunucuya:
-
-- `dbace-images-*.tar`
-- Tüm `deploy/onprem/` klasörü (compose + `.env` + scriptler)
-
-### Adım 6.3 — Kapalı sunucuda
+Yeni paketi ayrı bir dizine açın, **eski `.env` dosyasını** kopyalayın (özellikle `DBACE_DB_PASSWORD` ve
+`CREDENTIALS_MASTER_KEY` aynı kalmalı), eski sürümde yoksa `JWT_SECRET` ve `ADMIN_PASSWORD` ekleyin:
 
 ```bash
-cd /opt/dbace/deploy/onprem
-chmod +x scripts/import-and-start.sh
-./scripts/import-and-start.sh /opt/dbace/deploy/dist/dbace-images-YYYYMMDD.tar
+tar -xzf dbace-onprem-<yeni>.tar.gz -C /opt
+cp /opt/dbace-onprem-<eski>/deploy/onprem/.env /opt/dbace-onprem-<yeni>/deploy/onprem/.env
+cd /opt/dbace-onprem-<yeni>/deploy/onprem
+./scripts/install-offline.sh
 ```
 
-`.env` yoksa script oluşturur; düzenleyip:
-
-```bash
-docker compose up -d
-```
+Veritabanı birimi (`dbace-onprem_dbace-pgdata`) korunur; yeni migration'lar açılışta uygulanır. Migration kaydı
+olmayan eski bir kurulumda (Faz 31 Commit 8 öncesi) bütün migration'lar sırayla yeniden uygulanır — hepsi
+`IF NOT EXISTS` ile yazılı ve bu yol gerçek veriyle test edildi (`backend/tests/test_onprem_package_live.py`: satır
+kaybı 0, şema farkı 0). **Yükseltmeden önce birimin yedeğini alın** (bkz. 9).
 
 ---
 
-## 7. Üretim veritabanını izlemeye alma (DBA işi)
+## 6. İzlenen veritabanı: izleme kullanıcısı (DBA işi)
 
-### 7.1 PostgreSQL
+dbace izlenen veritabanlarında **yalnızca okur**. Paketteki SQL dosyaları bu kısıtla yazıldı ve testle denetleniyor
+(`backend/tests/test_onprem_role_sql.py`): süper kullanıcı, `pg_read_server_files` / `pg_write_server_files`,
+CREATE/TEMP, CREATE EXTENSION, yazma yetkisi yok; SQL Server'da sysadmin/db_owner/CONTROL yok. Her GRANT satırının
+yanında hangi özellik için gerektiği yazıyor. Nesne bazında gereken yetki (ölçülmüş): `sql/permission-matrix.md`.
 
-İzlenen sunucuda (pgwatch kullanıcısı):
+### 6.1 PostgreSQL
 
-```sql
-CREATE USER pgwatch WITH PASSWORD 'güçlü_şifre';
-GRANT pg_monitor TO pgwatch;
-GRANT CONNECT ON DATABASE veritabani_adi TO pgwatch;
-CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
-```
+Ön koşul (bir kez, yetkili bir hesapla): `shared_preload_libraries = 'pg_stat_statements'` (yeniden başlatma) ve izlenen
+veritabanında `CREATE EXTENSION pg_stat_statements;`. İsteğe bağlı: `hypopg` (index önerisinin fayda ölçümü).
 
-UI → **Instances** → host = PostgreSQL’in **iç IP**’si, port 5432, kullanıcı `pgwatch`.
-
-### 7.2 Ağ / firewall
-
-- dbace sunucusundan → hedef DB portuna **TCP izni** (5432, 1433, 27017).
-- İnternet **gerekmez**; sadece iç VLAN.
-
-### 7.3 SQL Server / MongoDB
-
-- **MongoDB:** UI’da motor MongoDB; `motor` paketi imajda var — bağlantı testi deneyin.  
-- **SQL Server:** collector henüz tam değil; instance eklenebilir, metrikler sonraki sürümde.
-
----
-
-## 8. Alarm ve tahmin
-
-| Özellik | Nerede |
-|---------|--------|
-| Eşik alarmı | **Alerts** → kural oluştur |
-| Trend tahmini | **Predictions** → worker metrik biriktirdikçe dolar |
-
----
-
-## 9. Günlük operasyon komutları
+`sql/postgresql-monitor-role.sql` içindeki `<izlenen_veritabanı>` ve `<şema>` yerlerini düzenleyin:
 
 ```bash
-cd /opt/dbace/deploy/onprem
+psql -U postgres -d <izlenen_veritabanı> -v monitor_password='<güçlü_şifre>' -f sql/postgresql-monitor-role.sql
+```
 
-# Durum
+Arayüz → Veritabanı ekle → kullanıcı `dbace_monitor`.
+
+### 6.2 SQL Server
+
+`sql/sqlserver-monitor-login.sql` içindeki `<güçlü_parola>` ve `<izlenen_veritabanı>` yerlerini düzenleyip
+`sqlcmd` / SSMS ile çalıştırın. Login `dbace_monitor`: VIEW SERVER STATE + VIEW DATABASE STATE.
+
+### 6.3 Yetki yetmediğinde ne görürsünüz?
+
+Hiçbir ekran sessizce boş kalmaz: yetki ya da bileşen eksikse **"ölçülemedi"**, **gerekçe** ve **gereken yetki
+(komut olarak)** gösterilir. Bu kısıtla bilerek ölçülmeyenler:
+
+| Özellik | Neden | Ne gerekir |
+|---|---|---|
+| auto_explain ile yakalanan planlar | Sunucu log'unda; log'u veritabanından okumak `pg_read_server_files` ister (verilmiyor) | Sunucuya host-agent (`docker-compose.host-agent.yml`) |
+| Deadlock ayrıntısı (kurban/kazanan sorgu), PostgreSQL | Aynı: yalnızca log'da | host-agent. Deadlock **sayısı** `pg_stat_database`'den yine ölçülür |
+| EXPLAIN ANALYZE, yetkisiz tablo | Tabloya SELECT yok | Ekranda yazan `GRANT SELECT ON <tablo> ...` |
+| İfade index'i doğrulaması | `hypopg` kurulu değil (TEMP/CREATE istenmiyor) | DBA'nın `CREATE EXTENSION hypopg` kurması |
+
+---
+
+## 7. İnternetli pilot sunucu
+
+```bash
+cd deploy/onprem
+cp .env.example .env && vi .env
+./scripts/start.sh     # çevrimdışı bağımlılıkları indirir, sonra install-offline.sh
+```
+
+Deneme hedefi için: `docker compose -f docker-compose.yml -f docker-compose.demo-db.yml up -d`.
+
+---
+
+## 8. Günlük operasyon
+
+```bash
+cd /opt/dbace-onprem-<sürüm>/deploy/onprem
 docker compose ps
-
-# Log (sorun giderme)
 docker compose logs -f dbace-app
-
-# Durdur
-docker compose down
-
-# Güncelleme (yeni imaj geldiyse)
-docker compose up -d --build
+docker compose down          # veri birimi korunur
+./scripts/install-offline.sh # yeniden başlatma / yükseltme
 ```
 
-**Yedekleme (önemli):** Docker volume `dbace-pgdata` — dbace’ın tüm kayıtları burada. IT ile düzenli snapshot alın.
+---
+
+## 9. Yedekleme
+
+Bütün dbace kayıtları `dbace-onprem_dbace-pgdata` biriminde. Örnek mantıksal yedek:
+
+```bash
+docker exec dbace-db pg_dump -U dbace -Fc dbace > dbace-$(date +%F).dump
+```
+
+`.env` dosyasını (özellikle `CREDENTIALS_MASTER_KEY`) ayrıca ve güvenli saklayın.
 
 ---
 
@@ -289,34 +211,21 @@ docker compose up -d --build
 
 | Belirti | Olası neden | Ne yapın |
 |---------|-------------|----------|
-| Sayfa açılmıyor | 8080 kapalı | `firewall-cmd` / security group; `HTTP_PORT` |
-| Instance test fail | Ağ / şifre | Hedef DB’den `telnet IP 5432`; pg_hba.conf |
-| Metrik yok | Worker / bağlantı | `docker compose logs dbace-app` |
-| Şifre hatası | `.env` değişti | `CREDENTIALS_MASTER_KEY` değişirse eski instance şifreleri okunamaz — yeniden ekleyin |
+| `install-offline.sh`: ".env: X verilmemiş" | Zorunlu değer eksik/örnek değerinde | `.env` düzenleyin |
+| Derleme "Could not find a version" / "Temporary failure resolving" | Paket eksik (`vendor/` boş ya da eksik kopyalandı) | Paketi yeniden açın; `vendor/` dizini tam olmalı |
+| `dbace-app` sağlıklı olmuyor, log'da `migration` hatası | Migration uygulanamadı | `docker logs dbace-app`; hata metniyle bize dönün — yarım migration geri alınmıştır |
+| Sayfa açılmıyor | 8080 kapalı | firewall; `HTTP_PORT` |
+| Veritabanı eklenemiyor | Ağ / şifre / pg_hba.conf | dbace sunucusundan hedef porta erişim |
+| Bir ekranda "ölçülemedi" | Yetki ya da bileşen eksik | Ekrandaki "gereken yetki" satırı; bkz. 6.3 |
+| Kayıtlı şifreler çözülemiyor | `CREDENTIALS_MASTER_KEY` değişti | Eski anahtarı geri koyun |
 
 ---
 
-## 11. Mimari özeti (on-prem)
+## 11. Mimari özeti
 
 ```text
-[Kullanıcı PC tarayıcı] --8080--> [dbace-web / nginx]
-                                        |
-                                        +--> /api --> [dbace-app]
-                                        |
-                                   [dbace-db PostgreSQL]
-
-[dbace-app] --iç ağ--> [Sizin PostgreSQL / MongoDB / SQL Server]
+[Kullanıcı tarayıcısı] --8080--> [dbace-web / nginx] --/api--> [dbace-app: API + toplayıcı]
+                                                                     |            |
+                                                              [dbace-db]    --iç ağ, salt okunur-->
+                                                                            [PostgreSQL / SQL Server]
 ```
-
----
-
-## 12. Şimdi sizin yapmanız gereken (checklist)
-
-- [ ] Linux sunucu + Docker hazır  
-- [ ] `deploy/onprem/.env` oluşturuldu, şifreler değiştirildi  
-- [ ] `./scripts/start.sh` veya air-gap import tamam  
-- [ ] `http://IP:8080` açılıyor  
-- [ ] En az bir instance eklendi, metrik geliyor  
-- [ ] (Üretim) dbace-pgdata yedek planı  
-
-Takıldığınız adımın numarasını ve ekrandaki hata metnini yazarsanız, bir sonraki mesajda yalnızca o adımı birlikte çözeriz.

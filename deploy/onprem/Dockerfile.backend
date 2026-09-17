@@ -1,17 +1,46 @@
-FROM python:3.12-slim
+# dbace backend — on-prem (Faz 31 Commit 8).
+#
+# ÇEVRİMDIŞI KURULUM: `scripts/prepare-offline-artifacts.sh` internetli makinede `deploy/onprem/vendor/`
+# dizinini doldurur (Python wheel'leri, ODBC Driver 18 .deb paketleri). vendor doluysa bu imaj
+# `docker build --network none` ile İNTERNETSİZ kurulur; boşsa (geliştirme, kök docker-compose.yml)
+# paketler internetten indirilir. Taban imaj bookworm'e sabit: Microsoft ODBC Driver 18 Debian 12 için
+# yayımlanıyor ve .deb'ler aynı tabanda indiriliyor.
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libpq5 \
-    && rm -rf /var/lib/apt/lists/*
-
+COPY deploy/onprem/vendor/ /vendor/
 COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# Cache-bust: increment below when app code must be re-copied
-RUN echo "cache-bust-v2" > /tmp/.dbace-cache-bust
+# ODBC Driver 18 (SQL Server toplayıcısı) + libpq. Çevrimdışı: yerel .deb'ler, dpkg ile tek seferde.
+RUN set -eux; \
+    if ls /vendor/debs/*.deb >/dev/null 2>&1; then \
+        ACCEPT_EULA=Y dpkg -i /vendor/debs/*.deb; \
+    else \
+        apt-get update; \
+        apt-get install -y --no-install-recommends curl gnupg ca-certificates libpq5; \
+        curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg; \
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql.list; \
+        apt-get update; \
+        ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc; \
+        rm -rf /var/lib/apt/lists/*; \
+    fi; \
+    odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
+
+# Python bağımlılıkları. Çevrimdışı: yalnızca yerel wheel'ler (--no-index), sürümler vendor/requirements.lock'tan
+# SABİT (requirements.txt alt sınır veriyor; paket hangi sürümle test edildiyse onunla kurulur).
+RUN set -eux; \
+    if ls /vendor/wheels/*.whl >/dev/null 2>&1; then \
+        pip install --no-cache-dir --no-index --find-links /vendor/wheels -r /vendor/requirements.lock; \
+    else \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi; \
+    rm -rf /vendor
+
 COPY backend/app ./app
+# Migration'lar imajın içinde: entrypoint her açılışta uygulanmamışları sırayla uygular
+# (app/migrations_runner.py). Yeni kurulum ve yükseltme AYNI yol.
+COPY supabase/migrations ./migrations
 COPY deploy/onprem/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /app/data
 

@@ -77,8 +77,10 @@ def captured_unavailable(instance: Instance, *, now: datetime | None = None) -> 
         )}
     if not (instance.options or {}).get("agent_url"):
         return {"kind": CAPTURE_NO_AGENT, "reason": (
-            "Bu veritabanı için host-agent yapılandırılmamış. auto_explain planları sunucu "
-            "log'undan okunuyor ve log'a erişim agent üzerinden sağlanıyor."
+            "Ölçülemedi: bu veritabanı için host-agent yapılandırılmamış. auto_explain planları sunucu "
+            "log'undan okunuyor ve log'a erişim agent üzerinden sağlanıyor. Log'u veritabanı üzerinden "
+            "okumak pg_read_server_files yetkisi ister; izleme kullanıcısına bilerek verilmiyor. "
+            "Gereken: sunucuya host-agent kurulumu (veritabanı yetkisi değil)."
         )}
     if instance.auto_explain_loaded is False:
         return {"kind": CAPTURE_DISABLED_ON_TARGET, "reason": (

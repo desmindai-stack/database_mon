@@ -300,8 +300,12 @@ async def capture_plans_tick() -> dict:
                             "SQL Server deadlock toplama atlandı (%s): %s",
                             instance.name, outcome["error"],
                         )
-                except Exception:
+                except Exception as exc:
                     logger.exception("Deadlock toplama başarısız (instance %s)", instance.name)
+                    outcome = {"found": None, "error": f"deadlock toplama hatası: {exc}"}
+                # Faz 31 Commit 8: SQL Server'da da son deneme kaydediliyor — okunamayan system_health
+                # "deadlock olmadı" diye değil "ölçülemedi + gereken yetki" diye görünsün.
+                record_capture_outcome(instance, outcome)
                 continue
 
             if not agent_configured(instance):

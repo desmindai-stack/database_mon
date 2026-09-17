@@ -1,5 +1,13 @@
 # dbace — production on-prem (tek sunucu)
 # Çalıştırma dizini: deploy/onprem  →  docker compose up -d
+#
+# Faz 31 Commit 8:
+# - Şema MIGRATION'LARLA kuruluyor: dbace-app açılışta `supabase/migrations` altındaki uygulanmamış
+#   dosyaları sırayla uyguluyor (app/migrations_runner.py). Eskiden initdb'ye yalnızca ilk dört migration
+#   bağlıydı; yeni kurulum 60 kolon eksik açılıyordu, yükseltme elle yapılıyordu.
+# - JWT_SECRET ve ADMIN_PASSWORD ZORUNLU: verilmezse uygulama koddaki geliştirme sırrıyla açılıyordu
+#   (oturum jetonları taklit edilebilir).
+# - Bütün ayarlar `.env` dosyasından (env_file); açıklamaları `.env.example`'da.
 
 name: dbace-onprem
 
@@ -13,10 +21,6 @@ services:
       POSTGRES_DB: dbace
     volumes:
       - dbace-pgdata:/var/lib/postgresql/data
-      - ../../supabase/migrations/20250717120000_dbace_core.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ../../supabase/migrations/20250718180000_add_instance_metadata.sql:/docker-entrypoint-initdb.d/02-metadata.sql:ro
-      - ../../supabase/migrations/20250718210000_add_slow_query_io_columns.sql:/docker-entrypoint-initdb.d/03-slow-query-io.sql:ro
-      - ../../supabase/migrations/20250719140000_query_history_index.sql:/docker-entrypoint-initdb.d/04-query-history-index.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dbace -d dbace"]
       interval: 5s
@@ -32,14 +36,19 @@ services:
       dockerfile: deploy/onprem/Dockerfile.backend
     image: dbace/backend:latest
     container_name: dbace-app
+    env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://dbace:${DBACE_DB_PASSWORD}@dbace-db:5432/dbace
       RUN_MODE: all
       CREDENTIALS_MASTER_KEY: ${CREDENTIALS_MASTER_KEY:?CREDENTIALS_MASTER_KEY gerekli}
-      COLLECT_INTERVAL_SECONDS: ${COLLECT_INTERVAL_SECONDS:-15}
-      DEPLOYMENT_MODE: ${DEPLOYMENT_MODE:-public}
-      DEFAULT_CUSTOMER_NAME: ${DEFAULT_CUSTOMER_NAME:-}
-      CORS_ORIGINS: '["http://localhost","http://127.0.0.1"]'
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET gerekli (en az 32 karakter rastgele)}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?ADMIN_PASSWORD gerekli (ilk girişte değiştirilecek)}
+      CORS_ORIGINS: ${CORS_ORIGINS:-["http://localhost","http://127.0.0.1"]}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 30
     depends_on:
       dbace-db:
         condition: service_healthy
@@ -50,7 +59,7 @@ services:
   dbace-web:
     build:
       context: ../..
-      dockerfile: deploy/onprem/Dockerfile.web
+      dockerfile: deploy/onprem/Dockerfile.web.offline
     image: dbace/web:latest
     container_name: dbace-web
     ports:

@@ -1,0 +1,4 @@
+# Çevrimdışı kurulum çıktıları (scripts/prepare-offline-artifacts.sh) — depoya girmez, sürüm paketine girer.
+vendor/*
+!vendor/.gitkeep
+.env

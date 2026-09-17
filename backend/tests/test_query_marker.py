@@ -37,6 +37,9 @@ from app.collectors.query_marker import (
 
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 MARKER_MODULE = APP_DIR / "collectors" / "query_marker.py"
+#: dbace'in KENDİ veritabanına bağlanan modüller: imza izlenen sunucular içindir (Faz 31 Commit 8'de
+#: migration çalıştırıcısı eklendi — hedefe değil, uygulamanın kendi PostgreSQL'ine bağlanıyor).
+OWN_DATABASE_MODULES = {APP_DIR / "migrations_runner.py"}
 
 #: Bağlantı AÇAN asyncpg giriş noktaları. Bunlardan biri modül dışında çağrılırsa imzasız
 #: bir bağlantı var demektir.
@@ -168,7 +171,7 @@ def connect_marked_call_sites() -> list[str]:
 def test_no_module_opens_a_raw_asyncpg_connection():
     offenders = []
     for path in _python_files():
-        if path == MARKER_MODULE:
+        if path == MARKER_MODULE or path in OWN_DATABASE_MODULES:
             continue
         for lineno, what in _raw_asyncpg_calls(path):
             offenders.append(f"{path.relative_to(APP_DIR.parent).as_posix()}:{lineno} {what}")

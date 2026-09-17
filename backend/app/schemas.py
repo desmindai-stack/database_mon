@@ -2312,6 +2312,12 @@ class BlockingHistoryOut(BaseModel):
     deadlocks: list[DeadlockEventOut] = []
     # Hiç kayıt yoksa NEDEN yok — "bloklama olmadı" ile "bloklama ölçülmedi" farklı şeyler.
     unavailable_reason: str | None = None
+    # Faz 31 Commit 8: deadlock AYRINTISI (kurban/kazanan sorgu) ölçülemiyorsa gerekçe + gereken şey.
+    # Bloklama olayları varken de dolu olabilir — boş deadlock listesi "deadlock olmadı" DEMEK DEĞİL.
+    deadlock_detail_reason: str | None = None
+    # Pencere içinde veritabanının KENDİ sayacından (pg_stat_database.deadlocks) sayılan deadlock;
+    # ayrıntı okunamasa da sayı salt-okunur rolle ölçülüyor. Ölçüm yoksa None.
+    deadlock_counter: int | None = None
 
 
 class BlockingTreeOut(BaseModel):

@@ -457,6 +457,23 @@ _ERROR_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         "EXPLAIN (GENERIC_PLAN) kullanıyor; daha eski sürümlerde parametresiz plan alınamıyor.",
     ),
     (
+        # Faz 31 Commit 8: salt-okunur rolün yetkisiz tabloda aldığı cevap. Gerekçenin yanında
+        # GEREKEN YETKİ komut olarak — DBA'nın ne vereceğini tahmin etmesi gerekmesin.
+        re.compile(
+            r'permission denied for (?:table|relation|view|materialized view)\s+"?([\w$.]+)"?',
+            re.IGNORECASE,
+        ),
+        "Ölçülemedi: izleme kullanıcısının '{0}' tablosunu okuma yetkisi yok (EXPLAIN, sorgunun "
+        "okuduğu her tabloya SELECT yetkisi ister). Gereken yetki: "
+        "GRANT SELECT ON {0} TO <izleme_kullanıcısı>; — şemaya erişim için ayrıca "
+        "GRANT USAGE ON SCHEMA <şema> TO <izleme_kullanıcısı>;",
+    ),
+    (
+        re.compile(r'permission denied for schema\s+"?([\w$]+)"?', re.IGNORECASE),
+        "Ölçülemedi: izleme kullanıcısının '{0}' şemasına erişim yetkisi yok. Gereken yetki: "
+        "GRANT USAGE ON SCHEMA {0} TO <izleme_kullanıcısı>; ve okunan tablolara GRANT SELECT.",
+    ),
+    (
         re.compile(r"permission denied", re.IGNORECASE),
         "İzleme kullanıcısının bu nesneye erişim yetkisi yok. EXPLAIN, sorgunun okuduğu "
         "tablolara SELECT yetkisi ister. Salt-okunur bir izleme kullanıcısı kullanıyorsanız "
