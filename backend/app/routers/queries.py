@@ -52,8 +52,7 @@ from app.services.plan_source import KIND_SAMPLE, captured_unavailable, resolve_
 from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
-from app.services.noise_settings import get_noise_settings
-from app.services.slow_query_selection import DEFAULT_WINDOW_HOURS, MARKER_CONFLICT_NOTE, select_slow_queries
+from app.services.slow_query_selection import MARKER_CONFLICT_NOTE, default_slow_query_selection
 from app.services.slow_query_status import get_slow_query_availability
 
 router = APIRouter(prefix="/queries", tags=["queries"])
@@ -193,24 +192,12 @@ async def get_slow_queries(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
-    window_end = end or datetime.now(UTC)
-    window_start = start or (window_end - timedelta(hours=DEFAULT_WINDOW_HOURS))
-
-    # Eşikler ve sistem sorgusu görünürlüğü TEK yerden (Faz 18 İŞ 2) — rapor da aynısını
-    # okuyor, ikisinin farklı eşik kullanması Faz 18 İŞ 1'deki tutarsızlığı geri getirirdi.
-    noise = await get_noise_settings(db)
-    selection = await select_slow_queries(
-        db,
-        instance_id,
-        start=window_start,
-        end=window_end,
-        sort=sort,
-        limit=limit,
-        include_system=noise["show_system_queries"] if include_system is None else include_system,
-        min_total_ms=noise["list_min_total_ms"],
-        min_calls=noise["list_min_calls"],
+    # Eşikler, sistem sorgusu görünürlüğü ve pencere TEK yerden (Faz 18 İŞ 2; Faz 31 Commit 7'de
+    # Tuning içgörüsü ve teşhis paneli de aynı fonksiyona bağlandı).
+    selection = await default_slow_query_selection(
+        db, instance_id, start=start, end=end, sort=sort, limit=limit, include_system=include_system
     )
-    out = selection_to_out(selection, window_start, window_end)
+    out = selection_to_out(selection, selection.window_start, selection.window_end)
     out.monitoring_role = MonitoringRoleOut(**monitoring_role_status(instance))
     return out
 
@@ -338,31 +325,18 @@ async def get_query_diagnostics(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
-    subq = (
-        select(SlowQuerySample.collected_at)
-        .where(SlowQuerySample.instance_id == instance_id)
-        .order_by(SlowQuerySample.collected_at.desc())
-        .limit(1)
-    )
-    latest_at = (await db.execute(subq)).scalar_one_or_none()
-    rows: list[SlowQuerySample] = []
-    if latest_at:
-        result = await db.execute(
-            select(SlowQuerySample)
-            .where(
-                SlowQuerySample.instance_id == instance_id,
-                SlowQuerySample.collected_at == latest_at,
-            )
-            .order_by(SlowQuerySample.total_time_ms.desc())
-            .limit(limit)
-        )
-        rows = list(result.scalars().all())
-
-    # Faz 25 İŞ 3: bekleme ölçümü varsa teşhis ONDAN yapılıyor. Öncesinde sınıflandırma
-    # exec_user_time/exec_sys_time'a bağlıydı ve bu sütunlar çoğu kurulumda boş geldiği için
-    # sonuç sık sık "unknown" oluyordu — yani darboğaz sınıflandırması pratikte çalışmıyordu.
+    # Faz 31 Commit 7: yavaş sorgu LİSTESİYLE aynı seçim (pencere, sistem/imza filtresi, eşik). Eskiden
+    # son anlık görüntünün ham satırlarıydı: dbace'in kendi imzalı sorguları ve katalog sorguları
+    # "en sorunlu sorgu" olarak teşhis ediliyordu (gerçek veride 10 satırın 8'i). Ayrıca `collected_at ==`
+    # eşitliği SQLite'ta hiç satır bulmuyordu.
+    selection = await default_slow_query_selection(db, instance_id, sort="total", limit=limit)
     wait_profiles = await wait_profiles_by_query(db, instance_id)
-    diagnoses = diagnose_queries(rows, wait_profiles)
+    diagnoses = diagnose_queries([e.sample for e in selection.entries], wait_profiles)
+    for diagnosis, entry in zip(diagnoses, selection.entries):
+        # Sayılar listedekiyle AYNI olsun: pencere içindeki değişim, ham kümülatif değil.
+        diagnosis.calls, diagnosis.mean_time_ms, diagnosis.total_time_ms = (
+            entry.calls, entry.mean_time_ms, entry.total_time_ms,
+        )
     by_resource: dict[str, int] = {}
     for d in diagnoses:
         by_resource[d.resource] = by_resource.get(d.resource, 0) + 1
@@ -398,6 +372,11 @@ async def get_query_diagnostics(
     return QueryDiagnosticsReportOut(
         generated_at=datetime.now(UTC),
         limit=limit,
+        mode=selection.mode,
+        window_start=selection.window_start,
+        window_end=selection.window_end,
+        filtered_system=selection.filtered_system,
+        filtered_insignificant=selection.filtered_insignificant,
         diagnoses=[QueryDiagnosisOut(**vars(d)) for d in diagnoses],
         by_resource=by_resource,
         agent_configured=agent_configured,

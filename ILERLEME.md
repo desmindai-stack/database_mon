@@ -8252,6 +8252,57 @@ takılan atlama 0. DSN'siz: 1820 geçti / 106 atlandı. **Tam pakette bulunan te
 durum testi sunucu log'unun tamamını okuyordu; Commit 6'dan beri auto_explain planları aynı dosyaya
 yazıldığı için tam pakette kırmızıydı — yalnızca kendi başlangıcından sonraki satırlar okunuyor.
 
+## Faz 31 — Commit 7: rozet/özet sayısı listeyle aynı kaynaktan
+
+**Migration:** yok.
+
+### Yeniden üretme (gerçek veri)
+
+PG 17, pg_monitor rolü, gerçek iş yükü (3 yavaş uygulama sorgusu, dbace'in imzalı sorguları, yavaş
+katalog sorgusu), iki toplama turu. **PostgreSQL meta veritabanında** (canlıdaki gibi): Tuning rozeti 2
+(deadlock + "**2** yavaş ortalama süreli sorgu"), yavaş sorgu listesi **1** kalem (22 sistem/dbace ve 1
+eşik altı gizli), teşhis paneli **10** satır (8'i dbace/katalog). SQLite meta veritabanında içgörü ve
+teşhis uçları `collected_at ==` eşitliği yüzünden HİÇ satır bulmuyordu ("Yavaş sorgu örneği yok").
+
+### Kaynak tablosu (önce)
+
+| Ekran | Uç | Sorgu | Pencere | Sistem/imza filtresi | userid/toplevel | Eşik | Sayfalama |
+|---|---|---|---|---|---|---|---|
+| Tuning rozeti | /instances/{id}/insights | critical+high+medium içgörü | — | — | — | — | — |
+| "N yavaş sorgu" içgörüsü | /instances/{id}/insights | slow_query_samples, son `collected_at` (eşitlik) | YOK (son anlık görüntü, kümülatif ortalama) | YOK | YOK (ayrı seri değil, ham satır) | ortalama ≥ 50 ms | toplam süreye göre 20 |
+| Yavaş sorgu listesi | /queries/{id} | `select_slow_queries` | son 24 saat, fark | VAR (sistem + dbace imzası) | VAR (dbace/uygulama, üst düzey/iç içe ayrı seri) | yönetim ayarı (toplam ms, çağrı) | kullanıcının seçtiği 5/10/20 |
+| Teşhis paneli | /queries/{id}/diagnostics | slow_query_samples, son `collected_at` | YOK | YOK | YOK | YOK | 10 |
+
+Fark sistem/imza filtresinde ve pencerede doğuyordu: içgörünün saydığı ikinci sorgu listede gizlenen
+katalog sorgusuydu; teşhis panelindeki 8 satır dbace'in kendi imzalı sorguları ve katalog.
+
+### Düzeltme
+
+- `default_slow_query_selection`: liste, Tuning içgörüsü ve teşhis paneli AYNI fonksiyon (pencere, filtre,
+  eşik). İçgörü, bağlantısının açtığı görünümden (ortalama süreye göre ilk 20) sayıyor; gizlenenler
+  nedenleriyle yazılıyor; teşhis sayıları listedeki pencere değişimi.
+- Tuning rozeti ve "N aksiyon gerektiren bulgu" metni panelin gösterdiği bulgu listesinden (`issueInsights`).
+- Taramanın bulduğu diğer uyuşmazlıklar: GroupDetailPage parametre rozeti `summary.warning` okuyordu — o
+  alan YOK, rozet hep 0'dı; "Düğümler" rozeti down SERVİS sayısını gösteriyordu. İkisi de listeden.
+- Elle yazılmış `TuningReport`, `PerformanceInsight`, `QueryDiagnosticsReport` tipleri üretilen şemadan.
+- `services/count_contracts.py`: 47 sayı alanı şemadan keşfediliyor, hepsi kaynağını bildiriyor.
+
+### Testler
+
+- Çevrimdışı: bildirim kapsamı (negatif kontrol: bildirimsiz alan), değerlendirici (negatif: sayı listeden
+  ayrışınca), gizlenen sayıların arayüzde görünmesi, frontend rozet taraması (negatif: Commit 7 öncesi
+  GroupDetailPage'de `summary.warning` yakalandı).
+- Canlı (`test_count_contracts_live_postgres.py`): OpenAPI'den bulunan 12 GET ucu, 33 liste bildirimli sayı
+  gerçek veride; içgörü N = listede ≥50 ms kalem; teşhis = liste. Negatif kontrol: eski `/insights` ucuyla
+  kırmızı.
+- E2E (`live-counts.spec.ts`, gerçek toplama): Tuning rozeti = görünen bulgu satırı; bulgu bağlantısı
+  listeyi açıyor, listede ≥50 ms satır = N; kaleme tıklayınca ayrıntı dolu. Negatif kontrol: eski uçla
+  kırmızı.
+
+**Sayılar:** CI eşdeğeri (sürüm başına DSN + replika + SQL Server): PG 15.19 1931 geçti / 2 atlandı / 1 xfail;
+PG 16.15 ve 17.11 1932 / 1 / 1; 106 canlı test, denetime takılan atlama 0. DSN'siz: 1827 geçti / 107 atlandı.
+E2E `live-counts.spec.ts` (PG 17): geçti.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

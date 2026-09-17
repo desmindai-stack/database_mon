@@ -4797,6 +4797,10 @@ export interface components {
         PerformanceInsightOut: {
             /** Action */
             action?: string | null;
+            /** Action Params */
+            action_params?: {
+                [key: string]: string;
+            } | null;
             /** Category */
             category: string;
             /** Description */
@@ -5159,14 +5163,33 @@ export interface components {
             /** Diagnoses */
             diagnoses: components["schemas"]["QueryDiagnosisOut"][];
             /**
+             * Filtered Insignificant
+             * @default 0
+             */
+            filtered_insignificant: number;
+            /**
+             * Filtered System
+             * @default 0
+             */
+            filtered_system: number;
+            /**
              * Generated At
              * Format: date-time
              */
             generated_at: string;
             /** Limit */
             limit: number;
+            /**
+             * Mode
+             * @default delta
+             */
+            mode: string;
             /** Server Resource Note */
             server_resource_note: string;
+            /** Window End */
+            window_end?: string | null;
+            /** Window Start */
+            window_start?: string | null;
         };
         /** QueryHistoryListOut */
         QueryHistoryListOut: {

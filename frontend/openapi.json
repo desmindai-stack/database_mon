@@ -105,7 +105,15 @@
             "type": "array"
           },
           "totals": {
-            "$ref": "#/components/schemas/ActivityTotalsOut"
+            "$ref": "#/components/schemas/ActivityTotalsOut",
+            "counted_from": {
+              "active": "sessions[state=active]",
+              "blocked": "sessions[blocked]",
+              "idle": "sessions[state=idle]",
+              "idle_in_transaction": "sessions[state~idle in transaction]",
+              "total": "sessions",
+              "waiting": "sessions[wait_event_type]"
+            }
           },
           "wait_events": {
             "items": {
@@ -1865,7 +1873,13 @@
             ]
           },
           "totals": {
-            "$ref": "#/components/schemas/ClusterTotalsOut"
+            "$ref": "#/components/schemas/ClusterTotalsOut",
+            "counted_from": {
+              "down": "services[status=down]",
+              "skipped": "services[status=skipped]",
+              "unknown": "services[status=unknown]",
+              "up": "services[status=up]"
+            }
           }
         },
         "required": [
@@ -2140,6 +2154,7 @@
             "title": "Leader"
           },
           "member_count": {
+            "counted_from": "members",
             "default": 0,
             "title": "Member Count",
             "type": "integer"
@@ -2697,7 +2712,13 @@
             "type": "array"
           },
           "totals": {
-            "$ref": "#/components/schemas/DashboardTotalsOut"
+            "$ref": "#/components/schemas/DashboardTotalsOut",
+            "counted_from": {
+              "applications": "external: GET /api/applications",
+              "customers": "external: GET /api/customers",
+              "groups": "groups",
+              "nodes": "external: GET /api/groups/{id}/nodes toplamı"
+            }
           }
         },
         "required": [
@@ -4250,7 +4271,13 @@
             "type": "string"
           },
           "totals": {
-            "$ref": "#/components/schemas/ClusterTotalsOut"
+            "$ref": "#/components/schemas/ClusterTotalsOut",
+            "counted_from": {
+              "down": "nodes[].services[status=down]",
+              "skipped": "nodes[].services[status=skipped]",
+              "unknown": "nodes[].services[status=unknown]",
+              "up": "nodes[].services[status=up]"
+            }
           }
         },
         "required": [
@@ -4391,6 +4418,7 @@
       "HealthReportOut": {
         "properties": {
           "critical_count": {
+            "counted_from": "findings[status=open][suppressed=False][severity=critical]",
             "default": 0,
             "title": "Critical Count",
             "type": "integer"
@@ -4507,6 +4535,7 @@
             "type": "object"
           },
           "warning_count": {
+            "counted_from": "findings[status=open][suppressed=False][severity=warning]",
             "default": 0,
             "title": "Warning Count",
             "type": "integer"
@@ -4610,6 +4639,7 @@
         "description": "Rapor listesi satırı — bulgular olmadan (liste ekranı için hafif).",
         "properties": {
           "critical_count": {
+            "counted_from": "findings[status=open][suppressed=False][severity=critical]",
             "default": 0,
             "title": "Critical Count",
             "type": "integer"
@@ -4706,6 +4736,7 @@
             "type": "string"
           },
           "warning_count": {
+            "counted_from": "findings[status=open][suppressed=False][severity=warning]",
             "default": 0,
             "title": "Warning Count",
             "type": "integer"
@@ -4856,7 +4887,10 @@
             "type": "array"
           },
           "summary": {
-            "$ref": "#/components/schemas/IndexAdviceBatchSummaryOut"
+            "$ref": "#/components/schemas/IndexAdviceBatchSummaryOut",
+            "counted_from": {
+              "total": "items"
+            }
           }
         },
         "required": [
@@ -4890,6 +4924,7 @@
             "additionalProperties": {
               "type": "integer"
             },
+            "counted_from": "external: aynı yanıtın items listesi — report.status, raporsuz kalem failed (index_advice_watch.summarize)",
             "title": "Counts",
             "type": "object"
           },
@@ -7527,7 +7562,15 @@
             "title": "Patroni Config"
           },
           "summary": {
-            "$ref": "#/components/schemas/ParameterAuditSummaryOut"
+            "$ref": "#/components/schemas/ParameterAuditSummaryOut",
+            "counted_from": {
+              "critical": "findings[severity=critical]",
+              "high": "findings[severity=high]",
+              "low": "findings[severity=low]",
+              "medium": "findings[severity=medium]",
+              "ok": "findings[severity=ok]",
+              "unknown": "findings[severity=unknown]"
+            }
           }
         },
         "required": [
@@ -7647,6 +7690,20 @@
               }
             ],
             "title": "Action"
+          },
+          "action_params": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Action Params"
           },
           "category": {
             "title": "Category",
@@ -8245,6 +8302,7 @@
                 "type": "null"
               }
             ],
+            "counted_from": "not_a_count: tahminin dayandığı metrik örneği sayısı",
             "title": "Sample Count"
           },
           "seasonality": {
@@ -8508,15 +8566,18 @@
             "type": "string"
           },
           "ignored_count": {
+            "counted_from": "checks[ignored=True]",
             "default": 0,
             "title": "Ignored Count",
             "type": "integer"
           },
           "issue_count": {
+            "counted_from": "checks[ignored=False][status!=ok]",
             "title": "Issue Count",
             "type": "integer"
           },
           "ok_count": {
+            "counted_from": "checks[ignored=False][status=ok]",
             "title": "Ok Count",
             "type": "integer"
           }
@@ -8596,6 +8657,7 @@
             "additionalProperties": {
               "type": "integer"
             },
+            "counted_from": "diagnoses[resource=$key]",
             "title": "By Resource",
             "type": "object"
           },
@@ -8606,6 +8668,18 @@
             "title": "Diagnoses",
             "type": "array"
           },
+          "filtered_insignificant": {
+            "counted_from": "hidden: eşik altı",
+            "default": 0,
+            "title": "Filtered Insignificant",
+            "type": "integer"
+          },
+          "filtered_system": {
+            "counted_from": "hidden: sistem/dbace sorgusu",
+            "default": 0,
+            "title": "Filtered System",
+            "type": "integer"
+          },
           "generated_at": {
             "format": "date-time",
             "title": "Generated At",
@@ -8615,9 +8689,38 @@
             "title": "Limit",
             "type": "integer"
           },
+          "mode": {
+            "default": "delta",
+            "title": "Mode",
+            "type": "string"
+          },
           "server_resource_note": {
             "title": "Server Resource Note",
             "type": "string"
+          },
+          "window_end": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window End"
+          },
+          "window_start": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window Start"
           }
         },
         "required": [
@@ -9317,6 +9420,7 @@
                 "type": "null"
               }
             ],
+            "counted_from": "not_a_count: son temizlikte silinen satır sayısı; gösterilen bir liste yok",
             "title": "Last Deleted Count"
           },
           "last_run_at": {
@@ -9445,7 +9549,15 @@
             "type": "array"
           },
           "totals": {
-            "$ref": "#/components/schemas/SchemaHealthTotalsOut"
+            "$ref": "#/components/schemas/SchemaHealthTotalsOut",
+            "counted_from": {
+              "bloated_tables": "bloated_tables",
+              "missing_indexes": "missing_indexes",
+              "tables_with_access_signals": "table_access[signals]",
+              "unused_index_bytes": "not_a_count: kullanılmayan index'lerin bayt toplamı",
+              "unused_indexes": "unused_indexes",
+              "vacuum_lag_tables": "vacuum_lag"
+            }
           },
           "unused_indexes": {
             "items": {
@@ -10020,11 +10132,13 @@
         "description": "Yavaş sorgu listesi + pencerenin kendisi hakkında bilgi (Faz 18 İŞ 1).\n\nDüz bir liste yerine zarflanmış bir yanıt: arayüzün \"hangi pencereye bakıyorum\",\n\"fark mı anlık görüntü mü\" ve \"kaç sorgu filtrelendi\" sorularını cevaplayabilmesi için.\nRapor ile DPA'nın aynı veriyi gösterdiğini kullanıcıya kanıtlayan bilgi de bu.",
         "properties": {
           "filtered_insignificant": {
+            "counted_from": "hidden: eşik altı",
             "default": 0,
             "title": "Filtered Insignificant",
             "type": "integer"
           },
           "filtered_system": {
+            "counted_from": "hidden: sistem/dbace sorgusu",
             "default": 0,
             "title": "Filtered System",
             "type": "integer"
@@ -10364,6 +10478,7 @@
             "type": "integer"
           },
           "sample_count": {
+            "counted_from": "not_a_count: penceredeki toplama örneği sayısı, listelenen kalem değil",
             "default": 0,
             "title": "Sample Count",
             "type": "integer"
@@ -10783,6 +10898,7 @@
             "additionalProperties": {
               "type": "integer"
             },
+            "counted_from": "insights[severity=$key]",
             "title": "Summary",
             "type": "object"
           }

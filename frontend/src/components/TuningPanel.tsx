@@ -19,9 +19,17 @@ const SEVERITY_TR: Record<string, string> = {
   info: "Bilgi",
 };
 
+// Faz 31 Commit 7: sekme rozeti ve "N aksiyon gerektiren bulgu" metni, panelin GÖSTERDİĞİ kalemlerden
+// türüyor — ayrı bir özet sayısından değil. Rozet = bu listenin uzunluğu.
+const ISSUE_SEVERITIES = new Set(["critical", "high", "medium"]);
+
+export function issueInsights(report: TuningReport | null) {
+  return (report?.insights ?? []).filter((i) => ISSUE_SEVERITIES.has(i.severity));
+}
+
 type Props = {
   report: TuningReport | null;
-  onOpenTab: (tab: "queries" | "metrics" | "alerts") => void;
+  onOpenTab: (tab: "queries" | "metrics" | "alerts", params?: Record<string, string> | null) => void;
   onRunIndexAdvice: () => void;
   adviceRunning?: boolean;
 };
@@ -42,8 +50,7 @@ export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, advic
     return acc;
   }, {});
 
-  const issueCount =
-    (report.summary.critical || 0) + (report.summary.high || 0) + (report.summary.medium || 0);
+  const issueCount = issueInsights(report).length;
 
   return (
     <div className="tuning-layout">
@@ -67,7 +74,7 @@ export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, advic
         <div className="tuning-summary-grid">
           {(["critical", "high", "medium", "info"] as const).map((sev) => (
             <div key={sev} className={`tuning-summary-chip ${sev}`}>
-              <strong>{report.summary[sev] || 0}</strong>
+              <strong>{insights.filter((i) => i.severity === sev).length}</strong>
               <span>{SEVERITY_TR[sev]}</span>
             </div>
           ))}
@@ -130,7 +137,7 @@ export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, advic
                       <button
                         className="btn linkish"
                         onClick={() => {
-                          if (insight.action === "queries") onOpenTab("queries");
+                          if (insight.action === "queries") onOpenTab("queries", insight.action_params);
                           else if (insight.action === "metrics") onOpenTab("metrics");
                           else if (insight.action === "alerts") onOpenTab("alerts");
                         }}

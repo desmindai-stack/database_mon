@@ -2584,6 +2584,29 @@ sürücüsüyle, şifreleme kapalı koştu). **Açık soru:** CI'a SQL Server + 
 **Eski kurallar:** düzeltmeden önce tek sunucuya eklenmiş 6 cluster kuralı silinmedi (tetiklenmiyor);
 listeleme SQL'i DEPLOY.md'de.
 
+## Faz 31 Commit 7: sayı ↔ liste sözleşmeleri — sınırlar
+
+**Kural:** yanıt şemasındaki her sayı alanı `counted_from` ile kaynağını bildiriyor
+(services/count_contracts.py); frontend'deki her `badge`/`warning`/`critical` ifadesi bir listenin
+uzunluğundan ya da bildirimli bir alandan türüyor. İkisi de testle taranıyor, elle liste yok.
+
+**Doğrulanamayan bildirimler (bilerek):**
+- `DashboardSummaryOut.totals.nodes` — `external: GET /api/groups/{id}/nodes toplamı`; tek bir liste ucu
+  yok, canlı testte karşılaştırılmıyor.
+- `IndexAdviceBatchSummaryOut.counts` — aynı yanıtın `items` listesinden ama raporsuz (hata veren) kalem
+  "failed" sayılıyor; bildirim dili bunu ifade edemediği için `external` olarak işaretli, POST ucu canlı
+  testte çağrılmıyor.
+- Tarama alan ADINA bakıyor (`totals.down`): aynı adlı alan iki modelde farklı listelerden sayılıyorsa
+  (ClusterHealthOut ↔ GroupHealthOut) yanlış modeli okumak yakalanmaz. GroupDetailPage'deki "düğüm
+  rozeti servis sayısını gösteriyor" hatası bu yüzden taramayla değil incelemeyle bulundu.
+
+**Activity sekmesi rozeti** `totals.blocked || totals.idle_in_transaction`: iki farklı sayıyı tek rozette
+gösteriyor (bloklanan yoksa transaction'da boşta bekleyen). Kaynak doğru, anlam belirsiz — açık soru:
+iki ayrı rozet mi?
+
+**E2E gerçek veri testi** (`frontend/e2e/live-counts.spec.ts`) DBACE_TEST_PG_DSN ister; CI'daki e2e işinde
+PostgreSQL olmadığı için orada atlanıyor (Playwright atlaması pytest atlama denetiminin dışında).
+
 ## Faz 31 — on-prem kurulum notları (#48 temizlik migration'ı)
 
 - **Önce ölç:** DEPLOY.md "#48'den önce: temizlik ölçümü" SQL'i salt okunur; sonucu görmeden

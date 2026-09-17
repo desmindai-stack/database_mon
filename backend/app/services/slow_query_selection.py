@@ -198,6 +198,51 @@ def _merge_key(row: SlowQuerySample, text_to_key: dict[str, str]) -> str:
     return text_to_key.setdefault(text_key, text_key)
 
 
+#: Tuning içgörüsünün saydığı ve "İlgili sekmeye git" bağlantısının açtığı liste görünümü (Faz 31
+#: Commit 7). Arayüzün sunduğu en büyük "ilk N" değeri; sayı bu görünümün dışına taşamaz.
+INSIGHT_LIST_SORT = "mean"
+INSIGHT_LIST_LIMIT = 20
+#: İçgörünün "yavaş" saydığı ortalama süre eşiği (ms).
+SLOW_MEAN_MS = 50.0
+
+
+async def default_slow_query_selection(
+    session: AsyncSession,
+    instance_id: int,
+    *,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    sort: str = "total",
+    limit: int = 20,
+    include_system: bool | None = None,
+) -> SlowQuerySelection:
+    """Yavaş sorgu LİSTESİ, Tuning içgörüsü ve teşhis panelinin TEK kaynağı (Faz 31 Commit 7).
+
+    Aynı pencere (varsayılan son `DEFAULT_WINDOW_HOURS` saat), aynı sistem/imza filtresi ve aynı
+    eşikler (yönetim ayarı). Eskiden içgörü ve teşhis son anlık görüntünün HAM satırlarını
+    okuyordu: sistem sorguları, dbace'in kendi imzalı sorguları ve kümülatif ortalama dahil —
+    "2 yavaş sorgu" deniyor, listede 1 görünüyordu (gerçek veride ölçüldü; canlıda 17).
+    """
+    from datetime import timedelta
+
+    from app.services.noise_settings import get_noise_settings
+
+    noise = await get_noise_settings(session)
+    window_end = end or datetime.now(UTC)
+    window_start = start or (window_end - timedelta(hours=DEFAULT_WINDOW_HOURS))
+    return await select_slow_queries(
+        session,
+        instance_id,
+        start=window_start,
+        end=window_end,
+        sort=sort,
+        limit=limit,
+        include_system=noise["show_system_queries"] if include_system is None else include_system,
+        min_total_ms=noise["list_min_total_ms"],
+        min_calls=noise["list_min_calls"],
+    )
+
+
 async def select_slow_queries(
     session: AsyncSession,
     instance_id: int,

@@ -68,7 +68,7 @@ class RetentionStatusOut(BaseModel):
     retention_days: int
     options: list[int]
     last_run_at: str | None = None
-    last_deleted_count: int | None = None
+    last_deleted_count: int | None = Field(default=None, json_schema_extra={"counted_from": 'not_a_count: son temizlikte silinen satır sayısı; gösterilen bir liste yok'})
 
 
 class RetentionDaysIn(BaseModel):
@@ -620,7 +620,7 @@ class SlowQueryOut(BaseModel):
     # pg_stat_statements.toplevel: False = iç içe çalıştırma (ayrı sayaç). None = bilinmiyor.
     toplevel: bool | None = None
     # Pencerede kaç örnek görüldü — 1 ise fark hesaplanamamıştır.
-    sample_count: int = 0
+    sample_count: int = Field(default=0, json_schema_extra={"counted_from": 'not_a_count: penceredeki toplama örneği sayısı, listelenen kalem değil'})
 
     # --- Faz 29 İŞ 2a: pg_stat_statements'ın kalan sütunları ve türetilmiş göstergeler ---
     #
@@ -686,8 +686,8 @@ class SlowQueryListOut(BaseModel):
     mode: str = "delta"
     window_start: datetime | None = None
     window_end: datetime | None = None
-    filtered_system: int = 0
-    filtered_insignificant: int = 0
+    filtered_system: int = Field(default=0, json_schema_extra={"counted_from": 'hidden: sistem/dbace sorgusu'})
+    filtered_insignificant: int = Field(default=0, json_schema_extra={"counted_from": 'hidden: eşik altı'})
     # Faz 31 Commit 5: köken ayrımının (dbace/uygulama) ölçülebilir olup olmadığı.
     monitoring_role: MonitoringRoleOut | None = None
 
@@ -706,8 +706,14 @@ class QueryDiagnosisOut(BaseModel):
 class QueryDiagnosticsReportOut(BaseModel):
     generated_at: datetime
     limit: int
+    # Faz 31 Commit 7: yavaş sorgu listesiyle AYNI seçim — pencere ve gizlenen kalemler nedenleriyle.
+    mode: str = "delta"
+    window_start: datetime | None = None
+    window_end: datetime | None = None
+    filtered_system: int = Field(default=0, json_schema_extra={"counted_from": "hidden: sistem/dbace sorgusu"})
+    filtered_insignificant: int = Field(default=0, json_schema_extra={"counted_from": "hidden: eşik altı"})
     diagnoses: list[QueryDiagnosisOut]
-    by_resource: dict[str, int]
+    by_resource: dict[str, int] = Field(json_schema_extra={"counted_from": 'diagnoses[resource=$key]'})
     agent_configured: bool
     server_resource_note: str
 
@@ -886,7 +892,7 @@ class PredictionOut(BaseModel):
     # Faz 20 İŞ 3 — yöntem şeffaflığı. `confidence` (R²) tek başına yanıltıcıydı: modelin
     # geçmişe oturma iyiliğini söyler, verinin doğrusal modele UYUP uymadığını değil.
     method: str | None = None
-    sample_count: int | None = None
+    sample_count: int | None = Field(default=None, json_schema_extra={"counted_from": 'not_a_count: tahminin dayandığı metrik örneği sayısı'})
     span_days: float | None = None
     outliers_removed: int | None = None
     fit_kind: str | None = None
@@ -1071,7 +1077,12 @@ class GroupStatusRowOut(BaseModel):
 
 
 class DashboardSummaryOut(BaseModel):
-    totals: DashboardTotalsOut
+    totals: DashboardTotalsOut = Field(json_schema_extra={"counted_from": {
+        "customers": "external: GET /api/customers",
+        "applications": "external: GET /api/applications",
+        "groups": "groups",
+        "nodes": "external: GET /api/groups/{id}/nodes toplamı",
+    }})
     health: DashboardHealthOut
     top_issues: list[DashboardIssueOut]
     recommendations: list[DashboardRecommendationOut]
@@ -1112,10 +1123,10 @@ class PrerequisiteReportOut(BaseModel):
     engine: str
     checked_at: datetime
     checks: list[PrerequisiteCheckOut]
-    ok_count: int
-    issue_count: int
+    ok_count: int = Field(json_schema_extra={"counted_from": 'checks[ignored=False][status=ok]'})
+    issue_count: int = Field(json_schema_extra={"counted_from": 'checks[ignored=False][status!=ok]'})
     # Yoksayılanlar hariç tamamlanma yüzdesi — kalan zorunlu kontroller bittiğinde %100 olur.
-    ignored_count: int = 0
+    ignored_count: int = Field(default=0, json_schema_extra={"counted_from": 'checks[ignored=True]'})
     completion_pct: int = 0
 
 
@@ -1303,7 +1314,7 @@ class IndexAdviceBatchRequest(BaseModel):
 
 class IndexAdviceBatchSummaryOut(BaseModel):
     total: int
-    counts: dict[str, int]
+    counts: dict[str, int] = Field(json_schema_extra={"counted_from": 'external: aynı yanıtın items listesi — report.status, raporsuz kalem failed (index_advice_watch.summarize)'})
     # "3 sorgudan 1'i çözümlenemedi; 1'i için öneri üretildi; …"
     text: str
 
@@ -1317,7 +1328,7 @@ class IndexAdviceBatchItemOut(BaseModel):
 
 
 class IndexAdviceBatchOut(BaseModel):
-    summary: IndexAdviceBatchSummaryOut
+    summary: IndexAdviceBatchSummaryOut = Field(json_schema_extra={"counted_from": {"total": "items"}})
     items: list[IndexAdviceBatchItemOut]
 
 
@@ -1330,6 +1341,9 @@ class PerformanceInsightOut(BaseModel):
     metric_value: float | None
     metric_unit: str | None
     action: str | None = None
+    # Faz 31 Commit 7: "İlgili sekmeye git" bağlantısı sayının hesaplandığı liste görünümünü açsın
+    # (ör. {"sort": "mean", "limit": "20"}).
+    action_params: dict[str, str] | None = None
 
 
 class TuningChecklistOut(BaseModel):
@@ -1344,7 +1358,7 @@ class TuningReportOut(BaseModel):
     grade: str
     status: str
     collected_at: datetime | None
-    summary: dict[str, int]
+    summary: dict[str, int] = Field(json_schema_extra={"counted_from": 'insights[severity=$key]'})
     insights: list[PerformanceInsightOut]
     checklist: list[TuningChecklistOut]
 
@@ -1403,7 +1417,14 @@ class ActivityOut(BaseModel):
     wait_events: list[WaitEventOut]
     state_summary: list[StateCountOut]
     blocking: list[BlockingEdgeOut]
-    totals: ActivityTotalsOut
+    totals: ActivityTotalsOut = Field(json_schema_extra={"counted_from": {
+        "total": "sessions",
+        "active": "sessions[state=active]",
+        "idle": "sessions[state=idle]",
+        "idle_in_transaction": "sessions[state~idle in transaction]",
+        "waiting": "sessions[wait_event_type]",
+        "blocked": "sessions[blocked]",
+    }})
 
 
 class ExplainRequest(BaseModel):
@@ -1647,7 +1668,14 @@ class SchemaHealthOut(BaseModel):
     unused_indexes: list[UnusedIndexOut]
     bloated_tables: list[BloatedTableOut]
     vacuum_lag: list[VacuumLagOut]
-    totals: SchemaHealthTotalsOut
+    totals: SchemaHealthTotalsOut = Field(json_schema_extra={"counted_from": {
+        "unused_indexes": "unused_indexes",
+        "unused_index_bytes": "not_a_count: kullanılmayan index'lerin bayt toplamı",
+        "bloated_tables": "bloated_tables",
+        "vacuum_lag_tables": "vacuum_lag",
+        "tables_with_access_signals": "table_access[signals]",
+        "missing_indexes": "missing_indexes",
+    }})
     # Faz 29 İŞ 2c: SQL Server'ın KENDİ eksik index önerileri (sys.dm_db_missing_index_*).
     # PostgreSQL'de karşılığı hypopg ile ölçülen fayda; SQL Server'da motorun kendisi zaten
     # üretiyor ve bu kaynak kullanılmıyordu.
@@ -1688,7 +1716,7 @@ class ClusterMemberOut(BaseModel):
 class ClusterSummaryOut(BaseModel):
     leader: str | None = None
     members: list[ClusterMemberOut] = []
-    member_count: int = 0
+    member_count: int = Field(default=0, json_schema_extra={"counted_from": 'members'})
     has_leader: bool = False
 
 
@@ -1730,7 +1758,12 @@ class ClusterHealthOut(BaseModel):
     services: list[ClusterServiceStatusOut]
     cluster: ClusterSummaryOut | None = None
     agent: ClusterAgentInfoOut
-    totals: ClusterTotalsOut
+    totals: ClusterTotalsOut = Field(json_schema_extra={"counted_from": {
+        "up": "services[status=up]",
+        "down": "services[status=down]",
+        "unknown": "services[status=unknown]",
+        "skipped": "services[status=skipped]",
+    }})
 
 
 class ClusterLogsOut(BaseModel):
@@ -1773,7 +1806,12 @@ class GroupHealthOut(BaseModel):
     split_brain: bool
     split_brain_nodes: list[str] = []
     down_nodes: list[DownNodeOut] = []
-    totals: ClusterTotalsOut
+    totals: ClusterTotalsOut = Field(json_schema_extra={"counted_from": {
+        "up": "nodes[].services[status=up]",
+        "down": "nodes[].services[status=down]",
+        "unknown": "nodes[].services[status=unknown]",
+        "skipped": "nodes[].services[status=skipped]",
+    }})
 
 
 class ParameterFindingOut(BaseModel):
@@ -1803,7 +1841,14 @@ class ParameterAuditOut(BaseModel):
     checked_at: str
     findings: list[ParameterFindingOut]
     patroni_config: dict[str, Any] | None = None
-    summary: ParameterAuditSummaryOut
+    summary: ParameterAuditSummaryOut = Field(json_schema_extra={"counted_from": {
+        "critical": "findings[severity=critical]",
+        "high": "findings[severity=high]",
+        "medium": "findings[severity=medium]",
+        "low": "findings[severity=low]",
+        "ok": "findings[severity=ok]",
+        "unknown": "findings[severity=unknown]",
+    }})
 
 
 class ReplicaDatabaseOut(BaseModel):
@@ -1943,8 +1988,10 @@ class HealthReportSummaryOut(BaseModel):
     error: str | None = None
     duration_ms: int
     previous_report_id: int | None = None
-    critical_count: int = 0
-    warning_count: int = 0
+    # Açık ve bastırılmamış bulgular (routers/reports.py::_counts); liste ekranında bulgu listesi yok,
+    # ayrıntıda (HealthReportOut) `findings` ile aynı kural.
+    critical_count: int = Field(default=0, json_schema_extra={"counted_from": 'findings[status=open][suppressed=False][severity=critical]'})
+    warning_count: int = Field(default=0, json_schema_extra={"counted_from": 'findings[status=open][suppressed=False][severity=warning]'})
 
     model_config = {"from_attributes": True}
 

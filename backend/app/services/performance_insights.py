@@ -28,6 +28,8 @@ class PerformanceInsight:
     metric_value: float | None = None
     metric_unit: str | None = None
     action: str | None = None  # queries | metrics | alerts | none
+    #: Faz 31 Commit 7: bağlantının açacağı liste görünümü (sıralama, adet).
+    action_params: dict[str, str] | None = None
     queryid: str | None = None
     query_hint: str | None = None
     suggested_action: str | None = None  # explain | index_advice | analyze
@@ -75,7 +77,11 @@ def analyze_metrics(
     slow_queries: list[dict[str, Any]] | None = None,
     collected_at: datetime | None = None,
     now: datetime | None = None,
+    hidden_queries: dict[str, int] | None = None,
 ) -> TuningReport:
+    """`slow_queries`: YAVAŞ SORGU LİSTESİNİN kendisi (`default_slow_query_selection`, sıralama
+    `INSIGHT_LIST_SORT`, adet `INSIGHT_LIST_LIMIT`) — sayı ayrı hesaplanmıyor (Faz 31 Commit 7).
+    `hidden_queries`: aynı seçimin gizlediği kalemler ({"system": n, "insignificant": n})."""
     metrics = dict(metrics or {})
     slow_queries = slow_queries or []
     now = now or datetime.now(UTC)
@@ -364,22 +370,31 @@ def analyze_metrics(
             )
         )
 
-    # Slow query derived insights
+    # Slow query derived insights — LİSTENİN kendisinden (Faz 31 Commit 7)
+    from app.services.slow_query_selection import DEFAULT_WINDOW_HOURS, INSIGHT_LIST_LIMIT, INSIGHT_LIST_SORT, SLOW_MEAN_MS
+
+    hidden = hidden_queries or {}
+    hidden_note = (
+        f"Liste son {DEFAULT_WINDOW_HOURS} saatteki değişime bakıyor; bu pencerede "
+        f"{hidden.get('system', 0)} sistem/dbace sorgusu ve {hidden.get('insignificant', 0)} eşik altı sorgu gizlendi."
+    )
+    list_params = {"sort": INSIGHT_LIST_SORT, "limit": str(INSIGHT_LIST_LIMIT)}
     if slow_queries:
         heavy = sorted(slow_queries, key=lambda q: float(q.get("total_time_ms") or 0), reverse=True)
         top = heavy[0] if heavy else None
-        mean_heavy = [q for q in heavy if float(q.get("mean_time_ms") or 0) >= 50]
+        mean_heavy = [q for q in heavy if float(q.get("mean_time_ms") or 0) >= SLOW_MEAN_MS]
         if top and float(top.get("total_time_ms") or 0) > 1000:
             insights.append(
                 PerformanceInsight(
                     severity="medium",
                     category="queries",
                     title="Yüksek toplam süreye sahip sorgu var",
-                    description=f"En pahalı sorgu toplam {float(top.get('total_time_ms') or 0):.0f} ms, ortalama {float(top.get('mean_time_ms') or 0):.1f} ms.",
+                    description=f"En pahalı sorgu toplam {float(top.get('total_time_ms') or 0):.0f} ms, ortalama {float(top.get('mean_time_ms') or 0):.1f} ms. {hidden_note}",
                     recommendation="Yavaş Sorgular sekmesinde bu sorgu için index önerisi çalıştırın; EXPLAIN ANALYZE ile planı doğrulayın.",
                     metric_value=float(top.get("total_time_ms") or 0),
                     metric_unit="ms",
                     action="queries",
+                    action_params={"sort": "total", "limit": str(INSIGHT_LIST_LIMIT)},
                 )
             )
         if mean_heavy:
@@ -388,30 +403,39 @@ def analyze_metrics(
                     severity="high" if len(mean_heavy) >= 3 else "medium",
                     category="queries",
                     title=f"{len(mean_heavy)} yavaş ortalama süreli sorgu",
-                    description="Ortalama süresi ≥ 50 ms olan sorgular tespit edildi.",
+                    description=(
+                        f"Yavaş Sorgular listesinde ortalama süreye göre ilk {INSIGHT_LIST_LIMIT} sorgudan "
+                        f"{len(mean_heavy)} tanesinin ortalaması ≥ {SLOW_MEAN_MS:.0f} ms. {hidden_note}"
+                    ),
                     recommendation="Bu sorgular için index advice ve plan iyileştirmesi öncelikli aksiyon olmalı.",
                     metric_value=float(len(mean_heavy)),
                     metric_unit="adet",
                     action="queries",
+                    action_params=list_params,
                 )
             )
-            checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "warn", f"{len(mean_heavy)} adet ≥50ms"))
+            checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "warn",
+                                           f"{len(mean_heavy)} adet ≥{SLOW_MEAN_MS:.0f}ms (listeyle aynı pencere ve filtreler)"))
         else:
-            checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "ok", f"{len(slow_queries)} örnek, kritik yok"))
+            checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "ok", f"{len(slow_queries)} sorgu, ≥{SLOW_MEAN_MS:.0f}ms yok"))
     else:
         # Sebebi burada TAHMİN ETMİYORUZ: bu fonksiyonun canlı bağlantısı yok, sadece saklanan
         # örnekleri görüyor. "pg_stat_statements kurulu değil" demek yanlış olabilir (eklenti
         # kurulu ama görünürlük kısıtlı ya da veri henüz birikmemiş olabilir). Gerçek sebebi
         # services/slow_query_status.py canlı probe ile belirliyor — kullanıcıyı oraya
         # yönlendiriyoruz (Faz 16-B İŞ 1).
-        checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "unknown", "Saklanan örnek yok"))
+        hidden_total = int(hidden.get("system", 0)) + int(hidden.get("insignificant", 0))
+        checklist.append(ChecklistItem(
+            "slow_queries", "Yavaş sorgular", "unknown",
+            f"Listede sorgu yok; {hidden_total} kalem gizlendi" if hidden_total else "Saklanan örnek yok",
+        ))
         if metrics:
             insights.append(
                 PerformanceInsight(
                     severity="info",
                     category="queries",
-                    title="Yavaş sorgu örneği yok",
-                    description="Bu instance için henüz yavaş sorgu örneği saklanmadı.",
+                    title="Listede yavaş sorgu yok" if hidden_total else "Yavaş sorgu örneği yok",
+                    description=hidden_note if hidden_total else "Bu instance için henüz yavaş sorgu örneği saklanmadı.",
                     recommendation="Sebebini Sorgular sekmesindeki durum notunda ve Ön koşullar panelinde görün.",
                     action="queries",
                 )

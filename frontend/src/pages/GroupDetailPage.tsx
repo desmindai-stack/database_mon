@@ -321,12 +321,16 @@ export default function GroupDetailPage() {
   // besleniyor; sayilar bolumun KENDI verisinden cikiyor, ayri bir esik tanimi yok.
   // "Olcum yok" ile "sorun yok" ayri: saglik henuz cekilmediyse durum "unknown", yani
   // bolum ACIK gelir - kapali gelseydi kullanici hic olculmedigini fark etmezdi.
-  const downNodes = health?.totals.down ?? 0;
+  // Faz 31 Commit 7: "Düğümler" bölümünün rozeti DÜĞÜM sayısı — eskiden `totals.down` (down SERVİS sayısı)
+  // idi: iki servisi düşmüş tek düğüm "2" gösteriyordu.
+  const downNodes = health?.down_nodes.length ?? 0;
   const nodesStatus: SectionStatus = !health ? "unknown" : downNodes > 0 ? "critical" : "ok";
   const clusterStatus: SectionStatus =
     !health?.cluster ? "unknown" : health.split_brain || !health.cluster.leader ? "critical" : "ok";
-  const paramsCritical = params?.summary.critical ?? 0;
-  const paramsWarning = params?.summary.warning ?? 0;
+  // Faz 31 Commit 7: gösterilen bulgu listesinden. Eskiden `summary.warning` okunuyordu — o alan YOK
+  // (critical/high/medium/low/ok/unknown), uyarı rozeti her zaman 0'dı.
+  const paramsCritical = (params?.findings ?? []).filter((f) => f.severity === "critical").length;
+  const paramsWarning = (params?.findings ?? []).filter((f) => f.severity === "high" || f.severity === "medium").length;
   const paramsStatus: SectionStatus = !params
     ? "unknown"
     : paramsCritical > 0

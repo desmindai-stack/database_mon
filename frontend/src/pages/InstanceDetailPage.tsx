@@ -61,7 +61,7 @@ import RecommendationHeader from "../components/RecommendationHeader";
 import SchemaHealthPanel from "../components/SchemaHealthPanel";
 import SlowQueryAvailabilityNote from "../components/SlowQueryAvailabilityNote";
 import { ChartRange, useChartRangeSelection } from "../components/useChartRangeSelection";
-import TuningPanel from "../components/TuningPanel";
+import TuningPanel, { issueInsights } from "../components/TuningPanel";
 import { useAuth } from "../auth";
 import CollapsibleSection, {
   PageSummaryBar,
@@ -761,8 +761,8 @@ export default function InstanceDetailPage() {
     </button>
   );
 
-  const tuningIssues =
-    (tuning?.summary.critical || 0) + (tuning?.summary.high || 0) + (tuning?.summary.medium || 0);
+  // Faz 31 Commit 7: rozet, Tuning panelinin gösterdiği bulgu kalemlerinin sayısı (aynı fonksiyon).
+  const tuningIssues = issueInsights(tuning).length;
 
   const StatTile = ({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) => (
     <div className="card stat-tile" style={{ borderLeftColor: color || "var(--accent)" }}>
@@ -1802,7 +1802,16 @@ export default function InstanceDetailPage() {
       {tab === "tuning" && (
         <TuningPanel
           report={tuning}
-          onOpenTab={(t) => setActiveTab(t)}
+          onOpenTab={(t, params) => {
+            // Bulgunun saydığı liste görünümü açılsın: "N yavaş sorgu" ortalama süreye göre ilk 20'den sayıldı.
+            if (t === "queries" && params) {
+              if (params.sort === "total" || params.sort === "mean" || params.sort === "calls") setQuerySort(params.sort);
+              if (params.limit === "5" || params.limit === "10" || params.limit === "20") {
+                setQueryTopN(Number(params.limit) as 5 | 10 | 20);
+              }
+            }
+            setActiveTab(t);
+          }}
           onRunIndexAdvice={runTopQueryAdvice}
           adviceRunning={bulkAdviceRunning}
         />

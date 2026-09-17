@@ -22,7 +22,6 @@ from app.models import (
     Node,
     PredictionInsight,
     SchemaObjectDailySample,
-    SlowQuerySample,
 )
 from app.schemas import (
     ActivityOut,
@@ -71,6 +70,7 @@ from app.services.collection import connection_target_for
 from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
 from app.services.performance_insights import analyze_metrics
+from app.services.slow_query_selection import INSIGHT_LIST_LIMIT, INSIGHT_LIST_SORT, default_slow_query_selection
 from app.services.deletion import (
     clear_dependents,
     collect_dependents,
@@ -842,40 +842,22 @@ async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get
                 (latest.active_connections / latest.max_connections) * 100,
             )
 
-    latest_q_at = (
-        await db.execute(
-            select(SlowQuerySample.collected_at)
-            .where(SlowQuerySample.instance_id == instance_id)
-            .order_by(SlowQuerySample.collected_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-
-    slow_rows: list[dict] = []
-    if latest_q_at is not None:
-        q_result = await db.execute(
-            select(SlowQuerySample)
-            .where(
-                SlowQuerySample.instance_id == instance_id,
-                SlowQuerySample.collected_at == latest_q_at,
-            )
-            .order_by(SlowQuerySample.total_time_ms.desc())
-            .limit(20)
-        )
-        slow_rows = [
-            {
-                "query": r.query,
-                "calls": r.calls,
-                "total_time_ms": r.total_time_ms,
-                "mean_time_ms": r.mean_time_ms,
-            }
-            for r in q_result.scalars().all()
-        ]
+    # Faz 31 Commit 7: yavaş sorgu içgörüsü LİSTENİN KENDİSİNDEN. Eskiden son anlık görüntünün ham
+    # satırlarıydı (sistem ve dbace sorguları dahil, kümülatif ortalama): "2 yavaş sorgu" deniyor, listede
+    # 1 görünüyordu (gerçek veride ölçüldü). Sayı ayrı hesaplanmıyor; gizlenenler nedenleriyle.
+    selection = await default_slow_query_selection(
+        db, instance_id, sort=INSIGHT_LIST_SORT, limit=INSIGHT_LIST_LIMIT
+    )
+    slow_rows = [
+        {"query": e.query, "calls": e.calls, "total_time_ms": e.total_time_ms, "mean_time_ms": e.mean_time_ms}
+        for e in selection.entries
+    ]
 
     report = analyze_metrics(
         metrics,
         slow_queries=slow_rows,
         collected_at=latest.collected_at if latest else None,
+        hidden_queries={"system": selection.filtered_system, "insignificant": selection.filtered_insignificant},
     )
     return TuningReportOut(
         health_score=report.health_score,
@@ -893,6 +875,7 @@ async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get
                 metric_value=i.metric_value,
                 metric_unit=i.metric_unit,
                 action=i.action,
+                action_params=i.action_params,
             )
             for i in report.insights
         ],

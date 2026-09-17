@@ -124,14 +124,11 @@ export interface QueryDiagnosis {
   confidence: "observed" | "inferred";
 }
 
-export interface QueryDiagnosticsReport {
-  generated_at: string;
-  limit: number;
+// Faz 31 Commit 7: üretilen şemadan — pencere ve gizlenen kalem sayıları sessizce kaybolmasın.
+export type QueryDiagnosticsReport = Omit<Gen["QueryDiagnosticsReportOut"], "diagnoses" | "by_resource"> & {
   diagnoses: QueryDiagnosis[];
   by_resource: Partial<Record<QueryResourceType, number>>;
-  agent_configured: boolean;
-  server_resource_note: string;
-}
+};
 
 // Faz 31: index önerisi tipleri ÜRETİLEN şemadan. Buradaki elle yazılmış hâl
 // `estimated_improvement_pct` için "her zaman sayı" diyordu; API artık ölçülemediğinde null
@@ -146,33 +143,12 @@ export type IndexAdviceOutcome = Gen["IndexAdviceOutcomeOut"];
 export type MonitoringRole = Gen["MonitoringRoleOut"];
 export type AnalysisSettings = Gen["AnalysisSettingsOut"];
 
-export interface PerformanceInsight {
-  severity: "critical" | "high" | "medium" | "low" | "info";
-  category: string;
-  title: string;
-  description: string;
-  recommendation: string;
-  metric_value: number | null;
-  metric_unit: string | null;
-  action?: string | null;
-}
+// Faz 31 Commit 7: üretilen şemadan (action_params eklendi).
+export type PerformanceInsight = Gen["PerformanceInsightOut"];
 
-export interface TuningChecklistItem {
-  key: string;
-  label: string;
-  status: "ok" | "warn" | "critical" | "unknown" | string;
-  detail: string;
-}
+export type TuningChecklistItem = Gen["TuningChecklistOut"];
 
-export interface TuningReport {
-  health_score: number;
-  grade: string;
-  status: string;
-  collected_at: string | null;
-  summary: Record<string, number>;
-  insights: PerformanceInsight[];
-  checklist: TuningChecklistItem[];
-}
+export type TuningReport = Gen["TuningReportOut"];
 
 export interface ActivitySession {
   pid: number;

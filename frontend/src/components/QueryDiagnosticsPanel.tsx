@@ -47,8 +47,8 @@ export default function QueryDiagnosticsPanel({ data, error, loading, topN, onTo
         <div>
           <h3 className="chart-title">Performans tuning — kaynak bazlı analiz</h3>
           <p style={{ color: "var(--muted)", fontSize: "0.8rem", margin: "0.25rem 0 0" }}>
-            En son toplanan yavaş sorgu anlık görüntüsünden — her sorgu için darboğazın I/O, CPU,
-            bellek ya da kilit/bekleme olduğu, hangi metriğin bunu gösterdiğiyle birlikte.
+            Yavaş Sorgular listesiyle AYNI sorgular (aynı pencere ve filtreler, toplam süreye göre) — her sorgu
+            için darboğazın I/O, CPU, bellek ya da kilit/bekleme olduğu, hangi metriğin bunu gösterdiğiyle birlikte.
           </p>
         </div>
         <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "0.8rem" }}>
@@ -68,10 +68,16 @@ export default function QueryDiagnosticsPanel({ data, error, loading, topN, onTo
       {data && (
         <>
           <p className="muted-note" style={{ margin: "0.5rem 0 0.75rem" }}>{data.server_resource_note}</p>
+          {(data.filtered_system > 0 || data.filtered_insignificant > 0) && (
+            <p className="muted-note">
+              Gizlenen: {data.filtered_system} sistem/dbace sorgusu · {data.filtered_insignificant} eşik altı sorgu
+            </p>
+          )}
 
           <div className="detail-tabs" style={{ marginBottom: "0.75rem" }}>
             {RESOURCE_TABS.map((t) => {
-              const count = t.key === "all" ? data.diagnoses.length : data.by_resource[t.key] || 0;
+              // Faz 31 Commit 7: sekme sayısı gösterilen listeden.
+              const count = t.key === "all" ? data.diagnoses.length : data.diagnoses.filter((d) => d.resource === t.key).length;
               return (
                 <button
                   key={t.key}

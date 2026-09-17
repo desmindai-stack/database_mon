@@ -330,7 +330,7 @@ npx playwright show-trace test-results/<klasör>/trace.zip
 | Tip sürüklenmesi | OpenAPI'den tipleri yeniden üretir, commit'lenmiş hâliyle karşılaştırır |
 | Tarayıcı testleri | Push'ta `@critical` akışlar; gecelik ve elle tetiklemede tam paket. Hata kanıtları artifact olarak yüklenir. |
 
-**CI canlı PostgreSQL testlerini koşuyor (Faz 31 Commit 5):** `live-postgres` işi 15/16/17 matrisiyle `scripts/live_pg.py` kurulumunu kullanıyor; DSN tanımlıyken sürüm koşulu dışında atlanan canlı test oturumu kırmızıya çeviriyor (`tests/conftest.py`). Faz 31 Commit 6'dan beri her sürüme streaming replika da kuruluyor (`DBACE_TEST_PG_REPLICA_DSN`); SQL Server topoloji testleri `scripts/live_mssql.py` ile yalnızca yerelde. Yerel eşdeğer koşu (Commit 6): PG 15 1923 geçti / 2 atlandı / 1 xfail, PG 16 ve 17 1924 / 1 / 1; DSN'siz 1820 geçti / 106 atlandı. Yerelde: `python scripts/live_pg.py up`, sonra yazdırdığı `DBACE_TEST_PG_DSN` ile `pytest`.
+**CI canlı PostgreSQL testlerini koşuyor (Faz 31 Commit 5):** `live-postgres` işi 15/16/17 matrisiyle `scripts/live_pg.py` kurulumunu kullanıyor; DSN tanımlıyken sürüm koşulu dışında atlanan canlı test oturumu kırmızıya çeviriyor (`tests/conftest.py`). Faz 31 Commit 6'dan beri her sürüme streaming replika da kuruluyor (`DBACE_TEST_PG_REPLICA_DSN`); SQL Server topoloji testleri `scripts/live_mssql.py` ile yalnızca yerelde. Yerel eşdeğer koşu (Commit 7): PG 15 1931 geçti / 2 atlandı / 1 xfail, PG 16 ve 17 1932 / 1 / 1; DSN'siz 1827 geçti / 107 atlandı. Gerçek veriyle e2e: `DBACE_TEST_PG_DSN=... npx playwright test e2e/live-counts.spec.ts`. Yerelde: `python scripts/live_pg.py up`, sonra yazdırdığı `DBACE_TEST_PG_DSN` ile `pytest`.
 
 ## API tipleri (TypeScript)
 
