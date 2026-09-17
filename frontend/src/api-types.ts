@@ -2691,6 +2691,7 @@ export interface components {
             overall: string;
             /** Services */
             services: components["schemas"]["ClusterServiceStatusOut"][];
+            topology?: components["schemas"]["TopologyOut"] | null;
             totals: components["schemas"]["ClusterTotalsOut"];
         };
         /** ClusterLogsOut */
@@ -5848,6 +5849,31 @@ export interface components {
              */
             token_type: "bearer";
             user: components["schemas"]["UserOut"];
+        };
+        /**
+         * TopologyOut
+         * @description Ölçülen topoloji (Faz 31 Commit 6, services/server_topology.py).
+         */
+        TopologyOut: {
+            /** Checked At */
+            checked_at?: string | null;
+            /** Kind */
+            kind: string;
+            /**
+             * Members
+             * @default []
+             */
+            members: {
+                [key: string]: unknown;
+            }[];
+            /** Reason */
+            reason: string;
+            /** Required Grant */
+            required_grant?: string | null;
+            /** Role */
+            role?: string | null;
+            /** State */
+            state?: string | null;
         };
         /** TuningChecklistOut */
         TuningChecklistOut: {

@@ -1705,8 +1705,25 @@ class ClusterTotalsOut(BaseModel):
     skipped: int = 0
 
 
+class TopologyOut(BaseModel):
+    """Ölçülen topoloji (Faz 31 Commit 6, services/server_topology.py)."""
+
+    # standalone | cluster | unmeasured
+    kind: str
+    # healthy | degraded — yalnızca cluster
+    state: str | None = None
+    # primary | replica
+    role: str | None = None
+    reason: str
+    members: list[dict[str, Any]] = []
+    checked_at: datetime | None = None
+    # Ölçülemediyse gereken yetki (tam GRANT komutu).
+    required_grant: str | None = None
+
+
 class ClusterHealthOut(BaseModel):
     instance_id: int
+    topology: TopologyOut | None = None
     cluster_name: str | None = None
     overall: str
     checked_at: str

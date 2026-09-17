@@ -21,6 +21,10 @@ Kurulan her şey:
 - `dbace` veritabanında `pg_stat_statements` ve `hypopg` eklentileri.
 - `dbace_nohypopg` veritabanı: yalnızca `pg_stat_statements` — hypopg'siz yolun testi için
   (eklenti veritabanı başına kurulur; aynı sunucuda iki durum da sınanabiliyor).
+- Faz 31 Commit 6: her sürüme bir STREAMING REPLİKA (`dbace-pg<sürüm>-replica`), ortak
+  `dbace-live` ağında, `pg_basebackup -R` ile. Topoloji tespiti testi replikayı SQL'le koparıp
+  (`ALTER SYSTEM SET primary_conninfo = ''`) geri bağlıyor — docker CLI gerekmiyor. `up`
+  replikanın akışta olduğunu doğruluyor, kopuk kalmışsa bağlantıyı geri yazıyor.
 """
 
 from __future__ import annotations
@@ -32,6 +36,9 @@ import time
 
 PASSWORD = "dbace"
 VERSIONS = {15: 55433, 16: 55434, 17: 55432, 18: 55435}
+REPLICA_PORTS = {15: 55443, 16: 55444, 17: 55442, 18: 55445}
+NETWORK = "dbace-live"
+REPLICA_APPLICATION_NAME = "dbace_replica"
 DEFAULT_VERSIONS = (15, 16, 17)
 SERVER_ARGS = [
     "-c", "shared_preload_libraries=pg_stat_statements",
@@ -128,8 +135,77 @@ def up(version: int, recreate: bool) -> None:
           f"dbace_nohypopg hypopg sayısı: {no_hypopg}")
 
 
+def replica_name(version: int) -> str:
+    return f"{name(version)}-replica"
+
+
+def primary_conninfo(version: int) -> str:
+    return (f"host={name(version)} port=5432 user=postgres password={PASSWORD} "
+            f"application_name={REPLICA_APPLICATION_NAME}")
+
+
+def replica_psql(version: int, sql: str) -> str:
+    result = run("docker", "exec", replica_name(version), "psql", "-U", "postgres", "-d", "dbace", "-tAc", sql,
+                 check=False, quiet=True)
+    return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def up_replica(version: int, recreate: bool) -> None:
+    """Birincile streaming replika. Testler replikayı SQL'le koparıp geri bağlıyor."""
+    container = replica_name(version)
+    if run("docker", "network", "inspect", NETWORK, check=False, quiet=True).returncode != 0:
+        run("docker", "network", "create", NETWORK, quiet=True)
+    connected = run("docker", "inspect", "-f", "{{json .NetworkSettings.Networks}}", name(version), quiet=True).stdout
+    if f'"{NETWORK}"' not in connected:
+        run("docker", "network", "connect", NETWORK, name(version), quiet=True)
+    hba = "host replication all all scram-sha-256"
+    if psql(version, "SELECT count(*) FROM pg_hba_file_rules WHERE 'replication' = ANY(database) AND address = 'all'") == "0":
+        run("docker", "exec", name(version), "sh", "-c", f"echo '{hba}' >> \"$PGDATA/pg_hba.conf\"", quiet=True)
+        psql(version, "SELECT pg_reload_conf()")
+
+    replica_exists = run("docker", "ps", "-a", "--filter", f"name=^{container}$", "--format", "{{.Names}}",
+                         quiet=True).stdout.strip() == container
+    if recreate and replica_exists:
+        run("docker", "rm", "-f", container, quiet=True)
+        replica_exists = False
+    if not replica_exists:
+        print(f"[{container}] oluşturuluyor (port {REPLICA_PORTS[version]}, pg_basebackup)")
+        boot = (
+            'if [ ! -s "$PGDATA/PG_VERSION" ]; then '
+            'mkdir -p "$PGDATA" && chown postgres:postgres "$PGDATA" && chmod 700 "$PGDATA" && '
+            f'gosu postgres env PGPASSWORD={PASSWORD} pg_basebackup -h {name(version)} -U postgres '
+            f'-D "$PGDATA" -X stream -R -d "application_name={REPLICA_APPLICATION_NAME}"; fi; '
+            'exec docker-entrypoint.sh postgres ' + " ".join(SERVER_ARGS)
+        )
+        run("docker", "run", "-d", "--name", container, "--network", NETWORK, "-e", f"POSTGRES_PASSWORD={PASSWORD}",
+            "-p", f"{REPLICA_PORTS[version]}:5432", "--entrypoint", "bash", f"postgres:{version}", "-c", boot, quiet=True)
+    else:
+        run("docker", "start", container, quiet=True)
+
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline and replica_psql(version, "SELECT pg_is_in_recovery()") != "t":
+        time.sleep(1)
+    if replica_psql(version, "SELECT pg_is_in_recovery()") != "t":
+        sys.exit(f"{container} replika olarak açılmadı")
+    # Önceki bir test koparıp geri bağlayamadıysa: bağlantıyı geri yaz.
+    if replica_psql(version, "SELECT current_setting('primary_conninfo') <> ''") != "t":
+        replica_psql(version, f"ALTER SYSTEM SET primary_conninfo = '{primary_conninfo(version)}'")
+        replica_psql(version, "SELECT pg_reload_conf()")
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and replica_psql(version, "SELECT status FROM pg_stat_wal_receiver") != "streaming":
+        time.sleep(1)
+    status = replica_psql(version, "SELECT status FROM pg_stat_wal_receiver")
+    if status != "streaming":
+        sys.exit(f"{container} akışta değil (wal receiver: {status or 'yok'})")
+    print(f"[{container}] {replica_psql(version, 'SHOW server_version')} | recovery=t | wal receiver: {status}")
+
+
 def dsn(versions) -> str:
     return ",".join(f"postgresql://postgres:{PASSWORD}@127.0.0.1:{VERSIONS[v]}/dbace" for v in versions)
+
+
+def replica_dsn(versions) -> str:
+    return ",".join(f"postgresql://postgres:{PASSWORD}@127.0.0.1:{REPLICA_PORTS[v]}/dbace" for v in versions)
 
 
 def main() -> None:
@@ -141,7 +217,10 @@ def main() -> None:
     if args.command == "up":
         for version in args.versions:
             up(version, args.recreate)
+            up_replica(version, args.recreate)
+    # İki satır da GITHUB_ENV'e yazılıyor (ci.yml) — sıra birincil DSN'lerle aynı.
     print(f"DBACE_TEST_PG_DSN={dsn(args.versions)}")
+    print(f"DBACE_TEST_PG_REPLICA_DSN={replica_dsn(args.versions)}")
 
 
 if __name__ == "__main__":

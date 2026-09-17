@@ -116,6 +116,24 @@ class PostgreSQLCollector(BaseCollector):
         return [row["app"] for row in rows]
 
     @staticmethod
+    async def _topology_facts(conn) -> dict[str, Any]:
+        """Salt okunur: pg_is_in_recovery, pg_stat_replication, pg_stat_wal_receiver. Durum kolonları
+        pg_read_all_stats olmadan NULL geliyor (ölçüldü) — ayrım sınıflandırmada."""
+        try:
+            in_recovery = bool(await conn.fetchval("SELECT pg_is_in_recovery()"))
+            replication = [
+                dict(r) for r in await conn.fetch(
+                    "SELECT application_name, state, sync_state FROM pg_stat_replication"
+                )
+            ]
+            wal_receiver = [
+                dict(r) for r in await conn.fetch("SELECT status, sender_host FROM pg_stat_wal_receiver")
+            ] if in_recovery else []
+        except Exception as exc:  # noqa: BLE001 — ölçüm yok, toplama sürmeli
+            return {"error": str(exc)}
+        return {"in_recovery": in_recovery, "replication": replication, "wal_receiver": wal_receiver}
+
+    @staticmethod
     async def _auto_explain_loaded(conn) -> bool | None:
         try:
             preload = await conn.fetchval("SHOW shared_preload_libraries")
@@ -506,6 +524,8 @@ class PostgreSQLCollector(BaseCollector):
             # services/plan_source.py). Okunamazsa None — "yok" değil "ölçülemedi".
             metrics["_monitoring_role_apps"] = await self._foreign_sessions_in_own_role(conn)
             metrics["_auto_explain_loaded"] = await self._auto_explain_loaded(conn)
+            # Faz 31 Commit 6: topoloji HAM verisi; sınıflandırma services/server_topology.py.
+            metrics["_topology_facts"] = await self._topology_facts(conn)
             metrics["_unsupported_metrics"] = unsupported
             # Hangi metriğin nereden alındığı — arayüz kaynağı gösteriyor ki kullanıcı
             # "bu sayı nereden geliyor" sorusunu ekrandan cevaplayabilsin.

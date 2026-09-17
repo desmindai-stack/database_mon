@@ -217,6 +217,15 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "instances", "plan_capture_checked_at", "plan_capture_checked_at DATETIME")
         await _sqlite_add_column_if_missing(conn, "instances", "plan_capture_error", "plan_capture_error TEXT")
         await _sqlite_add_column_if_missing(conn, "instances", "plan_capture_found", "plan_capture_found INTEGER")
+        # Faz 31 Commit 6 — 20260917090200_instance_topology.sql
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_kind", "topology_kind VARCHAR(16)")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_state", "topology_state VARCHAR(16)")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_role", "topology_role VARCHAR(16)")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_reason", "topology_reason TEXT")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_required_grant", "topology_required_grant TEXT")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_members", "topology_members JSON")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_checked_at", "topology_checked_at DATETIME")
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_cluster_seen_at", "topology_cluster_seen_at DATETIME")
         await _sqlite_add_column_if_missing(
             conn, "instances", "last_collect_error_at", "last_collect_error_at DATETIME"
         )

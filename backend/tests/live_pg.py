@@ -20,6 +20,18 @@ import pytest
 from app.collectors.base import ConnectionTarget
 
 LIVE_DSNS = [d.strip() for d in os.environ.get("DBACE_TEST_PG_DSN", "").split(",") if d.strip()]
+#: Faz 31 Commit 6: her birincilin streaming replikası, AYNI SIRADA (scripts/live_pg.py). DSN tanımlıyken
+#: eksikse replika testleri atlanmıyor, kırmızı oluyor (atlama denetimi).
+REPLICA_DSNS = [d.strip() for d in os.environ.get("DBACE_TEST_PG_REPLICA_DSN", "").split(",") if d.strip()]
+
+
+def replica_for(dsn: str) -> str:
+    if len(REPLICA_DSNS) != len(LIVE_DSNS):
+        raise AssertionError(
+            "DBACE_TEST_PG_REPLICA_DSN birincil DSN'lerle eşleşmiyor — `python scripts/live_pg.py up` "
+            "iki değişkeni de yazdırır."
+        )
+    return REPLICA_DSNS[LIVE_DSNS.index(dsn)]
 SKIP_REASON = (
     "Gerçek PostgreSQL yok. `python scripts/live_pg.py up` ile konteynerleri kurup yazdırdığı "
     "DBACE_TEST_PG_DSN değerini tanımlayın."

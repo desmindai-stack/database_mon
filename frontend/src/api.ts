@@ -956,6 +956,8 @@ export interface ClusterServiceStatus {
 
 export interface ClusterHealth {
   instance_id: number;
+  /** Faz 31 Commit 6 — üretilen şemadan: ölçülen topoloji. */
+  topology?: Gen["ClusterHealthOut"]["topology"];
   cluster_name: string | null;
   overall: string;
   checked_at: string;

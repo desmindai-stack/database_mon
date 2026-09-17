@@ -10,7 +10,7 @@ from app.collectors.registry import get_collector
 from app.config import settings
 from app.domain.engines import DatabaseEngine
 from app.models import Instance, MetricSample, SlowQuerySample
-from app.services.alert_engine import ensure_cluster_alert_rules, evaluate_alerts
+from app.services.alert_engine import ensure_cluster_alert_rules, ensure_topology_alert_rules, evaluate_alerts
 from app.services.cluster_health import (
     cluster_health_metric_flags,
     collect_cluster_health,
@@ -20,10 +20,37 @@ from app.services.credentials import decrypt_secret
 from app.services.prediction import run_predictions
 from app.services.monitoring_role import record_observation
 from app.services.query_text_privacy import sanitize_stored_query
+from app.services.server_topology import KIND_CLUSTER, classify, expected_cluster, record_topology
 
 logger = logging.getLogger(__name__)
 
 _previous_state: dict[int, dict] = {}
+
+
+#: Patroni yığınının servisleri — veritabanı motorunun kendi servisi (postgresql/sqlserver) değil.
+CLUSTER_STACK_SERVICES = frozenset({"patroni", "etcd", "haproxy", "keepalived"})
+
+
+def runs_cluster_stack_probe(instance: Instance) -> bool:
+    """Patroni yığını probu ve cluster alarm kuralları YALNIZCA yapılandırılmış yığında (Faz 31 Commit 6).
+
+    Eskiden koşul `cluster_name or services` idi. Sihirbaz ve düğüm ekleme tek sunuculu grupta da
+    `services=[motor]` (düğüm yolu `cluster_name=grup adı`) yazıyor; tek sunucu Patroni cluster'ı
+    sanılıyor, host-agent'ın `inactive` raporu 5 cluster alarmı üretiyordu (gerçek sunucuda ölçüldü).
+    """
+    if instance.engine != "postgresql" or not instance.cluster_name:
+        return False
+    services = set(instance.services or [])
+    return not services or bool(services & CLUSTER_STACK_SERVICES)
+
+
+async def _group_topology(session: AsyncSession, instance: Instance) -> str | None:
+    if not instance.group_id:
+        return None
+    from app.models import DatabaseGroup
+
+    group = await session.get(DatabaseGroup, instance.group_id)
+    return group.topology if group else None
 
 
 def effective_collect_interval(instance: Instance) -> int:
@@ -203,6 +230,7 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
         record_observation(instance, metrics.pop("_monitoring_role_apps"), now=now)
     if "_auto_explain_loaded" in metrics:
         instance.auto_explain_loaded = metrics.pop("_auto_explain_loaded")
+    topology_facts = metrics.pop("_topology_facts", None)
 
     sample = MetricSample(instance_id=instance.id)
     _apply_metrics_to_sample(sample, metrics)
@@ -239,9 +267,20 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
             )
         )
 
+    # Faz 31 Commit 6: ÖLÇÜLEN topoloji. Alarm metriği yalnızca cluster iken üretiliyor; tek sunucu
+    # ya da ölçülemedi durumunda metrik yok, kural değerlendirilmiyor.
+    if topology_facts is not None:
+        group_topology = await _group_topology(session, instance)
+        observation = classify(instance.engine, topology_facts,
+                               expected=expected_cluster(instance, group_topology, now=now))
+        record_topology(instance, observation, now=now)
+        if observation.kind == KIND_CLUSTER:
+            sample.metrics_json = {**(sample.metrics_json or {}), **observation.alert_flags()}
+            await ensure_topology_alert_rules(session, instance.id)
+
     # Cluster/Patroni stack health snapshot (probe + optional host agent)
     try:
-        if instance.cluster_name or (instance.services and len(instance.services) > 0):
+        if runs_cluster_stack_probe(instance):
             report = await collect_cluster_health(instance)
             flags = cluster_health_metric_flags(report)
             metrics_json = dict(sample.metrics_json or {})

@@ -2551,6 +2551,39 @@ ya da iş hiç çalışmıyorsa da. Artık dört durum ayrı (`unavailable_kind`
 (log okunuyor), `no_agent`. **Sınır:** pg_read_all_settings'siz rol preload'u okuyamıyor
 (ölçüldü); o durumda "yüklü olup olmadığı okunamadı" deniyor.
 
+## Faz 31 Commit 6: topoloji ölçülüyor — sınırlar
+
+**Ölçüm kaynakları (salt okunur):** PostgreSQL `pg_is_in_recovery`, `pg_stat_replication`,
+`pg_stat_wal_receiver` (durum kolonları pg_read_all_stats ister — pg_monitor'da var); SQL Server
+`SERVERPROPERTY('IsHadrEnabled')` ve `sys.dm_hadr_*` DMV'leri (VIEW SERVER STATE). Katalog
+`sys.availability_groups` VIEW SERVER STATE ile 0 satır döndüğü için kullanılmıyor (ölçüldü).
+
+**Beklenen cluster (24 saat):** birincilde replika satırı yoksa tek sunucu ile replikası kopmuş
+cluster aynı görünüyor. Grup topolojisi patroni/alwayson ise ya da sunucuda son 24 saatte cluster
+gözlendiyse "cluster, bozuk" (alarm); değilse tek sunucu. Replika BİLEREK kaldırıldıysa alarm en fazla
+24 saat sürer. Açık soru: süre ayarlanabilir olsun mu, ya da "replika kaldırıldı" onayı mı?
+
+**Yetkisiz SQL Server login'inde toplamanın TAMAMI duruyor:** oturum sayısı DMV'si bile VIEW SERVER
+PERFORMANCE STATE istiyor (ölçüldü). Hata sınırı bunu yakalıyor, topoloji "ölçülemedi + GRANT VIEW
+SERVER STATE" dönüyor; metrikler de yok. Kısmi toplama (yetki isteyen her sorguyu ayrı ölçülemedi
+saymak) Commit 8'in yetki matrisinin konusu.
+
+**Patroni REST topoloji tespitinin parçası değil:** yapılandırılmış Patroni yığını (cluster_name +
+patroni/etcd/haproxy/keepalived servisleri) kendi probunda kalıyor. Tek sunucuda yığın probu hiç
+çalışmıyor.
+
+**Host-agent birim adları:** agent `systemctl is-active postgresql` soruyor; Debian'da birim
+`postgresql@16-main` olabilir. Port açıkken agent'ın `inactive` raporu artık servisi "down" yapmıyor,
+detayda not düşülüyor. Agent'ın UNIT_* ortam değişkenleri doğru ayarlanmalı.
+
+**CI'da SQL Server yok:** `live-postgres` işi replika dahil kuruluyor; SQL Server topoloji testleri
+(`tests/test_topology_live_mssql.py`, `scripts/live_mssql.py`) yalnızca yerelde koştu. CI imajında
+"ODBC Driver 18 for SQL Server" yok; bu makinede de yok (testler Windows'un eski "SQL Server"
+sürücüsüyle, şifreleme kapalı koştu). **Açık soru:** CI'a SQL Server + ODBC 18 eklensin mi?
+
+**Eski kurallar:** düzeltmeden önce tek sunucuya eklenmiş 6 cluster kuralı silinmedi (tetiklenmiyor);
+listeleme SQL'i DEPLOY.md'de.
+
 ## Faz 31 — on-prem kurulum notları (#48 temizlik migration'ı)
 
 - **Önce ölç:** DEPLOY.md "#48'den önce: temizlik ölçümü" SQL'i salt okunur; sonucu görmeden

@@ -17,6 +17,48 @@ const STATUS_TR: Record<string, string> = {
   skipped: "SKIP",
 };
 
+// Faz 31 Commit 6: ölçülen topoloji. "Tek sunucu" bir sorun değil; "ölçülemedi" de "down" değil.
+const TOPOLOGY_LABEL: Record<string, string> = {
+  standalone: "Tek sunucu",
+  cluster: "Cluster",
+  unmeasured: "Ölçülemedi",
+};
+
+function TopologyCard({ topology }: { topology: NonNullable<ClusterHealth["topology"]> }) {
+  const tone =
+    topology.kind === "cluster" && topology.state === "degraded"
+      ? "critical"
+      : topology.kind === "unmeasured"
+        ? "unknown"
+        : "healthy";
+  return (
+    <div className="card">
+      <h3 className="chart-title">
+        Topoloji
+        <span className={`tuning-status ${tone}`} style={{ marginLeft: "0.5rem" }}>
+          {TOPOLOGY_LABEL[topology.kind] ?? topology.kind}
+          {topology.kind === "cluster" && (topology.state === "degraded" ? " · bozuk" : " · sağlıklı")}
+          {topology.role ? ` · ${topology.role === "primary" ? "birincil" : "replika"}` : ""}
+        </span>
+      </h3>
+      <p className="muted-note">{topology.reason}</p>
+      {topology.required_grant && (
+        <pre className="rec-action-code"><code>{topology.required_grant}</code></pre>
+      )}
+      {topology.members.length > 0 && (
+        <ul>
+          {topology.members.map((m, i) => (
+            <li key={i}>
+              {String(m.name ?? "—")}: {String(m.state ?? "—")}
+              {m.health ? ` / ${String(m.health)}` : ""}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function ClusterHealthPanel({ instanceId, data, error, loading, onRefresh }: Props) {
   const [logService, setLogService] = useState("patroni");
   const [logs, setLogs] = useState<ClusterLogs | null>(null);
@@ -72,6 +114,8 @@ export default function ClusterHealthPanel({ instanceId, data, error, loading, o
           {loading ? "Yenileniyor…" : "Yenile"}
         </button>
       </div>
+
+      {data.topology && <TopologyCard topology={data.topology} />}
 
       <div className="stats-grid compact">
         <div className="card stat-tile"><div className="stat-tile-label">UP</div><div className="stat-tile-value">{data.totals.up}</div></div>

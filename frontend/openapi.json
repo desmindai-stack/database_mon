@@ -1854,6 +1854,16 @@
             "title": "Services",
             "type": "array"
           },
+          "topology": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TopologyOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "totals": {
             "$ref": "#/components/schemas/ClusterTotalsOut"
           }
@@ -10626,6 +10636,79 @@
           "user"
         ],
         "title": "TokenOut",
+        "type": "object"
+      },
+      "TopologyOut": {
+        "description": "Ölçülen topoloji (Faz 31 Commit 6, services/server_topology.py).",
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "members": {
+            "default": [],
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Members",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "required_grant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Grant"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "kind",
+          "reason"
+        ],
+        "title": "TopologyOut",
         "type": "object"
       },
       "TuningChecklistOut": {

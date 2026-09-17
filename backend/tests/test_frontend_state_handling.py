@@ -211,3 +211,13 @@ def test_shared_monitoring_role_and_capture_state_reach_the_ui():
     for kind in ("not_measured", "disabled_on_target", "no_plans_yet"):
         assert kind in panel
     assert "unavailable_kind" in panel
+
+
+def test_cluster_tab_shows_measured_topology_and_unmeasured_is_not_down():
+    """Faz 31 Commit 6: Cluster sekmesi ÖLÇÜLEN topolojiyi gösteriyor; "ölçülemedi" gereken yetkiyle."""
+    panel = (FRONTEND / "components" / "ClusterHealthPanel.tsx").read_text(encoding="utf-8")
+    assert "<TopologyCard" in panel and "topology.reason" in panel and "topology.required_grant" in panel
+    for label in ("Tek sunucu", "Ölçülemedi"):
+        assert label in panel
+    api = (FRONTEND / "api.ts").read_text(encoding="utf-8")
+    assert 'topology?: Gen["ClusterHealthOut"]["topology"]' in api

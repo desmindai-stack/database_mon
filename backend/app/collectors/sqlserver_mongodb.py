@@ -471,6 +471,42 @@ class SqlServerCollector(BaseCollector):
     async def open_connection(self):
         return await self._connect()
 
+    @staticmethod
+    async def _topology_facts(conn) -> dict[str, Any]:
+        """IsHadrEnabled + sys.dm_hadr_availability_replica_states. KATALOG (`sys.availability_groups`)
+        KULLANILMIYOR: VIEW SERVER STATE ile 0 satır dönüyor (meta veri görünürlüğü, ölçüldü); DMV'ler
+        aynı login'le AG'yi ve kopuk replikayı gösteriyor."""
+        facts: dict[str, Any] = {"hadr_enabled": None, "replicas": None, "error": None}
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute("SELECT CAST(SERVERPROPERTY('IsHadrEnabled') AS INT)")
+                row = await cur.fetchone()
+                facts["hadr_enabled"] = bool(row[0]) if row and row[0] is not None else False
+        except Exception as exc:  # noqa: BLE001
+            facts["error"] = str(exc)
+            return facts
+        if not facts["hadr_enabled"]:
+            return facts
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT cs.replica_server_name, rs.role_desc, rs.connected_state_desc,
+                           rs.synchronization_health_desc, CAST(rs.is_local AS INT)
+                    FROM sys.dm_hadr_availability_replica_states rs
+                    LEFT JOIN sys.dm_hadr_availability_replica_cluster_states cs ON cs.replica_id = rs.replica_id
+                    """
+                )
+                rows = await cur.fetchall()
+            facts["replicas"] = [
+                {"replica_server_name": r[0], "role_desc": r[1], "connected_state_desc": r[2],
+                 "synchronization_health_desc": r[3], "is_local": bool(r[4])}
+                for r in rows
+            ]
+        except Exception as exc:  # noqa: BLE001
+            facts["error"] = str(exc)
+        return facts
+
     async def _detect_version(self, conn) -> tuple[int, str]:
         """Returns (ProductMajorVersion, @@VERSION text). 2016=13, 2017=14, 2019=15, 2022=16."""
         async with conn.cursor() as cur:
@@ -597,6 +633,8 @@ class SqlServerCollector(BaseCollector):
             "max_connections": max_connections,
             "replication_lag_bytes": None,
             "blocked_sessions": blocked_sessions,
+            # Faz 31 Commit 6: topoloji ham verisi (services/server_topology.py).
+            "_topology_facts": await self._topology_facts(conn),
             "_state": {"batch_requests_cum": batch_requests_cum},
             "_server_version": version_string,
             "_server_version_num": version_major,

@@ -75,7 +75,9 @@ def classify_connection_error(exc: Exception) -> str:
         )
     ):
         return wrap("Kimlik doğrulama başarısız: kullanıcı adı veya parola yanlış.")
-    if "permission denied" in lower:
+    # SQL Server "VIEW SERVER STATE permission was denied" / "does not have permission" (Msg 300/297) diyor;
+    # yalnızca "permission denied" aranınca yetkisiz login'in hatası "Bağlantı başarısız" görünüyordu (Faz 31 Commit 6).
+    if any(k in lower for k in ("permission denied", "permission was denied", "does not have permission")):
         return wrap(
             "Bağlanan kullanıcının bu işlem için yetkisi yok — sistem kataloğu/view'larını "
             "okuma yetkisi eksik olabilir. GRANT pg_monitor TO <kullanıcı>; (PostgreSQL) veya "

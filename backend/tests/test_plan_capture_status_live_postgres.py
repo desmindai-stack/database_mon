@@ -111,6 +111,10 @@ async def test_auto_explain_absent_on_target_is_measured_by_the_real_collector(a
 
 async def test_unreadable_log_is_not_measured_and_readable_log_is_no_plans_yet(admin, dsn, monkeypatch):
     version = (await admin.fetchval("SHOW server_version")).split(" ")[0]
+    # Log dosyası sunucu genelinde paylaşılıyor: başka testlerin auto_explain planları da orada (Faz 31
+    # Commit 6'da tam pakette yakalandı). Yalnızca bu testin başladığı andan sonraki satırlar.
+    logfile = await admin.fetchval("SELECT pg_current_logfile()")
+    offset = await admin.fetchval("SELECT (pg_stat_file($1)).size", logfile)
     instance_id = await _instance(dsn, "app", UNREACHABLE_AGENT)
     await _collect(instance_id)
     async with SessionLocal() as session:
@@ -122,8 +126,7 @@ async def test_unreadable_log_is_not_measured_and_readable_log_is_no_plans_yet(a
     log(f"PG {version} log okunamıyor", {"tur": totals, "tür": kind, "gerekçe": reason})
     assert kind == "not_measured" and "log'u okunamıyor" in reason
 
-    logfile = await admin.fetchval("SELECT pg_current_logfile()")
-    server_log = await admin.fetchval("SELECT pg_read_file($1)", logfile)
+    server_log = await admin.fetchval("SELECT pg_read_file($1, $2, (pg_stat_file($1)).size - $2)", logfile, offset)
 
     async def agent_returns_server_log(options, service, lines=100, timeout=5.0):
         return {"lines": server_log.splitlines()[-lines:]}

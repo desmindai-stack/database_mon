@@ -66,6 +66,7 @@ from app.services.table_access_advice import advice_for_signal
 from app.services.advice import advice_to_dict
 from app.services.blocking import build_blocking_tree, tree_to_dict
 from app.services.blocking_history import recent_episodes
+from app.services.server_topology import topology_status
 from app.services.collection import connection_target_for
 from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
@@ -457,6 +458,8 @@ async def get_cluster_health(instance_id: int, db: AsyncSession = Depends(get_db
         report = await collect_cluster_health(instance)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Cluster health failed: {exc}") from exc
+    # Faz 31 Commit 6: toplayıcının ÖLÇTÜĞÜ topoloji — servis probları topoloji değil.
+    report["topology"] = topology_status(instance)
     return ClusterHealthOut.model_validate(report)
 
 

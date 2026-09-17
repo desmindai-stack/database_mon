@@ -16,6 +16,12 @@ CLUSTER_RULE_SPECS = [
     ("Cluster services down", "cluster_services_down", ">", 0),
 ]
 
+# Faz 31 Commit 6: ÖLÇÜLEN topolojiden (services/server_topology.py). Kural yalnızca cluster gözlenince
+# ekleniyor; metrik yalnızca cluster iken üretiliyor.
+TOPOLOGY_RULE_SPECS = [
+    ("Cluster bozuk: replika/Always On bağlantısı", "topology_cluster_degraded", ">", 0),
+]
+
 # Group-level (multi-node) health flags — produced by
 # services.cluster_health.group_health_metric_flags() and persisted via
 # ensure_group_alert_rules()/evaluate_group_alerts() below, keyed by
@@ -62,6 +68,18 @@ async def ensure_cluster_alert_rules(session: AsyncSession, instance_id: int) ->
                 is_default=True,
             )
         )
+    await session.flush()
+
+
+async def ensure_topology_alert_rules(session: AsyncSession, instance_id: int) -> None:
+    existing = {
+        r.metric
+        for r in (await session.execute(select(AlertRule).where(AlertRule.instance_id == instance_id))).scalars()
+    }
+    for name, metric, operator, threshold in TOPOLOGY_RULE_SPECS:
+        if metric not in existing:
+            session.add(AlertRule(instance_id=instance_id, name=name, metric=metric, operator=operator,
+                                  threshold=float(threshold), enabled=True, is_default=True))
     await session.flush()
 
 

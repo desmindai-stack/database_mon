@@ -49,6 +49,29 @@ STORED_TEXT_CLEANUP_JOB_ID = "stored_query_text_cleanup"
 CUSTOM_RULES_TICK_SECONDS = 10
 
 
+async def collect_one_instance(instance_id: int) -> str | None:
+    """Tek veritabanının toplama turu, hata sınırıyla. Hata türünü (ya da None) döner.
+
+    Oturum veritabanı başına açılıyor: dışarıda açılsaydı bir veritabanının hatası oturumu bozar ve
+    sonrakiler hiç yazamazdı. Hata sessizce geçilmiyor, o veritabanının kaydına yazılıyor — Faz 31
+    Commit 6'dan beri "ölçülemedi" gerekçeleri (topoloji dahil) bu kayıttan da türüyor.
+    """
+    try:
+        async with SessionLocal() as session:
+            instance = await session.get(Instance, instance_id)
+            if instance is None or not instance.enabled:
+                return None
+            await collect_instance(instance, session)
+            await record_collection_success(session, instance)
+            await session.commit()
+        return None
+    except Exception as exc:
+        kind, message = classify_collection_error(exc)
+        logger.exception("Failed collecting metrics for instance %s (%s)", instance_id, kind)
+        await record_collection_failure(instance_id, kind, message)
+        return kind
+
+
 async def collect_all_instances() -> None:
     """Sabit bir tick'te çalışır (settings.collect_interval_seconds — bu asgari granülerlik,
     veritabanı başına garanti değil). Her veritabanı yalnızca kendi
@@ -79,22 +102,8 @@ async def collect_all_instances() -> None:
 
     schema_failures = 0
     for instance_id in due_ids:
-        try:
-            # Oturum döngünün İÇİNDE açılıyor: dışarıda açılsaydı bir veritabanının hatası
-            # oturumu bozar ve sonrakiler hiç yazamazdı — düzeltilen sorun tam olarak buydu.
-            async with SessionLocal() as session:
-                instance = await session.get(Instance, instance_id)
-                if instance is None or not instance.enabled:
-                    continue
-                await collect_instance(instance, session)
-                await record_collection_success(session, instance)
-                await session.commit()
-        except Exception as exc:
-            kind, message = classify_collection_error(exc)
-            if kind == KIND_SCHEMA:
-                schema_failures += 1
-            logger.exception("Failed collecting metrics for instance %s (%s)", instance_id, kind)
-            await record_collection_failure(instance_id, kind, message)
+        if await collect_one_instance(instance_id) == KIND_SCHEMA:
+            schema_failures += 1
 
     # Sistemik hata TEK TEK değil, tek bir uyarı olarak: şema uyumsuzluğunda "12 veritabanı
     # hata verdi" listesi operatörü yanlış yere bakmaya gönderir.

@@ -51,13 +51,15 @@ _disallowed_skips: list[tuple[str, str]] = []
 
 
 def pytest_collection_modifyitems(session, config, items):
-    from tests import live_pg
+    from tests import live_mssql, live_pg
 
-    if not live_pg.LIVE_DSNS:
+    # Faz 31 Commit 6: SQL Server hedefleri de aynı kurala tabi — her kaynak YALNIZCA kendisi tanımlıyken.
+    sources = [s for s in (live_pg.LIVE_DSNS, live_mssql.MSSQL_TARGETS) if s]
+    if not sources:
         return
     for item in items:
         module = getattr(item, "module", None)
-        if module is not None and any(value is live_pg.LIVE_DSNS for value in vars(module).values()):
+        if module is not None and any(value is source for value in vars(module).values() for source in sources):
             _live_nodeids.add(item.nodeid)
 
 

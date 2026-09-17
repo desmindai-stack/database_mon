@@ -98,7 +98,8 @@ jobs:
         run: python scripts/live_pg.py up --versions ${{ matrix.pg }}
 
       - name: DSN
-        run: python scripts/live_pg.py dsn --versions ${{ matrix.pg }} | tail -n 1 >> "$GITHUB_ENV"
+        # İki satır: DBACE_TEST_PG_DSN ve DBACE_TEST_PG_REPLICA_DSN.
+        run: python scripts/live_pg.py dsn --versions ${{ matrix.pg }} >> "$GITHUB_ENV"
 
       - name: Testler (canlı dahil)
         run: python -m pytest tests/ -q -rs

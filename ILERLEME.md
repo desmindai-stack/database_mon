@@ -8196,6 +8196,62 @@ planı, tur yeni index'i görünce "sonra". Canlı (15/16/17, adv_users.email): 
 yeni index planda, %98,7 azalma; index kurulmadan tur ölçüm üretmedi (negatif kontrol); ikinci öneri
 isteği önce değerini ezmedi; pg_monitor rolünde "Ölçülemedi … GRANT SELECT ON public.orders".
 
+## Faz 31 — Commit 6: tek sunucuda "cluster down" alarmı
+
+**Migration:** #52 `20260917090200_instance_topology.sql`.
+
+### Yeniden üretme (gerçek sunucu, kısıtlı roller)
+
+PostgreSQL 17 (`dbace_it_monitor`, pg_monitor) ve SQL Server 2022 (`dbace_ro`, VIEW SERVER STATE),
+üç oluşturma yolu (form, sihirbaz standalone, grup+düğüm) ve tek sunucuya plan yakalama için kurulan
+GERÇEK host-agent (systemd'li Debian konteyneri; olmayan birimler için `inactive`, exit 3):
+- DPA Cluster sekmesi: üç yolda da overall=critical, DOWN=5 — açık portu olan `postgresql` dahil;
+  SQL Server'da `patroni/etcd/postgresql` down.
+- Sihirbaz ve düğüm yollarında 5 alarm: Patroni down, etcd unhealthy, HAProxy down, Keepalived VIP
+  unreachable, Cluster services down.
+
+### Kök neden
+
+Topoloji hiç ölçülmüyordu. `collection.py` `cluster_name or services` doluysa Patroni yığını probunu
+çalıştırıp cluster kurallarını ekliyordu; sihirbaz (`wizard.py`) ve düğüm ekleme (`nodes.py`) tek
+sunuculu grupta da `services=[motor]` (düğüm: `cluster_name=grup adı`) yazıyor. `merge_agent_into_
+services` agent'ın durumunu "skipped" servislerin ve açık TCP portunun üstüne yazıyordu. "Yapılandırılmamış"
+ile "erişilemiyor" arasında ayrım yoktu.
+
+### Düzeltme
+
+- `services/server_topology.py`: standalone / cluster (healthy|degraded) / unmeasured, salt okunur
+  kaynaklardan; okunamazsa (yetki, zaman aşımı, toplama hatası) "ölçülemedi" + gereken yetki.
+- Alarm metriği `topology_cluster_degraded` YALNIZCA cluster gözlenince; kural da o zaman ekleniyor.
+- Patroni yığını probu/kuralları yalnızca yapılandırılmış yığında (`runs_cluster_stack_probe`);
+  agent atlanan servisi ve açık portu "down" yapamıyor; SQL Server'a "postgresql" probu gitmiyor.
+- Cluster sekmesi ölçülen topolojiyi gösteriyor; zamanlayıcının veritabanı başına gövdesi
+  `collect_one_instance` (test aynı yoldan geçiyor).
+- Test altyapısı: `live_pg.py` her sürüme streaming replika kuruyor (koparma SQL'le, docker'sız);
+  `live_mssql.py` tek sunucu + kopuk replikalı AG; atlama denetimi SQL Server hedeflerini de kapsıyor.
+
+### Ölçümler
+
+PostgreSQL (15/16/17 aynı): pg_monitor'lu rol replika durumlarını görüyor; yetkisiz rol satırları
+görüyor ama `state`/`status` NULL. Koparılınca birincilde satır yok, replikada wal receiver yok.
+Patroni REST: 8008 kapalı. SQL Server: IsHadrEnabled=0 (tek sunucu); AG sunucusunda dbace_ro DMV'de
+PRIMARY CONNECTED/HEALTHY + SECONDARY DISCONNECTED/NOT_HEALTHY görüyor, `sys.availability_groups`
+0 satır; yetkisiz login Msg 297/300.
+
+### Testler
+
+Canlı PG (15/16/17): tek sunucu + gerçek agent → alarm yok; replika koparılınca birincil ve replikada
+alarm; pg_monitor'suz rol → ölçülemedi + GRANT, alarm yok. Canlı SQL Server: tek sunucu → alarm yok;
+kopuk AG → alarm; yetkisiz login (iki sunucu) → ölçülemedi + GRANT, alarm yok. **Negatif kontrol:**
+eski koşul ve eski agent birleştirmesi geri konunca tek sunucu testi kırmızı (6 kural, `cluster_services_
+down` olayı, açık portta `postgresql: down`).
+
+**Sayılar (CI işinin yerel eşdeğeri, sürüm başına tek DSN + replika + SQL Server hedefleri):** PG 15.19:
+1923 geçti / 2 atlandı / 1 xfail; PG 16.15 ve 17.11: 1924 / 1 / 1. 105 canlı test toplandı, denetime
+takılan atlama 0. DSN'siz: 1820 geçti / 106 atlandı. **Tam pakette bulunan test hatası:** plan yakalama
+durum testi sunucu log'unun tamamını okuyordu; Commit 6'dan beri auto_explain planları aynı dosyaya
+yazıldığı için tam pakette kırmızıydı — yalnızca kendi başlangıcından sonraki satırlar okunuyor.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

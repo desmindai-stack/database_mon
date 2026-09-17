@@ -30,6 +30,7 @@ DEFAULT_OPTIONS = {
 # (standalone topology, or as the base connectivity signal generally). Getting this right
 # matters: a SQL Server node reported as "postgresql: down" is misleading, not just cosmetic.
 _ENGINE_SERVICE_NAME = {"postgresql": "postgresql", "sqlserver": "sqlserver", "mongodb": "mongodb"}
+CLUSTER_STACK_SERVICE_NAMES = frozenset({"patroni", "etcd", "haproxy", "keepalived"})
 
 
 def _opts(instance: Instance) -> dict[str, Any]:
@@ -39,12 +40,17 @@ def _opts(instance: Instance) -> dict[str, Any]:
 
 
 def _services(instance: Instance) -> set[str]:
+    """Faz 31 Commit 6: yığın servisleri YALNIZCA yapılandırılmış Patroni yığınında
+    (collection.runs_cluster_stack_probe ile aynı kural). Diğer her durumda motorun KENDİ servisi —
+    eskiden SQL Server'a bile "postgresql" TCP probu gidiyordu."""
+    from app.services.collection import runs_cluster_stack_probe
+
+    engine_service = _ENGINE_SERVICE_NAME.get(instance.engine, instance.engine)
+    if not runs_cluster_stack_probe(instance):
+        return {engine_service}
     services = instance.services or []
     if not services:
-        # If none selected, probe the common Patroni stack by default when cluster_name set.
-        if instance.cluster_name:
-            return {"etcd", "patroni", "postgresql", "keepalived", "haproxy"}
-        return {"postgresql"}
+        return {"etcd", "patroni", "postgresql", "keepalived", "haproxy"}
     return set(services)
 
 
@@ -384,9 +390,16 @@ def merge_agent_into_services(
     for item in services:
         name = item["service"]
         agent_state = agent_services.get(name)
-        if agent_state:
+        # Faz 31 Commit 6: agent ATLANAN servisin durumunu yazamaz — tek sunucuda patroni/etcd birimi
+        # yok ve agent `inactive` döndürüyor; eskiden bu "down" olup cluster alarmı üretiyordu.
+        if agent_state and item["status"] != "skipped":
             active = str(agent_state.get("active") or "").lower()
             status = "up" if active == "active" else "down" if active else item["status"]
+            # Port AÇIK (probe up) ama birim etkin değil: birim adı farklı olabilir (ör. postgresql@16-main).
+            # Açık portu "down" yapmak ölçülen bir gerçeği ölçülmeyen bir tahminle ezmek olurdu.
+            if item["status"] == "up" and status == "down":
+                status = "up"
+                active = f"{active} (port açık; systemd birim adı farklı olabilir)"
             detail = f"systemd={active}; {item.get('detail') or ''}".strip("; ")
             item = {
                 **item,
@@ -419,6 +432,8 @@ async def collect_cluster_health(instance: Instance) -> dict[str, Any]:
     tasks: dict[str, Any] = {}
     if "postgresql" in enabled:
         tasks["postgresql"] = asyncio.create_task(probe_postgresql(instance, timeout))
+    if "sqlserver" in enabled:
+        tasks["sqlserver"] = asyncio.create_task(probe_sqlserver_host(instance.host, instance.port, timeout))
     if "patroni" in enabled:
         tasks["patroni"] = asyncio.create_task(probe_patroni(instance, opts, timeout))
     if "etcd" in enabled:
@@ -444,10 +459,12 @@ async def collect_cluster_health(instance: Instance) -> dict[str, Any]:
         except Exception as exc:
             results.append(_result(name, "unknown", detail=str(exc)))
 
-    # skipped services that exist in canonical list but not enabled
-    for svc in ("etcd", "patroni", "postgresql", "keepalived", "haproxy"):
-        if svc not in enabled:
-            results.append(_result(svc, "skipped", detail="services listesinde yok"))
+    # Yığın yapılandırılmışsa, seçilmeyen yığın servisleri "atlandı" olarak listeleniyor. Tek sunucuda
+    # yığın servisi HİÇ listelenmiyor: patroni/etcd orada yok, "SKIP"/"DOWN" göstermek yanıltıcıydı.
+    if enabled & CLUSTER_STACK_SERVICE_NAMES:
+        for svc in ("etcd", "patroni", "postgresql", "keepalived", "haproxy"):
+            if svc not in enabled:
+                results.append(_result(svc, "skipped", detail="services listesinde yok"))
 
     # stable order
     order = {"patroni": 0, "etcd": 1, "postgresql": 2, "keepalived": 3, "haproxy": 4}

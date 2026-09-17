@@ -109,6 +109,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 49 | `20260916090900_slow_query_sample_origin.sql` | **YENİ** — slow_query_samples: from_monitoring_role, toplevel (imzalı satırın dbace'in kendi rolünden gelip gelmediği; iç içe çalıştırma). CONCURRENTLY YOK |
 | 50 | `20260917090000_instance_observation_status.sql` | **YENİ** — instances: izleme rolü paylaşımı (monitoring_role_checked_at/shared_at/shared_apps) ve plan yakalama durumu (auto_explain_loaded, plan_capture_checked_at/error/found). CONCURRENTLY YOK |
 | 51 | `20260917090100_index_advice_outcomes.sql` | **YENİ** — index_advice_outcomes: index önerisinin ölçülmüş etkisi (index kurulmadan önce ve sonra aynı sorgunun planlayıcı maliyeti). CONCURRENTLY YOK |
+| 52 | `20260917090200_instance_topology.sql` | **YENİ** — instances: ölçülen topoloji (tek sunucu / cluster sağlıklı-bozuk / ölçülemedi, rol, üyeler, gerekçe, gereken yetki, son cluster gözlemi). CONCURRENTLY YOK |
 
 ## Faz 31: migration adları ve geriye dönük temizlik
 
@@ -321,6 +322,33 @@ SELECT i.id, i.name,
 FROM instances i
 WHERE i.engine = 'postgresql' AND i.enabled
 ORDER BY i.id;
+ROLLBACK;
+```
+
+## Faz 31 Commit 6: tek sunucuya eklenmiş cluster alarm kuralları
+
+Düzeltmeden önce sihirbaz/düğüm ekleme yoluyla eklenen TEK SUNUCULU veritabanlarına 6 cluster kuralı
+ekleniyordu. Yeni sürümde bu kuralların metrikleri üretilmiyor, TETİKLENMEZLER — ama kural listesinde
+dururlar. Salt okunur liste (silmek isterseniz `kural_id`'leri kullanın; olay geçmişi kurala bağlı):
+
+```sql
+-- Faz 31 Commit 6 — tek sunucuya hata yüzünden eklenmiş cluster alarm kuralları (SALT OKUNUR).
+-- Düzeltmeden sonra bu kurallar TETİKLENMEZ (metrikleri artık üretilmiyor); kural listesinde durmaya devam ederler.
+BEGIN READ ONLY;
+SELECT i.id AS instance_id, i.name, i.engine, i.cluster_name, i.services::text AS services,
+       r.id AS kural_id, r.name AS kural, r.metric,
+       (SELECT count(*) FROM alert_events e WHERE e.rule_id = r.id AND e.resolved_at IS NULL) AS acik_olay
+FROM alert_rules r
+JOIN instances i ON i.id = r.instance_id
+WHERE r.is_default
+  AND r.metric IN ('patroni_down', 'etcd_down', 'haproxy_down', 'keepalived_vip_down', 'cluster_has_leader', 'cluster_services_down')
+  AND NOT (
+      i.engine = 'postgresql'
+      AND coalesce(i.cluster_name, '') <> ''
+      AND (i.services IS NULL OR i.services::jsonb = '[]'::jsonb
+           OR i.services::jsonb ?| array['patroni', 'etcd', 'haproxy', 'keepalived'])
+  )
+ORDER BY i.id, r.metric;
 ROLLBACK;
 ```
 
