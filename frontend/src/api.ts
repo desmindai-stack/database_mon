@@ -296,6 +296,8 @@ export type CapturedPlan = Gen["CapturedPlanOut"];
 export type CapturedPlanList = Gen["CapturedPlanListOut"];
 /** SQL Server plan regresyonu — Query Store (Faz 31 Commit 9). */
 export type PlanRegressionReport = Gen["PlanRegressionReportOut"];
+export type WaitStatsReport = Gen["WaitStatsReportOut"];
+export type WaitStatEntry = Gen["WaitStatEntryOut"];
 
 // --- Blocking hiyerarşisi (Faz 26 İŞ 3) ---
 export type BlockingNode = Gen["BlockingNodeOut"];
@@ -1333,6 +1335,12 @@ export const api = {
   /** Yakalanmış tek planın ağacı — canlı EXPLAIN ile AYNI yapıda döner. */
   getCapturedPlan: (id: number, planId: number) =>
     request<ExplainResult>(`/api/queries/${id}/captured-plans/${planId}`),
+  /** SQL Server bekleme istatistikleri (Faz 31 Commit 9): sunucu açılışından beri KÜMÜLATİF toplam ve
+   *  son okumadan bu yana FARK. Arka plan görevleri ölçülerek eleniyor; elenen sayı yanıtta. */
+  getWaitStats: (id: number, includeBackground = false, limit = 40) =>
+    request<WaitStatsReport>(
+      `/api/instances/${id}/wait-stats?include_background=${includeBackground}&limit=${limit}`,
+    ),
   /** Veritabanı yükü (AAS), bekleme kategorisine göre kırılmış (Faz 25 İŞ 2). */
   getDatabaseLoad: (id: number, hours = 1) =>
     request<DatabaseLoad>(`/api/instances/${id}/database-load?hours=${hours}`),

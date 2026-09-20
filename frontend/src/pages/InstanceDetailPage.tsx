@@ -58,6 +58,7 @@ import PredictionPlaybook from "../components/PredictionPlaybook";
 import PredictionReadinessPanel from "../components/PredictionReadinessPanel";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
 import PlanRegressionPanel from "../components/PlanRegressionPanel";
+import WaitStatsPanel from "../components/WaitStatsPanel";
 import QueryDiagnosticsPanel from "../components/QueryDiagnosticsPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
 import RecommendationHeader from "../components/RecommendationHeader";
@@ -1344,11 +1345,16 @@ export default function InstanceDetailPage() {
       )}
 
       {tab === "load" && (
-        <DatabaseLoadPanel
-          instanceId={instanceId}
-          rangeHours={range}
-          customRange={customRange}
-        />
+        <>
+          <DatabaseLoadPanel
+            instanceId={instanceId}
+            rangeHours={range}
+            customRange={customRange}
+          />
+          {/* Bekleme istatistikleri SQL Server'a özgü: PostgreSQL'de kırılım yukarıdaki AAS
+              panelinde, bekleme örnekleyicisinden geliyor (Faz 31 Commit 9). */}
+          {instance.engine === "sqlserver" && <WaitStatsPanel instanceId={instanceId} />}
+        </>
       )}
 
       {tab === "queries" && (

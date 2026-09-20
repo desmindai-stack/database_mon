@@ -53,6 +53,8 @@ from app.schemas import (
     SystemicCollectionNoticeOut,
     TuningChecklistOut,
     TuningReportOut,
+    WaitStatEntryOut,
+    WaitStatsReportOut,
 )
 from app.config import settings
 from app.services.cluster_health import collect_cluster_health, fetch_agent_logs
@@ -67,6 +69,7 @@ from app.services.advice import advice_to_dict
 from app.services.blocking import build_blocking_tree, tree_to_dict
 from app.services.blocking_history import recent_episodes
 from app.services.server_topology import topology_status
+from app.services.wait_stats import build_report as build_wait_stats_report
 from app.services.collection import connection_target_for
 from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
@@ -876,6 +879,54 @@ async def get_blocking_history(
             if out.deadlock_detail_reason:
                 out.unavailable_reason += " " + out.deadlock_detail_reason
     return out
+
+
+@router.get("/{instance_id}/wait-stats", response_model=WaitStatsReportOut)
+async def get_wait_stats(
+    instance_id: int,
+    include_background: bool = Query(default=False, description="Arka plan (kullanıcı oturumlarında hiç "
+                                                                "görülmeyen) bekleme türlerini de göster."),
+    page: Page = Depends(page_params),
+    db: AsyncSession = Depends(get_db),
+) -> WaitStatsReportOut:
+    """SQL Server bekleme istatistikleri — kümülatif toplam + son okumadan bu yana FARK (Faz 31 Commit 9).
+
+    Arka plan gürültüsü ELLE yazılmış bir listeyle değil, motorun kendi oturum kırılımıyla eleniyor; elenen
+    tür sayısı ayrıca dönüyor. Sunucu yeniden başlatıldıysa fark "hesaplanamadı" diye işaretleniyor.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+    try:
+        # SQL TOP sayfanın SONUNU kapsamalı: offset atlanacak satırları da getirtiyoruz, yoksa
+        # ikinci sayfa boş dönerdi (satırlar Python'da dilimleniyor — kaynak DMV, tablo değil).
+        report = await build_wait_stats_report(instance, limit=page.limit + page.offset,
+                                               include_background=include_background)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
+
+    def out(entry) -> WaitStatEntryOut:
+        return WaitStatEntryOut(
+            wait_type=entry.wait_type, waiting_tasks=entry.waiting_tasks, wait_ms=entry.wait_ms,
+            signal_ms=entry.signal_ms, max_wait_ms=entry.max_wait_ms, avg_wait_ms=entry.avg_wait_ms,
+            is_background=entry.is_background, user_tasks=entry.user_tasks,
+        )
+
+    return WaitStatsReportOut(
+        instance_id=instance_id,
+        server_start_time=report.server_start_time,
+        sampled_at=report.sampled_at,
+        totals=[out(e) for e in page.slice(report.totals)],
+        delta=[out(e) for e in page.slice(report.delta)],
+        delta_since=report.delta_since,
+        delta_unavailable_reason=report.delta_unavailable_reason,
+        restarted=report.restarted,
+        filtered_background=report.filtered_background,
+        background_types=report.background_types[:page.limit],
+        unavailable_kind=report.unavailable_kind,
+        unavailable_reason=report.unavailable_reason,
+        required_grant=report.required_grant,
+    )
 
 
 @router.get("/{instance_id}/database-load", response_model=DatabaseLoadOut)

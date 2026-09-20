@@ -1074,6 +1074,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/instances/{instance_id}/wait-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Wait Stats
+         * @description SQL Server bekleme istatistikleri — kümülatif toplam + son okumadan bu yana FARK (Faz 31 Commit 9).
+         *
+         *     Arka plan gürültüsü ELLE yazılmış bir listeyle değil, motorun kendi oturum kırılımıyla eleniyor; elenen
+         *     tür sayısı ayrıca dönüyor. Sunucu yeniden başlatıldıysa fark "hesaplanamadı" diye işaretleniyor.
+         */
+        get: operations["get_wait_stats_api_instances__instance_id__wait_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/maintenance-windows": {
         parameters: {
             query?: never;
@@ -6182,6 +6205,78 @@ export interface components {
             wait_event_type: string;
         };
         /**
+         * WaitStatEntryOut
+         * @description Tek bekleme türü (Faz 31 Commit 9). Değerler kümülatif ya da iki okuma arası FARK.
+         */
+        WaitStatEntryOut: {
+            /** Avg Wait Ms */
+            avg_wait_ms: number;
+            /**
+             * Is Background
+             * @default false
+             */
+            is_background: boolean;
+            /** Max Wait Ms */
+            max_wait_ms: number;
+            /** Signal Ms */
+            signal_ms: number;
+            /**
+             * User Tasks
+             * @default 0
+             */
+            user_tasks: number;
+            /** Wait Ms */
+            wait_ms: number;
+            /** Wait Type */
+            wait_type: string;
+            /** Waiting Tasks */
+            waiting_tasks: number;
+        };
+        /** WaitStatsReportOut */
+        WaitStatsReportOut: {
+            /**
+             * Background Types
+             * @default []
+             */
+            background_types: string[];
+            /**
+             * Delta
+             * @default []
+             */
+            delta: components["schemas"]["WaitStatEntryOut"][];
+            /** Delta Since */
+            delta_since?: string | null;
+            /** Delta Unavailable Reason */
+            delta_unavailable_reason?: string | null;
+            /**
+             * Filtered Background
+             * @default 0
+             */
+            filtered_background: number;
+            /** Instance Id */
+            instance_id: number;
+            /** Required Grant */
+            required_grant?: string | null;
+            /**
+             * Restarted
+             * @default false
+             */
+            restarted: boolean;
+            /** Sampled At */
+            sampled_at?: string | null;
+            /** Server Start Time */
+            server_start_time?: string | null;
+            /**
+             * Totals
+             * @default []
+             */
+            totals: components["schemas"]["WaitStatEntryOut"][];
+            /** Unavailable Kind */
+            unavailable_kind?: string | null;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+        };
+        /**
          * WizardAddNodesRequest
          * @description Same one-screen wizard, opened in "add node(s) to an existing group" mode instead of
          *     "create a new group" — engine/topology/cluster info all come from the group already, only
@@ -8588,6 +8683,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ConnectionTestResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_wait_stats_api_instances__instance_id__wait_stats_get: {
+        parameters: {
+            query?: {
+                /** @description Arka plan (kullanıcı oturumlarında hiç görülmeyen) bekleme türlerini de göster. */
+                include_background?: boolean;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WaitStatsReportOut"];
                 };
             };
             /** @description Validation Error */

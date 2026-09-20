@@ -8597,6 +8597,44 @@ planları karşılaştırılmıyor; zorlanmış plan raporlanıyor.
 **Arayüz:** Sorgular sekmesinde (yalnızca SQL Server) plan regresyonu paneli — şimdiki ve önceki plan yan yana,
 kaç kat yavaşladığı, mantıksal okuma farkı. Query Store kapalıysa boş liste değil, gerekçe ve komut.
 
+## Faz 31 — Commit 9f: SQL Server bekleme istatistikleri (dm_os_wait_stats)
+
+**Sorun:** "Sunucu yavaş" şikâyetinin ilk sorusu "ne bekliyor?" idi; dbace bunu SQL Server'da hiç
+göstermiyordu. `sys.dm_os_wait_stats` ham okunduğunda işe yaramıyor: ilk sıraları her zaman boştaki arka
+plan görevleri kapıyor (bu sunucuda ölçülen ilk 12 sıranın 12'si).
+
+**Filtre listesi ELLE YAZILMADI, ÖLÇÜLÜYOR.** İnternetteki "şu türleri yoksay" listeleri sürüme ve kuruluma
+göre eskiyor. Bunun yerine motorun kendi verisi kullanılıyor: `sys.dm_exec_session_wait_stats` +
+`sys.dm_exec_sessions.is_user_process` ile her bekleme türünün KULLANICI oturumlarına düşen payı okunuyor.
+Kullanıcı oturumlarında hiç görülmemiş tür "arka plan" sayılıyor. Elenen tür SAYISI ekranda yazıyor ve tek
+tıkla hepsi gösteriliyor — sessizce gizlenmiyor. `tests/test_wait_stats.py` kodda elle yazılmış bekleme türü
+adı olmadığını negatif kontrolle tarıyor.
+
+**Kümülatif sayaç ve sıfırlanma:** değerler sunucu açılışından beri birikiyor, anlamlı olan İKİ OKUMA ARASI
+FARK. Ekranda ikisi AYRI: "son okumadan bu yana" (şu an ne bekliyoruz) ve "açılıştan beri" (eğilim). Sunucu
+yeniden başlarsa sayaç sıfırlanıyor; bu `sys.dm_os_sys_info.sqlserver_start_time` değişiminden anlaşılıyor ve
+fark "hesaplanamadı — sayaç sıfırlandı" diye işaretleniyor. Eksi ya da uydurma fark üretilmiyor. Tek tür için
+sayaç geri gitmişse (kısmi sıfırlama) o tür farktan düşüyor.
+
+### Gerçek SQL Server'da ölçüldü (`tests/test_wait_stats_live_mssql.py`, salt-okunur `dbace_monitor`)
+
+| Ölçüm | Sonuç |
+|---|---|
+| Ölçülen filtre | **38 arka plan türü** elendi (SOS_WORK_DISPATCHER, LOGMGR_QUEUE, SLEEP_TASK, DIRTY_PAGE_POLL…); görünen her satırın `user_tasks > 0` |
+| Gerçek kullanıcı beklemesi | İki oturumla üretilen kilit beklemesi **LCK_M_S 2 950 ms** — filtreden geçti, farkta ilk sırada |
+| Yeniden başlatma | Konteyner gerçekten yeniden başlatıldı (açılış 06:59 → 13:33, 8,6 s'de hazır); sayaç sıfırlandı (MEMORY_ALLOCATION_EXT 1 486 ms → 426 ms), fark üretilmedi, gerekçe yazıldı |
+| Sonraki okuma | Yeni taban üzerinden fark normale döndü (`restarted=False`) |
+
+**Negatif kontroller:** filtresiz okumada ilk sırayı arka plan görevinin kaptığı (filtrenin sebebi) test
+ediliyor; sayaç geri gidince eksi fark üretilmediği; yetkisiz login'de boş ekran değil `GRANT VIEW SERVER
+STATE TO [login];` komutu; PostgreSQL veritabanında "bu SQL Server'a özgü" gerekçesi.
+
+**Arayüz:** Veritabanı yükü sekmesinde (yalnızca SQL Server) bekleme istatistikleri paneli. Fark ve kümülatif
+ayrı tablolar; elenen arka plan sayısı ve "arka planı da göster" düğmesi başlıkta.
+
+**Şema değişikliği yok** — bekleme sayaçları canlı okunuyor, meta veritabanına yazılmıyor (egress dersi:
+gereksiz veri saklamıyoruz). Fark için gereken taban okuma süreç içi bellekte tutuluyor; sınırı SORULAR.md'de.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

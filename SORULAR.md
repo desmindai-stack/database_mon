@@ -2706,3 +2706,19 @@ rollup, günlük şema fotoğrafı) günde bir değişiyor.
 
 **Satır sınırı (10.000) aşılırsa hata.** Sessiz kırpma yerine hata bilinçli: kırpılmış bir liste "sorun yok"
 gibi görünür. Bilinçli büyük okuma `execution_options(dbace_max_rows=...)` ile ve gerekçesiyle yapılır.
+
+**Bekleme farkının tabanı süreç içi bellekte (Commit 9f).** `sys.dm_os_wait_stats` kümülatif; fark için bir
+önceki okuma gerekiyor ve bu taban meta veritabanına YAZILMIYOR (egress dersi: sürekli büyüyen bir tabloyu
+beslememek için). Sonucu: (1) dbace yeniden başlatıldığında ilk okuma "fark hesaplanamadı — ilk okuma" diyor,
+ikinci okumadan sonra normale dönüyor; (2) birden fazla süreçle (web + worker, ya da çok işçili sunucu)
+çalışıldığında her sürecin kendi tabanı oluyor, yani fark "o sürecin son okumasından bu yana" demek.
+Kullanıcıya gösterilen "karşılaştırma anı" bu yüzden ekranda yazıyor — yanlış bir zaman aralığı varsayılmasın.
+**Açık iş:** bekleme farkı zaman serisi olarak istenirse (grafik, alarm, rapor), taban okuma örnek olarak
+saklanmalı; o zaman saklama penceresi ve satır maliyeti ayrıca kararlaştırılmalı.
+
+**Kullanıcı beklemesi ayrımı AÇIK oturumlara dayanıyor (Commit 9f).** Bir bekleme türünün "arka plan" sayılması,
+`sys.dm_exec_session_wait_stats`'te o an AÇIK kullanıcı oturumlarında hiç görülmemesine bakıyor; SQL Server bu
+görünümde kapanan oturumun beklemesini tutmuyor. Yani gündüz yaşanmış ama oturumları çoktan kapanmış bir bekleme
+türü, boş bir sunucuda arka plan sayılabilir. Bu yüzden filtre GİZLEMİYOR: elenen sayı yazıyor ve "arka planı da
+göster" tek tık. Daha kesin ayrım için beklemelerin oturum bazında örneklenmesi (Extended Events / düzenli
+anlık görüntü) gerekir — bugünkü toplama yükünü artıracağı için yapılmadı.

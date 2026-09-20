@@ -1598,6 +1598,37 @@ class PlanRegressionOut(BaseModel):
     baseline: QueryStorePlanOut
 
 
+class WaitStatEntryOut(BaseModel):
+    """Tek bekleme türü (Faz 31 Commit 9). Değerler kümülatif ya da iki okuma arası FARK."""
+
+    wait_type: str
+    waiting_tasks: int
+    wait_ms: float
+    signal_ms: float
+    max_wait_ms: float
+    avg_wait_ms: float
+    # Kullanıcı oturumlarında hiç görülmedi mi (ölçülen — elle liste değil).
+    is_background: bool = False
+    user_tasks: int = 0
+
+
+class WaitStatsReportOut(BaseModel):
+    instance_id: int
+    server_start_time: datetime | None = None
+    sampled_at: datetime | None = None
+    totals: list[WaitStatEntryOut] = []
+    delta: list[WaitStatEntryOut] = []
+    delta_since: datetime | None = None
+    delta_unavailable_reason: str | None = None
+    restarted: bool = False
+    # Kullanıcı oturumlarında görülmediği için elenen tür sayısı — gizlenmiyor, sayılıyor.
+    filtered_background: int = Field(default=0, json_schema_extra={"counted_from": 'hidden: arka plan bekleme türü'})
+    background_types: list[str] = []
+    unavailable_kind: str | None = None
+    unavailable_reason: str | None = None
+    required_grant: str | None = None
+
+
 class PlanRegressionReportOut(BaseModel):
     """SQL Server plan regresyonu — Query Store okunamıyorsa NEDEN okunamadığı (Faz 31 Commit 9)."""
 
