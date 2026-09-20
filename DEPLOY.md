@@ -581,6 +581,15 @@ için gerektiği satır sonu yorumlarında ve `deploy/onprem/sql/permission-matr
 
 ## Faz 31 Commit 9a — egress düzeltmesinin canlıya alınması
 
+### On-prem yükseltme: elle migration YOK (Faz 31 Commit 9c)
+
+`deploy/onprem/scripts/install-offline.sh` kurulumun da yükseltmenin de tek komutu. `dbace-app` açılışta
+uygulanmamış migration'ları ad sırasıyla uyguluyor (`dbace_meta.applied_migrations`), yani yükseltmede elle SQL
+çalıştırmanız gerekmiyor. Ölçüldü (gerçek konteynerde, ağı kapalı): Faz 30 paketiyle kurulmuş ve veri içeren bir
+kurulum → bugünün paketi: **54/54 migration uygulandı, 59 kolon eklendi, satır kaybı 0, şema farkı 0**, eski
+kullanıcı giriş yapabiliyor, şifreli kimlik bilgileri çözülüyor, toplama kaldığı yerden sürüyor. Değişen tek şey
+#48'in bilerek arındırdığı sorgu metinleri. Ayrıntı: `deploy/onprem/README.md`.
+
 1. **Migration #53** (`20260918090000_slow_query_sample_identity.sql`) — `query_hash` dolu olmadan yavaş sorgu
    seçimi eski satırları gruplayamaz (uygulama bunu metin başına bir kez okuyup toplu UPDATE ile tamamlıyor, ama
    asıl doldurma migration'da). 393 bin satırlık tabloda UPDATE tabloyu bir kez yeniden yazar: **bakım

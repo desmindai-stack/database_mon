@@ -352,6 +352,11 @@ def test_upgrade_from_old_package_keeps_every_row_and_schema_matches(dind_image,
         old_schema = live_schema(name)
         before = row_snapshot(name, old_schema)
 
+        # YÜKSELTME: tek komut. Arada elle SQL, elle migration, elle veri taşıma YOK — yeni paketin
+        # `install-offline.sh`'i imajları derliyor, konteynerleri değiştiriyor ve dbace-app açılışta eksik
+        # migration'ları kendisi uyguluyor. (Yukarıdaki elle migration ESKİ kurulumun kendi geçmişi: Faz 30
+        # paketi yeni kurulumda şemayı eksik bırakıyordu, DBA elle tamamlıyordu.)
+        upgrade_steps = ["./scripts/install-offline.sh"]
         upgraded = install_new_package(name)
         migrations = int(psql(name, "SELECT count(*) FROM dbace_meta.applied_migrations"))
         after = row_snapshot(name, old_schema)
@@ -379,6 +384,7 @@ def test_upgrade_from_old_package_keeps_every_row_and_schema_matches(dind_image,
     log("eski kurulum", {"sürüm": old_package, "kayıt tablosu yoktu": old_migrations, "tablo": len(old_schema),
                          "satır": rows_before})
     log("yükseltme", upgraded.strip().splitlines()[-2:])
+    log("yükseltme adımları (elle müdahale)", upgrade_steps)
     log("sonuç", {"uygulanan migration": migrations, "eklenen kolon": added_columns, "kayıp satır": lost or 0,
                   "şema farkı": diff or 0, "değişen satır": {t: len(v) for t, v in changed.items()} or 0})
     for table, rows in changed.items():
@@ -391,6 +397,7 @@ def test_upgrade_from_old_package_keeps_every_row_and_schema_matches(dind_image,
     assert old_migrations == "t", "eski paket migration kaydı tutmuyordu — yükseltme kayıtsız kurulumdan başlamalı"
     assert "does not exist" in broken, "eski paketin eksik şeması gerçek kurulumda görünmeliydi"
     assert sum(rows_before.values()) > 20 and rows_before.get("metric_samples", 0) >= 3
+    assert upgrade_steps == ["./scripts/install-offline.sh"], "yükseltme tek komut olmalı"
     assert migrations == len(MIGRATIONS)
     assert lost == {}, "yükseltmede satır kaybolmamalı"
     # Değişen satır YALNIZCA gerçek değer temizliği migration'ından olabilir (#48, bilerek): saklanmış sorgu

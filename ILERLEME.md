@@ -8515,6 +8515,27 @@ SQLite'ta ve muafiyet değişkeniyle serbest; geliştirme sırrıyla imzalanmı�
 access jetonu 401, eski refresh jetonu 401, yeni jeton 200; yönetici şifre sıfırlaması sonrası kullanıcının eski
 jetonu 401. DSN'siz paket: 1886 test yeşil.
 
+## Faz 31 — Commit 9c: eski paketten yükseltme, elle müdahale olmadan
+
+**Migration:** yok (yükseltmenin kendisi #53 ve #54'ü de uyguluyor).
+
+Commit 8'de migration çalıştırıcısı eklenmişti; bu iş onu YENİ migration'larla ve güncel paketle yeniden
+ölçüyor ve yükseltmeyi belgeliyor. Ölçüm ağı KAPALI `docker:dind` içinde, gerçek paketle:
+
+| Adım | Sonuç |
+|---|---|
+| Yeni kurulum (sıfırdan) | 54/54 migration, şema modellerle fark 0, üç konteyner sağlıklı, kısıtlı rolle toplama turu veri üretti |
+| Faz 30 paketi → bugün | **Tek komut** (`./scripts/install-offline.sh`) — elle SQL/migration yok. 54/54 migration, **59 kolon eklendi**, **satır kaybı 0**, şema farkı 0, eski kullanıcı giriş yapabiliyor, şifreli kimlik bilgisi çözülüyor, toplama sürüyor |
+| Değişen içerik | Yalnızca #48'in bilerek arındırdığı iki sorgu metni (parola taşıyan ifade ve sabit değer) |
+| Negatif kontrol | Bir satır silinince kayıp görülüyor, bir kolon düşürülünce şema farkı görülüyor |
+
+Testte eski kuruluma elle migration uygulanması ESKİ paketin kendi geçmişi (Faz 30 yeni kurulumda şemayı eksik
+bırakıyordu; o sürümün belgeleri DBA'nın elle uygulamasını istiyordu). Yükseltmenin kendisi tek komut ve test
+bunu ayrıca doğruluyor (`upgrade_steps`).
+
+**Belgeler:** `deploy/onprem/README.md` (yeni — kurulum/yükseltme kısa yolu, zorunlu sırlar, yedek komutu) ve
+DEPLOY.md'ye "On-prem yükseltme: elle migration YOK" bölümü.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
