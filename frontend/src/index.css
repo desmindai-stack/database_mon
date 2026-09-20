@@ -2628,6 +2628,20 @@ td code,
   letter-spacing: 0.04em;
 }
 
+/* Faz 31 Commit 9: harf notu ile durum etiketi AYNI satırda, aralarında görünür ayırıcı ("Not: A · Sağlıklı").
+   Eskiden ikisi ayrı satır elemanıydı ve aradaki boşluk yalnızca kapsayan kutunun CSS'ine bağlıydı —
+   metin olarak kopyalandığında/okunduğunda "Not: Ahealthy" diye birleşiyordu. */
+.tuning-grade {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.tuning-grade-separator {
+  color: var(--muted);
+}
+
 .tuning-status.healthy { background: rgba(34, 197, 94, 0.15); color: var(--success); }
 .tuning-status.warning { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
 .tuning-status.critical { background: rgba(239, 68, 68, 0.15); color: var(--danger); }

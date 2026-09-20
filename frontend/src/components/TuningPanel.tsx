@@ -1,5 +1,6 @@
 import type { TuningReport } from "../api";
 import { formatTime } from "../api";
+import { statusLabel } from "../terminology";
 
 const CATEGORY_LABELS: Record<string, string> = {
   memory: "Bellek / Cache",
@@ -61,8 +62,10 @@ export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, advic
             <span className="tuning-score-label">Sağlık</span>
           </div>
           <div className="tuning-score-meta">
-            <strong>Not: {report.grade}</strong>
-            <span className={`tuning-status ${report.status}`}>{report.status}</span>
+            <strong className="tuning-grade">
+              Not: {report.grade} <span className="tuning-grade-separator">·</span>{" "}
+              <span className={`tuning-status ${report.status}`}>{statusLabel(report.status)}</span>
+            </strong>
             <p>
               {report.collected_at
                 ? `Son metrik: ${formatTime(report.collected_at)}`
@@ -104,7 +107,7 @@ export default function TuningPanel({ report, onOpenTab, onRunIndexAdvice, advic
         <div className="tuning-checklist">
           {report.checklist.map((item) => (
             <div key={item.key} className={`checklist-row ${item.status}`}>
-              <span className="checklist-status">{item.status}</span>
+              <span className="checklist-status">{statusLabel(item.status)}</span>
               <div>
                 <strong>{item.label}</strong>
                 <p>{item.detail}</p>

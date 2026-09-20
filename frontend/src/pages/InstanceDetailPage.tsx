@@ -1,4 +1,5 @@
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from "react";
+import { statusLabel } from "../terminology";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   Area,
@@ -804,7 +805,7 @@ export default function InstanceDetailPage() {
         <div>
           <div className="detail-title-row">
             <h2>{instance.name}</h2>
-            <span className={`status ${status}`}>{status}</span>
+            <span className={`status ${status}`}>{statusLabel(status)}</span>
           </div>
           <p className="detail-subtitle">
             {instance.group_id ? (

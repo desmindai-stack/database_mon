@@ -8536,6 +8536,35 @@ bunu ayrıca doğruluyor (`upgrade_steps`).
 **Belgeler:** `deploy/onprem/README.md` (yeni — kurulum/yükseltme kısa yolu, zorunlu sırlar, yedek komutu) ve
 DEPLOY.md'ye "On-prem yükseltme: elle migration YOK" bölümü.
 
+## Faz 31 — Commit 9d: sağlık kartında "Not: Ahealthy"
+
+**Migration:** yok.
+
+**Yeniden üretme (gerçek tarayıcı):** `frontend/e2e/tuning-health-card.spec.ts` kartın metnini okuyor.
+Düzeltme öncesi: `"Not: B HEALTHY Henüz metrik toplanmadı"` — iki kusur birden:
+
+1. **Ayırıcı yoktu.** Harf notu `<strong>`, durum `<span>`; aralarında metin yoktu, boşluk YALNIZCA kapsayan
+   kutunun CSS'inden geliyordu. Metin olarak kopyalandığında/okunduğunda "Not: Ahealthy" diye birleşiyor.
+2. **Durum etiketi İngilizceydi** (`healthy`) — arayüz metinleri Türkçe olmalı.
+
+**Düzeltme:** kart artık `Not: B · Sağlıklı` — ayırıcı metnin KENDİSİNDE (`·`), etiket `terminology.ts`'deki
+tek kaynaktan (`statusLabel`). Aynı kaynak DashboardPage'deki kopya sözlüğü de besliyor. Ek olarak:
+`<html lang="en">` → `lang="tr"` (Türkçe büyük harf dönüşümü ve ekran okuyucu için), DPA başlığındaki instance
+durumu ve Tuning kontrol listesi durumları da Türkçe etikete bağlandı.
+
+**Benzer hataların taranması (`tests/test_ui_text_composition.py`, elle dosya listesi yok):**
+
+- *Bitişik satır elemanı:* JSX'te iki satır elemanı arada ayırıcı olmadan yan yanaysa ve kapsayan kutunun CSS'i
+  (gerçek `index.css`'ten okunuyor: grid, flex+gap, flex+dikey, space-between — alt eleman kuralları dahil)
+  ayırmıyorsa hata. Tarama 140 ham eşleşmeden CSS'i bilerek 0'a indi; kalan tek gerçek vaka düzeltildi.
+- *Ham durum değeri:* uygulamanın kendi `status` alanı doğrudan basılıyorsa hata (etiket sözlüğünden geçmeli).
+  İki gerçek vaka bulundu (DPA başlığı, Tuning kontrol listesi) ve düzeltildi. Veritabanının kendi terimleri
+  (`pg_stat_activity.state` gibi DBA'nın bildiği değerler) kapsam dışı.
+- Negatif kontrol: bildirilen hatanın TAM HÂLİ (eski JSX) iki tarayıcıya da veriliyor, ikisi de yakalıyor.
+
+**Not:** CSS boşluk ölçeği testi (`test_visual_consistency.py`) ölçek dışı `gap: 0.35rem` değerini yakaladı;
+0.5rem'e çekildi — var olan denetimin işe yaradığının kanıtı.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

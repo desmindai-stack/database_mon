@@ -17,14 +17,15 @@ import { useUrlFilter } from "../hooks/useUrlState";
 import AdviceCard from "../components/AdviceCard";
 import CopyableAction from "../components/CopyableAction";
 import RecommendationHeader from "../components/RecommendationHeader";
-import { ADD_ACTIONS } from "../terminology";
+import { ADD_ACTIONS, statusLabel } from "../terminology";
 import CollapsibleSection, { SectionsProvider, type SectionStatus } from "../components/CollapsibleSection";
 
+// Etiketler TEK kaynaktan (terminology.ts) — aynı durumun iki ekranda farklı yazılması güven kaybı.
 const STATUS_LABELS_TR: Record<GroupOverallStatus, string> = {
-  critical: "Kritik",
-  warning: "Uyarı",
-  healthy: "Sağlıklı",
-  unknown: "Bilinmiyor",
+  critical: statusLabel("critical"),
+  warning: statusLabel("warning"),
+  healthy: statusLabel("healthy"),
+  unknown: statusLabel("unknown"),
 };
 
 interface ProblemCard {

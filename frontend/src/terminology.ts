@@ -24,6 +24,26 @@
 
 /** Tekil ve çoğul biçimler. Metinleri elle yazmak yerine buradan almak, bir sonraki
  *  tutarsızlığı baştan engelliyor. */
+/**
+ * Durum etiketleri (Faz 31 Commit 9): ham İngilizce durum değeri ("healthy") ekranda GÖRÜNMEZ.
+ * Tuning sağlık kartında "Not: A" ile "healthy" yan yana gelip "Not: Ahealthy" diye okunuyordu.
+ */
+export const STATUS_LABELS: Record<string, string> = {
+  healthy: "Sağlıklı",
+  ok: "Sağlıklı",
+  warn: "Uyarı",
+  warning: "Uyarı",
+  critical: "Kritik",
+  alerting: "Alarm",
+  pending: "Veri bekleniyor",
+  disabled: "Kapalı",
+  unknown: "Bilinmiyor",
+};
+
+export function statusLabel(status: string | null | undefined): string {
+  return STATUS_LABELS[String(status ?? "unknown")] ?? String(status ?? "");
+}
+
 export const TERMS = {
   database: {
     singular: "Veritabanı",
