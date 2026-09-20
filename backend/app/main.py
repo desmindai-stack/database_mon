@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 
 from app.collectors.scheduler import start_scheduler, stop_scheduler_async
 from app.logging_setup import configure_logging
+from app.services.secret_policy import enforce_secret_policy
 from app.config import settings
 from app.database import SessionLocal, init_db
 from app.models import MetricSample, User
@@ -40,6 +41,8 @@ async def lifespan(_: FastAPI):
     # API ve worker AYNI log yapılandırmasını kullanıyor: ikisinin farklı davranması,
     # "worker'da görünen hata API'de görünmüyor" gibi bir teşhis kaybı demekti.
     configure_logging()
+    # Faz 31 Commit 9: üretimde geliştirme varsayılanıyla açılmak yasak — uyarı değil, HATA.
+    enforce_secret_policy()
     await init_db()
     await ensure_default_admin()
     await ensure_default_customer()

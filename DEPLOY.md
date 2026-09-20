@@ -111,6 +111,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 51 | `20260917090100_index_advice_outcomes.sql` | **YENİ** — index_advice_outcomes: index önerisinin ölçülmüş etkisi (index kurulmadan önce ve sonra aynı sorgunun planlayıcı maliyeti). CONCURRENTLY YOK |
 | 52 | `20260917090200_instance_topology.sql` | **YENİ** — instances: ölçülen topoloji (tek sunucu / cluster sağlıklı-bozuk / ölçülemedi, rol, üyeler, gerekçe, gereken yetki, son cluster gözlemi). CONCURRENTLY YOK |
 | 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor: 393 bin satırlık tabloda tabloyu bir kez yeniden yazar — bakım penceresinde çalıştırın. Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor. CONCURRENTLY YOK |
+| 54 | `20260918090100_user_password_changed_at.sql` | **YENİ** — users: şifrenin en son değiştiği an. Şifre değişince (ve yönetici sıfırlamasında) o andan ÖNCE üretilmiş access/refresh jetonları reddediliyor; eskiden access 60 dk, refresh 7 gün daha geçerliydi. CONCURRENTLY YOK |
 
 ## Faz 31: migration adları ve geriye dönük temizlik
 
@@ -590,3 +591,25 @@ için gerektiği satır sonu yorumlarında ve `deploy/onprem/sql/permission-matr
 3. Worker'ı **migration'dan sonra** açın (worker açılışta sınıflandırma işini çalıştırıyor).
 4. Egress'i izleyin: Supabase → Reports → Egress. Beklenen: toplama turu ve ekran yenilemeleri büyüklük
    mertebesinde düşer (ölçüm: ILERLEME.md Faz 31 Commit 9a tablosu).
+
+## Faz 31 Commit 9 — sır yönetimi: ÜRETİMDE ZORUNLU ORTAM DEĞİŞKENLERİ (madde 1)
+
+**Dağıtımdan önce okuyun: bu sürüm eksik sırla AÇILMAZ.** Meta veritabanı PostgreSQL olan her kurulumda
+(Supabase/Railway, on-prem) aşağıdakiler tanımlı değilse ya da koddaki geliştirme varsayılanına eşitse
+uygulama açılışta `RuntimeError` verip durur (API ve worker):
+
+| Değişken | Neden zorunlu |
+|---|---|
+| `JWT_SECRET` | Verilmezse jetonlar kodda YAZILI geliştirme sırrıyla imzalanıyordu — kaynağa erişen herkes geçerli oturum jetonu üretebilir. `openssl rand -hex 32` |
+| `CREDENTIALS_MASTER_KEY` | Verilmezse izlenen veritabanı şifreleri ŞİFRELENMEDEN saklanıyor. Değişirse kayıtlı şifreler okunamaz — yedekleyin |
+| `ADMIN_PASSWORD` | Verilmezse rastgele üretilip log'a yazılıyordu; canlıda eski bir değerde kalmıştı |
+
+Yerel geliştirme (SQLite) etkilenmez. Yerelde PostgreSQL ile çalışırken bilerek atlamak için
+`DBACE_ALLOW_INSECURE_SECRETS=1`.
+
+**Railway/Supabase için sıra:** önce değişkenleri tanımlayın, sonra dağıtın. Eksikse konteyner başlamaz ve
+log'da hangi değişkenin eksik olduğu tek tek yazar.
+
+**Şifre değişiminin etkisi (ölçüldü):** artık şifre değişimi ve yönetici sıfırlaması o kullanıcının açık
+oturumlarını düşürüyor (jetonun `iat` değeri `users.password_changed_at`'ten eskiyse 401). Kullanıcılar
+yeniden giriş yapar; bu beklenen davranış.

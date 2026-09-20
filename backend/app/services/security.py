@@ -57,6 +57,24 @@ def create_refresh_token(user_id: int, role: str) -> str:
     return _create_token(user_id, role, "refresh", timedelta(days=settings.refresh_token_expire_days))
 
 
+def token_is_stale(payload: dict[str, Any], password_changed_at) -> bool:
+    """Jeton, şifrenin değiştirildiği andan ÖNCE mi üretildi (Faz 31 Commit 9)?
+
+    JWT durumsuz: şifre değişince eski jetonlar kendiliğinden düşmüyordu — access 60 dakika, refresh 7 gün
+    daha geçerliydi. `iat` ile şifre değişim anı karşılaştırılıyor; hiç şifre değiştirmemiş kullanıcıda
+    (NULL) kontrol yok.
+    """
+    if password_changed_at is None:
+        return False
+    issued_at = payload.get("iat")
+    if issued_at is None:
+        return True
+    changed = password_changed_at if password_changed_at.tzinfo else password_changed_at.replace(tzinfo=timezone.utc)
+    # Tolerans YOK: `iat` saniyeye yuvarlanıyor, şifre değişimi aynı saniyede olsa bile jeton düşsün
+    # (şüpheli durumda kapalı taraf: bir kullanıcıya yeniden giriş yaptırmak, çalınmış jetonu yaşatmaktan iyi).
+    return float(issued_at) < changed.timestamp()
+
+
 def decode_token(token: str) -> dict[str, Any]:
     """Raises jwt.PyJWTError (expired/invalid/malformed) — callers turn that into a 401."""
     return jwt.decode(token, _jwt_secret(), algorithms=[_ALGORITHM])

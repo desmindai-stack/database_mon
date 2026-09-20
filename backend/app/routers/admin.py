@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -118,6 +119,8 @@ async def reset_password(user_id: int, db: AsyncSession = Depends(get_db)) -> Ad
     temp_password = secrets.token_urlsafe(9)
     user.password_hash = hash_password(temp_password)
     user.must_change_password = True
+    # Faz 31 Commit 9: yönetici şifreyi sıfırladıysa kullanıcının açık oturumları da düşmeli.
+    user.password_changed_at = datetime.now(UTC).replace(microsecond=0)
     await db.commit()
     return AdminPasswordResetOut(temporary_password=temp_password)
 

@@ -8,6 +8,7 @@ import signal
 
 from app.collectors.scheduler import start_scheduler, stop_scheduler_async
 from app.logging_setup import configure_logging
+from app.services.secret_policy import enforce_secret_policy
 from app.config import settings
 from app.database import init_db
 
@@ -19,6 +20,9 @@ logger = logging.getLogger("dbace.worker")
 async def _run() -> None:
     if settings.run_mode not in ("worker", "all"):
         logger.warning("RUN_MODE=%s; worker process expects worker or all", settings.run_mode)
+    # API ile AYNI kural: worker da geliştirme sırrıyla açılmıyor (jetonu o üretmiyor ama izlenen
+    # veritabanlarının şifrelerini CREDENTIALS_MASTER_KEY ile çözüyor).
+    enforce_secret_policy()
     await init_db()
     await start_scheduler()
     logger.info("dbace worker running (interval=%ss)", settings.collect_interval_seconds)

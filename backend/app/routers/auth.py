@@ -18,7 +18,14 @@ from app.schemas import (
     UserOut,
 )
 from app.services.auth_deps import get_current_user
-from app.services.security import create_access_token, create_refresh_token, decode_token, hash_password, verify_password
+from app.services.security import (
+    create_access_token,
+    create_refresh_token,
+    decode_token,
+    hash_password,
+    token_is_stale,
+    verify_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -58,6 +65,9 @@ async def refresh(payload: RefreshRequest, db: AsyncSession = Depends(get_db)) -
     user = await db.get(User, int(decoded["sub"]))
     if user is None or not user.is_active:
         raise invalid
+    # Faz 31 Commit 9: şifre değiştiyse ESKİ refresh jetonu da geçersiz (7 gün boyunca geçerli kalıyordu).
+    if token_is_stale(decoded, user.password_changed_at):
+        raise invalid
     return AccessTokenOut(access_token=create_access_token(user.id, user.role))
 
 
@@ -82,6 +92,10 @@ async def change_password(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Mevcut şifre hatalı")
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
+    # Faz 31 Commit 9: bu andan öncesine ait jetonlar (başka tarayıcı, çalınmış jeton) artık geçersiz.
+    # Saniyeye yuvarlanıyor: jetonun `iat` değeri de saniye hassasiyetinde — aynı saniyede üretilen YENİ
+    # jeton (kullanıcı hemen tekrar giriyor) haksız yere düşmesin.
+    user.password_changed_at = datetime.now(timezone.utc).replace(microsecond=0)
     await db.commit()
     await db.refresh(user)
     return UserOut.model_validate(user)

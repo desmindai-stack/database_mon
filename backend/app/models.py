@@ -34,6 +34,8 @@ class User(Base):
     # Forced on the initial admin bootstrap (and after an admin resets a user's password) —
     # cleared once the user successfully calls POST /api/auth/change-password.
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Faz 31 Commit 9: şifre en son ne zaman değişti — bu andan ÖNCE üretilmiş jetonlar reddediliyor.
+    password_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

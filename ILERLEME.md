@@ -8475,6 +8475,46 @@ Günlük tahmin (canlı sıklıklarla, tek instance, bir ekran açık): toplama 
   çağrısı 0.
 - Korumalar ve negatif kontrolleri (yukarıda), 1875 test yeşil.
 
+## Faz 31 — Commit 9b: sır yönetimi (üretimde geliştirme varsayılanı yasak)
+
+**Migration:** `supabase/migrations/20260918090100_user_password_changed_at.sql` (#54) — users.password_changed_at.
+DEPLOY.md satırı ve "üretimde zorunlu ortam değişkenleri" bölümü eklendi.
+
+**Belirti:** `JWT_SECRET` verilmediğinde jetonlar kodda YAZILI geliştirme sırrıyla imzalanıyordu (kaynağa
+erişen herkes geçerli jeton üretebilir), `CREDENTIALS_MASTER_KEY` verilmediğinde izlenen veritabanı şifreleri
+şifrelenmeden saklanıyordu, `ADMIN_PASSWORD` verilmediğinde rastgele üretilip log'a yazılıyordu — canlıda eski
+bir ADMIN_PASSWORD kalmıştı. Üçü de yalnızca UYARI logluyordu.
+
+### Settings'teki sır alanları (koddan tarandı)
+
+| Alan | Varsayılan | Üretimde zorunlu? | Kullanan |
+|---|---|---|---|
+| `JWT_SECRET` | `dev-insecure-secret-change-me-in-production` | **evet** | services/security.py |
+| `CREDENTIALS_MASTER_KEY` | yok (None) | **evet** | services/credentials.py |
+| `ADMIN_PASSWORD` | yok (None) | **evet** | services/bootstrap.py |
+| `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | yok (None) | hayır | hiçbir yer okumuyor |
+
+Zorunluluk ELLE yazılmıyor: `services/secret_policy.py` güvenlik modüllerinin (`security.py`, `credentials.py`,
+`bootstrap.py`) `settings.<alan>` olarak OKUDUĞU sır alanlarını AST ile buluyor. Yeni bir sır eklenip bu
+modüllerden okunursa kural kendiliğinden kapsar. Adında "token" geçen süre ayarları (int) sır sayılmıyor.
+
+### Davranış
+
+- **Üretim modu** = meta veritabanı PostgreSQL (Supabase/Railway/on-prem). Açılışta (API ve worker) eksik ya da
+  varsayılana eşit sır varsa `RuntimeError` — uygulama BAŞLAMIYOR, hangi değişkenin eksik olduğu tek tek yazılı.
+- Yerel geliştirme (SQLite) etkilenmiyor; yerelde PostgreSQL ile çalışan `DBACE_ALLOW_INSECURE_SECRETS=1`.
+- **Şifre değişimi artık oturumları düşürüyor.** Ölçüldü: JWT durumsuz olduğu için şifre değiştikten sonra eski
+  access jetonu 60 dakika, refresh jetonu 7 gün daha çalışıyordu. Artık jetonun `iat` değeri
+  `users.password_changed_at`'ten eskiyse 401 — hem `/auth/me` gibi uçlarda hem `/auth/refresh`'te. Damga
+  saniyeye yuvarlanıyor: aynı saniyede alınan YENİ jeton geçerli kalıyor (kullanıcı hemen tekrar giriyor).
+
+### Testler (`tests/test_secret_policy.py`, 10 test)
+
+Sır alanlarının koddan bulunması; üretimde varsayılan/eksik sırla açılış KIRMIZI, tanımlıyken yeşil (5 bileşim);
+SQLite'ta ve muafiyet değişkeniyle serbest; geliştirme sırrıyla imzalanmış jeton 401; şifre değişimi sonrası eski
+access jetonu 401, eski refresh jetonu 401, yeni jeton 200; yönetici şifre sıfırlaması sonrası kullanıcının eski
+jetonu 401. DSN'siz paket: 1886 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

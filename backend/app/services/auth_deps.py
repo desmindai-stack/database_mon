@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.domain.topology import UserRole
 from app.models import User
-from app.services.security import decode_token
+from app.services.security import decode_token, token_is_stale
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -34,6 +34,9 @@ async def get_current_user(
         raise unauthorized
     user = await db.get(User, int(payload["sub"]))
     if user is None or not user.is_active:
+        raise unauthorized
+    # Faz 31 Commit 9: şifre değiştikten SONRA, eski şifreyle alınmış jeton kabul edilmiyor.
+    if token_is_stale(payload, user.password_changed_at):
         raise unauthorized
     return user
 
