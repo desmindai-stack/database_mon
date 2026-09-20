@@ -962,6 +962,24 @@ class SqlServerCollector(BaseCollector):
             },
         }
 
+    async def run_readonly(self, sql: str, conn: Any | None = None) -> list[dict[str, Any]]:
+        """Salt-okunur tek sorgu — sonuç sözlük listesi (Faz 31 Commit 9).
+
+        Query Store ve bekleme istatistikleri gibi "yalnızca oku, yorumu serviste yap" yolları için. Yazma
+        ifadesi göndermiyor; hedefe giden her sorgu gibi dbace imzasını taşıyor (query_marker).
+        """
+        owns_conn = conn is None
+        if owns_conn:
+            conn = await self._connect()
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(sql)
+                columns = [c[0] for c in cur.description]
+                return [dict(zip(columns, row)) for row in await cur.fetchall()]
+        finally:
+            if owns_conn:
+                await conn.close()
+
     async def collect_deadlocks(self, limit: int = 20) -> list[dict[str, Any]]:
         """system_health halka tamponundaki deadlock raporları (Faz 26 İŞ 3).
 

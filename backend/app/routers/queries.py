@@ -31,6 +31,9 @@ from app.schemas import (
     QueryHistoryListOut,
     QueryHistorySeriesOut,
     SlowQueryAvailabilityOut,
+    PlanRegressionOut,
+    PlanRegressionReportOut,
+    QueryStorePlanOut,
     SlowQueryListOut,
     SlowQueryOut,
 )
@@ -53,6 +56,7 @@ from app.services.plan_source import KIND_SAMPLE, captured_unavailable, resolve_
 from app.services.database_load import wait_profiles_by_query
 from app.services.query_diagnostics import diagnose_queries
 from app.services.query_history import build_query_series, group_rows_by_queryid, summarize_history
+from app.services.query_store import build_report as build_query_store_report
 from app.services.slow_query_selection import MARKER_CONFLICT_NOTE, default_slow_query_selection
 from app.services.slow_query_status import get_slow_query_availability
 
@@ -735,6 +739,49 @@ async def advise_indexes_batch(
             )
             statuses.append("failed")
     return IndexAdviceBatchOut(summary=IndexAdviceBatchSummaryOut(**summarize(statuses)), items=items)
+
+
+@router.get("/{instance_id}/plan-regressions", response_model=PlanRegressionReportOut)
+async def get_plan_regressions(
+    instance_id: int,
+    hours: int = Query(default=168, ge=1, le=720),
+    page: Page = Depends(page_params),
+    db: AsyncSession = Depends(get_db),
+) -> PlanRegressionReportOut:
+    """SQL Server plan regresyonu: aynı sorgunun ESKİ planına göre yavaşlayan YENİ planı (Faz 31 Commit 9).
+
+    Salt-okunur: `sys.query_store_*` görünümleri VIEW DATABASE STATE ile okunuyor. Query Store kapalıysa,
+    sürüm desteklemiyorsa ya da yetki yetmiyorsa sonuç "ölçülemedi" + gerekçe + gereken ayar/yetki.
+    """
+    instance = await db.get(Instance, instance_id)
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance bulunamadı")
+    try:
+        report = await build_query_store_report(instance, hours=hours)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
+    items = [
+        PlanRegressionOut(
+            query_id=r.query_id,
+            query=r.query_text,
+            slowdown_factor=r.slowdown_factor,
+            current=QueryStorePlanOut(**vars(r.current)),
+            baseline=QueryStorePlanOut(**vars(r.baseline)),
+        )
+        for r in page.slice(report.regressions)
+    ]
+    return PlanRegressionReportOut(
+        instance_id=instance_id,
+        state=report.state,
+        items=items,
+        regression_count=len(items),
+        queries_with_history=report.queries_with_history,
+        plans=report.plans,
+        unavailable_kind=report.unavailable_kind,
+        unavailable_reason=report.unavailable_reason,
+        required_setting=report.required_setting,
+        checked_at=report.checked_at,
+    )
 
 
 @router.get("/{instance_id}/advice-outcomes", response_model=list[IndexAdviceOutcomeOut])

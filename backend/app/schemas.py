@@ -1576,6 +1576,48 @@ class CapturedPlanListOut(BaseModel):
     managed_service_guidance: str | None = None
 
 
+# TANIM SIRASI: bu tipler kendilerini KULLANAN modelden önce (yerel 3.14 / canlı 3.12 farkı).
+class QueryStorePlanOut(BaseModel):
+    """Query Store'daki tek bir plan ve ölçülen çalışma istatistiği (Faz 31 Commit 9)."""
+
+    plan_id: int
+    executions: int
+    avg_duration_ms: float
+    avg_cpu_ms: float | None = None
+    avg_logical_reads: float | None = None
+    first_seen: datetime | None = None
+    last_seen: datetime | None = None
+    is_forced: bool = False
+
+
+class PlanRegressionOut(BaseModel):
+    query_id: int
+    query: str
+    slowdown_factor: float
+    current: QueryStorePlanOut
+    baseline: QueryStorePlanOut
+
+
+class PlanRegressionReportOut(BaseModel):
+    """SQL Server plan regresyonu — Query Store okunamıyorsa NEDEN okunamadığı (Faz 31 Commit 9)."""
+
+    instance_id: int
+    # read_write | read_only | off | None (okunamadı)
+    state: str | None = None
+    items: list[PlanRegressionOut] = []
+    regression_count: int = Field(default=0, json_schema_extra={"counted_from": "items"})
+    queries_with_history: int = Field(default=0, json_schema_extra={
+        "counted_from": 'external: Query Store — karşılaştırılabilir ikinci planı olan sorgu sayısı'})
+    plans: int = Field(default=0, json_schema_extra={
+        "counted_from": 'external: Query Store — okunan plan kaydı sayısı'})
+    # not_sqlserver | query_store_disabled | unauthorized | unsupported | not_measured | no_history
+    unavailable_kind: str | None = None
+    unavailable_reason: str | None = None
+    # Gereken ayar ya da yetki — komut olarak.
+    required_setting: str | None = None
+    checked_at: datetime | None = None
+
+
 ExplainPlanNodeOut.model_rebuild()
 
 

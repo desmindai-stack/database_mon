@@ -7965,6 +7965,133 @@
         "title": "PlanNodeAnalysisOut",
         "type": "object"
       },
+      "PlanRegressionOut": {
+        "properties": {
+          "baseline": {
+            "$ref": "#/components/schemas/QueryStorePlanOut"
+          },
+          "current": {
+            "$ref": "#/components/schemas/QueryStorePlanOut"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "query_id": {
+            "title": "Query Id",
+            "type": "integer"
+          },
+          "slowdown_factor": {
+            "title": "Slowdown Factor",
+            "type": "number"
+          }
+        },
+        "required": [
+          "query_id",
+          "query",
+          "slowdown_factor",
+          "current",
+          "baseline"
+        ],
+        "title": "PlanRegressionOut",
+        "type": "object"
+      },
+      "PlanRegressionReportOut": {
+        "description": "SQL Server plan regresyonu — Query Store okunamıyorsa NEDEN okunamadığı (Faz 31 Commit 9).",
+        "properties": {
+          "checked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Checked At"
+          },
+          "instance_id": {
+            "title": "Instance Id",
+            "type": "integer"
+          },
+          "items": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/PlanRegressionOut"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "plans": {
+            "counted_from": "external: Query Store — okunan plan kaydı sayısı",
+            "default": 0,
+            "title": "Plans",
+            "type": "integer"
+          },
+          "queries_with_history": {
+            "counted_from": "external: Query Store — karşılaştırılabilir ikinci planı olan sorgu sayısı",
+            "default": 0,
+            "title": "Queries With History",
+            "type": "integer"
+          },
+          "regression_count": {
+            "counted_from": "items",
+            "default": 0,
+            "title": "Regression Count",
+            "type": "integer"
+          },
+          "required_setting": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Setting"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "unavailable_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Kind"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "instance_id"
+        ],
+        "title": "PlanRegressionReportOut",
+        "type": "object"
+      },
       "PlanSourceOptionOut": {
         "description": "Tek bir plan kaynağı ve kullanılabilirliği (Faz 31 İŞ 2).",
         "properties": {
@@ -8956,6 +9083,81 @@
           "share_pct"
         ],
         "title": "QueryLoadOut",
+        "type": "object"
+      },
+      "QueryStorePlanOut": {
+        "description": "Query Store'daki tek bir plan ve ölçülen çalışma istatistiği (Faz 31 Commit 9).",
+        "properties": {
+          "avg_cpu_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Cpu Ms"
+          },
+          "avg_duration_ms": {
+            "title": "Avg Duration Ms",
+            "type": "number"
+          },
+          "avg_logical_reads": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Logical Reads"
+          },
+          "executions": {
+            "title": "Executions",
+            "type": "integer"
+          },
+          "first_seen": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Seen"
+          },
+          "is_forced": {
+            "default": false,
+            "title": "Is Forced",
+            "type": "boolean"
+          },
+          "last_seen": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen"
+          },
+          "plan_id": {
+            "title": "Plan Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "plan_id",
+          "executions",
+          "avg_duration_ms"
+        ],
+        "title": "QueryStorePlanOut",
         "type": "object"
       },
       "RefreshIntervalIn": {
@@ -17271,6 +17473,93 @@
           }
         ],
         "summary": "Get Query History Detail",
+        "tags": [
+          "queries"
+        ]
+      }
+    },
+    "/api/queries/{instance_id}/plan-regressions": {
+      "get": {
+        "description": "SQL Server plan regresyonu: aynı sorgunun ESKİ planına göre yavaşlayan YENİ planı (Faz 31 Commit 9).\n\nSalt-okunur: `sys.query_store_*` görünümleri VIEW DATABASE STATE ile okunuyor. Query Store kapalıysa,\nsürüm desteklemiyorsa ya da yetki yetmiyorsa sonuç \"ölçülemedi\" + gerekçe + gereken ayar/yetki.",
+        "operationId": "get_plan_regressions_api_queries__instance_id__plan_regressions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "instance_id",
+            "required": true,
+            "schema": {
+              "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "hours",
+            "required": false,
+            "schema": {
+              "default": 168,
+              "maximum": 720,
+              "minimum": 1,
+              "title": "Hours",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlanRegressionReportOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Plan Regressions",
         "tags": [
           "queries"
         ]

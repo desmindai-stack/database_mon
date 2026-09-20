@@ -31,6 +31,7 @@ import {
   IndexAdviceReport,
   IndexAdviceOutcome,
   IndexAdviceWatch,
+  PlanRegressionReport,
   Instance,
   InstanceSummary,
   MetricSample,
@@ -56,6 +57,7 @@ import PlanSourcePanel from "../components/PlanSourcePanel";
 import PredictionPlaybook from "../components/PredictionPlaybook";
 import PredictionReadinessPanel from "../components/PredictionReadinessPanel";
 import PrerequisitesPanel from "../components/PrerequisitesPanel";
+import PlanRegressionPanel from "../components/PlanRegressionPanel";
 import QueryDiagnosticsPanel from "../components/QueryDiagnosticsPanel";
 import QueryHistoryChart from "../components/QueryHistoryChart";
 import RecommendationHeader from "../components/RecommendationHeader";
@@ -198,6 +200,7 @@ export default function InstanceDetailPage() {
   // "Index önerisi bulunamadı" yazıyordu — bağlantı hatası "öneri yok" gibi görünüyordu.
   const [adviceError, setAdviceError] = useState<Record<number, string>>({});
   const [bulkAdviceSummary, setBulkAdviceSummary] = useState<string | null>(null);
+  const [planRegressions, setPlanRegressions] = useState<PlanRegressionReport | null>(null);
   const [adviceWatches, setAdviceWatches] = useState<IndexAdviceWatch[] | null>(null);
   const [adviceWatchesError, setAdviceWatchesError] = useState<string | null>(null);
   const [adviceOutcomes, setAdviceOutcomes] = useState<IndexAdviceOutcome[] | null>(null);
@@ -236,6 +239,13 @@ export default function InstanceDetailPage() {
       setTab(tabParam as Tab);
     }
   }, [tabParam]);
+
+  // SQL Server plan regresyonu (Faz 31 Commit 9): Query Store kapalıysa yanıt gerekçeyi taşıyor,
+  // panel onu gösteriyor — bu yüzden hata durumunda da state'e yazılıyor.
+  useEffect(() => {
+    if (!instanceId || tab !== "queries" || instance?.engine !== "sqlserver") return;
+    api.getPlanRegressions(instanceId).then(setPlanRegressions).catch(() => setPlanRegressions(null));
+  }, [instanceId, tab, instance?.engine]);
 
   const loadAdviceWatches = async () => {
     if (!instanceId || instance?.engine !== "postgresql") return;
@@ -1343,6 +1353,7 @@ export default function InstanceDetailPage() {
 
       {tab === "queries" && (
         <>
+          {instance.engine === "sqlserver" && <PlanRegressionPanel report={planRegressions} />}
           {queryHistoryTop.length > 0 && (
             <CollapsibleSection
               id="queries-history"

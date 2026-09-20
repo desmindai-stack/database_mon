@@ -294,6 +294,8 @@ export type SlaTarget = Gen["SlaTargetOut"];
 export type MaintenanceWindow = Gen["MaintenanceWindowOut"];
 export type CapturedPlan = Gen["CapturedPlanOut"];
 export type CapturedPlanList = Gen["CapturedPlanListOut"];
+/** SQL Server plan regresyonu — Query Store (Faz 31 Commit 9). */
+export type PlanRegressionReport = Gen["PlanRegressionReportOut"];
 
 // --- Blocking hiyerarşisi (Faz 26 İŞ 3) ---
 export type BlockingNode = Gen["BlockingNodeOut"];
@@ -1324,6 +1326,10 @@ export const api = {
       `/api/queries/${id}/captured-plans?limit=${limit}` +
         (queryid ? `&queryid=${encodeURIComponent(queryid)}` : ""),
     ),
+  /** SQL Server plan regresyonu: aynı sorgunun eski planına göre yavaşlayan yeni planı (Faz 31 Commit 9).
+   *  Query Store kapalı/okunamıyorsa yanıt "ölçülemedi" gerekçesini ve gereken ayarı taşır. */
+  getPlanRegressions: (id: number, hours = 168) =>
+    request<PlanRegressionReport>(`/api/queries/${id}/plan-regressions?hours=${hours}`),
   /** Yakalanmış tek planın ağacı — canlı EXPLAIN ile AYNI yapıda döner. */
   getCapturedPlan: (id: number, planId: number) =>
     request<ExplainResult>(`/api/queries/${id}/captured-plans/${planId}`),

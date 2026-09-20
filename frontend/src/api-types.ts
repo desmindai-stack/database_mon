@@ -1549,6 +1549,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/queries/{instance_id}/plan-regressions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Plan Regressions
+         * @description SQL Server plan regresyonu: aynı sorgunun ESKİ planına göre yavaşlayan YENİ planı (Faz 31 Commit 9).
+         *
+         *     Salt-okunur: `sys.query_store_*` görünümleri VIEW DATABASE STATE ile okunuyor. Query Store kapalıysa,
+         *     sürüm desteklemiyorsa ya da yetki yetmiyorsa sonuç "ölçülemedi" + gerekçe + gereken ayar/yetki.
+         */
+        get: operations["get_plan_regressions_api_queries__instance_id__plan_regressions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/queries/{instance_id}/plan-sources": {
         parameters: {
             query?: never;
@@ -4904,6 +4927,55 @@ export interface components {
              */
             underestimated: boolean;
         };
+        /** PlanRegressionOut */
+        PlanRegressionOut: {
+            baseline: components["schemas"]["QueryStorePlanOut"];
+            current: components["schemas"]["QueryStorePlanOut"];
+            /** Query */
+            query: string;
+            /** Query Id */
+            query_id: number;
+            /** Slowdown Factor */
+            slowdown_factor: number;
+        };
+        /**
+         * PlanRegressionReportOut
+         * @description SQL Server plan regresyonu — Query Store okunamıyorsa NEDEN okunamadığı (Faz 31 Commit 9).
+         */
+        PlanRegressionReportOut: {
+            /** Checked At */
+            checked_at?: string | null;
+            /** Instance Id */
+            instance_id: number;
+            /**
+             * Items
+             * @default []
+             */
+            items: components["schemas"]["PlanRegressionOut"][];
+            /**
+             * Plans
+             * @default 0
+             */
+            plans: number;
+            /**
+             * Queries With History
+             * @default 0
+             */
+            queries_with_history: number;
+            /**
+             * Regression Count
+             * @default 0
+             */
+            regression_count: number;
+            /** Required Setting */
+            required_setting?: string | null;
+            /** State */
+            state?: string | null;
+            /** Unavailable Kind */
+            unavailable_kind?: string | null;
+            /** Unavailable Reason */
+            unavailable_reason?: string | null;
+        };
         /**
          * PlanSourceOptionOut
          * @description Tek bir plan kaynağı ve kullanılabilirliği (Faz 31 İŞ 2).
@@ -5272,6 +5344,31 @@ export interface components {
              * @default []
              */
             wait_profile: components["schemas"]["WaitCategoryShareOut"][];
+        };
+        /**
+         * QueryStorePlanOut
+         * @description Query Store'daki tek bir plan ve ölçülen çalışma istatistiği (Faz 31 Commit 9).
+         */
+        QueryStorePlanOut: {
+            /** Avg Cpu Ms */
+            avg_cpu_ms?: number | null;
+            /** Avg Duration Ms */
+            avg_duration_ms: number;
+            /** Avg Logical Reads */
+            avg_logical_reads?: number | null;
+            /** Executions */
+            executions: number;
+            /** First Seen */
+            first_seen?: string | null;
+            /**
+             * Is Forced
+             * @default false
+             */
+            is_forced: boolean;
+            /** Last Seen */
+            last_seen?: string | null;
+            /** Plan Id */
+            plan_id: number;
         };
         /** RefreshIntervalIn */
         RefreshIntervalIn: {
@@ -9414,6 +9511,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["QueryHistorySeriesOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_plan_regressions_api_queries__instance_id__plan_regressions_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                instance_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanRegressionReportOut"];
                 };
             };
             /** @description Validation Error */

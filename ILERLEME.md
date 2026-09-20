@@ -8565,6 +8565,38 @@ durumu ve Tuning kontrol listesi durumları da Türkçe etikete bağlandı.
 **Not:** CSS boşluk ölçeği testi (`test_visual_consistency.py`) ölçek dışı `gap: 0.35rem` değerini yakaladı;
 0.5rem'e çekildi — var olan denetimin işe yaradığının kanıtı.
 
+## Faz 31 — Commit 9e: SQL Server plan regresyonu (Query Store)
+
+**Migration:** yok. **Yeni uç:** `GET /api/queries/{id}/plan-regressions`.
+
+Ertelenmiş işti: DMV'ler yalnızca ŞU ANKİ planı gösteriyor, "dün hızlıydı bugün yavaş" sorusu plan GEÇMİŞİ
+ister. Query Store bu geçmişi tutuyor ve salt-okunur (VIEW DATABASE STATE) okunabiliyor — bankadaki login'in
+sahip olduğu yetki. Query Store'u AÇMAK DBA'nın işi; uygulama açmıyor, komutu söylüyor.
+
+**Kural (`services/query_store.py`):** aynı sorgu METNİNİN planları karşılaştırılıyor; en son kullanılan plan,
+daha önceki EN İYİ plandan ≥ 1,5 kat yavaşsa regresyon. Gürültü elemesi: plan başına en az 5 çalıştırma ve
+1 ms ortalama. Zorlanmış (forced) plan kötüye gittiyse de raporlanıyor.
+
+### Gerçek SQL Server'da ölçüldü (`tests/test_query_store_live_mssql.py`)
+
+| Durum | Sonuç |
+|---|---|
+| Query Store AÇIK, gerçek regresyon | Aynı sorgu önce paralel planla **19,8 ms**, MAXDOP 1 yapılınca seri planla **164,0 ms** → **8,29× yavaşlama**, salt-okunur login'le ölçüldü |
+| Query Store KAPALI | "Ölçülemedi: Query Store bu veritabanında KAPALI" + `ALTER DATABASE … SET QUERY_STORE = ON` komutu |
+| Yetkisiz login | "Ölçülemedi" + `USE [db]; GRANT VIEW DATABASE STATE TO [login];` |
+
+**Gerçek sunucuda öğrenilenler (koda yazıldı):** (1) Query Store aynı sorgu metnini farklı "context settings"
+(ör. MAXDOP değişikliği) altında AYRI `query_id` ile tutuyor — gruplama `query_text_id` üzerinden yapılmalı,
+yoksa plan değişimi hiç görülmüyor. (2) İki plan aynı istatistik aralığına düşebiliyor; "şimdiki plan" eşitlikte
+`plan_id`'ye göre seçiliyor. (3) Çalışma istatistikleri bir tur gecikmeli yazılıyor (test iki kez flush ediyor).
+
+**Offline testler** (`tests/test_query_store.py`, 7 test): yeni plan yavaşsa regresyon, hızlıysa değil; küçük
+fark regresyon değil; seyrek çalışan/çok hızlı planlar elenmiş; taban "önceki en iyi plan"; farklı sorguların
+planları karşılaştırılmıyor; zorlanmış plan raporlanıyor.
+
+**Arayüz:** Sorgular sekmesinde (yalnızca SQL Server) plan regresyonu paneli — şimdiki ve önceki plan yan yana,
+kaç kat yavaşladığı, mantıksal okuma farkı. Query Store kapalıysa boş liste değil, gerekçe ve komut.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
