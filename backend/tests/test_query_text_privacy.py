@@ -150,6 +150,7 @@ def test_sqlserver_deadlock_xml_text_nodes_are_sanitized_and_stay_xml():
 #: Sorgu metni tutmayan ya da dbace'in TOPLAMADIĞI kolonlar — ve NEDEN.
 NOT_COLLECTED = {
     ("alert_rules", "sql_query"): "admin'in yazdığı özel kural SQL'i; hedeften toplanmıyor",
+    ("slow_query_samples", "query_class"): "sistem sorgusu SINIF ETİKETİ (classify_system_query) — metin taşımıyor",
 }
 
 

@@ -78,10 +78,13 @@ def analyze_metrics(
     collected_at: datetime | None = None,
     now: datetime | None = None,
     hidden_queries: dict[str, int] | None = None,
+    slow_mean_count: int | None = None,
 ) -> TuningReport:
     """`slow_queries`: YAVAŞ SORGU LİSTESİNİN kendisi (`default_slow_query_selection`, sıralama
     `INSIGHT_LIST_SORT`, adet `INSIGHT_LIST_LIMIT`) — sayı ayrı hesaplanmıyor (Faz 31 Commit 7).
-    `hidden_queries`: aynı seçimin gizlediği kalemler ({"system": n, "insignificant": n})."""
+    `hidden_queries`: aynı seçimin gizlediği kalemler ({"system": n, "insignificant": n}).
+    `slow_mean_count`: listede ortalaması ≥ SLOW_MEAN_MS olan kalem sayısı — aynı CTE'den SQL `count(*)`
+    (Faz 31 Commit 9). Verilmezse (eski çağıranlar, testler) listeden sayılıyor."""
     metrics = dict(metrics or {})
     slow_queries = slow_queries or []
     now = now or datetime.now(UTC)
@@ -382,7 +385,9 @@ def analyze_metrics(
     if slow_queries:
         heavy = sorted(slow_queries, key=lambda q: float(q.get("total_time_ms") or 0), reverse=True)
         top = heavy[0] if heavy else None
-        mean_heavy = [q for q in heavy if float(q.get("mean_time_ms") or 0) >= SLOW_MEAN_MS]
+        # Sayı SQL'den (aynı CTE'nin count(*)'u); verilmemişse listeden. İkisi ayrışırsa hata (test ediliyor).
+        slow_count = slow_mean_count if slow_mean_count is not None else sum(
+            1 for q in heavy if float(q.get("mean_time_ms") or 0) >= SLOW_MEAN_MS)
         if top and float(top.get("total_time_ms") or 0) > 1000:
             insights.append(
                 PerformanceInsight(
@@ -397,25 +402,25 @@ def analyze_metrics(
                     action_params={"sort": "total", "limit": str(INSIGHT_LIST_LIMIT)},
                 )
             )
-        if mean_heavy:
+        if slow_count:
             insights.append(
                 PerformanceInsight(
-                    severity="high" if len(mean_heavy) >= 3 else "medium",
+                    severity="high" if slow_count >= 3 else "medium",
                     category="queries",
-                    title=f"{len(mean_heavy)} yavaş ortalama süreli sorgu",
+                    title=f"{slow_count} yavaş ortalama süreli sorgu",
                     description=(
                         f"Yavaş Sorgular listesinde ortalama süreye göre ilk {INSIGHT_LIST_LIMIT} sorgudan "
-                        f"{len(mean_heavy)} tanesinin ortalaması ≥ {SLOW_MEAN_MS:.0f} ms. {hidden_note}"
+                        f"{slow_count} tanesinin ortalaması ≥ {SLOW_MEAN_MS:.0f} ms. {hidden_note}"
                     ),
                     recommendation="Bu sorgular için index advice ve plan iyileştirmesi öncelikli aksiyon olmalı.",
-                    metric_value=float(len(mean_heavy)),
+                    metric_value=float(slow_count),
                     metric_unit="adet",
                     action="queries",
                     action_params=list_params,
                 )
             )
             checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "warn",
-                                           f"{len(mean_heavy)} adet ≥{SLOW_MEAN_MS:.0f}ms (listeyle aynı pencere ve filtreler)"))
+                                           f"{slow_count} adet ≥{SLOW_MEAN_MS:.0f}ms (listeyle aynı pencere ve filtreler)"))
         else:
             checklist.append(ChecklistItem("slow_queries", "Yavaş sorgular", "ok", f"{len(slow_queries)} sorgu, ≥{SLOW_MEAN_MS:.0f}ms yok"))
     else:

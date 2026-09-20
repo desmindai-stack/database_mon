@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Instance, MetricSample
@@ -48,24 +48,22 @@ async def outages_for_instance(
     boşluklara bakılıyordu ve bir düğüm üç saat önce düşüp bir daha gelmediyse rapor hiç
     kesinti göstermiyordu — en kötü durum tam da görünmez olan durumdu.
     """
-    rows = (
-        await session.execute(
-            select(MetricSample.collected_at)
-            .where(
-                MetricSample.instance_id == instance.id,
-                MetricSample.collected_at >= period_start,
-                MetricSample.collected_at <= period_end,
-            )
-            .order_by(MetricSample.collected_at.asc())
-        )
-    ).scalars().all()
-    if not rows:
+    threshold = gap_threshold(instance)
+    in_period = [
+        MetricSample.instance_id == instance.id,
+        MetricSample.collected_at >= period_start,
+        MetricSample.collected_at <= period_end,
+    ]
+    last = (
+        await session.execute(select(MetricSample.collected_at).where(*in_period)
+                              .order_by(MetricSample.collected_at.desc()).limit(1))
+    ).scalar_one_or_none()
+    if last is None:
         return []
 
-    rows = [as_utc(r) for r in rows]
-    threshold = gap_threshold(instance)
     outages: list[dict] = []
-    for previous, current in zip(rows, rows[1:]):
+    for previous, current in await _gaps(session, in_period, threshold):
+        previous, current = as_utc(previous), as_utc(current)
         gap = (current - previous).total_seconds()
         if gap >= threshold:
             outages.append(
@@ -77,17 +75,40 @@ async def outages_for_instance(
                 }
             )
 
-    trailing = (period_end - rows[-1]).total_seconds()
+    trailing = (period_end - as_utc(last)).total_seconds()
     if trailing >= threshold:
         outages.append(
             {
-                "start": rows[-1].isoformat(),
+                "start": as_utc(last).isoformat(),
                 "end": period_end.isoformat(),
                 "seconds": round(trailing, 1),
                 "ongoing": True,
             }
         )
     return outages
+
+
+async def _gaps(session: AsyncSession, in_period: list, threshold: float) -> list[tuple[datetime, datetime]]:
+    """Ardışık iki ölçüm arasındaki boşluklar — yalnızca eşiği aşanlar döner (Faz 31 Commit 9, egress).
+
+    PostgreSQL'de fark ve eşik SQL'de (`LAG`): dönemdeki her ölçüm zamanı çekilmiyordu değil, çekiliyordu —
+    günlük raporda instance başına ~5760 satır. SQLite'ta (yalnızca yerel geliştirme/test; meta veritabanı
+    egress'i yok) zaman aritmetiği taşınabilir değil: aynı karşılaştırma Python'da. İki yolun aynı sonucu
+    verdiğini canlı test ölçüyor (tests/test_meta_egress_live_postgres.py).
+    """
+    previous = func.lag(MetricSample.collected_at, type_=MetricSample.collected_at.type).over(
+        order_by=[MetricSample.collected_at, MetricSample.id])
+    pairs = select(previous.label("previous"), MetricSample.collected_at.label("current")).where(*in_period).subquery()
+    if session.bind.dialect.name == "postgresql":
+        gap = func.extract("epoch", pairs.c.current - pairs.c.previous)
+        rows = await session.execute(
+            select(pairs.c.previous, pairs.c.current).where(pairs.c.previous.is_not(None), gap >= threshold)
+            .order_by(pairs.c.current)
+        )
+        return [(r.previous, r.current) for r in rows]
+    rows = await session.execute(select(pairs.c.previous, pairs.c.current).where(pairs.c.previous.is_not(None))
+                                 .order_by(pairs.c.current))
+    return [(r.previous, r.current) for r in rows]
 
 
 async def first_sample_at(session: AsyncSession, instance: Instance) -> datetime | None:

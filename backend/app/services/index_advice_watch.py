@@ -29,6 +29,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
+
+#: Faz 31 Commit 9: izleme turunda işlenen parti (kalanlar sonraki turda).
+TICK_BATCH = 200
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.query_marker import DBACE_QUERY_MARKER
@@ -241,13 +244,15 @@ async def _resolve_watch(session, instance_id, query, result: AdviceResult) -> I
     return watch
 
 
-async def list_watches(session: AsyncSession, instance_id: int) -> list[dict[str, Any]]:
+async def list_watches(session: AsyncSession, instance_id: int, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     settings = await get_analysis_settings(session)
     rows = (
         await session.execute(
             select(IndexAdviceWatch)
             .where(IndexAdviceWatch.instance_id == instance_id)
-            .order_by(IndexAdviceWatch.status.desc(), IndexAdviceWatch.registered_at.desc())
+            .order_by(IndexAdviceWatch.status.desc(), IndexAdviceWatch.registered_at.desc(), IndexAdviceWatch.id)
+            .limit(limit)
+            .offset(offset)
         )
     ).scalars().all()
     return [_watch_payload(w, current_threshold=int(settings["index_advice_min_calls"])) for w in rows]
@@ -291,6 +296,8 @@ async def index_advice_watch_tick() -> dict[str, int]:
                     Instance.enabled.is_(True),
                     Instance.engine == str(DatabaseEngine.POSTGRESQL),
                 )
+                .order_by(IndexAdviceWatch.id)
+                .limit(TICK_BATCH)
             )
         ).all()
 

@@ -5705,6 +5705,16 @@ export interface components {
              */
             mode: string;
             monitoring_role?: components["schemas"]["MonitoringRoleOut"] | null;
+            /**
+             * Offset
+             * @default 0
+             */
+            offset: number;
+            /**
+             * Total
+             * @default 0
+             */
+            total: number;
             /** Window End */
             window_end?: string | null;
             /** Window Start */
@@ -6387,7 +6397,12 @@ export interface operations {
     };
     list_users_api_admin_users_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6401,6 +6416,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6537,6 +6561,10 @@ export interface operations {
         parameters: {
             query?: {
                 active_only?: boolean;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -6597,7 +6625,12 @@ export interface operations {
     };
     list_rules_api_alerts_rules_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6611,6 +6644,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlertRuleOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6749,6 +6791,10 @@ export interface operations {
         parameters: {
             query?: {
                 customer_id?: number | null;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -7063,7 +7109,12 @@ export interface operations {
     };
     list_customers_api_customers_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7077,6 +7128,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CustomerOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7306,6 +7366,10 @@ export interface operations {
         parameters: {
             query?: {
                 application_id?: number | null;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -7593,7 +7657,12 @@ export interface operations {
     };
     list_group_nodes_api_groups__group_id__nodes_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path: {
                 group_id: number;
@@ -7675,7 +7744,12 @@ export interface operations {
     };
     list_instances_api_instances_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7689,6 +7763,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -7730,6 +7813,10 @@ export interface operations {
         parameters: {
             query?: {
                 engine?: components["schemas"]["DatabaseEngine"] | null;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -7759,7 +7846,12 @@ export interface operations {
     };
     get_collection_health_api_instances_collection_health_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7775,11 +7867,25 @@ export interface operations {
                     "application/json": components["schemas"]["CollectionHealthOut"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     list_summaries_api_instances_summary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -7793,6 +7899,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InstanceSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -8192,7 +8307,12 @@ export interface operations {
     };
     get_prediction_readiness_api_instances__instance_id__prediction_readiness_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path: {
                 instance_id: number;
@@ -8389,6 +8509,10 @@ export interface operations {
             query?: {
                 scope_type?: string | null;
                 scope_id?: number | null;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -8453,6 +8577,10 @@ export interface operations {
         parameters: {
             query?: {
                 days?: number;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -8554,6 +8682,8 @@ export interface operations {
                 start?: string | null;
                 /** @description Özel aralık bitişi (ISO-8601). */
                 end?: string | null;
+                /** @description Kaç örnek döneceğinin üst sınırı (Faz 31 Commit 9). Aralıkta daha çok örnek varsa eşit aralıkla seyreltilir; ilk ve son örnek her zaman dahil (bu yüzden sonuç en fazla bir örnek daha uzun olabilir). */
+                max_points?: number;
             };
             header?: never;
             path: {
@@ -8747,6 +8877,10 @@ export interface operations {
             query?: {
                 active_only?: boolean;
                 accuracy_days?: number;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -8779,6 +8913,10 @@ export interface operations {
             query?: {
                 days?: number;
                 instance_id?: number | null;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -8839,7 +8977,12 @@ export interface operations {
     };
     get_metric_dictionary_api_queries_metric_dictionary_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -8855,12 +8998,23 @@ export interface operations {
                     "application/json": components["schemas"]["MetricMeaningOut"][];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     get_slow_queries_api_queries__instance_id__get: {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Sayfalama: atlanacak kalem sayısı (Faz 31 Commit 9). */
+                offset?: number;
                 sort?: string;
                 /** @description Aralık başlangıcı (ISO-8601) */
                 start?: string | null;
@@ -8934,7 +9088,12 @@ export interface operations {
     };
     list_advice_outcomes_api_queries__instance_id__advice_outcomes_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path: {
                 instance_id: number;
@@ -8965,7 +9124,12 @@ export interface operations {
     };
     list_advice_watches_api_queries__instance_id__advice_watches_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path: {
                 instance_id: number;
@@ -9303,6 +9467,7 @@ export interface operations {
                 scope_type?: string | null;
                 scope_id?: number | null;
                 limit?: number;
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -9332,7 +9497,12 @@ export interface operations {
     };
     list_acknowledgements_api_reports_acknowledgements_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -9346,6 +9516,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FindingAcknowledgementOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -9447,7 +9626,12 @@ export interface operations {
     };
     get_finding_history_api_reports_findings__fingerprint__history_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path: {
                 fingerprint: string;
@@ -9725,6 +9909,10 @@ export interface operations {
         parameters: {
             query?: {
                 view?: string;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path: {
@@ -9760,6 +9948,10 @@ export interface operations {
         parameters: {
             query?: {
                 customer_id?: number | null;
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
             };
             header?: never;
             path?: never;
@@ -10012,7 +10204,12 @@ export interface operations {
     };
     sla_status_api_sla_status_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -10028,6 +10225,15 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     }[];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -10067,7 +10273,12 @@ export interface operations {
     };
     list_targets_api_sla_targets_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Sayfadaki en fazla kalem. */
+                limit?: number;
+                /** @description Atlanacak kalem sayısı. */
+                offset?: number;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -10081,6 +10292,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SlaTargetOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

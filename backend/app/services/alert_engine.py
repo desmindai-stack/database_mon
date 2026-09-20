@@ -123,11 +123,11 @@ async def evaluate_alerts(session: AsyncSession, instance_id: int, metrics: dict
             continue
 
         existing = await session.execute(
-            select(AlertEvent).where(
+            select(AlertEvent.id).where(
                 AlertEvent.rule_id == rule.id,
                 AlertEvent.instance_id == instance_id,
                 AlertEvent.resolved_at.is_(None),
-            )
+            ).limit(1)
         )
         if existing.scalar_one_or_none():
             continue
@@ -190,11 +190,11 @@ async def evaluate_group_alerts(session: AsyncSession, group_id: int, metrics: d
             continue
 
         existing = await session.execute(
-            select(AlertEvent).where(
+            select(AlertEvent.id).where(
                 AlertEvent.rule_id == rule.id,
                 AlertEvent.group_id == group_id,
                 AlertEvent.resolved_at.is_(None),
-            )
+            ).limit(1)
         )
         if existing.scalar_one_or_none():
             continue

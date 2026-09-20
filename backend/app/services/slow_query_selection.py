@@ -29,7 +29,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, false, func, literal, not_, or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import SlowQuerySample
@@ -168,6 +168,8 @@ class SlowQuerySelection:
     # Eşiklerin/sistem filtresinin elediği sorgu sayısı — arayüz "N sorgu filtrelendi" diyebilsin.
     filtered_system: int = 0
     filtered_insignificant: int = 0
+    # Faz 31 Commit 9: filtreleri geçen TOPLAM kalem (sayfalamadan önce) — SQL `count(*)`.
+    visible_count: int = 0
 
 
 SORT_KEYS = {
@@ -214,6 +216,7 @@ async def default_slow_query_selection(
     end: datetime | None = None,
     sort: str = "total",
     limit: int = 20,
+    offset: int = 0,
     include_system: bool | None = None,
 ) -> SlowQuerySelection:
     """Yavaş sorgu LİSTESİ, Tuning içgörüsü ve teşhis panelinin TEK kaynağı (Faz 31 Commit 7).
@@ -237,10 +240,192 @@ async def default_slow_query_selection(
         end=window_end,
         sort=sort,
         limit=limit,
+        offset=offset,
         include_system=noise["show_system_queries"] if include_system is None else include_system,
         min_total_ms=noise["list_min_total_ms"],
         min_calls=noise["list_min_calls"],
     )
+
+
+#: Liste yollarında metnin okunacağı en fazla kalem (sayfa). Metin ayrıntıda tam okunuyor.
+MAX_PAGE_ITEMS = 200
+
+
+def _selection_groups(instance_id: int, start: datetime | None, end: datetime | None):
+    """Penceredeki her sorgu grubunun İLK ve SON örneği — METİNSİZ, SQL'de (Faz 31 Commit 9).
+
+    Eskiden penceredeki her satır tam kolon (metin dahil, satır başına ~840 bayt) çekilip Python'da
+    gruplanıyordu: 24 saatte instance başına ~4-14 bin satır, arayüz 15 saniyede bir yeniliyor — canlıda
+    Supabase egress kotasının 17 katı. Gruplama kuralları aynı (`_merge_key`):
+
+    - metin kimliği = `query_hash` + rol/iç içe son eki; metnin grubu, o metnin PENCEREDEKİ İLK
+      örneğinin anahtarı (`id:<queryid><sonek>`; queryid yoksa metin kimliği),
+    - ilk/son örnek toplama zamanına (eşitlikte id'ye) göre.
+    """
+    s = SlowQuerySample
+    conditions = [s.instance_id == instance_id]
+    if start:
+        conditions.append(s.collected_at >= _as_utc(start))
+    if end:
+        conditions.append(s.collected_at <= _as_utc(end))
+    suffix = case((s.from_monitoring_role == true(), literal(":dbace")), else_=literal("")) + case(
+        (s.toplevel == false(), literal(":nested")), else_=literal("")
+    )
+    window = (
+        select(
+            s.id, s.collected_at, s.queryid, s.query_hash, s.query_class, s.calls, s.total_time_ms,
+            s.mean_time_ms, s.rows,
+            case((s.from_monitoring_role == true(), 1), (s.from_monitoring_role == false(), 0)).label("fmr"),
+            suffix.label("suffix"),
+        )
+        .where(*conditions)
+        .cte("sq_window")
+    )
+    first_qid = func.first_value(window.c.queryid).over(
+        partition_by=[window.c.query_hash, window.c.suffix], order_by=[window.c.collected_at, window.c.id]
+    )
+    keyed = select(window, first_qid.label("first_qid")).cte("sq_keyed")
+    group_key = case(
+        (and_(keyed.c.first_qid.is_not(None), keyed.c.first_qid != ""),
+         literal("id:") + keyed.c.first_qid + keyed.c.suffix),
+        else_=keyed.c.query_hash + keyed.c.suffix,
+    )
+    ranked_src = select(keyed, group_key.label("gkey")).cte("sq_grouped")
+    ranked = select(
+        ranked_src,
+        func.row_number().over(partition_by=ranked_src.c.gkey,
+                               order_by=[ranked_src.c.collected_at, ranked_src.c.id]).label("rn_first"),
+        func.row_number().over(partition_by=ranked_src.c.gkey,
+                               order_by=[ranked_src.c.collected_at.desc(), ranked_src.c.id.desc()]).label("rn_last"),
+        func.min(ranked_src.c.id).over(partition_by=ranked_src.c.gkey).label("first_seen"),
+    ).cte("sq_ranked")
+
+    def at(rn, column):
+        return func.max(case((rn == 1, column)))
+
+    groups = (
+        select(
+            ranked.c.gkey.label("key"),
+            func.count().label("n"),
+            func.min(ranked.c.first_seen).label("first_seen"),
+            at(ranked.c.rn_last, ranked.c.id).label("last_id"),
+            at(ranked.c.rn_last, ranked.c.queryid).label("queryid"),
+            at(ranked.c.rn_last, ranked.c.calls).label("last_calls"),
+            at(ranked.c.rn_last, ranked.c.total_time_ms).label("last_total"),
+            at(ranked.c.rn_last, ranked.c.mean_time_ms).label("last_mean"),
+            at(ranked.c.rn_last, ranked.c.rows).label("last_rows"),
+            at(ranked.c.rn_last, ranked.c.query_class).label("query_class"),
+            at(ranked.c.rn_last, ranked.c.query_hash).label("query_hash"),
+            at(ranked.c.rn_last, ranked.c.fmr).label("fmr"),
+            at(ranked.c.rn_first, ranked.c.calls).label("first_calls"),
+            at(ranked.c.rn_first, ranked.c.total_time_ms).label("first_total"),
+        )
+        .group_by(ranked.c.gkey)
+        .cte("sq_groups")
+    )
+    cycles = select(func.count(func.distinct(window.c.collected_at))).scalar_subquery()
+    return groups, cycles
+
+
+def _computed(groups, cycles, *, include_system: bool, min_total_ms: float, min_calls: int,
+              pending: dict[str, str] | None = None):
+    """Fark, sınıf ve eşik kararları SQL ifadesi olarak — liste ve SAYI aynı ifadelerden (Commit 7)."""
+    g = groups.c
+    query_class = (
+        func.coalesce(g.query_class, case(pending, value=g.query_hash, else_=literal("")))
+        if pending else g.query_class
+    )
+    cumulative = or_(cycles <= 1, g.n == 1)
+    reset = or_(g.last_total < g.first_total, g.last_calls < g.first_calls)
+    total = case((or_(cumulative, reset), g.last_total), else_=g.last_total - g.first_total)
+    calls = case((or_(cumulative, reset), g.last_calls), else_=g.last_calls - g.first_calls)
+    mean = case((calls > 0, total / calls), else_=g.last_mean)
+    marker_conflict = and_(query_class == DBACE_MARKER_LABEL, g.fmr == 0)
+    is_system = and_(query_class.is_not(None), query_class != "", not_(marker_conflict))
+    visible_system = true() if include_system else not_(is_system)
+    significant = and_(total >= min_total_ms, calls >= min_calls)
+    computed = select(
+        g.key, g.queryid, g.last_id, g.last_rows, query_class.label("query_class"), g.n, g.first_seen,
+        total.label("total"), calls.label("calls"), mean.label("mean"),
+        marker_conflict.label("marker_conflict"), is_system.label("is_system"),
+        case((total <= 0, "zero"), (not_(visible_system), "system"), (not_(significant), "insignificant"),
+             else_="visible").label("verdict"),
+    ).cte("sq_computed")
+    return computed
+
+
+_ORDER = {"total": "total", "mean": "mean", "calls": "calls"}
+
+
+async def _pending_classes(session: AsyncSession, groups) -> dict[str, str]:
+    """Migration'dan önce yazılmış satırların sınıfı yok (NULL): metin METİN BAŞINA bir kez okunup bellekte
+    sınıflandırılıyor ve SQL'e ifade olarak veriliyor. İstek yolu YAZMIYOR; kalıcı sınıfı arka plan işi
+    (`backfill_query_classes`) toplu UPDATE ile yazıyor."""
+    rows = (
+        await session.execute(select(groups.c.query_hash, groups.c.last_id).where(groups.c.query_class.is_(None)))
+    ).all()
+    if not rows:
+        return {}
+    texts = dict((
+        await session.execute(select(SlowQuerySample.id, SlowQuerySample.query)
+                              .where(SlowQuerySample.id.in_([r.last_id for r in rows][:MAX_PAGE_ITEMS])))
+    ).all())
+    return {r.query_hash: classify_system_query(texts.get(r.last_id) or "") or "" for r in rows if r.last_id in texts}
+
+
+async def backfill_query_classes(session: AsyncSession, *, batch: int = 500) -> int:
+    """Sınıfı olmayan satırlar için: parmak izi başına TEK metin okunur, sınıf o parmak izli bütün satırlara
+    TEK UPDATE ile yazılır (satır satır değil). Döndürdüğü: sınıflandırılan farklı metin sayısı.
+
+    Parmak izi olmayan satırlar (PostgreSQL'de migration dolduruyor; yalnızca SQLite geliştirme veritabanı) önce
+    parmak izi alıyor — yine farklı metin başına tek UPDATE."""
+    while True:
+        rows = (
+            await session.execute(select(SlowQuerySample.id, SlowQuerySample.query)
+                                  .where(SlowQuerySample.query_hash.is_(None)).limit(batch))
+        ).all()
+        if not rows:
+            break
+        by_hash: dict[str, list[int]] = {}
+        for row_id, text in rows:
+            by_hash.setdefault(query_fingerprint(text or ""), []).append(row_id)
+        for query_hash, ids in by_hash.items():
+            await session.execute(update(SlowQuerySample).where(SlowQuerySample.id.in_(ids)).values(query_hash=query_hash))
+        await session.commit()
+    done = 0
+    while True:
+        pending = (
+            await session.execute(
+                select(SlowQuerySample.query_hash, func.min(SlowQuerySample.id).label("sample_id"))
+                .where(SlowQuerySample.query_class.is_(None), SlowQuerySample.query_hash.is_not(None))
+                .group_by(SlowQuerySample.query_hash)
+                .limit(batch)
+            )
+        ).all()
+        if not pending:
+            return done
+        texts = dict((
+            await session.execute(select(SlowQuerySample.id, SlowQuerySample.query)
+                                  .where(SlowQuerySample.id.in_([r.sample_id for r in pending])))
+        ).all())
+        for query_hash, sample_id in pending:
+            await session.execute(
+                update(SlowQuerySample)
+                .where(SlowQuerySample.query_hash == query_hash, SlowQuerySample.query_class.is_(None))
+                .values(query_class=classify_system_query(texts.get(sample_id) or "") or "")
+            )
+        await session.commit()
+        done += len(pending)
+
+
+async def _load_samples(session: AsyncSession, ids: list[int]) -> dict[int, SlowQuerySample]:
+    """Sayfadaki kalemlerin SON örnekleri — tam satır yalnızca gösterilen kalemler için (≤ MAX_PAGE_ITEMS)."""
+    if not ids:
+        return {}
+    if len(ids) > MAX_PAGE_ITEMS:
+        raise ValueError(f"sayfa {MAX_PAGE_ITEMS} kalemi aşamaz ({len(ids)})")
+    rows = (await session.execute(select(SlowQuerySample).where(SlowQuerySample.id.in_(ids)))).scalars().all()
+    return {row.id: row for row in rows}
 
 
 async def select_slow_queries(
@@ -251,9 +436,12 @@ async def select_slow_queries(
     end: datetime | None = None,
     sort: str = "total",
     limit: int = 20,
+    offset: int = 0,
     include_system: bool = False,
     min_total_ms: float = DEFAULT_MIN_TOTAL_MS,
     min_calls: int = DEFAULT_MIN_CALLS,
+    keys: list[str] | None = None,
+    with_samples: bool = True,
 ) -> SlowQuerySelection:
     """Pencere içindeki en sorunlu sorgular — rapor ve DPA'nın ORTAK kaynağı.
 
@@ -261,86 +449,107 @@ async def select_slow_queries(
     döngüsü varsa fark alınamaz; bu durumda kümülatif değerler `mode="snapshot"` ile
     döndürülür (yeni eklenmiş bir instance'ta listeyi boş bırakmak yerine, ne gösterildiğini
     dürüstçe söylemek).
-    """
-    conditions = [SlowQuerySample.instance_id == instance_id]
-    if start:
-        conditions.append(SlowQuerySample.collected_at >= _as_utc(start))
-    if end:
-        conditions.append(SlowQuerySample.collected_at <= _as_utc(end))
 
-    rows = list(
-        (
-            await session.execute(
-                select(SlowQuerySample).where(*conditions).order_by(SlowQuerySample.collected_at.asc())
+    Faz 31 Commit 9: gruplama, fark, sınıf filtresi, eşik, sayım, sıralama ve LIMIT SQL'de; meta
+    veritabanından yalnızca sayfadaki kalemler döner. `with_samples=False` metni ve ham satırı hiç
+    okumaz (içgörü, sayım). `keys` verilirse yalnızca o gruplar (rapordaki önceki dönem karşılaştırması).
+    """
+    limit = max(0, min(int(limit), MAX_PAGE_ITEMS))
+    groups, cycles = _selection_groups(instance_id, start, end)
+    computed = _computed(groups, cycles, include_system=include_system, min_total_ms=min_total_ms,
+                         min_calls=min_calls, pending=await _pending_classes(session, groups))
+    c = computed.c
+
+    counts = (
+        await session.execute(
+            select(
+                func.count().filter(c.verdict == "system").label("system"),
+                func.count().filter(c.verdict == "insignificant").label("insignificant"),
+                func.count().filter(c.verdict == "visible").label("visible"),
+                func.count().label("groups"),
+                cycles.label("cycles"),
             )
         )
-        .scalars()
-        .all()
-    )
-    if not rows:
+    ).one()
+    if not counts.groups:
         return SlowQuerySelection([], "delta", start, end)
+    mode = "delta" if (counts.cycles or 0) > 1 else "snapshot"
 
-    distinct_cycles = {row.collected_at for row in rows}
-    mode = "delta" if len(distinct_cycles) > 1 else "snapshot"
+    order_col = getattr(c, _ORDER.get(sort, "total"))
+    page_query = select(computed).where(c.verdict == "visible")
+    if keys is not None:
+        page_query = select(computed).where(c.verdict != "zero", c.key.in_(keys or [""]))
+    page = (
+        await session.execute(page_query.order_by(order_col.desc(), c.first_seen).limit(limit).offset(offset))
+    ).all()
 
-    text_to_key: dict[str, str] = {}
-    grouped: dict[str, list[SlowQuerySample]] = {}
-    for row in rows:
-        grouped.setdefault(_merge_key(row, text_to_key), []).append(row)
-
+    samples = await _load_samples(session, [r.last_id for r in page]) if with_samples else {}
     entries: list[SlowQueryEntry] = []
-    filtered_system = 0
-    filtered_insignificant = 0
-
-    for key, group in grouped.items():
-        group.sort(key=lambda r: r.collected_at)
-        first, last = group[0], group[-1]
-
-        if mode == "snapshot" or len(group) == 1:
-            # Fark alınamıyor: penceredeki tek örneğin kümülatif değeri.
-            total = float(last.total_time_ms or 0)
-            calls = int(last.calls or 0)
-        else:
-            reset = last.total_time_ms < first.total_time_ms or last.calls < first.calls
-            total = float(last.total_time_ms if reset else last.total_time_ms - first.total_time_ms)
-            calls = int(last.calls if reset else last.calls - first.calls)
-
-        if total <= 0:
-            continue
-
-        entry = SlowQueryEntry(
-            key=key,
-            queryid=last.queryid,
-            query=last.query,
-            calls=calls,
-            total_time_ms=round(total, 2),
-            mean_time_ms=round(total / calls, 2) if calls > 0 else float(last.mean_time_ms or 0),
-            rows=int(last.rows or 0),
-            sample=last,
-            system_reason=classify_system_query(last.query),
-            sample_count=len(group),
+    for r in page:
+        total = round(float(r.total or 0), 2)
+        calls = int(r.calls or 0)
+        sample = samples.get(r.last_id)
+        is_system = bool(r.is_system)
+        entries.append(
+            SlowQueryEntry(
+                key=r.key,
+                queryid=r.queryid,
+                query=sample.query if sample is not None else "",
+                calls=calls,
+                total_time_ms=total,
+                mean_time_ms=round(total / calls, 2) if calls > 0 else float(r.mean or 0),
+                rows=int(r.last_rows or 0),
+                sample=sample,
+                system_reason=(r.query_class or None) if is_system else None,
+                sample_count=int(r.n or 0),
+                marker_conflict=bool(r.marker_conflict),
+            )
         )
-        if entry.system_reason == DBACE_MARKER_LABEL and last.from_monitoring_role is False:
-            entry.system_reason = None
-            entry.marker_conflict = True
-
-        if entry.is_system and not include_system:
-            filtered_system += 1
-            continue
-        if entry.total_time_ms < min_total_ms or entry.calls < min_calls:
-            filtered_insignificant += 1
-            continue
-        entries.append(entry)
-
-    entries.sort(key=SORT_KEYS.get(sort, SORT_KEYS["total"]), reverse=True)
     return SlowQuerySelection(
-        entries=entries[:limit],
+        entries=entries,
         mode=mode,
         window_start=start,
         window_end=end,
-        filtered_system=filtered_system,
-        filtered_insignificant=filtered_insignificant,
+        filtered_system=int(counts.system or 0),
+        filtered_insignificant=int(counts.insignificant or 0),
+        visible_count=int(counts.visible or 0),
     )
+
+
+async def count_slow_in_list_view(
+    session: AsyncSession,
+    instance_id: int,
+    *,
+    threshold_ms: float,
+    sort: str = "mean",
+    limit: int = 20,
+) -> tuple[int, SlowQuerySelection]:
+    """Tuning "N yavaş ortalama süreli sorgu" sayısı — LİSTE GÖRÜNÜMÜYLE AYNI CTE'den `count(*)`
+    (Faz 31 Commit 7 sözleşmesi, Commit 9'da SQL'e taşındı). Seçimin kendisi de metinsiz dönüyor:
+    içgörü sorgu metni kullanmıyor."""
+    from app.services.noise_settings import get_noise_settings
+
+    from datetime import timedelta
+
+    noise = await get_noise_settings(session)
+    end = datetime.now(UTC)
+    start = end - timedelta(hours=DEFAULT_WINDOW_HOURS)
+    groups, cycles = _selection_groups(instance_id, start, end)
+    computed = _computed(groups, cycles, include_system=noise["show_system_queries"],
+                         min_total_ms=noise["list_min_total_ms"], min_calls=noise["list_min_calls"],
+                         pending=await _pending_classes(session, groups))
+    c = computed.c
+    view = (
+        select(c.mean).where(c.verdict == "visible")
+        .order_by(getattr(c, _ORDER.get(sort, "mean")).desc(), c.first_seen).limit(limit).subquery()
+    )
+    count = (await session.execute(select(func.count()).select_from(view).where(view.c.mean >= threshold_ms))).scalar_one()
+    selection = await select_slow_queries(
+        session, instance_id, start=start, end=end, sort=sort, limit=limit,
+        include_system=noise["show_system_queries"], min_total_ms=noise["list_min_total_ms"],
+        min_calls=noise["list_min_calls"], with_samples=False,
+    )
+    return int(count), selection
 
 
 async def find_slow_query(
@@ -356,21 +565,21 @@ async def find_slow_query(
 
     Rapor bir sorgudan bahsediyorsa o sorgunun DPA'da bulunabilir olması gerekiyor; bu
     fonksiyon o güvenceyi test edilebilir hale getiriyor (bkz. tests/test_report_dpa_consistency.py).
-    Eşikler ve sistem filtresi BURADA uygulanmaz: kullanıcı belirli bir sorguyu istedi.
+    Eşikler ve sistem filtresi BURADA uygulanmaz: kullanıcı belirli bir sorguyu istedi. Faz 31 Commit 9:
+    arama SQL'de (anahtar ya da queryid), yalnızca bulunan kalem okunuyor.
     """
+    groups, cycles = _selection_groups(instance_id, start, end)
+    computed = _computed(groups, cycles, include_system=True, min_total_ms=0.0, min_calls=0,
+                         pending=await _pending_classes(session, groups))
+    c = computed.c
+    condition = c.key == key if key is not None else c.queryid == queryid
+    row = (
+        await session.execute(select(c.key).where(c.verdict != "zero", condition).order_by(c.first_seen).limit(1))
+    ).first()
+    if row is None:
+        return None
     selection = await select_slow_queries(
-        session,
-        instance_id,
-        start=start,
-        end=end,
-        limit=10_000,
-        include_system=True,
-        min_total_ms=0.0,
-        min_calls=0,
+        session, instance_id, start=start, end=end, limit=1, include_system=True, min_total_ms=0.0,
+        min_calls=0, keys=[row.key],
     )
-    for entry in selection.entries:
-        if key is not None and entry.key == key:
-            return entry
-        if queryid is not None and entry.queryid == queryid:
-            return entry
-    return None
+    return selection.entries[0] if selection.entries else None

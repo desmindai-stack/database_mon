@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import Customer
 from app.schemas import CustomerCreate, CustomerOut, CustomerUpdate
 from app.services.deletion import clear_dependents, commit_or_conflict
@@ -11,8 +12,8 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 
 
 @router.get("", response_model=list[CustomerOut])
-async def list_customers(db: AsyncSession = Depends(get_db)) -> list[Customer]:
-    result = await db.execute(select(Customer).order_by(Customer.name))
+async def list_customers(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[Customer]:
+    result = await db.execute(page.apply(select(Customer).order_by(Customer.name)))
     return list(result.scalars().all())
 
 

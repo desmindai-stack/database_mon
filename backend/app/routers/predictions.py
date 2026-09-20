@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import PredictionInsight
 from app.schemas import PredictionAccuracyOut, PredictionOut, PredictionReliabilityOut
 from app.services.prediction_accuracy import accuracy_by_kind, reliability_map
@@ -54,6 +55,7 @@ def kind_of(metric_key: str) -> str:
 async def list_predictions(
     active_only: bool = True,
     accuracy_days: int = Query(default=30, ge=7, le=365),
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[PredictionOut]:
     """Açık tahminler + her birinin TÜRÜNE ait ölçülmüş güvenilirlik (Faz 20 İŞ 2).
@@ -62,10 +64,10 @@ async def list_predictions(
     ne kadar tuttu". Düşük çıkan türler arayüzde işaretleniyor — gizlenmiyor, çünkü modelin
     zayıf olması riskin gerçek olmadığı anlamına gelmez (bkz. ILERLEME.md).
     """
-    query = select(PredictionInsight).order_by(PredictionInsight.created_at.desc())
+    query = select(PredictionInsight).order_by(PredictionInsight.created_at.desc()).limit(page.limit).offset(page.offset)
     if active_only:
         query = query.where(PredictionInsight.acknowledged_at.is_(None))
-    rows = list((await db.execute(query.limit(100))).scalars().all())
+    rows = list((await db.execute(query)).scalars().all())
 
     accuracy = await reliability_map(db, days=accuracy_days)
     out: list[PredictionOut] = []
@@ -88,6 +90,7 @@ async def list_predictions(
 async def get_prediction_accuracy(
     days: int = Query(default=30, ge=7, le=365),
     instance_id: int | None = Query(default=None),
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[PredictionAccuracyOut]:
     """Tür bazında ölçülmüş doğruluk: ortalama mutlak hata, ortalama yüzde hata ve güven

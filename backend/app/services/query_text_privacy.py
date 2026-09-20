@@ -225,50 +225,51 @@ async def run_stored_text_cleanup(session, *, force: bool = False) -> dict[str, 
     """Faz 31 Commit 5 öncesinde yazılmış satırlara aynı kuralları uygular. Tek implementasyon
     (Python) — SQL migration'ı ile iki ayrı arındırıcının ayrışma riski yok.
 
-    Sürüm anahtarı `app_settings`'te; bir kez tamamlanınca her süreç başlangıcında 393 bin satırı
-    yeniden taramıyor. Parçalı (id sırasıyla 2000'er satır), yalnızca değişen satırı güncelliyor,
-    idempotent. Tablo başına değişen satır sayısını döner.
+    Sürüm anahtarı `app_settings`'te; bir kez tamamlanınca her süreç başlangıcında yeniden taramıyor.
+    Faz 31 Commit 9 (egress): her FARKLI metin bir kez okunuyor ve değişen metin için TEK toplu UPDATE
+    (`WHERE kolon = eski_metin`). Eskiden her satır okunup değişen her satır ayrı UPDATE'le yazılıyordu:
+    canlıda 393 bin satırın metni (≈330 MB egress) ve 123.938 tek satırlık UPDATE. Döndürdüğü: tablo başına
+    değişen FARKLI metin sayısı.
     """
-    from sqlalchemy import select, update
+    from sqlalchemy import select, tuple_, update
 
-    from app.models import AppSetting, DeadlockEvent
+    from app.models import AppSetting, DeadlockEvent, SlowQuerySample
 
     done = await session.get(AppSetting, CLEANUP_VERSION_KEY)
     if done is not None and done.value == CLEANUP_VERSION and not force:
         return {}
     changed: dict[str, int] = {}
     for model, columns in _cleanup_targets():
-        names = list(columns)
-        extra = [model.source] if model is DeadlockEvent else []
-        last_id = 0
         count = 0
-        while True:
-            rows = (
-                await session.execute(
-                    select(model.id, *[getattr(model, n) for n in names], *extra)
-                    .where(model.id > last_id)
-                    .order_by(model.id)
-                    .limit(CLEANUP_BATCH_SIZE)
-                )
-            ).all()
-            if not rows:
-                break
-            for row in rows:
-                last_id = row[0]
-                values = {}
-                for position, name in enumerate(names, start=1):
-                    original = row[position]
-                    keep = columns[name]
-                    if keep is None:
-                        cleaned = sanitize_deadlock_detail(original, source=row[-1])
-                    else:
-                        cleaned = sanitize_stored_query(original, keep_values=keep)
-                    if cleaned != original:
-                        values[name] = cleaned
-                if values:
-                    await session.execute(update(model).where(model.id == row[0]).values(**values))
+        for name, keep in columns.items():
+            column = getattr(model, name)
+            # Aynı metnin satırlarını bulmak için dizinli bir anahtar: yavaş sorguda parmak izi.
+            anchor = model.query_hash if model is SlowQuerySample and name == "query" else None
+            extra = [model.source] if model is DeadlockEvent and keep is None else []
+            key_columns = ([anchor] if anchor is not None else []) + [column] + extra
+            last = None
+            while True:
+                query = select(*key_columns).where(column.is_not(None)).distinct()
+                if last is not None:
+                    query = query.where(tuple_(*key_columns) > tuple_(*last))
+                values = (await session.execute(query.order_by(*key_columns).limit(CLEANUP_BATCH_SIZE))).all()
+                if not values:
+                    break
+                for value in values:
+                    last = tuple(value)
+                    original = value[1] if anchor is not None else value[0]
+                    cleaned = (sanitize_deadlock_detail(original, source=value[-1]) if keep is None
+                               else sanitize_stored_query(original, keep_values=keep))
+                    if cleaned == original:
+                        continue
+                    conditions = [column == original]
+                    if anchor is not None:
+                        conditions.append(anchor == value[0])
+                    if extra:
+                        conditions.append(model.source == value[-1])
+                    await session.execute(update(model).where(*conditions).values({name: cleaned}))
                     count += 1
-            await session.commit()
+                await session.commit()
         changed[model.__tablename__] = count
     row = await session.get(AppSetting, CLEANUP_VERSION_KEY)
     if row is None:

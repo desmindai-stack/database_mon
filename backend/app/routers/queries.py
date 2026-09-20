@@ -1,11 +1,12 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.domain.query_metrics import derive_metrics, flag_metrics, metric_dictionary
 from app.models import CapturedPlan, IndexAdviceOutcome, Instance, Node, Server, SlowQuerySample, WaitQuerySignature
 from app.services.collection import connection_target_for
@@ -70,7 +71,7 @@ _ADVICE_CACHE_TTL_SECONDS = 300.0
 # sonundaydı ve `GET /metric-dictionary` "metric-dictionary" bir instance_id sanılarak
 # 422 dönüyordu — sözlüğe hiç erişilemiyordu (Faz 29 İŞ 2a düzeltmesi).
 @router.get("/metric-dictionary", response_model=list[MetricMeaningOut])
-async def get_metric_dictionary() -> list[dict]:
+async def get_metric_dictionary(page: Page = Depends(page_params)) -> list[dict]:
     """Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).
 
     Arayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının
@@ -78,7 +79,26 @@ async def get_metric_dictionary() -> list[dict]:
 
     Instance gerektirmiyor: sözlük sunucudan bağımsız.
     """
-    return metric_dictionary()
+    return page.slice(metric_dictionary())
+
+
+#: Geçmiş serisinin ihtiyaç duyduğu kolonlar — metin YOK (Faz 31 Commit 9).
+_SERIES_COLUMNS = (
+    SlowQuerySample.id,
+    SlowQuerySample.queryid,
+    SlowQuerySample.collected_at,
+    SlowQuerySample.calls,
+    SlowQuerySample.total_time_ms,
+    SlowQuerySample.mean_time_ms,
+    SlowQuerySample.rows,
+)
+
+
+async def _query_texts(db: AsyncSession, ids: list[int]) -> dict[int, str]:
+    """Gösterilecek kalemlerin metni — yalnızca verilen satırlar (seri başına bir)."""
+    if not ids:
+        return {}
+    return dict((await db.execute(select(SlowQuerySample.id, SlowQuerySample.query).where(SlowQuerySample.id.in_(ids)))).all())
 
 
 @router.get("/{instance_id}/history", response_model=QueryHistoryListOut)
@@ -93,29 +113,51 @@ async def get_query_history(
         raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     since = datetime.now(UTC) - timedelta(hours=hours)
-    result = await db.execute(
-        select(SlowQuerySample)
-        .where(
-            SlowQuerySample.instance_id == instance_id,
-            SlowQuerySample.collected_at >= since,
-            SlowQuerySample.queryid.is_not(None),
+    # Faz 31 Commit 9 (egress): sıralama SQL'de (penceredeki SON örneğin toplam süresi), seri yalnızca ilk
+    # `limit` sorgu için ve METİNSİZ; metin seri başına bir satır. Eskiden penceredeki her örnek tam kolon.
+    in_window = [
+        SlowQuerySample.instance_id == instance_id,
+        SlowQuerySample.collected_at >= since,
+        SlowQuerySample.queryid.is_not(None),
+    ]
+    latest = (
+        select(
+            SlowQuerySample.queryid,
+            SlowQuerySample.id,
+            SlowQuerySample.total_time_ms,
+            func.row_number().over(
+                partition_by=SlowQuerySample.queryid,
+                order_by=[SlowQuerySample.collected_at.desc(), SlowQuerySample.id.desc()],
+            ).label("rn"),
+            func.min(SlowQuerySample.id).over(partition_by=SlowQuerySample.queryid).label("first_seen"),
         )
-        .order_by(SlowQuerySample.collected_at.asc())
+        .where(*in_window)
+        .subquery()
     )
-    rows = list(result.scalars().all())
-    grouped = group_rows_by_queryid(rows)
-
-    scored: list[tuple[float, QueryHistorySeriesOut]] = []
-    for qid, qrows in grouped.items():
-        series = build_query_series(qrows)
-        summary = summarize_history(qid, qrows[-1].query if qrows else "", series)
-        item = QueryHistorySeriesOut.model_validate(summary)
-        # Rank by recent total time impact
-        score = float(qrows[-1].total_time_ms or 0) if qrows else 0.0
-        scored.append((score, item))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return QueryHistoryListOut(hours=hours, series=[item for _, item in scored[:limit]])
+    top = (
+        await db.execute(
+            select(latest.c.queryid, latest.c.id)
+            .where(latest.c.rn == 1)
+            .order_by(latest.c.total_time_ms.desc(), latest.c.first_seen)
+            .limit(limit)
+        )
+    ).all()
+    queryids = [qid for qid, _ in top]
+    texts = await _query_texts(db, [last_id for _, last_id in top])
+    series_rows = (
+        await db.execute(
+            select(*_SERIES_COLUMNS)
+            .where(*in_window, SlowQuerySample.queryid.in_(queryids or [""]))
+            .order_by(SlowQuerySample.collected_at.asc(), SlowQuerySample.id.asc())
+        )
+    ).all()
+    grouped = group_rows_by_queryid(series_rows)
+    series_out = []
+    for qid, last_id in top:
+        qrows = grouped.get(str(qid), [])
+        summary = summarize_history(qid, texts.get(last_id, ""), build_query_series(qrows))
+        series_out.append(QueryHistorySeriesOut.model_validate(summary))
+    return QueryHistoryListOut(hours=hours, series=series_out)
 
 
 @router.get("/{instance_id}/history/{queryid}", response_model=QueryHistorySeriesOut)
@@ -130,16 +172,17 @@ async def get_query_history_detail(
         raise HTTPException(status_code=404, detail="Instance bulunamadi")
 
     since = datetime.now(UTC) - timedelta(hours=hours)
-    result = await db.execute(
-        select(SlowQuerySample)
-        .where(
-            SlowQuerySample.instance_id == instance_id,
-            SlowQuerySample.queryid == queryid,
-            SlowQuerySample.collected_at >= since,
+    rows = (
+        await db.execute(
+            select(*_SERIES_COLUMNS)
+            .where(
+                SlowQuerySample.instance_id == instance_id,
+                SlowQuerySample.queryid == queryid,
+                SlowQuerySample.collected_at >= since,
+            )
+            .order_by(SlowQuerySample.collected_at.asc(), SlowQuerySample.id.asc())
         )
-        .order_by(SlowQuerySample.collected_at.asc())
-    )
-    rows = list(result.scalars().all())
+    ).all()
     if not rows:
         # Faz 19 IS 1 — API DEGISIKLIGI: eskiden 404 donuyordu. Instance de sorgu da var
         # olabilir; yalnizca SECILEN PENCEREDE ornek yoktur (yeni eklenmis instance, uzun
@@ -147,7 +190,8 @@ async def get_query_history_detail(
         # istemcinin bunu silinmis bir kayittan ayirabilmesi icin bos seri donuyoruz.
         return QueryHistorySeriesOut.model_validate(summarize_history(queryid, "", []))
     series = build_query_series(rows)
-    return QueryHistorySeriesOut.model_validate(summarize_history(queryid, rows[-1].query, series))
+    texts = await _query_texts(db, [rows[-1].id])
+    return QueryHistorySeriesOut.model_validate(summarize_history(queryid, texts.get(rows[-1].id, ""), series))
 
 
 @router.get("/{instance_id}/availability", response_model=SlowQueryAvailabilityOut)
@@ -169,6 +213,7 @@ async def get_slow_query_availability_endpoint(
 async def get_slow_queries(
     instance_id: int,
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0, description="Sayfalama: atlanacak kalem sayısı (Faz 31 Commit 9)."),
     sort: str = Query(default="total", pattern="^(total|mean|calls)$"),
     start: datetime | None = Query(default=None, description="Aralık başlangıcı (ISO-8601)"),
     end: datetime | None = Query(default=None, description="Aralık bitişi (ISO-8601)"),
@@ -195,9 +240,10 @@ async def get_slow_queries(
     # Eşikler, sistem sorgusu görünürlüğü ve pencere TEK yerden (Faz 18 İŞ 2; Faz 31 Commit 7'de
     # Tuning içgörüsü ve teşhis paneli de aynı fonksiyona bağlandı).
     selection = await default_slow_query_selection(
-        db, instance_id, start=start, end=end, sort=sort, limit=limit, include_system=include_system
+        db, instance_id, start=start, end=end, sort=sort, limit=limit, offset=offset, include_system=include_system
     )
     out = selection_to_out(selection, selection.window_start, selection.window_end)
+    out.total, out.offset = selection.visible_count, offset
     out.monitoring_role = MonitoringRoleOut(**monitoring_role_status(instance))
     return out
 
@@ -694,6 +740,7 @@ async def advise_indexes_batch(
 @router.get("/{instance_id}/advice-outcomes", response_model=list[IndexAdviceOutcomeOut])
 async def list_advice_outcomes(
     instance_id: int,
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[IndexAdviceOutcomeOut]:
     """Index önerilerinin ölçülmüş etkisi: kurulmadan önce/sonra aynı sorgunun planı (Faz 31 Commit 5)."""
@@ -702,8 +749,9 @@ async def list_advice_outcomes(
         await db.execute(
             select(IndexAdviceOutcome)
             .where(IndexAdviceOutcome.instance_id == instance_id)
-            .order_by(IndexAdviceOutcome.registered_at.desc())
-            .limit(100)
+            .order_by(IndexAdviceOutcome.registered_at.desc(), IndexAdviceOutcome.id.desc())
+            .limit(page.limit)
+            .offset(page.offset)
         )
     ).scalars().all()
     return [IndexAdviceOutcomeOut(**outcome_payload(row)) for row in rows]
@@ -712,8 +760,10 @@ async def list_advice_outcomes(
 @router.get("/{instance_id}/advice-watches", response_model=list[IndexAdviceWatchListItemOut])
 async def list_advice_watches(
     instance_id: int,
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[IndexAdviceWatchListItemOut]:
     """Çağrı eşiği nedeniyle izlenen sorgular ve eşik dolunca üretilen öneriler (Faz 31 İŞ 1c)."""
     await _postgres_instance(db, instance_id)
-    return [IndexAdviceWatchListItemOut.model_validate(w) for w in await list_watches(db, instance_id)]
+    watches = await list_watches(db, instance_id, limit=page.limit, offset=page.offset)
+    return [IndexAdviceWatchListItemOut.model_validate(w) for w in watches]

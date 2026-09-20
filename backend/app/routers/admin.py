@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import User
 from app.schemas import (
     AnalysisSettingsOut,
@@ -52,8 +53,8 @@ async def trigger_retention_run(db: AsyncSession = Depends(get_db)) -> Retention
 
 
 @router.get("/users", response_model=list[UserOut])
-async def list_users(db: AsyncSession = Depends(get_db)) -> list[User]:
-    result = await db.execute(select(User).order_by(User.username))
+async def list_users(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[User]:
+    result = await db.execute(page.apply(select(User).order_by(User.username)))
     return list(result.scalars().all())
 
 

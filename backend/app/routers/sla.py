@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import SlaTarget, User
 from app.schemas import SlaTargetCreate, SlaTargetOut, SlaTargetUpdate
 from app.services.auth_deps import get_current_user
@@ -29,14 +30,14 @@ def _validate(target_pct: float, period: str) -> None:
 
 
 @router.get("/targets", response_model=list[SlaTargetOut])
-async def list_targets(db: AsyncSession = Depends(get_db)) -> list[SlaTarget]:
-    return list((await db.execute(select(SlaTarget).order_by(SlaTarget.id))).scalars().all())
+async def list_targets(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[SlaTarget]:
+    return list((await db.execute(page.apply(select(SlaTarget).order_by(SlaTarget.id)))).scalars().all())
 
 
 @router.get("/status", response_model=list[dict])
-async def sla_status(db: AsyncSession = Depends(get_db)) -> list[dict]:
+async def sla_status(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[dict]:
     """Tanımlı tüm hedeflerin güncel durumu (gerçekleşen, en iyi durum, kalan bütçe)."""
-    return [status.to_dict() for status in await evaluate_all(db)]
+    return [status.to_dict() for status in page.slice(await evaluate_all(db))]
 
 
 @router.get("/status/{target_id}", response_model=dict)

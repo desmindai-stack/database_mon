@@ -2670,3 +2670,39 @@ kurulumu internetsiz.
 
 **docker-compose.demo-db.yml ve host-agent compose dosyası sürüm paketine girmiyor** (pilot/geliştirme
 içindir); ihtiyaç olursa depodan alınır.
+
+## Faz 31 Commit 9a: egress — öneriler ve sınırlar
+
+**Saklama süresini kısaltmak (ÖLÇÜLDÜ, uygulanmadı).** `backend/scripts/meta_storage_report.py` ile ölçüm
+(canlı ölçeğinde 388.800 satır / 373 MB): 0-7 gün %23, 7-14 gün %23, 14+ gün %54. Yani 30 → 14 gün tabloyu
+%53, 30 → 7 gün %77 küçültür. **Ama egress'i doğrudan düşürmez:** ekranların ve işlerin okuduğu pencere zaten
+sabit (liste 24 saat, rapor dönemi, tahmin son 200 örnek) — Commit 9a sonrası bu yolların hiçbiri tabloyu
+baştan sona taramıyor. Saklamayı kısaltmanın kazancı DEPOLAMA (Supabase disk kotası) ve tam tablo tarayan tek
+seferlik işler; bedeli 7 günden eski karşılaştırma ("geçen haftaya göre") ve 14 günü aşan rapor dönemleridir.
+**Öneri:** slow_query_samples için ayrı ve daha kısa bir pencere (ör. 14 gün), metric_samples 30 günde kalsın
+(rollup zaten günlük özet tutuyor). Karar verilmeden önce canlıda aynı betikle ölçüm alınmalı.
+
+**Sorgu metnini tekilleştirmek (ölçüldü, uygulanmadı).** Satır baytının **%85'i sorgu metni** (ölçüm setinde
+262 MB / 310 MB; canlı satır başına ~840 bayt ile uyumlu). Aynı metin her toplama turunda yeniden yazılıyor:
+`queryid`/`query_hash` bazlı ayrı bir metin tablosu (`slow_query_texts(query_hash PK, query)`) ve örnek
+satırında yalnızca parmak izi, tabloyu metin tekrarından kurtarır. Ölçüm setinde kazanç 262 MB (metin 40 farklı
+şekle indiğinden oran gerçekçi değil); **canlıdaki gerçek oranı** şu sorgu verir:
+`SELECT count(*) AS satir, count(DISTINCT query_hash) AS farkli_metin, pg_size_pretty(sum(pg_column_size(query))::bigint) FROM slow_query_samples;`
+Commit 9a'dan sonra bu değişiklik SADECE depolama kazancı: liste ve sayım yolları metni zaten okumuyor.
+
+**pg_timezone_names (74 çağrı / 88 bin satır) dbace'ten gelmiyor.** Uygulama kodunda, bağımlılıklarda ve
+canlı testte (uygulamanın bütün yolları koşarken) hiç çağrılmıyor. Kaynağı büyük olasılıkla Supabase Studio
+(SQL/tablo editörü zaman dilimi listesini böyle okur). **Öneri:** Studio'yu kapalı tutmak; kimin çağırdığını
+kesinleştirmek için canlıda `SELECT userid::regrole, calls, rows FROM extensions.pg_stat_statements WHERE query
+ILIKE '%pg_timezone_names%';` — rol `postgres`/`supabase_admin` çıkarsa dbace değildir (dbace kendi rolüyle bağlanır).
+
+**Sayfalama varsayılanı 100, üst sınır 500.** 100'den çok instance/kayıt olan bir kurulumda arayüz ilk sayfayı
+gösterir; şu an arayüz `offset` göndermiyor (liste uçları yeni). Kurulum büyürse arayüze sayfa gezinmesi
+eklenmeli — açık iş.
+
+**Uzun vadeli tahminler artık günde bir.** Bir tahmin kullanıcı tarafından kapatılırsa (acknowledge) yeniden
+üretilmesi ertesi günü bulur; öncesinde 15 saniye içinde yeniden üretiliyordu. Bilinçli: dayandığı veri (günlük
+rollup, günlük şema fotoğrafı) günde bir değişiyor.
+
+**Satır sınırı (10.000) aşılırsa hata.** Sessiz kırpma yerine hata bilinçli: kırpılmış bir liste "sorun yok"
+gibi görünür. Bilinçli büyük okuma `execution_options(dbace_max_rows=...)` ile ve gerekçesiyle yapılır.

@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import AlertEvent, AlertRule
 from app.schemas import (
     AlertEventOut,
@@ -18,8 +19,8 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
 @router.get("/rules", response_model=list[AlertRuleOut])
-async def list_rules(db: AsyncSession = Depends(get_db)) -> list[AlertRule]:
-    result = await db.execute(select(AlertRule).order_by(AlertRule.created_at.desc()))
+async def list_rules(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[AlertRule]:
+    result = await db.execute(page.apply(select(AlertRule).order_by(AlertRule.created_at.desc(), AlertRule.id)))
     return list(result.scalars().all())
 
 
@@ -108,12 +109,13 @@ async def delete_rule(rule_id: int, db: AsyncSession = Depends(get_db)) -> None:
 @router.get("/events", response_model=list[AlertEventOut])
 async def list_events(
     active_only: bool = True,
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[AlertEvent]:
-    query = select(AlertEvent).order_by(AlertEvent.triggered_at.desc())
+    query = select(AlertEvent).order_by(AlertEvent.triggered_at.desc()).limit(page.limit).offset(page.offset)
     if active_only:
         query = query.where(AlertEvent.resolved_at.is_(None))
-    result = await db.execute(query.limit(100))
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 

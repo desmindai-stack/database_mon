@@ -3,6 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import Customer, Node, Server
 from app.schemas import ConnectionTestResult, ServerAgentTestRequest, ServerCreate, ServerOut, ServerUpdate
 from app.services.cluster_health import fetch_agent_snapshot
@@ -27,9 +28,10 @@ async def _test_agent(agent_url: str | None, agent_token: str | None) -> Connect
 
 @router.get("", response_model=list[ServerOut])
 async def list_servers(
-    customer_id: int | None = Query(default=None), db: AsyncSession = Depends(get_db)
+    customer_id: int | None = Query(default=None), page: Page = Depends(page_params),
+    db: AsyncSession = Depends(get_db),
 ) -> list[Server]:
-    query = select(Server).order_by(Server.name)
+    query = page.apply(select(Server).order_by(Server.name))
     if customer_id is not None:
         query = query.where(Server.customer_id == customer_id)
     return list((await db.execute(query)).scalars().all())

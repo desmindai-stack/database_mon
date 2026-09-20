@@ -220,14 +220,25 @@ async def index_advice_watch_tick() -> None:
 
 
 async def stored_text_cleanup_tick() -> None:
-    """Faz 31 Commit 5: var olan satırlardaki yardımcı ifade değerlerinin tek seferlik temizliği."""
+    """Faz 31 Commit 5: var olan satırlardaki yardımcı ifade değerlerinin tek seferlik temizliği.
+
+    Faz 31 Commit 9: migration'dan önce yazılmış yavaş sorgu satırlarının sınıfı (ve SQLite'ta parmak izi) da
+    burada, metin başına bir kez ve toplu UPDATE ile yazılıyor."""
     from app.services.query_text_privacy import run_stored_text_cleanup
+    from app.services.slow_query_selection import backfill_query_classes
 
     async with SessionLocal() as session:
         try:
             await run_stored_text_cleanup(session)
         except Exception:
             logger.exception("Saklanan sorgu metni temizliği başarısız")
+    async with SessionLocal() as session:
+        try:
+            classified = await backfill_query_classes(session)
+            if classified:
+                logger.info("Yavaş sorgu sınıflandırması: %s farklı metin", classified)
+        except Exception:
+            logger.exception("Yavaş sorgu sınıflandırması başarısız")
 
 
 async def backup_tick() -> None:

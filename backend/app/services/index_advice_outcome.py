@@ -28,6 +28,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
+
+#: Faz 31 Commit 9: tek sorgu için kayıtlı index önerisi ölçümü ve tur başına işlenen parti.
+MAX_OUTCOMES_PER_QUERY = 50
+TICK_BATCH = 200
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import classify_connection_error
@@ -109,7 +113,7 @@ async def register_outcomes(
             await session.execute(
                 select(IndexAdviceOutcome).where(
                     IndexAdviceOutcome.instance_id == instance.id, IndexAdviceOutcome.query_fingerprint == key
-                )
+                ).limit(MAX_OUTCOMES_PER_QUERY)
             )
         ).scalars()
     }
@@ -222,6 +226,7 @@ async def outcome_tick() -> dict[str, int]:
                     Instance.engine == str(DatabaseEngine.POSTGRESQL),
                 )
                 .order_by(IndexAdviceOutcome.instance_id)
+                .limit(TICK_BATCH)
             )
         ).all()
         by_instance: dict[int, tuple[Instance, list[IndexAdviceOutcome]]] = {}

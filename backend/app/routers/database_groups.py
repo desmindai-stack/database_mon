@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 
 from app.collectors.base import classify_connection_error
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import Application, DatabaseGroup, Node
 from app.domain.topology import GroupTopology
 from app.schemas import (
@@ -37,9 +38,10 @@ router = APIRouter(prefix="/groups", tags=["database-groups"])
 @router.get("", response_model=list[DatabaseGroupOut])
 async def list_groups(
     application_id: int | None = Query(default=None),
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[DatabaseGroupOut]:
-    query = select(DatabaseGroup).order_by(DatabaseGroup.name)
+    query = page.apply(select(DatabaseGroup).order_by(DatabaseGroup.name))
     if application_id is not None:
         query = query.where(DatabaseGroup.application_id == application_id)
     groups = list((await db.execute(query)).scalars().all())
@@ -139,12 +141,15 @@ async def delete_group(group_id: int, db: AsyncSession = Depends(get_db)) -> Non
 
 
 @router.get("/{group_id}/nodes", response_model=list[NodeOut])
-async def list_group_nodes(group_id: int, db: AsyncSession = Depends(get_db)) -> list[NodeOut]:
+async def list_group_nodes(group_id: int, page: Page = Depends(page_params),
+                           db: AsyncSession = Depends(get_db)) -> list[NodeOut]:
     group = await db.get(DatabaseGroup, group_id)
     if not group:
         raise HTTPException(status_code=404, detail="Database group not found")
     result = await db.execute(
-        select(Node).options(selectinload(Node.server)).where(Node.group_id == group_id).order_by(Node.name)
+        page.apply(
+            select(Node).options(selectinload(Node.server)).where(Node.group_id == group_id).order_by(Node.name)
+        )
     )
     nodes = result.scalars().all()
     outs = [NodeOut.model_validate(n) for n in nodes]

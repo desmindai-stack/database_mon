@@ -3,6 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import Application, Customer
 from app.schemas import ApplicationCreate, ApplicationOut, ApplicationUpdate
 from app.services.deletion import clear_dependents, commit_or_conflict
@@ -13,9 +14,10 @@ router = APIRouter(prefix="/applications", tags=["applications"])
 @router.get("", response_model=list[ApplicationOut])
 async def list_applications(
     customer_id: int | None = Query(default=None),
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[Application]:
-    query = select(Application).order_by(Application.name)
+    query = page.apply(select(Application).order_by(Application.name))
     if customer_id is not None:
         query = query.where(Application.customer_id == customer_id)
     result = await db.execute(query)

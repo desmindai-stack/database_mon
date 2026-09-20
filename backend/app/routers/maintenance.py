@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.domain.maintenance import RECURRENCE_LABELS, MaintenanceRecurrence
 from app.models import MaintenanceWindow, User
 from app.schemas import (
@@ -61,9 +62,10 @@ def _validate(starts_at: datetime, ends_at: datetime, recurrence: str) -> None:
 async def list_windows(
     scope_type: str | None = Query(default=None),
     scope_id: int | None = Query(default=None),
+    page: Page = Depends(page_params),
     db: AsyncSession = Depends(get_db),
 ) -> list[MaintenanceWindow]:
-    stmt = select(MaintenanceWindow).order_by(MaintenanceWindow.starts_at.desc())
+    stmt = page.apply(select(MaintenanceWindow).order_by(MaintenanceWindow.starts_at.desc()))
     if scope_type:
         stmt = stmt.where(MaintenanceWindow.scope_type == scope_type)
         if scope_id is not None:
@@ -73,7 +75,8 @@ async def list_windows(
 
 @router.get("/upcoming", response_model=list[dict])
 async def upcoming_occurrences(
-    days: int = Query(default=30, ge=1, le=365), db: AsyncSession = Depends(get_db)
+    days: int = Query(default=30, ge=1, le=365), page: Page = Depends(page_params),
+    db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
     """Önümüzdeki N gün içindeki somut bakım örnekleri.
 

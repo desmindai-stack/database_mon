@@ -65,6 +65,31 @@ if _database_url.startswith("sqlite"):
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
+#: Faz 31 Commit 9 (egress): meta veritabanından TEK sorguda dönebilecek en fazla satır. Canlıda Supabase
+#: egress kotası 17 kat aşıldı — ekranlar ve zamanlanmış işler zaman serisi tablolarından on binlerce tam
+#: satır çekiyordu. Sınır aşılırsa sorgu HATA verir (sessizce kırpılmaz). Bilinçli büyük okuma yalnızca
+#: `execution_options(dbace_max_rows=n)` ile, çağrı yerinde gerekçesiyle.
+MAX_META_ROWS = 10_000
+
+
+class MetaRowLimitExceeded(RuntimeError):
+    """Meta veritabanı sorgusu satır sınırını aştı."""
+
+
+@event.listens_for(engine.sync_engine, "after_cursor_execute")
+def _meta_row_cap(conn, cursor, statement, parameters, context, executemany) -> None:
+    # asyncpg ve aiosqlite bağdaştırıcıları sonucu yürütmede tamponluyor (`_rows`); sunucu tarafı imleçte yok.
+    rows = getattr(cursor, "_rows", None)
+    if rows is None:
+        return
+    limit = context.execution_options.get("dbace_max_rows", MAX_META_ROWS) if context is not None else MAX_META_ROWS
+    if len(rows) > limit:
+        raise MetaRowLimitExceeded(
+            f"Meta veritabanı sorgusu {len(rows)} satır döndürdü (sınır {limit}). Toplama/sayma SQL'de yapılmalı, "
+            f"liste sayfalanmalı. Sorgu: {' '.join(statement.split())[:300]}"
+        )
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with SessionLocal() as session:
         yield session
@@ -226,6 +251,9 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "instances", "topology_members", "topology_members JSON")
         await _sqlite_add_column_if_missing(conn, "instances", "topology_checked_at", "topology_checked_at DATETIME")
         await _sqlite_add_column_if_missing(conn, "instances", "topology_cluster_seen_at", "topology_cluster_seen_at DATETIME")
+        # Faz 31 Commit 9 — 20260918090000_slow_query_sample_identity.sql
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "query_hash", "query_hash VARCHAR(40)")
+        await _sqlite_add_column_if_missing(conn, "slow_query_samples", "query_class", "query_class TEXT")
         await _sqlite_add_column_if_missing(
             conn, "instances", "last_collect_error_at", "last_collect_error_at DATETIME"
         )

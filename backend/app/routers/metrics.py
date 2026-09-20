@@ -1,12 +1,15 @@
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models import Instance, MetricSample, SlowQuerySample
-from app.schemas import MetricSampleOut, SlowQueryOut
+from app.models import Instance, MetricSample
+from app.schemas import MetricSampleOut
+
+#: Grafik için yeterli nokta sayısı; uzun aralıklarda örnekler SQL'de eşit aralıkla seyreltiliyor.
+DEFAULT_MAX_POINTS = 720
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -19,6 +22,11 @@ async def get_metrics(
         default=None, description="Özel aralık başlangıcı (ISO-8601). Verilirse `hours` yok sayılır."
     ),
     end: datetime | None = Query(default=None, description="Özel aralık bitişi (ISO-8601)."),
+    max_points: int = Query(
+        default=DEFAULT_MAX_POINTS, ge=10, le=5000,
+        description="Kaç örnek döneceğinin üst sınırı (Faz 31 Commit 9). Aralıkta daha çok örnek varsa eşit aralıkla "
+        "seyreltilir; ilk ve son örnek her zaman dahil (bu yüzden sonuç en fazla bir örnek daha uzun olabilir).",
+    ),
     db: AsyncSession = Depends(get_db),
 ) -> list[MetricSample]:
     """Faz 16-B İŞ 3: hazır aralıkların (1/6/24 saat, 7 gün) yanında özel aralık desteği.
@@ -40,8 +48,24 @@ async def get_metrics(
     else:
         conditions.append(MetricSample.collected_at >= datetime.now(UTC) - timedelta(hours=hours))
 
+    # Faz 31 Commit 9 (egress): 24 saatlik aralık 15 sn aralıkla 5760 tam satır demekti (her biri 40+
+    # anahtarlık metrics_json) ve ekran 15 saniyede bir yeniliyor. Seyreltme SQL'de: her `adım`ıncı örnek.
+    numbered = (
+        select(
+            MetricSample.id,
+            func.row_number().over(order_by=[MetricSample.collected_at, MetricSample.id]).label("rn"),
+            func.count().over().label("total"),
+        )
+        .where(*conditions)
+        .subquery()
+    )
+    # TAM BÖLME (`//`): SQLAlchemy 2.0'da `/` gerçek bölme — 1.33'lük bir adım her satırı elerdi.
+    step = (numbered.c.total + max_points - 1) // max_points
+    kept = select(numbered.c.id).where(
+        or_((numbered.c.rn - 1) % step == 0, numbered.c.rn == numbered.c.total)
+    )
     result = await db.execute(
-        select(MetricSample).where(*conditions).order_by(MetricSample.collected_at.asc())
+        select(MetricSample).where(MetricSample.id.in_(kept)).order_by(MetricSample.collected_at.asc())
     )
     return [MetricSampleOut.from_orm_sample(row) for row in result.scalars().all()]
 

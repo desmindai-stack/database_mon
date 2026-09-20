@@ -110,6 +110,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 50 | `20260917090000_instance_observation_status.sql` | **YENİ** — instances: izleme rolü paylaşımı (monitoring_role_checked_at/shared_at/shared_apps) ve plan yakalama durumu (auto_explain_loaded, plan_capture_checked_at/error/found). CONCURRENTLY YOK |
 | 51 | `20260917090100_index_advice_outcomes.sql` | **YENİ** — index_advice_outcomes: index önerisinin ölçülmüş etkisi (index kurulmadan önce ve sonra aynı sorgunun planlayıcı maliyeti). CONCURRENTLY YOK |
 | 52 | `20260917090200_instance_topology.sql` | **YENİ** — instances: ölçülen topoloji (tek sunucu / cluster sağlıklı-bozuk / ölçülemedi, rol, üyeler, gerekçe, gereken yetki, son cluster gözlemi). CONCURRENTLY YOK |
+| 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor: 393 bin satırlık tabloda tabloyu bir kez yeniden yazar — bakım penceresinde çalıştırın. Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor. CONCURRENTLY YOK |
 
 ## Faz 31: migration adları ve geriye dönük temizlik
 
@@ -576,3 +577,16 @@ ayrışması CI'da denetleniyor.
 DBA tek dosya çalıştırıyor — `deploy/onprem/sql/postgresql-monitor-role.sql` (PostgreSQL) ya da
 `sqlserver-monitor-login.sql` (SQL Server). Yalnızca okuma yetkisi verirler; hangi yetkinin hangi özellik
 için gerektiği satır sonu yorumlarında ve `deploy/onprem/sql/permission-matrix.md` tablosunda (ölçülmüş).
+
+## Faz 31 Commit 9a — egress düzeltmesinin canlıya alınması
+
+1. **Migration #53** (`20260918090000_slow_query_sample_identity.sql`) — `query_hash` dolu olmadan yavaş sorgu
+   seçimi eski satırları gruplayamaz (uygulama bunu metin başına bir kez okuyup toplu UPDATE ile tamamlıyor, ama
+   asıl doldurma migration'da). 393 bin satırlık tabloda UPDATE tabloyu bir kez yeniden yazar: **bakım
+   penceresinde** çalıştırın, sonrasında `VACUUM (ANALYZE) slow_query_samples;`.
+2. Doğrulama: `SELECT count(*) FILTER (WHERE query_hash IS NULL) AS parmak_izi_yok,
+   count(*) FILTER (WHERE query_class IS NULL) AS sinif_yok FROM slow_query_samples;` — birincisi migration'dan
+   hemen sonra 0 olmalı; ikincisi worker açıldıktan sonra (açılış işi) 0'a iner.
+3. Worker'ı **migration'dan sonra** açın (worker açılışta sınıflandırma işini çalıştırıyor).
+4. Egress'i izleyin: Supabase → Reports → Egress. Beklenen: toplama turu ve ekran yenilemeleri büyüklük
+   mertebesinde düşer (ölçüm: ILERLEME.md Faz 31 Commit 9a tablosu).

@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -282,6 +283,21 @@ class MetricSample(Base):
         }
         return legacy.get(key)
 
+    #: `get_metric`'in JSON'da bulamayınca baktığı eski kolonlar.
+    LEGACY_METRIC_COLUMNS = (
+        "active_connections", "max_connections", "transactions_per_sec", "cache_hit_ratio",
+        "replication_lag_bytes", "database_size_bytes", "deadlocks", "temp_bytes",
+    )
+
+    @classmethod
+    def metric_expr(cls, key: str):
+        """`get_metric(key)`'in SQL karşılığı (Faz 31 Commit 9): yalnızca o metrik okunsun, bütün
+        `metrics_json` (40+ anahtar) değil. JSON değeri yoksa eski kolon."""
+        json_value = cls.metrics_json[key].as_float()
+        if key in cls.LEGACY_METRIC_COLUMNS:
+            return func.coalesce(json_value, getattr(cls, key))
+        return json_value
+
 
 class SlowQuerySample(Base):
     __tablename__ = "slow_query_samples"
@@ -290,6 +306,7 @@ class SlowQuerySample(Base):
     # metric_samples'takinin 20 katı.
     __table_args__ = (
         Index("ix_slow_query_samples_instance_collected", "instance_id", "collected_at"),
+        Index("ix_slow_query_samples_instance_hash", "instance_id", "query_hash"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -298,6 +315,11 @@ class SlowQuerySample(Base):
 
     queryid: Mapped[str | None] = mapped_column(String(64), nullable=True)
     query: Mapped[str] = mapped_column(Text, nullable=False)
+    # Faz 31 Commit 9 (egress): metnin parmak izi ve sistem sorgusu sınıfı satırda — seçim SQL'de
+    # gruplayıp sayabilsin, metin yalnızca gösterilen kalemler için okunsun. Yazılırken dolduruluyor
+    # (aşağıdaki `before_insert`); query_class NULL = henüz sınıflandırılmadı, '' = uygulama sorgusu.
+    query_hash: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    query_class: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Faz 31 Commit 4: satırı dbace'in KENDİ rolü mü üretti (pg_stat_statements.userid = toplayıcının
     # rolü). `/* dbace */` imzası sorgu ŞEKLİNİ işaretliyor; imzalı bir satırın gerçekten dbace'e
     # ait olduğunun kanıtı bu alan. None = bilinmiyor (Faz 31 öncesi satır).
@@ -391,6 +413,17 @@ class SlowQuerySample(Base):
     used_grant_kb: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     instance: Mapped["Instance"] = relationship(back_populates="slow_queries")
+
+
+@event.listens_for(SlowQuerySample, "before_insert")
+def _slow_query_identity(_mapper, _connection, target: "SlowQuerySample") -> None:
+    """Her ORM yazma yolu (toplayıcı, testler, araçlar) parmak izini ve sınıfı AYNI işlevle yazsın."""
+    from app.services.slow_query_selection import classify_system_query, query_fingerprint
+
+    if target.query_hash is None:
+        target.query_hash = query_fingerprint(target.query or "")
+    if target.query_class is None:
+        target.query_class = classify_system_query(target.query or "") or ""
 
 
 class AlertRule(Base):

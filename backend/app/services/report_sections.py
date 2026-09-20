@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.models import (
     AlertEvent,
@@ -181,20 +181,41 @@ def needs_more_days(have_days: float, need_days: float, what: str) -> str:
     )
 
 
-async def _samples_in_period(ctx: ReportContext, instance: Instance) -> list[MetricSample]:
-    """Dönem içindeki metrik örnekleri, zamana göre sıralı. Bölümler bunu paylaşır."""
+def _in_period(ctx: ReportContext, instance: Instance) -> list:
+    return [
+        MetricSample.instance_id == instance.id,
+        MetricSample.collected_at >= ctx.period_start,
+        MetricSample.collected_at <= ctx.period_end,
+    ]
+
+
+async def _cluster_rows_in_period(ctx: ReportContext, instance: Instance) -> list:
+    """Cluster bölümünün ihtiyacı: zaman, replikasyon gecikmesi ve gömülü cluster anlık görüntüsü — tam satır
+    (40+ anahtarlık metrics_json) değil (Faz 31 Commit 9, egress)."""
     rows = (
         await ctx.session.execute(
-            select(MetricSample)
-            .where(
-                MetricSample.instance_id == instance.id,
-                MetricSample.collected_at >= ctx.period_start,
-                MetricSample.collected_at <= ctx.period_end,
+            select(
+                MetricSample.collected_at,
+                MetricSample.replication_lag_bytes,
+                MetricSample.metrics_json["cluster_services"].label("cluster_services"),
             )
+            .where(*_in_period(ctx, instance))
             .order_by(MetricSample.collected_at.asc())
         )
-    ).scalars().all()
+    ).all()
     return list(rows)
+
+
+async def _period_edges(ctx: ReportContext, instance: Instance, **exprs) -> tuple:
+    """Dönemin İLK ve SON örneğindeki verilen ifadeler — kümülatif sayaçların dönem farkı için."""
+    columns = [expr.label(name) for name, expr in exprs.items()]
+    first = (await ctx.session.execute(
+        select(*columns).where(*_in_period(ctx, instance))
+        .order_by(MetricSample.collected_at.asc(), MetricSample.id.asc()).limit(1))).first()
+    last = (await ctx.session.execute(
+        select(*columns).where(*_in_period(ctx, instance))
+        .order_by(MetricSample.collected_at.desc(), MetricSample.id.desc()).limit(1))).first()
+    return first, last
 
 
 def _environment_of(instance: Instance) -> str:
@@ -212,6 +233,11 @@ def _fmt_duration(seconds: float) -> str:
         return f"{seconds / 60:.0f} dk"
     return f"{seconds / 3600:.1f} sa"
 
+
+#: Faz 31 Commit 9 (egress) — rapor okumalarının üst sınırları.
+LONG_OPEN_LIMIT = 200
+OPEN_PREDICTIONS_LIMIT = 500
+STATE_SNAPSHOT_DEPTH = 14
 
 #: Bloklama bulgusu için eşik. Tek bir oturumun kısa süre beklemesi normaldir; kilit
 #: beklemesi veritabanının çalışma biçiminin parçasıdır. Bulgu üretmek için birden çok
@@ -798,13 +824,13 @@ def _sla_advice(status_row, *, lost: bool) -> Advice:
 # --------------------------------------------------------------------------------------
 
 
-def _cluster_snapshots(samples: list[MetricSample]) -> list[tuple[datetime, dict]]:
+def _cluster_snapshots(samples: list) -> list[tuple[datetime, dict]]:
     """Örneklerin içine gömülü cluster anlık görüntüleri (collection.py bunları
     metrics_json["cluster_services"] altına yazar) — lider değişimi ve servis kesintileri
     buradan, geriye dönük olarak okunur."""
     out: list[tuple[datetime, dict]] = []
     for sample in samples:
-        snapshot = (sample.metrics_json or {}).get("cluster_services")
+        snapshot = sample.cluster_services
         if isinstance(snapshot, dict):
             out.append((as_utc(sample.collected_at), snapshot))
     return out
@@ -828,7 +854,7 @@ async def cluster_section(ctx: ReportContext) -> SectionResult:
     leader_changes_total = 0
 
     for instance in clustered:
-        samples = await _samples_in_period(ctx, instance)
+        samples = await _cluster_rows_in_period(ctx, instance)
         snapshots = _cluster_snapshots(samples)
 
         # Lider değişimi: ardışık anlık görüntülerde cluster.leader'ın değişmesi.
@@ -1526,15 +1552,19 @@ async def performance_section(ctx: ReportContext) -> SectionResult:
             instances_without_data.append(instance.name)
             continue
 
+        # Faz 31 Commit 9: önceki dönemden yalnızca BU dönemin kalemleri (anahtarla, SQL'de) — eskiden önceki
+        # dönemin bütün satırları tam kolon çekilip 10 bin kaleme kadar hesaplanıyordu.
         previous = await select_slow_queries(
             ctx.session,
             instance.id,
             start=previous_start,
             end=previous_end,
-            limit=10_000,
+            limit=len(selection.entries),
             min_total_ms=0.0,
             min_calls=0,
             include_system=True,
+            keys=[e.key for e in selection.entries],
+            with_samples=False,
         )
         previous_by_key = {e.key: e for e in previous.entries}
 
@@ -1644,6 +1674,32 @@ def _is_finding_worthy(entry, change: str, noise: dict) -> bool:
 # --------------------------------------------------------------------------------------
 
 
+async def _schema_object_edges(session, instance_ids: list[int]) -> tuple[list, list, int]:
+    """Nesne başına ilk ve son günlük fotoğraf + kapsamdaki farklı gün sayısı — SQL'de."""
+    s = SchemaObjectDailySample
+    partition = [s.instance_id, s.object_kind, s.schema_name, s.object_name]
+    ranked = (
+        select(
+            s.id, s.instance_id, s.object_kind, s.schema_name, s.object_name, s.day, s.size_bytes,
+            func.row_number().over(partition_by=partition, order_by=[s.day.asc(), s.id.asc()]).label("rn_first"),
+            func.row_number().over(partition_by=partition, order_by=[s.day.desc(), s.id.desc()]).label("rn_last"),
+            func.count().over(partition_by=partition).label("n"),
+            func.min(s.id).over(partition_by=partition).label("first_seen"),
+        )
+        .where(s.instance_id.in_(instance_ids))
+        .subquery()
+    )
+    first_rows = (await session.execute(select(ranked).where(ranked.c.rn_first == 1))).all()
+    last_ranked = (
+        select(ranked, s.extra).join(s, s.id == ranked.c.id).where(ranked.c.rn_last == 1).order_by(ranked.c.first_seen)
+    )
+    last_rows = (await session.execute(last_ranked)).all()
+    distinct_days = (
+        await session.execute(select(func.count(func.distinct(s.day))).where(s.instance_id.in_(instance_ids)))
+    ).scalar_one()
+    return list(first_rows), list(last_rows), int(distinct_days or 0)
+
+
 @register_section
 async def resources_section(ctx: ReportContext) -> SectionResult:
     """Kaynak kullanımı — bağlantı zirvesi, cache hit trendi, geçici dosya, checkpoint."""
@@ -1651,38 +1707,59 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
     rows: list[dict] = []
 
     for instance in ctx.instances:
-        samples = await _samples_in_period(ctx, instance)
-        if not samples:
+        # Faz 31 Commit 9 (egress): zirve, ortalama, en küçük ve dönem farkları SQL'de. Eskiden dönemin
+        # BÜTÜN örnekleri tam satır (40+ anahtarlık metrics_json dahil) okunuyordu — günlük raporda instance
+        # başına ~5760 satır, rapor işinin egress'inin yarısı.
+        in_period = _in_period(ctx, instance)
+        sample_count, cache_count, cache_avg_raw, cache_min_raw = (
+            await ctx.session.execute(
+                select(func.count(), func.count(MetricSample.cache_hit_ratio), func.avg(MetricSample.cache_hit_ratio),
+                       func.min(MetricSample.cache_hit_ratio))
+                .where(*in_period)
+            )
+        ).one()
+        if not sample_count:
             continue
 
-        conn_values = [(as_utc(s.collected_at), s.active_connections or 0) for s in samples]
-        peak_conn, peak_conn_at = max(((v, at) for at, v in conn_values), default=(0, None))
-        max_conn = next((s.max_connections for s in reversed(samples) if s.max_connections), None)
+        peak_row = (
+            await ctx.session.execute(
+                select(func.coalesce(MetricSample.active_connections, 0).label("value"), MetricSample.collected_at)
+                .where(*in_period)
+                .order_by(func.coalesce(MetricSample.active_connections, 0).desc(), MetricSample.collected_at.desc())
+                .limit(1)
+            )
+        ).first()
+        peak_conn, peak_conn_at = int(peak_row.value), as_utc(peak_row.collected_at)
+        max_conn = (
+            await ctx.session.execute(
+                select(MetricSample.max_connections)
+                .where(*in_period, MetricSample.max_connections.is_not(None), MetricSample.max_connections != 0)
+                .order_by(MetricSample.collected_at.desc(), MetricSample.id.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
         peak_util = round(peak_conn / max_conn * 100, 1) if max_conn else None
 
-        cache_values = [float(s.cache_hit_ratio) for s in samples if s.cache_hit_ratio is not None]
-        cache_avg = round(sum(cache_values) / len(cache_values), 2) if cache_values else None
-        cache_min = round(min(cache_values), 2) if cache_values else None
+        cache_avg = round(float(cache_avg_raw), 2) if cache_avg_raw is not None else None
+        cache_min = round(float(cache_min_raw), 2) if cache_min_raw is not None else None
 
         # Faz 18 İŞ 5 denetimi: temp_bytes KÜMÜLATİF bir sayaç (pg_stat_database.temp_bytes).
         # Eskiden max() alınıyordu; bu yalnızca son değeri verir, yani geçmişte bir kez geçici
         # dosya kullanmış her veritabanı sonsuza kadar bu bulguyu üretirdi. Doğrusu dönem farkı.
-        temp_values = [float(s.temp_bytes or 0) for s in samples]
-        if len(temp_values) >= 2:
+        first, last = await _period_edges(
+            ctx, instance,
+            temp=func.coalesce(MetricSample.temp_bytes, 0),
+            req=func.coalesce(MetricSample.metric_expr("checkpoints_req"), 0),
+            timed=func.coalesce(MetricSample.metric_expr("checkpoints_timed"), 0),
+        )
+        if sample_count >= 2:
             # Sayaç sıfırlanmışsa (pg_stat_reset) son değeri olduğu gibi al.
-            temp_delta = (
-                temp_values[-1]
-                if temp_values[-1] < temp_values[0]
-                else temp_values[-1] - temp_values[0]
-            )
+            temp_delta = float(last.temp) if last.temp < first.temp else float(last.temp - first.temp)
         else:
             temp_delta = 0.0
-
-        checkpoints_req = [float(s.get_metric("checkpoints_req") or 0) for s in samples]
-        checkpoints_timed = [float(s.get_metric("checkpoints_timed") or 0) for s in samples]
         # Kümülatif sayaçlar — dönemdeki artış anlamlı olan.
-        req_delta = max(0.0, (checkpoints_req[-1] - checkpoints_req[0])) if checkpoints_req else 0.0
-        timed_delta = max(0.0, (checkpoints_timed[-1] - checkpoints_timed[0])) if checkpoints_timed else 0.0
+        req_delta = max(0.0, float(last.req) - float(first.req))
+        timed_delta = max(0.0, float(last.timed) - float(first.timed))
 
         rows.append(
             {
@@ -1697,7 +1774,7 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                 "temp_bytes_in_period": temp_delta,
                 "checkpoints_requested": req_delta,
                 "checkpoints_timed": timed_delta,
-                "sample_count": len(samples),
+                "sample_count": int(sample_count),
             }
         )
 
@@ -1797,7 +1874,7 @@ async def resources_section(ctx: ReportContext) -> SectionResult:
                         "value": cache_avg,
                         "threshold": CACHE_HIT_WARN,
                         "min_value": cache_min,
-                        "sample_count": len(cache_values),
+                        "sample_count": int(cache_count),
                         "measured_at": ctx.period_end.isoformat(),
                     },
                     fingerprint_parts=("cache_hit", str(instance.id)),
@@ -1954,13 +2031,10 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
             unknown_reason="Kapsama bağlı instance bulunamadı.",
         )
 
-    rows = (
-        await ctx.session.execute(
-            select(SchemaObjectDailySample)
-            .where(SchemaObjectDailySample.instance_id.in_(instance_ids))
-            .order_by(SchemaObjectDailySample.day.asc())
-        )
-    ).scalars().all()
+    # Faz 31 Commit 9 (egress): nesne başına yalnızca İLK ve SON gün (SQL'de) — eskiden her nesnenin bütün
+    # günleri tam satır okunuyordu.
+    first_rows, last_rows, distinct_days = await _schema_object_edges(ctx.session, instance_ids)
+    rows = last_rows
 
     if not rows:
         return SectionResult(
@@ -1979,21 +2053,18 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
     #   * Kullanılmayan index → tek fotoğraf yeter (idx_scan = 0 bugünün gerçeği).
     # Eskiden ikisi de büyüme eşiğinin arkasındaydı; sonuç olarak ilk iki gün boyunca
     # kullanılmayan indexler HİÇ raporlanmıyor, bölüm tamamen "bilinmiyor" dönüyordu.
-    distinct_days = len({r.day for r in rows})
     growth_ready = distinct_days >= SCHEMA_MIN_DAYS
-
-    by_object: dict[tuple, list] = {}
-    for row in rows:
-        by_object.setdefault((row.instance_id, row.object_kind, row.schema_name, row.object_name), []).append(row)
+    firsts = {(r.instance_id, r.object_kind, r.schema_name, r.object_name): r for r in first_rows}
 
     growing: list[dict] = []
     unused_indexes: list[dict] = []
     findings: list[FindingDraft] = []
 
-    for (instance_id, kind, schema_name, object_name), group in by_object.items():
+    for latest in last_rows:
+        instance_id, kind, schema_name, object_name = (
+            latest.instance_id, latest.object_kind, latest.schema_name, latest.object_name)
         instance = ctx.instance_by_id(instance_id)
-        latest = group[-1]
-        first = group[0]
+        first = firsts[(instance_id, kind, schema_name, object_name)]
         growth = latest.size_bytes - first.size_bytes
         days = max((latest.day - first.day).days, 1)
 
@@ -2007,7 +2078,7 @@ async def schema_section(ctx: ReportContext) -> SectionResult:
                 }
             )
 
-        if growth_ready and growth > 0 and len(group) >= 2:
+        if growth_ready and growth > 0 and latest.n >= 2:
             growing.append(
                 {
                     "instance": instance.name if instance else instance_id,
@@ -2362,38 +2433,54 @@ async def alerts_section(ctx: ReportContext) -> SectionResult:
 
     # AlertEvent kuralın adını/eşiğini taşımaz (sadece rule_id + metric_value); okunabilir bir
     # rapor için kuralla birlikte çekiliyor.
-    triggered = (
+    # Faz 31 Commit 9 (egress): dönemdeki tetiklemeler KURAL BAŞINA SQL'de sayılıyor (sayı, ilk/son an);
+    # eskiden her olay satırı kuralıyla birlikte çekiliyordu — gürültülü bir kural binlerce satır demek.
+    per_rule = (
         await ctx.session.execute(
-            select(AlertEvent, AlertRule)
-            .join(AlertRule, AlertRule.id == AlertEvent.rule_id)
+            select(
+                AlertEvent.rule_id,
+                func.count().label("count"),
+                func.min(AlertEvent.triggered_at).label("first_at"),
+                func.max(AlertEvent.triggered_at).label("last_at"),
+            )
             .where(
                 AlertEvent.instance_id.in_(instance_ids),
                 AlertEvent.triggered_at >= ctx.period_start,
                 AlertEvent.triggered_at <= ctx.period_end,
             )
-            .order_by(AlertEvent.triggered_at.asc())
+            .group_by(AlertEvent.rule_id)
         )
     ).all()
-
+    rules = {
+        rule.id: rule
+        for rule in (
+            await ctx.session.execute(select(AlertRule).where(AlertRule.id.in_([r.rule_id for r in per_rule] or [0])))
+        ).scalars()
+    }
+    triggered_total = sum(int(r.count) for r in per_rule)
+    open_filter = [AlertEvent.instance_id.in_(instance_ids), AlertEvent.resolved_at.is_(None)]
+    still_open_count = (
+        await ctx.session.execute(select(func.count()).select_from(AlertEvent).where(*open_filter))
+    ).scalar_one()
+    # Bulgu yalnızca DÖNEMDEN ÖNCE açılıp hâlâ açık olanlar için; en eski LONG_OPEN_LIMIT tanesi.
     still_open = (
         await ctx.session.execute(
             select(AlertEvent, AlertRule)
             .join(AlertRule, AlertRule.id == AlertEvent.rule_id)
-            .where(AlertEvent.instance_id.in_(instance_ids), AlertEvent.resolved_at.is_(None))
+            .where(*open_filter, AlertEvent.triggered_at < ctx.period_start)
+            .order_by(AlertEvent.triggered_at.asc())
+            .limit(LONG_OPEN_LIMIT)
         )
     ).all()
 
-    by_rule: dict[int, list] = {}
-    rules: dict[int, AlertRule] = {}
-    for event, rule in triggered:
-        by_rule.setdefault(rule.id, []).append(event)
-        rules[rule.id] = rule
-
     rule_rows: list[dict] = []
     findings: list[FindingDraft] = []
-    for rule_id, group in by_rule.items():
-        rule = rules[rule_id]
-        noisy = len(group) >= NOISY_RULE_THRESHOLD
+    for row in per_rule:
+        rule_id, count = row.rule_id, int(row.count)
+        rule = rules.get(rule_id)
+        if rule is None:
+            continue
+        noisy = count >= NOISY_RULE_THRESHOLD
         rule_rows.append(
             {
                 "rule_id": rule_id,
@@ -2401,10 +2488,10 @@ async def alerts_section(ctx: ReportContext) -> SectionResult:
                 "metric": rule.metric,
                 "severity": rule.severity,
                 "threshold": rule.threshold,
-                "count": len(group),
+                "count": count,
                 "noisy": noisy,
-                "first_at": as_utc(group[0].triggered_at).isoformat(),
-                "last_at": as_utc(group[-1].triggered_at).isoformat(),
+                "first_at": as_utc(row.first_at).isoformat(),
+                "last_at": as_utc(row.last_at).isoformat(),
             }
         )
         if noisy:
@@ -2412,15 +2499,15 @@ async def alerts_section(ctx: ReportContext) -> SectionResult:
                 FindingDraft(
                     section="alerts",
                     severity="info",
-                    title=f"Gürültü yapan alarm kuralı: {rule.name} ({len(group)} tetikleme)",
+                    title=f"Gürültü yapan alarm kuralı: {rule.name} ({count} tetikleme)",
                     detail=(
                         f"'{rule.name}' kuralı ({rule.metric} {rule.operator} {rule.threshold}) dönem içinde "
-                        f"{len(group)} kez tetiklendi. Bu sıklık genelde eşiğin gerçek çalışma aralığına göre "
+                        f"{count} kez tetiklendi. Bu sıklık genelde eşiğin gerçek çalışma aralığına göre "
                         "çok dar olduğunu gösterir; her tetikleme gerçek bir olay değilse alarm körlüğü yaratır."
                     ),
                     evidence={
                         "metric": rule.metric,
-                        "value": len(group),
+                        "value": count,
                         "threshold": NOISY_RULE_THRESHOLD,
                         "rule_threshold": rule.threshold,
                         "rule_id": rule_id,
@@ -2468,11 +2555,11 @@ async def alerts_section(ctx: ReportContext) -> SectionResult:
         title="Alarmlar",
         status=status,
         summary=(
-            f"{len(triggered)} tetikleme, {len(still_open)} hâlâ açık, "
+            f"{triggered_total} tetikleme, {still_open_count} hâlâ açık, "
             f"{sum(1 for r in rule_rows if r['noisy'])} gürültü yapan kural."
         ),
         findings=findings,
-        data={"rules": rule_rows[:20], "triggered": len(triggered), "still_open": len(still_open)},
+        data={"rules": rule_rows[:20], "triggered": triggered_total, "still_open": int(still_open_count)},
     )
 
 
@@ -2499,6 +2586,7 @@ async def capacity_section(ctx: ReportContext) -> SectionResult:
                 PredictionInsight.acknowledged_at.is_(None),
             )
             .order_by(PredictionInsight.created_at.desc())
+            .limit(OPEN_PREDICTIONS_LIMIT)
         )
     ).scalars().all()
 
@@ -2593,11 +2681,21 @@ async def _state_snapshots(ctx: ReportContext, kind: str) -> dict[int, list[Dail
     """instance_id → günlük durum fotoğrafları (eskiden yeniye)."""
     if not ctx.instance_ids():
         return {}
+    # Faz 31 Commit 9 (egress): instance başına en yeni STATE_SNAPSHOT_DEPTH fotoğraf (SQL'de). Bölümler yalnızca
+    # en yeniyi ve ondan önceki son geçerli fotoğrafı kullanıyor; eskiden bütün günler çekiliyordu.
+    newest = (
+        select(
+            DailyStateSnapshot.id,
+            func.row_number().over(partition_by=DailyStateSnapshot.instance_id,
+                                   order_by=[DailyStateSnapshot.day.desc(), DailyStateSnapshot.id.desc()]).label("rn"),
+        )
+        .where(DailyStateSnapshot.instance_id.in_(ctx.instance_ids()), DailyStateSnapshot.kind == kind)
+        .subquery()
+    )
+    ids = select(newest.c.id).where(newest.c.rn <= STATE_SNAPSHOT_DEPTH)
     rows = (
         await ctx.session.execute(
-            select(DailyStateSnapshot)
-            .where(DailyStateSnapshot.instance_id.in_(ctx.instance_ids()), DailyStateSnapshot.kind == kind)
-            .order_by(DailyStateSnapshot.day.asc())
+            select(DailyStateSnapshot).where(DailyStateSnapshot.id.in_(ids)).order_by(DailyStateSnapshot.day.asc())
         )
     ).scalars().all()
     out: dict[int, list[DailyStateSnapshot]] = {}

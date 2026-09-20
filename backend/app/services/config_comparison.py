@@ -16,7 +16,7 @@ import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.config_drift import (
@@ -224,15 +224,21 @@ async def compare_group_from_snapshots(
             "unavailable_reason": "Karşılaştırma için en az iki düğüm gerekiyor.",
         }
 
-    stmt = (
-        select(DailyStateSnapshot)
-        .where(
-            DailyStateSnapshot.instance_id.in_(instance_ids),
-            DailyStateSnapshot.kind == SNAPSHOT_KIND,
+    # Faz 31 Commit 9 (egress): instance başına yalnızca en yeni fotoğraf (SQL'de) — eskiden bütün günler.
+    conditions = [DailyStateSnapshot.instance_id.in_(instance_ids), DailyStateSnapshot.kind == SNAPSHOT_KIND]
+    if day is not None:
+        conditions.append(DailyStateSnapshot.day == day)
+    newest = (
+        select(
+            DailyStateSnapshot.id,
+            func.row_number().over(partition_by=DailyStateSnapshot.instance_id,
+                                   order_by=[DailyStateSnapshot.day.desc(), DailyStateSnapshot.id.desc()]).label("rn"),
         )
-        .order_by(DailyStateSnapshot.day.desc())
+        .where(*conditions)
+        .subquery()
     )
-    rows = (await session.execute(stmt)).scalars().all()
+    ids = select(newest.c.id).where(newest.c.rn == 1)
+    rows = (await session.execute(select(DailyStateSnapshot).where(DailyStateSnapshot.id.in_(ids)))).scalars().all()
 
     # Instance başına EN YENİ fotoğraf. Farklı günlerin fotoğraflarını karşılaştırmak
     # yanıltıcı olurdu ama bir düğümün fotoğrafı bir gün eskiyse onu tamamen dışarıda

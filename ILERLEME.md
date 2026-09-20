@@ -8387,6 +8387,94 @@ düşürülünce şema farkı görülüyor; rol SQL'ine `GRANT pg_read_server_fi
 PG 16.15 ve 17.11 1977 / 3; xfail kalmadı (Commit 5'in strict xfail'i gerçek ölçüme dönüştü). DSN'siz:
 1862 geçti / 118 atlandı. On-prem paket testleri (`DBACE_TEST_ONPREM=1`): 2 geçti, 3 dk 6 sn.
 
+## Faz 31 — Commit 9a: meta veritabanı egress'i (Supabase kotası 17 kat aşıldı)
+
+**Migration:** `supabase/migrations/20260918090000_slow_query_sample_identity.sql` (#53) — slow_query_samples'a
+`query_hash` ve `query_class`. Var olan satırların parmak izini SQL'de hesaplıyor (tabloyu bir kez yeniden
+yazar; bakım penceresi). DEPLOY.md satırı eklendi.
+
+**Belirti:** Supabase free planı 5 GB egress veriyor, 85,67 GB kullanılmış, proje kısıtlandı; Railway'de worker
+durduruldu. Ölçümler canlı Supabase yerine YEREL PostgreSQL meta veritabanında yapıldı (kullanıcı talimatı).
+
+### Ölçüm aracı (tekrarlanabilir)
+
+`backend/scripts/meta_egress_probe.py`: ayrı bir PostgreSQL konteynerinde (replika yok — konteynerin ağ
+arayüzünden GİDEN bayt doğrudan egress) canlı ölçeğinde veri üretiyor (slow_query_samples 388.800 satır /
+373 MB, metric_samples 518.400, schema_object_daily_samples 21.600), sonra HER kod yolunu ayrı ayrı koşup
+arasında `pg_stat_statements_reset()` yapıyor: zamanlayıcının her işi ve OpenAPI'deki her GET ucu (elle liste
+yok; yol parametresi doldurulamayan 4 uç raporlanıyor). Ölçülen: dönen satır, çağrı ve giden bayt.
+
+### Kök neden — hangi sorgu hangi koddan (ölçülerek)
+
+| Canlı pg_stat_statements satırı | Kod yolu | Sıklık |
+|---|---|---|
+| slow_query_samples tam kolon, 1663 çağrı / 23,7M satır | `services/slow_query_selection.py::select_slow_queries` — liste (`GET /api/queries/{id}`), Tuning içgörüsü (`/insights`), teşhis (`/diagnostics`), rapor bölümü | Arayüz açıkken **15 saniyede bir** (liste + içgörü), rapor günde bir |
+| metric_samples tam kolon, 163.391 çağrı / 19,8M satır | `services/prediction.py::_short_horizon_predictions` — her toplama turunda, izlenen metrik BAŞINA ayrı sorgu, 200 tam satır | **15 saniyede bir** × metrik |
+| schema_object_daily_samples tam kolon, 90.562 çağrı / 10,9M satır | `services/prediction.py::_object_growth_predictions` (tablo + index) — her toplama turunda nesnelerin BÜTÜN geçmişi | **15 saniyede bir** × 2 |
+| slow_query_samples ikinci yol, 1164 çağrı / 5,4M satır | `routers/queries.py` geçmiş uçları (`/history`, `/history/{queryid}`) | Sorgular sekmesi açıkken |
+| slow_query_samples (from_monitoring_role + toplevel kolonlu) 156 çağrı / 851K | Aynı seçim, Faz 31'de kolon eklendikten SONRAKİ sürüm (pg_stat_statements ayrı satır sayıyor) | — |
+| `UPDATE slow_query_samples SET query=...` 123.938 çağrı | `services/query_text_privacy.py::run_stored_text_cleanup` — her satırı okuyup DEĞİŞEN HER SATIR için ayrı UPDATE | Tek sefer (sürüm anahtarına kadar her açılışta) |
+| pg_timezone_names 74 çağrı / 88K satır | **dbace değil.** Uygulama kodunda ve bağımlılıklarında geçmiyor; canlı testte uygulamanın bütün yolları koşturulduğunda çağrı sayısı 0 (Supabase Studio gibi bir istemci) | — |
+
+### Düzeltme
+
+- **Yavaş sorgu seçimi SQL'e taşındı.** Gruplama (metin parmak izi + rol/iç içe son eki), ilk/son örnek, fark,
+  sayaç sıfırlanması, sistem sınıfı, eşikler, sıralama, LIMIT/OFFSET ve SAYIM (`count(*)`) tek CTE'de. Metin
+  yalnızca sayfadaki kalemler için okunuyor; içgörü/sayım metni hiç okumuyor. Commit 7'nin "sayı ile liste aynı
+  kaynaktan" sözleşmesi korunuyor — sayı artık aynı CTE'nin `count(*)`'u (`count_slow_in_list_view`).
+  Gruplama için gereken iki alan (parmak izi, sınıf) artık satırda (#53); yazarken ORM olayı dolduruyor,
+  eski satırları metin başına bir kez sınıflandıran toplu iş dolduruyor.
+- **Tahminler:** kısa vade tek sorguda ve yalnızca izlenen metriğin değeriyle (`MetricSample.metric_expr`);
+  uzun vadeli tahminler (disk dolma, wraparound, tablo büyümesi, index şişmesi) günlük veriye dayandığı için
+  instance başına GÜNDE BİR; nesne büyümesi adayları SQL'de (`row_number`), noktalar yalnızca ilk 5 nesne için.
+- **Rapor:** kaynak bölümü zirve/ortalama/dönem farkını SQL'de hesaplıyor, cluster bölümü yalnızca üç kolon
+  okuyor, şema bölümü nesne başına ilk/son satırı alıyor, alarm bölümü kural başına SQL'de sayıyor, kesinti
+  boşlukları PostgreSQL'de `LAG` ile filtreleniyor.
+- **Metin temizliği:** her FARKLI metin bir kez okunuyor, değişen metin için TEK toplu UPDATE
+  (`WHERE query_hash = ... AND query = ...`) — satır satır UPDATE kalktı.
+- **Metrik serisi:** `GET /api/metrics/{id}` artık `max_points` (varsayılan 720) ile SQL'de eşit aralıkla
+  seyreltiyor; ilk ve son örnek her zaman dahil.
+- **pg_timezone_names:** dbace kaynaklı değil (kanıt: canlı testte 0 çağrı) — öneri SORULAR.md'de.
+
+### Korumalar (elle liste yok, hepsi negatif kontrollü)
+
+`tests/test_meta_query_guards.py`: (1) zaman serisi tablolarında (saklama işinden AST ile türetiliyor + günlük
+`day` kolonlu modeller) sınırsız tam kolon `select(Model)` yasak — sınır birincil anahtar, tekil kısıt ya da
+SQL'de LIMIT; ham SQL'de `SELECT *` yasak. (2) Çalışma anı satır sınırı: tek sorgu `MAX_META_ROWS` (10.000)
+satırdan fazlasını döndürürse `MetaRowLimitExceeded` — bilinçli büyük okuma `execution_options(dbace_max_rows=)`
+ile. (3) Liste döndüren her GET ucu `limit` (üst sınırlı) + `offset` alıyor; zaman serisi uçları `max_points`.
+Bu kural 22 uca sayfalama ekletti (`app/pagination.py`).
+
+### Ölçüm: önce → sonra (aynı veri, aynı yollar)
+
+| Yol | Satır (önce) | Satır (sonra) | Egress (önce) | Egress (sonra) | Oran |
+|---|---:|---:|---:|---:|---:|
+| Metin temizliği (tek sefer) | 388.861 | 62 | 271 MB | 35 KB | 7.887× |
+| Günlük sağlık raporu | 199.096 | 35.977 | 109 MB | 1,3 MB | 84× |
+| Günlük rollup | 17.331 | 69 | 13,8 MB | 28 KB | 510× |
+| Toplama turu (15 sn) | 24.096 | 687 | 4,2 MB | 62 KB | 69× |
+| `GET /queries/{id}` (liste) | 4.342 | 9 | 4,1 MB | 7 KB | 600× |
+| `GET /instances/{id}/insights` | 4.343 | 11 | 4,1 MB | 9 KB | 483× |
+| `GET /queries/{id}/diagnostics` | 4.342 | 9 | 4,1 MB | 11 KB | 392× |
+| `GET /queries/{id}/history` | 4.342 | 1.072 | 4,1 MB | 96 KB | 43× |
+| `GET /instances/{id}/blocking-history` | 40.322 | 3 | 600 KB | 4 KB | 151× |
+| `GET /instances/{id}/prediction-readiness` | 7.414 | 7 | 199 KB | 4 KB | 48× |
+| `GET /metrics/{id}` | 241 | 4 | 197 KB | 5 KB | 38× |
+| **TOPLAM (ölçülen bütün yollar)** | **695.104** | **38.289** | **416 MB** | **2,1 MB** | **196×** |
+
+Günlük tahmin (canlı sıklıklarla, tek instance, bir ekran açık): toplama turu 4,2 MB × 5.760 = 24 GB/gün →
+62 KB × 5.760 = 0,35 GB/gün; liste + içgörü 8,2 MB × 5.760 = 47 GB/gün → 16 KB × 5.760 = 0,09 GB/gün.
+
+### Testler
+
+- Canlı PostgreSQL (`tests/test_meta_egress_live_postgres.py`): SQL seçimi, AYNI satırlardan hesaplayan
+  **referans Python uygulamasıyla** birebir aynı (4 farklı sıralama/eşik/sistem filtresi bileşimi; sayaç
+  sıfırlanması, dbace imzası, iç içe çalıştırma, queryid'siz satır dahil); 30 satırlık pencerede toplam 10 satır
+  okunuyor ve metin yalnızca sayfadaki 3 kalem için; kesinti boşlukları SQL ve Python yollarında aynı;
+  migration'ın SQL parmak izi Python'unkiyle aynı (Türkçe/çok satırlı/boşluklu corpus); `pg_timezone_names`
+  çağrısı 0.
+- Korumalar ve negatif kontrolleri (yukarıda), 1875 test yeşil.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

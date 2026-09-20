@@ -121,9 +121,10 @@ async def _actual_from_sample(
     """Hedef zamana en yakın ham örnek. Hedefin ÖNCESİ ve SONRASI birlikte aranıyor: toplama
     döngüsü hedefi birkaç saniye kaçırmış olabilir."""
     target = _as_utc(outcome.target_at)
+    # Faz 31 Commit 9 (egress): yalnızca zaman ve ölçülen metrik — tam satır değil.
     rows = (
         await session.execute(
-            select(MetricSample)
+            select(MetricSample.collected_at, MetricSample.metric_expr(outcome.metric_key).label("value"))
             .where(
                 MetricSample.instance_id == outcome.instance_id,
                 MetricSample.collected_at >= target - _SAMPLE_TOLERANCE,
@@ -131,10 +132,10 @@ async def _actual_from_sample(
             )
             .order_by(MetricSample.collected_at.asc())
         )
-    ).scalars().all()
+    ).all()
     best: tuple[float, float] | None = None  # (mesafe, değer)
     for row in rows:
-        value = row.get_metric(outcome.metric_key)
+        value = row.value
         if value is None:
             continue
         distance = abs((_as_utc(row.collected_at) - target).total_seconds())

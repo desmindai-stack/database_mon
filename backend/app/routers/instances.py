@@ -2,13 +2,14 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget, classify_connection_error
 from app.collectors.registry import get_collector
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.services.collection_status import systemic_notice
 from app.domain.engines import DatabaseEngine
 from app.domain.metrics import CANONICAL_METRICS, metrics_for_engine
@@ -70,7 +71,7 @@ from app.services.collection import connection_target_for
 from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
 from app.services.performance_insights import analyze_metrics
-from app.services.slow_query_selection import INSIGHT_LIST_LIMIT, INSIGHT_LIST_SORT, default_slow_query_selection
+from app.services.slow_query_selection import INSIGHT_LIST_LIMIT, INSIGHT_LIST_SORT, SLOW_MEAN_MS, count_slow_in_list_view
 from app.services.deletion import (
     clear_dependents,
     collect_dependents,
@@ -101,8 +102,9 @@ def _connection_target(payload: InstanceCreate) -> ConnectionTarget:
 
 
 @router.get("/catalog/metrics", response_model=list[MetricDefinitionOut])
-async def metric_catalog(engine: DatabaseEngine | None = None) -> list[MetricDefinitionOut]:
-    defs = metrics_for_engine(engine) if engine else list(CANONICAL_METRICS)
+async def metric_catalog(engine: DatabaseEngine | None = None,
+                         page: Page = Depends(page_params)) -> list[MetricDefinitionOut]:
+    defs = page.slice(metrics_for_engine(engine) if engine else list(CANONICAL_METRICS))
     return [
         MetricDefinitionOut(
             key=m.key,
@@ -117,8 +119,8 @@ async def metric_catalog(engine: DatabaseEngine | None = None) -> list[MetricDef
 
 
 @router.get("", response_model=list[InstanceOut])
-async def list_instances(db: AsyncSession = Depends(get_db)) -> list[Instance]:
-    result = await db.execute(select(Instance).order_by(Instance.name))
+async def list_instances(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[Instance]:
+    result = await db.execute(page.apply(select(Instance).order_by(Instance.name)))
     return list(result.scalars().all())
 
 
@@ -142,8 +144,8 @@ async def create_instance(payload: InstanceCreate, db: AsyncSession = Depends(ge
 
 
 @router.get("/summary", response_model=list[InstanceSummary])
-async def list_summaries(db: AsyncSession = Depends(get_db)) -> list[InstanceSummary]:
-    instances = (await db.execute(select(Instance).order_by(Instance.name))).scalars().all()
+async def list_summaries(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[InstanceSummary]:
+    instances = (await db.execute(page.apply(select(Instance).order_by(Instance.name)))).scalars().all()
     summaries: list[InstanceSummary] = []
 
     for instance in instances:
@@ -209,7 +211,8 @@ async def list_summaries(db: AsyncSession = Depends(get_db)) -> list[InstanceSum
 # SABİT yol `/{instance_id}`'den ÖNCE: FastAPI rotaları kayıt sırasıyla eşleştiriyor ve
 # `/{instance_id}` her tek segmenti yakalıyor (bkz. tests/test_route_order.py).
 @router.get("/collection-health", response_model=CollectionHealthOut)
-async def get_collection_health(db: AsyncSession = Depends(get_db)) -> CollectionHealthOut:
+async def get_collection_health(page: Page = Depends(page_params),
+                                db: AsyncSession = Depends(get_db)) -> CollectionHealthOut:
     """Veritabanı başına toplama durumu ve varsa sistemik uyarı (Faz 30 İŞ 1).
 
     Hata eskiden yalnızca log'a düşüyordu; kullanıcı bir veritabanının günlerdir veri
@@ -218,7 +221,7 @@ async def get_collection_health(db: AsyncSession = Depends(get_db)) -> Collectio
 
     Sistemik uyarı ayrı alanda: şema uyumsuzluğu tek tek veritabanlarının sorunu değil.
     """
-    result = await db.execute(select(Instance).order_by(Instance.name))
+    result = await db.execute(page.apply(select(Instance).order_by(Instance.name)))
     instances = result.scalars().all()
     items = [
         CollectionHealthItemOut(
@@ -234,9 +237,13 @@ async def get_collection_health(db: AsyncSession = Depends(get_db)) -> Collectio
         for i in instances
     ]
     notice = systemic_notice()
+    # Faz 31 Commit 9: sayfa kadar kalem dönüyor; "hata veren" sayısı SAYFAYA değil hepsine ait (SQL count).
+    failing = (
+        await db.execute(select(func.count()).select_from(Instance).where(Instance.last_collect_error.is_not(None)))
+    ).scalar_one()
     return CollectionHealthOut(
         items=items,
-        failing=sum(1 for i in items if i.last_collect_error),
+        failing=int(failing),
         notice=SystemicCollectionNoticeOut(**notice.as_dict()) if notice else None,
     )
 
@@ -629,14 +636,15 @@ async def set_ignored_prerequisites(
 
 
 @router.get("/{instance_id}/prediction-readiness", response_model=list[PredictionReadinessOut])
-async def get_prediction_readiness(instance_id: int, db: AsyncSession = Depends(get_db)) -> list[PredictionReadinessOut]:
+async def get_prediction_readiness(instance_id: int, page: Page = Depends(page_params),
+                                   db: AsyncSession = Depends(get_db)) -> list[PredictionReadinessOut]:
     """Faz 16 İŞ 6: her tahmin türü için "kaç gün/örnek gerekli, şu an ne kadar var" —
     tahminin kendisi olmasa bile bu her zaman döner, böylece UI "neden tahmin yok" sorusunu
     her zaman cevaplayabilir."""
     instance = await db.get(Instance, instance_id)
     if not instance:
         raise HTTPException(status_code=404, detail="Instance not found")
-    results = await compute_prediction_readiness(db, instance_id, instance.engine)
+    results = page.slice(await compute_prediction_readiness(db, instance_id, instance.engine))
     return [PredictionReadinessOut(**vars(r)) for r in results]
 
 
@@ -695,27 +703,27 @@ async def get_blocking_tree(
 async def _deadlock_counter_delta(db: AsyncSession, instance_id: int, start: datetime, end: datetime) -> int | None:
     """Pencere içindeki deadlock sayısı, toplanan `pg_stat_database.deadlocks` KÜMÜLATİF sayacından.
 
-    Sayaç sıfırlanırsa (pg_stat_reset, yeniden başlatma) düşüşten sonraki artış da sayılıyor.
-    Pencerede iki örnek yoksa ölçüm yok: None.
+    Sayaç sıfırlanırsa (pg_stat_reset, yeniden başlatma) düşüşten sonraki değer artış sayılıyor.
+    Pencerede iki örnek yoksa ölçüm yok: None. Faz 31 Commit 9 (egress): fark SQL'de (`LAG`); eskiden
+    penceredeki her örnek çekiliyordu (7 günde instance başına ~40 bin satır).
     """
-    values = (
-        await db.execute(
-            select(MetricSample.deadlocks)
-            .where(
-                MetricSample.instance_id == instance_id,
-                MetricSample.collected_at >= start,
-                MetricSample.collected_at <= end,
-            )
-            .order_by(MetricSample.collected_at)
+    in_window = (
+        select(
+            MetricSample.deadlocks.label("value"),
+            func.lag(MetricSample.deadlocks).over(order_by=[MetricSample.collected_at, MetricSample.id]).label("previous"),
         )
-    ).scalars().all()
-    if len(values) < 2:
-        return None
-    total = 0
-    for previous, current in zip(values, values[1:]):
-        previous, current = int(previous or 0), int(current or 0)
-        total += current - previous if current >= previous else current
-    return total
+        .where(
+            MetricSample.instance_id == instance_id,
+            MetricSample.collected_at >= start,
+            MetricSample.collected_at <= end,
+        )
+        .subquery()
+    )
+    value = func.coalesce(in_window.c.value, 0)
+    previous = func.coalesce(in_window.c.previous, 0)
+    increase = case((in_window.c.previous.is_(None), 0), (value >= previous, value - previous), else_=value)
+    samples, total = (await db.execute(select(func.count(), func.coalesce(func.sum(increase), 0)))).one()
+    return int(total) if samples >= 2 else None
 
 
 def _postgres_deadlock_detail_reason(instance: Instance, counter: int | None) -> str | None:
@@ -931,11 +939,12 @@ async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get
     # Faz 31 Commit 7: yavaş sorgu içgörüsü LİSTENİN KENDİSİNDEN. Eskiden son anlık görüntünün ham
     # satırlarıydı (sistem ve dbace sorguları dahil, kümülatif ortalama): "2 yavaş sorgu" deniyor, listede
     # 1 görünüyordu (gerçek veride ölçüldü). Sayı ayrı hesaplanmıyor; gizlenenler nedenleriyle.
-    selection = await default_slow_query_selection(
-        db, instance_id, sort=INSIGHT_LIST_SORT, limit=INSIGHT_LIST_LIMIT
+    # Faz 31 Commit 9: içgörü sorgu METNİ kullanmıyor — seçim metinsiz, sayı aynı CTE'den count(*).
+    slow_mean_count, selection = await count_slow_in_list_view(
+        db, instance_id, threshold_ms=SLOW_MEAN_MS, sort=INSIGHT_LIST_SORT, limit=INSIGHT_LIST_LIMIT
     )
     slow_rows = [
-        {"query": e.query, "calls": e.calls, "total_time_ms": e.total_time_ms, "mean_time_ms": e.mean_time_ms}
+        {"calls": e.calls, "total_time_ms": e.total_time_ms, "mean_time_ms": e.mean_time_ms}
         for e in selection.entries
     ]
 
@@ -944,6 +953,7 @@ async def get_instance_insights(instance_id: int, db: AsyncSession = Depends(get
         slow_queries=slow_rows,
         collected_at=latest.collected_at if latest else None,
         hidden_queries={"system": selection.filtered_system, "insignificant": selection.filtered_insignificant},
+        slow_mean_count=slow_mean_count,
     )
     return TuningReportOut(
         health_score=report.health_score,

@@ -688,6 +688,10 @@ class SlowQueryListOut(BaseModel):
     window_end: datetime | None = None
     filtered_system: int = Field(default=0, json_schema_extra={"counted_from": 'hidden: sistem/dbace sorgusu'})
     filtered_insignificant: int = Field(default=0, json_schema_extra={"counted_from": 'hidden: eşik altı'})
+    # Faz 31 Commit 9: sayfalamadan ÖNCE filtreleri geçen kalem sayısı — aynı CTE'den SQL count(*).
+    total: int = Field(default=0, json_schema_extra={
+        "counted_from": 'external: slow_query_selection.select_slow_queries — sayfalamadan önceki SQL count(*)'})
+    offset: int = 0
     # Faz 31 Commit 5: köken ayrımının (dbace/uygulama) ölçülebilir olup olmadığı.
     monitoring_role: MonitoringRoleOut | None = None
 

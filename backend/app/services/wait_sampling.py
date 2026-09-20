@@ -276,7 +276,7 @@ async def _write_bucket(session: AsyncSession, instance_id: int, bucket: _Minute
             select(WaitSampleMinute).where(
                 WaitSampleMinute.instance_id == instance_id,
                 WaitSampleMinute.minute == bucket.minute,
-            )
+            ).limit(MAX_WAIT_ROWS_PER_MINUTE)
         )
     ).scalars().all()
     by_key = {(r.queryid, r.wait_category, r.wait_event): r for r in existing_rows}
@@ -371,6 +371,10 @@ async def _write_samples(
             row.sample_captured_at = captured_at
 
 
+#: Bir dakikalık bekleme kovasında (instance başına) en fazla satır — sorgu × bekleme olayı.
+MAX_WAIT_ROWS_PER_MINUTE = 5000
+
+
 async def enforce_query_text_privacy(session: AsyncSession) -> int:
     """Saklanmış gerçek değerli metni temizler.
 
@@ -388,8 +392,8 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
 
     keep_samples = await _store_real_query_samples(session)
     changed = 0
-    rows = (await session.execute(select(WaitQuerySignature))).scalars().all()
-    for row in rows:
+    # Faz 31 Commit 9: parti parti (id sırasıyla PRIVACY_BATCH satır) — tek sorguda bütün tablo değil.
+    async for row in _batches(session, WaitQuerySignature):
         normalized = sanitize_stored_query(row.query_text or "", keep_values=False)
         drop_sample = not keep_samples and row.sample_query_text is not None
         if normalized != row.query_text or drop_sample:
@@ -403,8 +407,7 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
         from app.models import CapturedPlan
         from app.services.sql_analysis import strip_plan_values
 
-        plans = (await session.execute(select(CapturedPlan))).scalars().all()
-        for plan in plans:
+        async for plan in _batches(session, CapturedPlan):
             text = sanitize_stored_query(plan.query_text or "", keep_values=False)
             body = strip_plan_values(plan.plan_json) if plan.plan_json is not None else None
             if text != plan.query_text or body != plan.plan_json:
@@ -413,6 +416,22 @@ async def enforce_query_text_privacy(session: AsyncSession) -> int:
                 changed += 1
     await session.commit()
     return changed
+
+
+PRIVACY_BATCH = 500
+
+
+async def _batches(session: AsyncSession, model):
+    last_id = 0
+    while True:
+        rows = (
+            await session.execute(select(model).where(model.id > last_id).order_by(model.id).limit(PRIVACY_BATCH))
+        ).scalars().all()
+        if not rows:
+            return
+        for row in rows:
+            yield row
+        last_id = rows[-1].id
 
 
 async def _write_signatures(session: AsyncSession, instance_id: int, texts: dict[str, str]) -> None:

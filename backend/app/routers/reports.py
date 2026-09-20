@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.scheduler import reschedule_health_report
 from app.database import get_db
+from app.pagination import Page, page_params
 from app.models import FindingAcknowledgement, FindingStatusHistory, HealthReport, ReportFinding, User
 from app.schemas import (
     AcknowledgeFindingRequest,
@@ -101,9 +102,10 @@ async def list_reports(
     scope_type: str | None = Query(default=None),
     scope_id: int | None = Query(default=None),
     limit: int = Query(default=30, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ) -> list[HealthReportSummaryOut]:
-    stmt = select(HealthReport).order_by(HealthReport.generated_at.desc()).limit(limit)
+    stmt = select(HealthReport).order_by(HealthReport.generated_at.desc()).limit(limit).offset(offset)
     if scope_type:
         stmt = stmt.where(HealthReport.scope_type == scope_type)
     if scope_id is not None:
@@ -154,9 +156,9 @@ async def update_schedule(
 
 
 @router.get("/acknowledgements", response_model=list[FindingAcknowledgementOut])
-async def list_acknowledgements(db: AsyncSession = Depends(get_db)) -> list[FindingAcknowledgement]:
+async def list_acknowledgements(page: Page = Depends(page_params), db: AsyncSession = Depends(get_db)) -> list[FindingAcknowledgement]:
     rows = (
-        await db.execute(select(FindingAcknowledgement).order_by(FindingAcknowledgement.acknowledged_at.desc()))
+        await db.execute(page.apply(select(FindingAcknowledgement).order_by(FindingAcknowledgement.acknowledged_at.desc())))
     ).scalars().all()
     return list(rows)
 
@@ -282,7 +284,8 @@ async def set_finding_status(
 
 
 @router.get("/findings/{fingerprint}/history", response_model=list[FindingStatusHistoryOut])
-async def get_finding_history(fingerprint: str, db: AsyncSession = Depends(get_db)) -> list[FindingStatusHistory]:
+async def get_finding_history(fingerprint: str, page: Page = Depends(page_params),
+                              db: AsyncSession = Depends(get_db)) -> list[FindingStatusHistory]:
     """Bir bulgunun durum değişikliği geçmişi — otomatik geçişler dahil."""
     rows = (
         await db.execute(
@@ -408,7 +411,9 @@ async def export_report(
 
 
 @router.get("/{report_id}/export-sections", response_model=list[dict])
-async def list_exportable_sections(report_id: int, view: str = Query(default="technical"), db: AsyncSession = Depends(get_db)) -> list[dict]:
+async def list_exportable_sections(report_id: int, view: str = Query(default="technical"),
+                                   page: Page = Depends(page_params),
+                                   db: AsyncSession = Depends(get_db)) -> list[dict]:
     """Dışa aktarma öncesi bölüm seçimi için kullanılabilir bölümlerin listesi."""
     report = await db.get(HealthReport, report_id)
     if report is None:
@@ -426,13 +431,13 @@ async def list_exportable_sections(report_id: int, view: str = Query(default="te
             "work_done": "Bu dönemde yapılanlar",
             "recommendations": "Öneriler",
         }
-        return [{"key": k, "title": labels[k]} for k in EXECUTIVE_SECTION_KEYS]
+        return page.slice([{"key": k, "title": labels[k]} for k in EXECUTIVE_SECTION_KEYS])
     sections = report.sections or {}
     items = sections.get("items") or {}
-    return [
+    return page.slice([
         {"key": key, "title": (items.get(key) or {}).get("title") or key}
         for key in (sections.get("order") or [])
-    ]
+    ])
 
 
 @router.delete("/{report_id}", status_code=204)

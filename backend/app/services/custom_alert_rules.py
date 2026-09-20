@@ -182,7 +182,7 @@ async def evaluate_custom_alert_rules(session: AsyncSession) -> None:
                 continue
 
             existing = await session.execute(
-                select(AlertEvent).where(AlertEvent.rule_id == rule.id, AlertEvent.resolved_at.is_(None))
+                select(AlertEvent.id).where(AlertEvent.rule_id == rule.id, AlertEvent.resolved_at.is_(None)).limit(1)
             )
             if existing.scalar_one_or_none():
                 continue

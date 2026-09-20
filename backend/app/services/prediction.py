@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from datetime import date
+
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.metrics import METRIC_KEYS
@@ -117,11 +119,11 @@ _CONNECTION_ACTIONS = {
 
 async def _existing_open_insight(session: AsyncSession, instance_id: int, metric_key: str) -> bool:
     existing = await session.execute(
-        select(PredictionInsight).where(
+        select(PredictionInsight.id).where(
             PredictionInsight.instance_id == instance_id,
             PredictionInsight.metric_key == metric_key,
             PredictionInsight.acknowledged_at.is_(None),
-        )
+        ).limit(1)
     )
     return existing.scalar_one_or_none() is not None
 
@@ -149,11 +151,27 @@ async def run_predictions(
         session, instance_id, current_metrics, engine=engine, horizon_minutes=horizon_minutes,
         sample_interval_seconds=sample_interval_seconds,
     )
-    created += await _database_size_prediction(session, instance_id)
-    created += await _wraparound_prediction(session, instance_id, engine)
-    created += await _table_growth_predictions(session, instance_id)
-    created += await _index_bloat_predictions(session, instance_id)
+    # Faz 31 Commit 9 (egress): uzun vadeli tahminler GÜNLÜK veriye dayanıyor (rollup 03:30, şema günde bir);
+    # 15 saniyelik her toplama turunda yeniden okunmaları canlıda günde ~90 bin şema sorgusu demekti.
+    # Artık instance başına günde bir kez (süreç yeniden başlarsa ilk turda bir kez daha).
+    if _long_horizon_due(instance_id):
+        created += await _database_size_prediction(session, instance_id)
+        created += await _wraparound_prediction(session, instance_id, engine)
+        created += await _table_growth_predictions(session, instance_id)
+        created += await _index_bloat_predictions(session, instance_id)
     return created
+
+
+#: instance_id → uzun vadeli tahminlerin en son hesaplandığı gün (süreç içi).
+_LONG_HORIZON_DONE: dict[int, date] = {}
+
+
+def _long_horizon_due(instance_id: int, *, today: date | None = None) -> bool:
+    today = today or datetime.now(UTC).date()
+    if _LONG_HORIZON_DONE.get(instance_id) == today:
+        return False
+    _LONG_HORIZON_DONE[instance_id] = today
+    return True
 
 
 async def _short_horizon_predictions(
@@ -176,6 +194,7 @@ async def _short_horizon_predictions(
     )
     created: list[PredictionInsight] = []
 
+    candidates: list[str] = []
     for metric_key in watch_metrics:
         if metric_key not in current_metrics or current_metrics[metric_key] is None:
             continue
@@ -183,17 +202,26 @@ async def _short_horizon_predictions(
             continue
         if await _existing_open_insight(session, instance_id, metric_key):
             continue
+        candidates.append(metric_key)
+    if not candidates:
+        return created
 
-        result = await session.execute(
-            select(MetricSample)
+    # Faz 31 Commit 9 (egress): son 200 örnek TEK sorguda ve yalnızca aday metriklerin değerleriyle. Eskiden
+    # metrik başına ayrı sorgu ve tam satır (40+ anahtarlık metrics_json dahil) — 15 saniyede bir, canlıda
+    # günde ~163 bin çağrı.
+    recent = list(reversed((
+        await session.execute(
+            select(MetricSample.collected_at, *[MetricSample.metric_expr(k).label(k) for k in candidates])
             .where(MetricSample.instance_id == instance_id)
             .order_by(MetricSample.collected_at.desc())
             .limit(200)
         )
-        samples = list(reversed(result.scalars().all()))
+    ).all()))
+
+    for metric_key in candidates:
         points: list[SeasonalPoint] = []
-        for sample in samples:
-            val = sample.get_metric(metric_key)
+        for sample in recent:
+            val = getattr(sample, metric_key)
             if val is not None:
                 ts = sample.collected_at if sample.collected_at.tzinfo else sample.collected_at.replace(tzinfo=UTC)
                 points.append(SeasonalPoint(ts, float(val)))
@@ -392,11 +420,11 @@ def _record_long_horizon(
 async def _rollup_points(session: AsyncSession, instance_id: int, metric_key: str) -> list[SeasonalPoint]:
     rows = (
         await session.execute(
-            select(MetricRollupDaily)
+            select(MetricRollupDaily.day, MetricRollupDaily.last_value)
             .where(MetricRollupDaily.instance_id == instance_id, MetricRollupDaily.metric_key == metric_key)
             .order_by(MetricRollupDaily.day.asc())
         )
-    ).scalars().all()
+    ).all()
     return [SeasonalPoint(datetime.combine(r.day, datetime.min.time(), tzinfo=UTC), r.last_value) for r in rows]
 
 
@@ -564,28 +592,46 @@ async def _wraparound_prediction(session: AsyncSession, instance_id: int, engine
 async def _object_growth_predictions(
     session: AsyncSession, instance_id: int, object_kind: str, requirement_kind: str, prefix: str
 ) -> list[PredictionInsight]:
-    rows = (
-        await session.execute(
-            select(SchemaObjectDailySample)
-            .where(SchemaObjectDailySample.instance_id == instance_id, SchemaObjectDailySample.object_kind == object_kind)
-            .order_by(SchemaObjectDailySample.day.asc())
+    # Faz 31 Commit 9 (egress): büyüme (son gün − ilk gün) ve aday seçimi SQL'de; günlük noktalar yalnızca
+    # en çok büyüyen TOP_N_OBJECTS nesne için. Eskiden nesnelerin bütün geçmişi tam satır okunuyordu.
+    s = SchemaObjectDailySample
+    scope = [s.instance_id == instance_id, s.object_kind == object_kind]
+    ranked = (
+        select(
+            s.schema_name, s.object_name, s.size_bytes,
+            func.row_number().over(partition_by=[s.schema_name, s.object_name], order_by=s.day.asc()).label("rn_first"),
+            func.row_number().over(partition_by=[s.schema_name, s.object_name], order_by=s.day.desc()).label("rn_last"),
         )
-    ).scalars().all()
-    by_object: dict[tuple[str, str], list[SchemaObjectDailySample]] = {}
-    for r in rows:
+        .where(*scope)
+        .subquery()
+    )
+    growth = (func.max(case((ranked.c.rn_last == 1, ranked.c.size_bytes)))
+              - func.max(case((ranked.c.rn_first == 1, ranked.c.size_bytes))))
+    top = (
+        await session.execute(
+            select(ranked.c.schema_name, ranked.c.object_name)
+            .group_by(ranked.c.schema_name, ranked.c.object_name)
+            .having(and_(func.count() >= 2, growth > 0))
+            .order_by(growth.desc(), ranked.c.schema_name, ranked.c.object_name)
+            .limit(TOP_N_OBJECTS)
+        )
+    ).all()
+    if not top:
+        return []
+    point_rows = (
+        await session.execute(
+            select(s.schema_name, s.object_name, s.day, s.size_bytes)
+            .where(*scope, or_(*[and_(s.schema_name == sn, s.object_name == on) for sn, on in top]))
+            .order_by(s.day.asc())
+        )
+    ).all()
+    by_object: dict[tuple[str, str], list] = {}
+    for r in point_rows:
         by_object.setdefault((r.schema_name, r.object_name), []).append(r)
 
-    candidates: list[tuple[float, tuple[str, str], list[SchemaObjectDailySample]]] = []
-    for key, obj_rows in by_object.items():
-        if len(obj_rows) < 2:
-            continue
-        growth = obj_rows[-1].size_bytes - obj_rows[0].size_bytes
-        if growth > 0:
-            candidates.append((growth, key, obj_rows))
-    candidates.sort(key=lambda c: c[0], reverse=True)
-
     created: list[PredictionInsight] = []
-    for _growth, (schema_name, object_name), obj_rows in candidates[:TOP_N_OBJECTS]:
+    for schema_name, object_name in top:
+        obj_rows = by_object.get((schema_name, object_name), [])
         metric_key = f"{prefix}:{schema_name}.{object_name}"[:64]
         if await _existing_open_insight(session, instance_id, metric_key):
             continue
@@ -673,33 +719,25 @@ async def _index_bloat_predictions(session: AsyncSession, instance_id: int) -> l
 
 
 async def _rollup_day_count(session: AsyncSession, instance_id: int, metric_key: str) -> int:
-    rows = (
+    return int((
         await session.execute(
-            select(MetricRollupDaily.id).where(
+            select(func.count()).select_from(MetricRollupDaily).where(
                 MetricRollupDaily.instance_id == instance_id, MetricRollupDaily.metric_key == metric_key
             )
         )
-    ).all()
-    return len(rows)
+    ).scalar_one())
 
 
 async def _best_object_day_count(session: AsyncSession, instance_id: int, object_kind: str) -> int:
     """En çok geçmişe sahip TEK nesnenin gün sayısı — table_growth/index_bloat "en iyi durumda
     ne kadar veri var" sorusuna cevap verir (her nesnenin kendi ayrı tarihçesi var)."""
-    rows = (
-        await session.execute(
-            select(SchemaObjectDailySample.schema_name, SchemaObjectDailySample.object_name).where(
-                SchemaObjectDailySample.instance_id == instance_id,
-                SchemaObjectDailySample.object_kind == object_kind,
-            )
-        )
-    ).all()
-    if not rows:
-        return 0
-    counts: dict[tuple[str, str], int] = {}
-    for schema_name, object_name in rows:
-        counts[(schema_name, object_name)] = counts.get((schema_name, object_name), 0) + 1
-    return max(counts.values())
+    per_object = (
+        select(func.count().label("days"))
+        .where(SchemaObjectDailySample.instance_id == instance_id, SchemaObjectDailySample.object_kind == object_kind)
+        .group_by(SchemaObjectDailySample.schema_name, SchemaObjectDailySample.object_name)
+        .subquery()
+    )
+    return int((await session.execute(select(func.coalesce(func.max(per_object.c.days), 0)))).scalar_one())
 
 
 async def compute_prediction_readiness(session: AsyncSession, instance_id: int, engine: str) -> list[DataSufficiency]:
@@ -711,18 +749,18 @@ async def compute_prediction_readiness(session: AsyncSession, instance_id: int, 
     db_days = await _rollup_day_count(session, instance_id, "database_size_bytes")
     results.append(check_sufficiency("database_size", have_days=db_days, have_samples=db_days))
 
-    conn_count_result = await session.execute(
+    recent = (
         select(MetricSample.collected_at)
         .where(MetricSample.instance_id == instance_id)
         .order_by(MetricSample.collected_at.desc())
         .limit(200)
+        .subquery()
     )
-    conn_rows = conn_count_result.scalars().all()
-    if conn_rows:
-        span_days = (max(conn_rows) - min(conn_rows)).total_seconds() / 86400.0
-    else:
-        span_days = 0.0
-    results.append(check_sufficiency("connection_trend", have_days=span_days, have_samples=len(conn_rows)))
+    oldest, newest, have = (
+        await session.execute(select(func.min(recent.c.collected_at), func.max(recent.c.collected_at), func.count()))
+    ).one()
+    span_days = (newest - oldest).total_seconds() / 86400.0 if have else 0.0
+    results.append(check_sufficiency("connection_trend", have_days=span_days, have_samples=int(have or 0)))
 
     if engine == "postgresql":
         wraparound_days = await _rollup_day_count(session, instance_id, "transaction_id_age")

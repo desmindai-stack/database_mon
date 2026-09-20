@@ -10188,6 +10188,17 @@
               }
             ]
           },
+          "offset": {
+            "default": 0,
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "counted_from": "external: slow_query_selection.select_slow_queries — sayfalamadan önceki SQL count(*)",
+            "default": 0,
+            "title": "Total",
+            "type": "integer"
+          },
           "window_end": {
             "anyOf": [
               {
@@ -11977,6 +11988,35 @@
     "/api/admin/users": {
       "get": {
         "operationId": "list_users_api_admin_users_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -11991,6 +12031,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -12203,6 +12253,33 @@
               "title": "Active Only",
               "type": "boolean"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -12292,6 +12369,35 @@
     "/api/alerts/rules": {
       "get": {
         "operationId": "list_rules_api_alerts_rules_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -12306,6 +12412,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -12523,6 +12639,33 @@
                 }
               ],
               "title": "Customer Id"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -12946,6 +13089,35 @@
     "/api/customers": {
       "get": {
         "operationId": "list_customers_api_customers_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -12960,6 +13132,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -13298,6 +13480,33 @@
                 }
               ],
               "title": "Application Id"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -13736,6 +13945,33 @@
               "title": "Group Id",
               "type": "integer"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -13843,6 +14079,35 @@
     "/api/instances": {
       "get": {
         "operationId": "list_instances_api_instances_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -13857,6 +14122,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -13933,6 +14208,33 @@
               ],
               "title": "Engine"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -13976,6 +14278,35 @@
       "get": {
         "description": "Veritabanı başına toplama durumu ve varsa sistemik uyarı (Faz 30 İŞ 1).\n\nHata eskiden yalnızca log'a düşüyordu; kullanıcı bir veritabanının günlerdir veri\nyazamadığını ancak grafiklerin boş kalmasından anlıyordu — o da \"sorun yok\" ile\nkarıştırılabilecek bir sinyal.\n\nSistemik uyarı ayrı alanda: şema uyumsuzluğu tek tek veritabanlarının sorunu değil.",
         "operationId": "get_collection_health_api_instances_collection_health_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -13986,6 +14317,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -14002,6 +14343,35 @@
     "/api/instances/summary": {
       "get": {
         "operationId": "list_summaries_api_instances_summary_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -14016,6 +14386,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -14729,6 +15109,33 @@
               "title": "Instance Id",
               "type": "integer"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -15064,6 +15471,33 @@
               ],
               "title": "Scope Id"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -15161,6 +15595,33 @@
               "maximum": 365,
               "minimum": 1,
               "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
               "type": "integer"
             }
           }
@@ -15360,6 +15821,20 @@
               ],
               "description": "Özel aralık bitişi (ISO-8601).",
               "title": "End"
+            }
+          },
+          {
+            "description": "Kaç örnek döneceğinin üst sınırı (Faz 31 Commit 9). Aralıkta daha çok örnek varsa eşit aralıkla seyreltilir; ilk ve son örnek her zaman dahil (bu yüzden sonuç en fazla bir örnek daha uzun olabilir).",
+            "in": "query",
+            "name": "max_points",
+            "required": false,
+            "schema": {
+              "default": 720,
+              "description": "Kaç örnek döneceğinin üst sınırı (Faz 31 Commit 9). Aralıkta daha çok örnek varsa eşit aralıkla seyreltilir; ilk ve son örnek her zaman dahil (bu yüzden sonuç en fazla bir örnek daha uzun olabilir).",
+              "maximum": 5000,
+              "minimum": 10,
+              "title": "Max Points",
+              "type": "integer"
             }
           }
         ],
@@ -15668,6 +16143,33 @@
               "title": "Accuracy Days",
               "type": "integer"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -15738,6 +16240,33 @@
                 }
               ],
               "title": "Instance Id"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -15829,6 +16358,35 @@
       "get": {
         "description": "Sorgu metriklerinin sözlüğü: her metrik ne ölçüyor, ne zaman sorun (Faz 29 İŞ 2a).\n\nArayüz bu metinleri ELLE YAZMIYOR. Aynı açıklamanın iki yerde farklı olması, kullanıcının\nhangisine güveneceğini bilememesi demekti; eşikler de aynı modülden geliyor.\n\nInstance gerektirmiyor: sözlük sunucudan bağımsız.",
         "operationId": "get_metric_dictionary_api_queries_metric_dictionary_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -15843,6 +16401,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -15879,6 +16447,19 @@
               "maximum": 100,
               "minimum": 1,
               "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sayfalama: atlanacak kalem sayısı (Faz 31 Commit 9).",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Sayfalama: atlanacak kalem sayısı (Faz 31 Commit 9).",
+              "minimum": 0,
+              "title": "Offset",
               "type": "integer"
             }
           },
@@ -16053,6 +16634,33 @@
               "title": "Instance Id",
               "type": "integer"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -16103,6 +16711,33 @@
             "required": true,
             "schema": {
               "title": "Instance Id",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
               "type": "integer"
             }
           }
@@ -16747,6 +17382,17 @@
               "title": "Limit",
               "type": "integer"
             }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -16789,6 +17435,35 @@
     "/api/reports/acknowledgements": {
       "get": {
         "operationId": "list_acknowledgements_api_reports_acknowledgements_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -16803,6 +17478,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -16964,6 +17649,33 @@
             "schema": {
               "title": "Fingerprint",
               "type": "string"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -17436,6 +18148,33 @@
               "title": "View",
               "type": "string"
             }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -17494,6 +18233,33 @@
                 }
               ],
               "title": "Customer Id"
+            }
+          },
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
             }
           }
         ],
@@ -17864,6 +18630,35 @@
       "get": {
         "description": "Tanımlı tüm hedeflerin güncel durumu (gerçekleşen, en iyi durum, kalan bütçe).",
         "operationId": "sla_status_api_sla_status_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -17879,6 +18674,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [
@@ -17944,6 +18749,35 @@
     "/api/sla/targets": {
       "get": {
         "operationId": "list_targets_api_sla_targets_get",
+        "parameters": [
+          {
+            "description": "Sayfadaki en fazla kalem.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Sayfadaki en fazla kalem.",
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Atlanacak kalem sayısı.",
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Atlanacak kalem sayısı.",
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -17958,6 +18792,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
           }
         },
         "security": [

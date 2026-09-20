@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, date, datetime, timedelta
-from statistics import mean
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.collectors.base import ConnectionTarget
@@ -36,23 +35,29 @@ SCHEMA_OBJECTS_LIMIT = 20
 async def _rollup_metrics_for_instance(
     session: AsyncSession, instance: Instance, day: date, window_start: datetime, window_end: datetime
 ) -> int:
-    result = await session.execute(
-        select(MetricSample).where(
-            MetricSample.instance_id == instance.id,
-            MetricSample.collected_at >= window_start,
-            MetricSample.collected_at < window_end,
-        )
-    )
-    samples = list(result.scalars().all())
-    if not samples:
-        return 0
-
+    # Faz 31 Commit 9 (egress): ortalama/en küçük/en büyük/sayı ve son değer SQL'de. Eskiden günün bütün
+    # örnekleri (15 sn aralıkla instance başına 5760 tam satır) okunup Python'da hesaplanıyordu.
+    in_day = [
+        MetricSample.instance_id == instance.id,
+        MetricSample.collected_at >= window_start,
+        MetricSample.collected_at < window_end,
+    ]
     written = 0
     for key in ROLLUP_METRIC_KEYS:
-        values = [v for v in (s.get_metric(key) for s in samples) if v is not None]
-        values = [float(v) for v in values]
-        if not values:
+        value = MetricSample.metric_expr(key)
+        count, avg_value, min_value, max_value = (
+            await session.execute(
+                select(func.count(value), func.avg(value), func.min(value), func.max(value)).where(*in_day)
+            )
+        ).one()
+        if not count:
             continue
+        last_value = (
+            await session.execute(
+                select(value).where(*in_day, value.is_not(None))
+                .order_by(MetricSample.collected_at.desc(), MetricSample.id.desc()).limit(1)
+            )
+        ).scalar_one()
         existing = (
             await session.execute(
                 select(MetricRollupDaily).where(
@@ -65,11 +70,11 @@ async def _rollup_metrics_for_instance(
         if existing is None:
             existing = MetricRollupDaily(instance_id=instance.id, metric_key=key, day=day)
             session.add(existing)
-        existing.avg_value = mean(values)
-        existing.min_value = min(values)
-        existing.max_value = max(values)
-        existing.last_value = values[-1]
-        existing.sample_count = len(values)
+        existing.avg_value = float(avg_value)
+        existing.min_value = float(min_value)
+        existing.max_value = float(max_value)
+        existing.last_value = float(last_value)
+        existing.sample_count = int(count)
         written += 1
     return written
 
