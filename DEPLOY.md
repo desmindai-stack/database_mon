@@ -112,6 +112,7 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 52 | `20260917090200_instance_topology.sql` | **YENİ** — instances: ölçülen topoloji (tek sunucu / cluster sağlıklı-bozuk / ölçülemedi, rol, üyeler, gerekçe, gereken yetki, son cluster gözlemi). CONCURRENTLY YOK |
 | 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor: 393 bin satırlık tabloda tabloyu bir kez yeniden yazar — bakım penceresinde çalıştırın. Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor. CONCURRENTLY YOK |
 | 54 | `20260918090100_user_password_changed_at.sql` | **YENİ** — users: şifrenin en son değiştiği an. Şifre değişince (ve yönetici sıfırlamasında) o andan ÖNCE üretilmiş access/refresh jetonları reddediliyor; eskiden access 60 dk, refresh 7 gün daha geçerliydi. CONCURRENTLY YOK |
+| 55 | `20260920090000_active_session_max_gap.sql` | **YENİ** — active_session_minutes: dakika başına ÖLÇÜLEN en uzun örnekleme boşluğu (max_gap_ms, NULL = ölçülmedi). Veritabanı yükü ekranı bu değerden "örnekleme aralığı tutturulamadı" uyarısını üretiyor. Nullable kolon ekler, tabloyu yeniden yazmaz; CONCURRENTLY YOK |
 
 ## Faz 31: migration adları ve geriye dönük temizlik
 

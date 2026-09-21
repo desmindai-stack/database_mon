@@ -251,6 +251,8 @@ async def migrate_schema() -> None:
         await _sqlite_add_column_if_missing(conn, "instances", "topology_members", "topology_members JSON")
         await _sqlite_add_column_if_missing(conn, "instances", "topology_checked_at", "topology_checked_at DATETIME")
         await _sqlite_add_column_if_missing(conn, "instances", "topology_cluster_seen_at", "topology_cluster_seen_at DATETIME")
+        # Faz 31 Commit 10a — 20260920090000_active_session_max_gap.sql
+        await _sqlite_add_column_if_missing(conn, "active_session_minutes", "max_gap_ms", "max_gap_ms INTEGER")
         # Faz 31 Commit 9 — 20260918090100_user_password_changed_at.sql
         await _sqlite_add_column_if_missing(conn, "users", "password_changed_at", "password_changed_at DATETIME")
         # Faz 31 Commit 9 — 20260918090000_slow_query_sample_identity.sql

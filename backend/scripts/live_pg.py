@@ -204,6 +204,30 @@ def dsn(versions) -> str:
     return ",".join(f"postgresql://postgres:{PASSWORD}@127.0.0.1:{VERSIONS[v]}/dbace" for v in versions)
 
 
+POOLER_CONTAINER = "dbace-pgbouncer"
+POOLER_PORT = 55470
+POOLER_VERSION = 16
+#: Örnekleme bağlantısının hazırlanmış ifade önbelleği testi için (Faz 31 Commit 10a): PgBouncer işlem modu,
+#: `max_prepared_statements=0` — Supabase havuzlayıcısı gibi adlandırılmış hazırlanmış ifadeleri desteklemeyen kurulum.
+#: Rol/veritabanı testte paketin kendi SQL'iyle kuruluyor (`prepare_restricted_database`).
+POOLER_ROLE, POOLER_ROLE_PASSWORD, POOLER_DATABASE = "dbace_monitor", "dbace_it_pw", "dbace_restricted"
+
+
+def up_pooler() -> None:
+    """PgBouncer (işlem modu) — PostgreSQL 16 birincilinin önünde. İmaj yoksa çekilir (internet gerekir)."""
+    run("docker", "rm", "-f", POOLER_CONTAINER, check=False, quiet=True)
+    run("docker", "run", "-d", "--name", POOLER_CONTAINER, "--network", NETWORK, "-p", f"{POOLER_PORT}:5432",
+        "-e", f"DB_HOST={name(POOLER_VERSION)}", "-e", f"DB_USER={POOLER_ROLE}", "-e", f"DB_PASSWORD={POOLER_ROLE_PASSWORD}",
+        "-e", f"DB_NAME={POOLER_DATABASE}", "-e", "POOL_MODE=transaction", "-e", "AUTH_TYPE=plain",
+        "-e", "DEFAULT_POOL_SIZE=1", "-e", "MAX_CLIENT_CONN=100", "-e", "MAX_PREPARED_STATEMENTS=0",
+        "edoburu/pgbouncer:latest", quiet=True)
+    print(f"[{POOLER_CONTAINER}] PgBouncer (işlem modu, max_prepared_statements=0) port {POOLER_PORT} → {name(POOLER_VERSION)}")
+
+
+def pooler_dsn() -> str:
+    return f"postgresql://{POOLER_ROLE}:{POOLER_ROLE_PASSWORD}@127.0.0.1:{POOLER_PORT}/{POOLER_DATABASE}"
+
+
 def replica_dsn(versions) -> str:
     return ",".join(f"postgresql://postgres:{PASSWORD}@127.0.0.1:{REPLICA_PORTS[v]}/dbace" for v in versions)
 
@@ -218,9 +242,13 @@ def main() -> None:
         for version in args.versions:
             up(version, args.recreate)
             up_replica(version, args.recreate)
+        if POOLER_VERSION in args.versions:
+            up_pooler()
     # İki satır da GITHUB_ENV'e yazılıyor (ci.yml) — sıra birincil DSN'lerle aynı.
     print(f"DBACE_TEST_PG_DSN={dsn(args.versions)}")
     print(f"DBACE_TEST_PG_REPLICA_DSN={replica_dsn(args.versions)}")
+    if POOLER_VERSION in args.versions:
+        print(f"DBACE_TEST_PG_POOLER_DSN={pooler_dsn()}")
 
 
 if __name__ == "__main__":

@@ -51,6 +51,29 @@ function colorFor(category: string): string {
   return CATEGORY_COLORS[category] ?? FALLBACK_COLOR;
 }
 
+/**
+ * Örnekleme aralığı (Faz 31 Commit 10a). Bekleme analizi örneklemeye dayanıyor; hedef aralık tutturulamadıysa
+ * (ya da uzun bir boşluk varsa) grafik güvenilir görünse de daha seyrek örnekle hesaplanmıştır. Bu sessiz
+ * geçilmiyor: sunucunun ürettiği cümle (ölçülen aralık dahil) uyarı olarak gösteriliyor.
+ */
+function CadenceNotice({ cadence }: { cadence: DatabaseLoad["cadence"] }) {
+  if (!cadence) return null;
+  if (cadence.message) {
+    return (
+      <div className="card cadence-warning" role="alert">
+        <h3 className="chart-title">Örnekleme aralığı</h3>
+        <p className="warn-text">{cadence.message}</p>
+      </div>
+    );
+  }
+  if (cadence.measured_interval_ms == null) return null;
+  return (
+    <p className="muted-note">
+      Örnekleme aralığı: {cadence.measured_interval_ms} ms (hedef {cadence.target_interval_ms} ms).
+    </p>
+  );
+}
+
 function timeLabel(iso: string, withDate: boolean): string {
   const d = new Date(iso);
   const hm = `${d.getHours().toString().padStart(2, "0")}:${d.getMinutes().toString().padStart(2, "0")}`;
@@ -182,11 +205,15 @@ export default function DatabaseLoadPanel({ instanceId, rangeHours, customRange 
   if (!report) return null;
 
   if (report.unavailable_reason) {
+    // Örnek azlığının nedeni çoğu zaman örnekleme aralığının tutmamasıdır: uyarı burada da görünmeli.
     return (
-      <EmptyState
-        title="Veritabanı yükü hesaplanamadı"
-        detail={report.unavailable_reason}
-      />
+      <>
+        <EmptyState
+          title="Veritabanı yükü hesaplanamadı"
+          detail={report.unavailable_reason}
+        />
+        <CadenceNotice cadence={report.cadence} />
+      </>
     );
   }
 
@@ -197,6 +224,7 @@ export default function DatabaseLoadPanel({ instanceId, rangeHours, customRange 
 
   return (
     <div className="db-load">
+      <CadenceNotice cadence={shown.cadence} />
       <div className="stats-grid compact">
         <div className="card stat-card">
           <div className="stat-meta">

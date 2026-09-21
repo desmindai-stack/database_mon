@@ -2491,6 +2491,20 @@ class QueryLoadOut(BaseModel):
     wait_profile: list[WaitCategoryShareOut] = []
 
 
+class SamplingCadenceOut(BaseModel):
+    """Bekleme örneklemesinin hedeflenen ve ÖLÇÜLEN aralığı (Faz 31 Commit 10a)."""
+
+    target_interval_ms: int
+    # Ölçülen ortalama aralık; örnek yoksa None ("aralık tuttu" DEĞİL, "ölçülemedi").
+    measured_interval_ms: int | None = None
+    # O aralıktaki en uzun örnekleme boşluğu; None = ölçülmedi (eski satırlar).
+    max_gap_ms: int | None = None
+    missed: bool = False
+    irregular: bool = False
+    # Kullanıcıya gösterilecek uyarı cümlesi; sorun yoksa None.
+    message: str | None = None
+
+
 class DatabaseLoadOut(BaseModel):
     instance_id: int
     engine: str
@@ -2517,3 +2531,5 @@ class DatabaseLoadOut(BaseModel):
     advice: AdviceOut | None = None
     # Veri yetersizse NEDEN yetersiz olduğu — boş grafik gösterip susmak yasak.
     unavailable_reason: str | None = None
+    # Örnekleme aralığı ölçümü: tutturulamadıysa `message` dolu ve ekran bunu gösteriyor (Faz 31 Commit 10a).
+    cadence: SamplingCadenceOut | None = None

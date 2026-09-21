@@ -90,9 +90,19 @@ def _without_dbace_literals(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+#: Havuzlayıcı (PgBouncer işlem/ifade modu) arkasında hazırlanmış ifade önbelleğinin ürettiği hatalar.
+_POOLER_STATEMENT_ERRORS = (
+    asyncpg.exceptions.InvalidSQLStatementNameError,
+    asyncpg.exceptions.DuplicatePreparedStatementError,
+)
+
+
 class PostgreSQLCollector(BaseCollector):
     def __init__(self, target: ConnectionTarget) -> None:
         self.target = target
+        # Faz 31 Commit 10a: örnekleme bağlantısında hazırlanmış ifade önbelleği bu hedefte GÜVENSİZ çıktı mı
+        # (havuzlayıcı hatası görüldü). Toplayıcı ömrü boyunca kalıcı: aynı hedefe bir daha denenmez.
+        self._statement_cache_unsafe = False
 
     @staticmethod
     async def _foreign_sessions_in_own_role(conn) -> list[str] | None:
@@ -142,7 +152,7 @@ class PostgreSQLCollector(BaseCollector):
             return None
         return "auto_explain" in {p.strip() for p in (preload or "").split(",")}
 
-    async def _connect(self) -> asyncpg.Connection:
+    async def _connect(self, *, statement_cache: bool = False) -> asyncpg.Connection:
         # asyncpg's `ssl` kwarg is bool/SSLContext, not libpq's 6-value sslmode string — the
         # UI only offers "disable"/"require" (see SORULAR.md for why the finer verify-ca/
         # verify-full modes aren't exposed), which maps directly onto that.
@@ -163,7 +173,12 @@ class PostgreSQLCollector(BaseCollector):
             # nothing measurable for these short monitoring queries and is harmless against a
             # direct (non-pooled) connection too, so it's unconditional rather than gated behind
             # pooler detection — see resolve_uses_pooler() for where that detection is still used.
-            statement_cache_size=0,
+            #
+            # Tek istisna: SÜREKLİ örnekleme bağlantısı (`open_sampling_connection`). Önbelleksiz her sorgu
+            # Parse + Execute = 2 gidiş-dönüş; 1 saniyelik örneklemede uzak bir hedefte bu ağ gecikmesinin
+            # ikiye katlanması (250 ms RTT'de örnek başına 558 ms ölçüldü). Orada önbellek açık başlıyor ve
+            # havuzlayıcı hatası görülürse kalıcı kapanıyor — bkz. `sample_active_sessions`.
+            statement_cache_size=100 if statement_cache else 0,
         )
         await conn.execute(f"SET statement_timeout = '{COLLECTOR_STATEMENT_TIMEOUT_MS}ms'")
         return conn
@@ -678,15 +693,45 @@ class PostgreSQLCollector(BaseCollector):
                 await conn.close()
 
     async def open_sampling_connection(self) -> SamplingConnection | None:
-        conn = await self._connect()
-        # Örnekleyicinin kendi tavanı: toplama döngüsünün 5 sn'si yerine 1 sn.
-        await conn.execute(f"SET statement_timeout = '{SAMPLER_STATEMENT_TIMEOUT_MS}ms'")
-        version_num, _ = await self._detect_version(conn)
+        # Hazırlanmış ifade önbelleği: örnekleme sorgusu her turda AYNI metin, ilk turdan sonra tek gidiş-dönüş.
+        # Havuzlayıcı arkasında (açıkça bildirilmiş ya da adresten anlaşılan) ya da daha önce bu hedefte
+        # havuzlayıcı hatası görüldüyse kapalı — bkz. `_connect` ve `sample_active_sessions`.
+        use_cache = not self._statement_cache_unsafe and not resolve_uses_pooler(
+            self.target.options, self.target.host, self.target.port
+        )
+        try:
+            return await self._open_sampling(use_cache)
+        except _POOLER_STATEMENT_ERRORS:
+            if not use_cache:
+                raise
+            # Havuzlayıcı hatası bağlantı KURULUMUNDA (sürüm tespiti de hazırlanmış ifade kullanıyor) görüldü:
+            # önbellek bu hedefte kapatılıp bağlantı bir kez önbelleksiz yeniden kuruluyor.
+            self._disable_statement_cache()
+            return await self._open_sampling(False)
+
+    def _disable_statement_cache(self) -> None:
+        self._statement_cache_unsafe = True
+        logger.warning(
+            "Örnekleme bağlantısında hazırlanmış ifade önbelleği kapatıldı (havuzlayıcı algılandı): %s:%s. "
+            "Örnekleme bu hedefte iki gidiş-dönüşle sürecek; kalıcı çözüm için 'uses_pooler' seçeneğini "
+            "işaretleyin.", self.target.host, self.target.port,
+        )
+
+    async def _open_sampling(self, use_cache: bool) -> SamplingConnection:
+        conn = await self._connect(statement_cache=use_cache)
+        try:
+            # Örnekleyicinin kendi tavanı: toplama döngüsünün 5 sn'si yerine 1 sn.
+            await conn.execute(f"SET statement_timeout = '{SAMPLER_STATEMENT_TIMEOUT_MS}ms'")
+            version_num, _ = await self._detect_version(conn)
+        except BaseException:
+            await conn.close()
+            raise
         return SamplingConnection(
             raw=conn,
             capabilities={
                 "server_version_num": version_num,
                 "has_query_id": version_num >= PG_VERSION_ACTIVITY_QUERY_ID,
+                "statement_cache": use_cache,
             },
         )
 
@@ -708,7 +753,19 @@ class PostgreSQLCollector(BaseCollector):
         """
         has_query_id = bool(conn.capabilities.get("has_query_id"))
         queryid_expr = "a.query_id::text" if has_query_id else "NULL::text"
-        rows = await conn.raw.fetch(
+        try:
+            rows = await self._fetch_active_sessions(conn, queryid_expr)
+        except _POOLER_STATEMENT_ERRORS:
+            # Havuzlayıcı (PgBouncer işlem/ifade modu) ardışık ifadeleri farklı arka uçlara dağıttı: adlandırılmış
+            # hazırlanmış ifade orada yok/zaten var. Bu hedefte önbellek bir daha kullanılmıyor; hata yukarı
+            # çıkıyor, örnekleyici bağlantıyı düşürüp önbelleksiz yeniden kuruyor (bir tur kaybı, bir kez).
+            if conn.capabilities.get("statement_cache"):
+                self._disable_statement_cache()
+            raise
+        return self._active_sessions_snapshot(rows, has_query_id)
+
+    async def _fetch_active_sessions(self, conn: SamplingConnection, queryid_expr: str):
+        return await conn.raw.fetch(
             f"""
             SELECT
                 {queryid_expr} AS queryid,
@@ -731,6 +788,8 @@ class PostgreSQLCollector(BaseCollector):
             """
         )
 
+    @staticmethod
+    def _active_sessions_snapshot(rows, has_query_id: bool) -> dict[str, Any]:
         sessions: list[dict[str, Any]] = []
         blocked = 0
         for row in rows:

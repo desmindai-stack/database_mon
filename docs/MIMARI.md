@@ -51,7 +51,8 @@ Aralıklar `backend/app/collectors/scheduler.py` içinde; hepsi ayarlanabilir.
 | İş | Aralık | Ne yapıyor |
 |---|---|---|
 | `collect_all` | 15 sn | Metrik toplama (instance başına kendi aralığı olabilir) |
-| `wait_event_sampling` | 1 sn | Aktif oturum örnekleme (AAS + bekleme kırılımı). Kalıcı bağlantı; her 10 sn'de bir bloklama kontrolü de bu bağlantı üzerinde |
+| `wait_event_sampling` | 1 sn | Aktif oturum örnekleme (AAS + bekleme kırılımı). Instance başına kalıcı bağlantı; tur instance başına bir görev başlatıp HEMEN döner (hedefi ve meta veritabanını beklemez); kilit bekleyen oturum varken 10 sn'de bir bloklama ağacı da bu bağlantıda okunur. Gerçek aralık ölçülür, atlanan tur sayılır (`services/sampling_cadence.py`) |
+| `wait_event_flush` | 5 sn | Bekleme kovalarının ve bloklama fotoğraflarının meta veritabanına TOPLU yazımı; örneklemeden ayrı, yavaş meta veritabanı örneklemeyi geciktirmez |
 | `evaluate_custom_rules` | 10 sn | Özel alarm kuralları (her kuralın kendi periyodu içeride kontrol ediliyor) |
 | `refresh_dashboard_snapshots` | 60 sn | Dashboard/cluster health özeti |
 | `auto_explain_plan_capture` | 5 dk | Host-agent log'undan gerçek planlar + PostgreSQL deadlock'ları; SQL Server'da `system_health` deadlock'ları |

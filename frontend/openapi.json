@@ -3113,6 +3113,16 @@
             "title": "Bucket Seconds",
             "type": "integer"
           },
+          "cadence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SamplingCadenceOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "categories": {
             "default": [],
             "items": {
@@ -9735,6 +9745,63 @@
           }
         },
         "title": "RunReportRequest",
+        "type": "object"
+      },
+      "SamplingCadenceOut": {
+        "description": "Bekleme örneklemesinin hedeflenen ve ÖLÇÜLEN aralığı (Faz 31 Commit 10a).",
+        "properties": {
+          "irregular": {
+            "default": false,
+            "title": "Irregular",
+            "type": "boolean"
+          },
+          "max_gap_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Gap Ms"
+          },
+          "measured_interval_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Measured Interval Ms"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "missed": {
+            "default": false,
+            "title": "Missed",
+            "type": "boolean"
+          },
+          "target_interval_ms": {
+            "title": "Target Interval Ms",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "target_interval_ms"
+        ],
+        "title": "SamplingCadenceOut",
         "type": "object"
       },
       "SchemaHealthOut": {

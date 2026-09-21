@@ -33,6 +33,8 @@ def replica_for(dsn: str) -> str:
             "iki değişkeni de yazdırır."
         )
     return REPLICA_DSNS[LIVE_DSNS.index(dsn)]
+#: Faz 31 Commit 10a: PgBouncer (işlem modu) arkasındaki PostgreSQL 16 — scripts/live_pg.py up yazdırır.
+POOLER_DSN = os.environ.get("DBACE_TEST_PG_POOLER_DSN", "").strip()
 SKIP_REASON = (
     "Gerçek PostgreSQL yok. `python scripts/live_pg.py up` ile konteynerleri kurup yazdırdığı "
     "DBACE_TEST_PG_DSN değerini tanımlayın."

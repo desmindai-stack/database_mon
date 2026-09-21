@@ -34,6 +34,7 @@ from app.domain.waits import (
 )
 from app.models import ActiveSessionMinute, Instance, WaitQuerySignature, WaitSampleMinute
 from app.services.advice import Advice, advice_to_dict
+from app.services.sampling_cadence import Cadence, assess as assess_cadence
 from app.services.wait_advice import advice_for_wait_category
 
 #: Grafikte hedeflenen nokta sayısı. Daha fazlası hem ağdan boşuna geçer hem de ekranda
@@ -105,6 +106,9 @@ class DatabaseLoadReport:
     # bilgi; onu eyleme çeviren bu alan. Üretilemiyorsa NEDENİ dolu gelir, hiç boş dönmez.
     advice: Advice | None = None
     unavailable_reason: str | None = None
+    # Faz 31 Commit 10a: hedeflenen değil ÖLÇÜLEN örnekleme aralığı ve tutturulamadıysa uyarı cümlesi. Veri
+    # yetersiz olsa da (unavailable_reason dolu) doldurulur: örnek azlığının nedeni çoğu zaman tam da budur.
+    cadence: Cadence | None = None
 
 
 def choose_bucket_seconds(start: datetime, end: datetime) -> int:
@@ -180,6 +184,10 @@ async def build_database_load(
                 func.sum(ActiveSessionMinute.samples_taken).label("samples"),
                 func.sum(ActiveSessionMinute.active_sessions_sampled).label("active"),
                 func.sum(ActiveSessionMinute.blocked_sessions_sampled).label("blocked"),
+                # Aralık ölçümü AYNI sorguda (ek gidiş-dönüş yok): satır sayısı = örnekleme yapılan dakika sayısı,
+                # max_gap_ms NULL ise o dakika ölçülmemiş (kolon eklenmeden önceki satır).
+                func.count().label("minutes"),
+                func.max(ActiveSessionMinute.max_gap_ms).label("max_gap"),
             )
             .where(
                 ActiveSessionMinute.instance_id == instance.id,
@@ -193,6 +201,16 @@ async def build_database_load(
 
     total_samples = sum(int(r.samples or 0) for r in totals_rows)
     report.samples_taken = total_samples
+    if total_samples:
+        # Ölçülen ortalama aralık = örnekleme yapılan dakikaların toplam süresi / alınan örnek. Dakikalar bir
+        # instance'ın yalnızca ÇALIŞTIĞI dakikaları: worker kapalıyken satır yok, bu bir aralık sorunu değil.
+        minutes = sum(int(r.minutes or 0) for r in totals_rows)
+        gaps = [int(r.max_gap) for r in totals_rows if r.max_gap is not None]
+        report.cadence = assess_cadence(
+            target_interval_seconds=max(settings.wait_sample_interval_seconds, 1),
+            measured_interval_ms=minutes * 60_000 / total_samples,
+            max_gap_ms=max(gaps) if gaps else None,
+        )
     if total_samples == 0:
         report.unavailable_reason = (
             "Bu aralıkta hiç bekleme örneği yok. Örnekleyici yalnızca worker sürecinde "
@@ -480,6 +498,14 @@ def report_to_dict(report: DatabaseLoadReport) -> dict[str, Any]:
         "query_attribution_available": report.query_attribution_available,
         "advice": advice_to_dict(report.advice),
         "unavailable_reason": report.unavailable_reason,
+        "cadence": None if report.cadence is None else {
+            "target_interval_ms": report.cadence.target_interval_ms,
+            "measured_interval_ms": report.cadence.measured_interval_ms,
+            "max_gap_ms": report.cadence.max_gap_ms,
+            "missed": report.cadence.missed,
+            "irregular": report.cadence.irregular,
+            "message": report.cadence.message,
+        },
     }
 
 

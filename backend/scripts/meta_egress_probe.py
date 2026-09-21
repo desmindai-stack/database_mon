@@ -182,6 +182,7 @@ def _jobs():
         ("iş: refresh_dashboard_snapshots (60 sn)", scheduler.refresh_dashboard_snapshots),
         ("iş: evaluate_custom_rules_tick", scheduler.evaluate_custom_rules_tick),
         ("iş: wait_sampling_tick (1 sn)", scheduler.wait_sampling_tick),
+        ("iş: wait_flush_tick (5 sn)", scheduler.wait_flush_tick),
         ("iş: plan_capture_tick (300 sn)", scheduler.plan_capture_tick),
         ("iş: index_advice_watch_tick (300 sn)", scheduler.index_advice_watch_tick),
         ("iş: backup_tick (900 sn)", scheduler.backup_tick),

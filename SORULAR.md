@@ -2722,3 +2722,20 @@ görünümde kapanan oturumun beklemesini tutmuyor. Yani gündüz yaşanmış am
 türü, boş bir sunucuda arka plan sayılabilir. Bu yüzden filtre GİZLEMİYOR: elenen sayı yazıyor ve "arka planı da
 göster" tek tık. Daha kesin ayrım için beklemelerin oturum bazında örneklenmesi (Extended Events / düzenli
 anlık görüntü) gerekir — bugünkü toplama yükünü artıracağı için yapılmadı.
+
+**Bekleme örnekleyicisinin yazım hacmi (Commit 10a, ölçüldü, uygulanmadı).** `wait_sample_minutes` satır başına ≈ 300 bayt (indeksler dahil) ve dakika × sorgu × kategori × olay başına bir satır: ağır bir iş
+yükünde (dakikada 27 farklı birleşim) instance başına ≈ 1 660 satır/saat ≈ 12 MB/gün ≈ 360 MB / 30 gün; 20 instance ≈ 7 GB / 30 gün. Canlıdaki gerçek değeri şu sorgu verir:
+`SELECT instance_id, count(*) AS satir_saat FROM wait_sample_minutes WHERE minute > now() - interval '1 hour' GROUP BY 1;` (× 300 bayt × 24 × saklama günü). **Öneriler:** (a) `wait_sample_minutes` için ayrı ve kısa saklama
+(ör. 7 gün) + saatlik toplulaştırma tablosu (haftalık/aylık görünüm için; kategori kırılımı saatte yeter); (b) `blocking_episodes` aynı sunucuyu izleyen instance'lar için tekilleştirme. Karar verilmeden önce canlıda yukarıdaki
+sorguyla ölçülmeli.
+
+**Örnekleyici bir instance'a bağlanamıyorsa ekran bunu söylemiyor (Commit 10a).** RTT ≥ ~1 sn ya da kimlik/yetki hatası olan hedefte hiç örnek yok; `sampling_status().instances_failing` worker sürecinde sayıyor ama web sürecinde
+(ayrı süreç) görünmüyor, ekran yalnızca "Bu aralıkta hiç bekleme örneği yok" diyor. **Açık iş:** son bağlanma hatasını (kısa, sanitize) meta veritabanına yazıp ekranda "örnekleyici bağlanamıyor: neden" göstermek — yazım hacmi
+küçük ama yeni bir tablo/kolon gerekir.
+
+**Örnekleme bağlantısında hazırlanmış ifade önbelleği açık başlıyor (Commit 10a).** Havuzlayıcı hatası görülürse kalıcı kapanıyor ve bağlantı yeniden kuruluyor (bir kez, ~1–3 tur kaybı); havuzlayıcı arkasındaki hedefte bu, worker
+yeniden başladığında her hedef için tekrar yaşanır. Kalıcı çözüm o instance'ta `uses_pooler` seçeneğini işaretlemek (Supabase havuzlayıcı adresi zaten tanınıyor). Supavisor'un davranışı bu ortamda ölçülmedi — yalnızca PgBouncer
+(işlem modu, `max_prepared_statements=0`) gerçek sunucuda doğrulandı.
+
+**Bloklama ağacı okuması bir örnek aralığını uzatabilir (Commit 10a).** Okuma örnekleme bağlantısında ve sırayla yapıldığı için (aynı bağlantıda aynı anda tek sorgu), kilit beklemesi sürerken her 10 sn'de bir o instance'ın bir
+sonraki örneği ~3 gidiş-dönüş gecikir (250 ms RTT'de en uzun boşluk 3 sn ölçüldü). Ayrı ikinci bağlantı bunu çözerdi ama her instance'a fazladan kalıcı bağlantı demek; kilit beklemesi nadir olduğu için yapılmadı.

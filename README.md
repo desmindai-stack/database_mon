@@ -490,9 +490,18 @@ bozuktur).
 | `pg_blocking_pids(pid)` | kilit yöneticisi taraması | **yalnızca zaten `Lock` bekleyen satırlarda** çağrılır — bir `CASE` koruması onu diğer satırlardan uzak tutar |
 | SQL Server: `dm_exec_requests` + `dm_os_waiting_tasks` + `dm_exec_sql_text` | DMV'ler / plan önbelleği | düşük; aktif istek sayısı tanımı gereği azdır ve `TOP` en kötü durumu sınırlar |
 
-Veritabanı başına tur başına tek sorgu, tek gidiş-dönüş. Veritabanları eşzamanlı örneklenir
-(yavaş bir sunucu diğerlerini geciktirmez) ve iş `max_instances=1` ile çalışır (turlar üst
-üste binmez).
+Veritabanı başına tur başına tek sorgu, tek gidiş-dönüş (PostgreSQL'de hazırlanmış ifade önbelleğiyle; havuzlayıcı arkasında iki — bkz. aşağıda). Her veritabanı KENDİ görevinde
+örneklenir: zamanlayıcı turu görevleri başlatıp hemen döner, yavaş bir sunucu yalnızca kendi örneğini geciktirir. Bir veritabanının önceki örneği sürerken gelen tur o veritabanı için atlanır ve
+sayılır (kalıcı bağlantıda aynı anda tek sorgu olabilir). Meta veritabanına yazım ayrı işte (`wait_event_flush`, 5 sn).
+
+**Aralık ölçülür.** Hedeflenen aralık ile ÖLÇÜLEN aralık (ardışık başarılı örneklerin geliş farkı) ayrı tutulur: 5 dakikalık özet log satırı gerçek aralığı (ort/p95/en uzun boşluk), atlanan turu ve süre
+kırılımını (bağlanma / sorgu / bloklama / meta yazımı) yazar; hedef tutturulamadıysa UYARI seviyesinde. Veritabanı yükü ekranı aynı kuralla "örnekleme aralığı tutturulamadı (ölçülen: X ms)" der.
+Gecikmeli ağda ölçüm (gerçek sunucular, `scripts/sampler_probe.py`): 20 veritabanı ve 60 ms meta gecikmesinde aralık 1 661 ms → 999 ms, kayıp örnek %40 → %0; canlıya benzer 250 ms hedef gecikmesinde
+örnek başına süre 558 → 281 ms (bkz. ILERLEME.md, Faz 31 Commit 10a).
+
+**Ağ gecikmesi ve gidiş-dönüş.** Bağlantı kurulumu ~8–9 gidiş-dönüş (250 ms'de 2,2 sn), örnek başına 1. Hedefle worker arasındaki gecikme ~800 ms'yi aşarsa sunucu tarafı `statement_timeout` (1 sn) kurulum
+sorgusunu iptal eder ve örnekleyici bağlanamaz; worker'ı izlenen sunucuya yakın bir ağa koyun. Bir havuzlayıcının (PgBouncer/Supavisor) ARKASINDAKİ hedefte örnekleme bağlantısına `uses_pooler` seçeneğini
+işaretleyin; işaretlenmezse örnekleyici ilk hatada önbelleği kendisi kapatır (bir kez, birkaç tur kaybı).
 
 **Maliyeti kendi sunucunuzda ölçmek** (örnekleyicinin sorgusu `pg_stat_statements`'ta
 görünür):

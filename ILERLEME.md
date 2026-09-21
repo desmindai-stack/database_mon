@@ -8635,6 +8635,117 @@ ayrı tablolar; elenen arka plan sayısı ve "arka planı da göster" düğmesi 
 **Şema değişikliği yok** — bekleme sayaçları canlı okunuyor, meta veritabanına yazılmıyor (egress dersi:
 gereksiz veri saklamıyoruz). Fark için gereken taban okuma süreç içi bellekte tutuluyor; sınırı SORULAR.md'de.
 
+## Faz 31 — Commit 10a: bekleme örnekleyicisi — atlanan turlar, ölçülen aralık, 20 instance ölçeği
+
+**Migration:** `supabase/migrations/20260920090000_active_session_max_gap.sql` (#55, DEPLOY.md'de) — `active_session_minutes.max_gap_ms`
+(dakika başına ÖLÇÜLEN en uzun örnekleme boşluğu; NULL = ölçülmedi). Nullable kolon, tabloyu yeniden yazmaz.
+
+**Sorun (canlı worker logu):** 1 saniyelik `wait_sampling_tick` ortalama 296 ms, en yavaş 1 800 ms sürüyor; APScheduler
+"maximum number of running instances reached (1)" ile dakikada birkaç tur atlıyor; özet satırı buna rağmen
+"273 tur, 0 gecikmiş tur" diyor.
+
+### Kabul kriterleri (kodlamadan önce)
+
+1. Gerçek örnekleme aralığı ve atlanan turlar ÖLÇÜLÜR (hedeflenen değil); turun süresi bileşen bazında raporlanır.
+2. Özet, atlanan turu ve ölçülen aralığı gösterir; "0 gecikmiş tur" ile "onlarca atlanan tur" aynı özette var olamaz.
+3. Aralık tutturulamıyorsa ekranda "örnekleme aralığı tutturulamadı (ölçülen: X ms)" çıkar; veri yetersizken de. Tutmuşsa uyarı yok;
+   boşluk ölçülmemişse "boşluk yok" denmez.
+4. 5/10/20 instance ile tur gerçek sunucularda ölçülür; tıkanma varsa çözülür ve çözüm ölçülür.
+5. Meta veritabanına yazım hacmi (satır/saat) ölçülür.
+6. Her kural için negatif kontrollü test; ölçüm kısıtlı (superuser olmayan) izleme kimlikleriyle.
+
+### Ölçüm: turun süresini ne harcıyor
+
+Düzenek (`backend/scripts/sampler_probe.py`, `tcp_delay_proxy.py`, `sampler_workload.py`): üretimdeki zamanlayıcı işi birebir koşuyor;
+gerçek sunucular (3 PostgreSQL birincil + 3 replika + 2 SQL Server) kısıtlı kimliklerle (`dbace_monitor`, pg_monitor; `dbace_ro`);
+canlıdaki ağ gecikmesini taklit eden gerçek TCP vekili (ayrı süreç); gerçek sorgu ve kilit yükü; meta veritabanı yerel PostgreSQL
+(`dbace-meta-egress`, canlı Supabase DEĞİL). 8 farklı sunucu var: 20 instance = aynı sunucuya birden çok kayıt (her biri kendi bağlantısıyla).
+
+**Gecikmesiz yerelde sorun YOK** (tur 4 ms, sorgu 2 ms, aralık 999,7 ms) — canlıdaki 296 ms ağ kaynaklı. Gecikme eklenince (hedef 20 ms, meta 60 ms)
+canlıdaki belirtinin aynısı yeniden üretildi (`maximum number of running instances reached`, özet "0 gecikmiş tur"). Bileşenler (1 instance):
+
+| Bileşen | Önce | Neden |
+|---|---|---|
+| Örnekleme sorgusu (250 ms RTT) | **558 ms** | `statement_cache_size=0` → her sorgu Parse + Execute = **2 gidiş-dönüş** |
+| Dakika kapanışında meta yazımı (kova başına) | **1 241 ms** (60 ms RTT) | kova başına ≥ 7 ifade, hepsi AYNI görevde |
+| Tur (zamanlayıcının gördüğü) | ort 124 ms, **maks 2 777 ms** | yazım turun içinde |
+| Özetin ölçtüğü "tur süresi" | maks 325 ms | yalnızca hedef sorgusunu ölçüyordu → "0 gecikmiş tur" |
+| Hedefe bağlanma | 263 ms (bir kez) | yeniden bağlanmada 2–3 sn kayıp |
+| Bloklama ağacı | 77–708 ms, her 10 sn | kilit beklemesi olsun olmasın |
+
+Kök nedenler (hepsi ölçüldü): (1) meta yazımı, bloklama yazımı ve instance listesi örnekleme turunun İÇİNDEYDİ; (2) tüm instance'lar tek `gather`'da
+beklendiği için TEK yavaş hedef herkesi yavaşlatıyordu; (3) özet yalnızca hedef sorgusunu ölçüyor, atlanan turu saymıyordu; (4) örnek başına 2 gidiş-dönüş;
+(5) kova yazımı O(kova sayısı) gidiş-dönüş; (6) `aioodbc` varsayılan iş parçacığı havuzunu (`min(32, cpu+4)`; 2 vCPU'lu worker'da 6) paylaşıyor.
+
+### Yapılanlar
+
+- **Tur beklemez** (`wait_sampling.sampling_tick(wait=False, flush=False)`): instance başına bir görev başlatıp döner. Önceki örnek sürerken gelen tur o instance için
+  atlanır ve SAYILIR; diğerleri ve zamanlayıcı etkilenmez. Meta yazımı ayrı iş (`wait_flush_tick`, 5 sn); iki iş de `register_wait_sampling_jobs` ile kaydolur
+  (ölçüm aracı aynı fonksiyonu kullanır).
+- **Aralık ölçülüyor:** ardışık BAŞARILI örneklerin geliş farkı; atlanan tur, başarısız tur ve yeniden bağlanma süresi farka otomatik girer. Dakika başına en uzun
+  boşluk `max_gap_ms`'e yazılır (kısmi dakika/yeniden başlatma: `GREATEST`, ikisi de NULL ise NULL).
+- **Özet:** gerçek aralık (ort/p95/en uzun boşluk), atlanan tur (kaçı önceki örnek sürerken, zamanlayıcı atlaması), bağlanma/sorgu/bloklama/meta yazımı süre kırılımı;
+  hedef tutturulamadıysa UYARI seviyesinde ve "Örnekleme aralığı tutturulamadı (ölçülen: X ms, hedef: Y ms)". Kural tek yerde: `services/sampling_cadence.py`
+  (ortalama > 1,25 × hedef = tutturulamadı; en uzun boşluk > 5 × hedef = düzensiz; ölçüm yoksa hüküm yok).
+- **Ekran:** `GET /api/instances/{id}/database-load` yanıtında `cadence`; Veritabanı yükü sekmesinde uyarı (veri yetersizken de). Ek gidiş-dönüş yok (aynı sorguya
+  `count`/`max`).
+- **Toplu meta yazımı:** tüm kapanmış kovalar tek `INSERT … ON CONFLICT DO UPDATE` (+ `WAIT_ROWS_PER_STATEMENT` bölmesi); önce okuma yok (eskiden dakika toplamı ve en fazla 5 000
+  bekleme satırı OKUNUYORDU — egress). Toplu yazım düşerse kova kova yedek yol. Analiz ayarı flush başına bir kez okunuyor.
+- **Bloklama ağacı yalnızca gerektiğinde:** fotoğrafta kilit bekleyen oturum varsa ya da o instance için açık olay varsa (kapanışı için). Okuma örnekleme görevinde, yazım flush işinde.
+- **Örnekleme bağlantısında hazırlanmış ifade önbelleği** (yalnızca PostgreSQL örnekleme bağlantısı): örnek 2 → 1 gidiş-dönüş. Havuzlayıcı hatası (`prepared statement … already exists /
+  does not exist`) görülürse — örnekleme sorgusunda VEYA bağlantı kurulumundaki sürüm tespitinde — o hedef için kalıcı kapanır ve bağlantı önbelleksiz yeniden kurulur.
+  Havuzlayıcı açıkça bildirilmişse (`uses_pooler`) ya da adresten anlaşılıyorsa hiç açılmaz. Gerçek PgBouncer'da ölçüldü; bu hata kurulum yolunda da çıkıyordu (ilk sürümde eksikti, test yakaladı).
+- Silinen/devre dışı instance'ın bağlantısı ve açık kovası artık bırakılıyor (eskiden `_samplers`'ta sonsuza kadar kalıyordu).
+
+### Önce / sonra (gerçek sunucular; 120–180 sn; aralık ms: ort / p95 / en uzun)
+
+| Senaryo | Önce | Kayıp | Atlanan | Sonra | Kayıp | Atlanan |
+|---|---|---|---|---|---|---|
+| 1 instance, hedef 20 ms / meta 60 ms | 1 027 / 1 013 / 2 994 | %2,5 | 3 | 993 / 1 009 / 1 011 | %0 | 0 |
+| 5 instance, aynı ağ | 1 073 / 1 010 / 5 473 | %6,7 | 41 | 996 / 1 009 / 1 056 | %0 | 0 |
+| 10 instance, aynı ağ | 1 324 / 2 996 / 7 999 | %24,2 | 300 | 1 000 / 1 009 / 1 040 | %0 | 0 |
+| 20 instance, aynı ağ | 1 661 / 4 003 / 15 511 | **%40,0** | 960 | 999 / 1 011 / 1 035 | %0 | 0 |
+| 1 instance, hedef 250 ms / meta 60 ms (canlıya benzer) | 1 195 / 2 000 / 4 463 | %17,5 | 19 | 1 017 / 1 010 / 3 007 | %3,3 | 2 |
+| 20 instance, meta 300 ms | 8 113 / 62 166 / 62 169 | **%89,4** | 2 560 | 1 000 / 1 010 / 1 055 | %1,1 | 0 |
+| 20 PostgreSQL, hedef 100 ms / meta 60 ms | 3 115 / 16 508 / 20 305 | %68,3 | 1 560 | 1 001 / 1 009 / 2 002 | %0,8 | 11 |
+| 20 SQL Server, 6 iş parçacığı, hedef 100 ms | 12 856 / 23 410 / 23 548 | **%91,7** | 2 140 | 1 058 / 1 578 / 2 198 | %7,7 | 122 |
+| gecikmesiz yerel, 1/5/10/20 instance | 999,5 / 999,0 / 998,6 / 997,7 | ~%0 | 0 | (değişmedi) | | |
+
+Örnekleme sorgusu (250 ms RTT): 558 → 281 ms; 300 ms RTT'de 0,619 → 0,310 sn (tam 2 → 1 gidiş-dönüş, canlı testle). Zamanlayıcının tur atlaması: 20 instance/300 ms meta'da 162 → 8 (kalanlar yalnızca YAZIM işi;
+örnekleme işi 0, ve yazım gecikmesi örneklemeyi etkilemiyor). Kalan %3,3 (canlıya benzer koşu): bağlantı kurulumu (2,2 sn) ve bloklama ağacının ilk okuması (2,2 sn) — bir kerelik. Kalan %7,7 (20 SQL Server): başlangıçta
+20 bağlantının 6 iş parçacığında kurulması (her biri 3,4 sn).
+
+### Yazım hacmi (meta veritabanı; kararlı hâl = 4 dk ısınma sonrası 8 dk, 20 instance, her birinde 30 farklı sorgu yapısı + kilit çatışması)
+
+| Tablo | Satır/saat (20 instance) | Satır/saat (1 instance) | Not |
+|---|---|---|---|
+| `wait_sample_minutes` | **33 150** (ekleme) | 3 045 | dakika × sorgu × bekleme kategorisi × olay; iş yüküne bağlı |
+| `active_session_minutes` | 1 350 | 68 | ≈ 60 × instance |
+| `wait_query_signatures` | 315 | 0 | yalnızca yeni queryid'ler; kararlı hâlde ~0 |
+| `blocking_episodes` | 150 ekleme / 368 güncelleme | 15 / 38 | kilit çatışması yüküne ve AYNI sunucuyu izleyen instance sayısına bağlı (test yükü yapay) |
+
+Satır başına ≈ 300 bayt (indeksler dahil; ölçüldü, 40 bin satırlık tabloda; heap 101 bayt). **20 instance için ≈ 10 MB/saat ≈ 240 MB/gün; 30 gün saklamayla ≈ 7 GB** (bu ağır yükte;
+instance başına ≈ 360 MB / 30 gün). Bu, `slow_query_samples`'ın (393 bin satır / 329 MB) çok üstünde: egress düzeltmesinden sonra bu iş meta veritabanının en ağır YAZAN yolu — ama yazım Supabase'de egress değil disk
+kotası ve indeks/IO yükü demek. Gerçek canlı değer için SORULAR.md'deki sorgu. Saklama kısaltma / saatlik toplulaştırma önerisi SORULAR.md'de (uygulanmadı).
+
+### Sınırlar (dürüst notlar)
+
+- **RTT ≥ ~1 sn olan hedefte örnekleyici bağlanamıyor** (sunucu tarafı `statement_timeout = 1000ms` kurulum sorgusunu iptal ediyor; öncesinde de böyleydi: 800 ms'de bağlanıyor, 1 000 ms'de hayır). Ekranda "örnek yok" görünür,
+  `sampling_status()` `instances_failing` sayar; ekran bunu "bağlanamıyor" diye AYIRMIYOR (SORULAR.md).
+- Bloklama ağacı okuması (~3 gidiş-dönüş) o instance'ın örnek aralığını kilit beklemesi sürerken her 10 sn'de bir uzatabilir (yüksek RTT'de 1–3 tur).
+- Yazım işi yüksek meta RTT'de 5 sn'lik aralığı aşabilir; zamanlayıcı o çalışmayı atlar (özetin "zamanlayıcı atlaması"nda görünür, örneklemeyi etkilemez, kova kaybı yok).
+- Ölçülen ortalama aralık, örnekleme yapılan dakikaları TAM dakika sayar; işlemin başladığı/bittiği kısmi dakikalar çok kısa pencerelerde (birkaç dakika) aralığı olduğundan büyük gösterebilir.
+- Aynı sunucuyu izleyen birden çok instance aynı bloklama olayını ayrı kaydeder (yalnızca ölçüm düzeneğinde 20 kayıt/8 sunucu).
+
+### Test (negatif kontrollü)
+
+`tests/test_sampling_cadence.py` (36: tur beklemez ve yavaş instance izole; `wait=True` eski davranış kontrolü; yazım turu geciktirmez; aralık/`max_gap_ms` ölçümü, ilk örnekte NULL; başarısız tur boşluğu genişletir;
+özet: atlanan tur + ölçülen aralık, "0 gecikmiş tur" tutarsızlığı, tutmuşsa sessiz; zamanlayıcı atlaması; ekran/HTTP: tutturulamadı, veri yetersizken de, tutmuşsa sessiz, ölçülmemiş ≠ boşluk yok; toplu yazım sabit ifade sayısı,
+kova kova yazım ölçekle büyür (kontrol), aynı anahtar birleşir, yedek yol, ayar bir kez; bloklama yalnızca gerektiğinde), `tests/test_sampling_statement_cache.py` (12), canlı: `tests/test_sampling_cadence_live.py`
+(20 instance — 15 PostgreSQL + 5 SQL Server kaydı, 4 farklı sunucu — kısıtlı kimliklerle 20 sn'de 20'şer örnek, atlanan tur 0; tek aksayan hedef (5 sn'de bir 2,5 sn ağ aksaması) yalnızca kendini geciktiriyor: hızlılar 24/24, aksayan 16/24 ve 8 atlanan tur SAYILDI; eski tur biçimi aynı durumda HERKESİ 18/24'e indiriyor; ekran uyarısı HTTP yolundan; PostgreSQL ve SQL Server'da gerçek kilit çatışması olay olarak kaydediliyor
+ve kapanıyor), `tests/test_sampling_statement_cache_live.py` (gerçek gecikmeli bağlantıda 0,310 vs 0,619 sn; havuzlayıcı hatasının DETERMİNİSTİK gerçeği (`DEALLOCATE ALL` → gerçek `InvalidSQLStatementNameError`) → önbellek kapanır, bağlantı önbelleksiz yeniden kurulur; gerçek PgBouncer'da (işlem modu) örnekleme her durumda sürer — çakışmanın oluşması PgBouncer'ın iç durumuna bağlı olduğundan zorunlu tutulmadı, 8 denemeye kadar tekrarlanır). PgBouncer: `python scripts/live_pg.py up`
+(`DBACE_TEST_PG_POOLER_DSN`).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

@@ -3153,6 +3153,7 @@ export interface components {
             blocked_aas: number;
             /** Bucket Seconds */
             bucket_seconds: number;
+            cadence?: components["schemas"]["SamplingCadenceOut"] | null;
             /**
              * Categories
              * @default []
@@ -5577,6 +5578,30 @@ export interface components {
              * @enum {string}
              */
             scope_type: "global" | "customer" | "application" | "group" | "instance";
+        };
+        /**
+         * SamplingCadenceOut
+         * @description Bekleme örneklemesinin hedeflenen ve ÖLÇÜLEN aralığı (Faz 31 Commit 10a).
+         */
+        SamplingCadenceOut: {
+            /**
+             * Irregular
+             * @default false
+             */
+            irregular: boolean;
+            /** Max Gap Ms */
+            max_gap_ms?: number | null;
+            /** Measured Interval Ms */
+            measured_interval_ms?: number | null;
+            /** Message */
+            message?: string | null;
+            /**
+             * Missed
+             * @default false
+             */
+            missed: boolean;
+            /** Target Interval Ms */
+            target_interval_ms: number;
         };
         /** SchemaHealthOut */
         SchemaHealthOut: {

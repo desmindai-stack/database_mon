@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from apscheduler.events import EVENT_JOB_MAX_INSTANCES
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
@@ -28,7 +29,13 @@ from app.services.backup_collection import backup_collection_tick
 from app.services.index_advice_outcome import outcome_tick as run_index_advice_outcome_tick
 from app.services.index_advice_watch import index_advice_watch_tick as run_index_advice_watch_tick
 from app.services.plan_capture import capture_plans_tick
-from app.services.wait_sampling import sampling_tick, shutdown_sampling
+from app.services.wait_sampling import (
+    FLUSH_INTERVAL_SECONDS,
+    flush_tick,
+    note_scheduler_skip,
+    sampling_tick,
+    shutdown_sampling,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +47,7 @@ DAILY_ROLLUP_JOB_ID = "daily_rollup"
 PREDICTION_ACCURACY_JOB_ID = "prediction_accuracy"
 HEALTH_REPORT_JOB_ID = "daily_health_report"
 WAIT_SAMPLING_JOB_ID = "wait_event_sampling"
+WAIT_FLUSH_JOB_ID = "wait_event_flush"
 PLAN_CAPTURE_JOB_ID = "auto_explain_plan_capture"
 BACKUP_JOB_ID = "backup_monitoring"
 INDEX_ADVICE_WATCH_JOB_ID = "index_advice_watch"
@@ -175,10 +183,71 @@ async def daily_health_report_tick() -> None:
 
 
 async def wait_sampling_tick() -> None:
+    """Örnekleme turu: instance başına bir görev başlatıp HEMEN döner (Faz 31 Commit 10a).
+
+    Eskiden tur, hedefteki örneklemeyi VE meta veritabanına yazımı bekliyordu; ikisinden biri 1 saniyeyi aşınca
+    APScheduler sonraki turları "maximum number of running instances" ile atlıyordu. Şimdi tur mikrosaniyeler
+    sürer; hedef tarafı yavaşlığı yalnızca o instance'ın örneğini geciktirir, yazım `wait_flush_tick`'in işi."""
     try:
-        await sampling_tick()
+        await sampling_tick(wait=False, flush=False)
     except Exception:
         logger.exception("Bekleme örneklemesi turu başarısız")
+
+
+#: Yazım işi üst üste başarısız olurken hata log'u seyreltilir (5 sn'de bir → dakikada bir).
+_flush_failures = 0
+FLUSH_FAILURE_LOG_EVERY = 12
+
+
+async def wait_flush_tick() -> None:
+    """Bekleme örneklerinin ve bloklama fotoğraflarının meta veritabanına yazımı — örneklemeden AYRI iş."""
+    global _flush_failures
+    try:
+        await flush_tick()
+        _flush_failures = 0
+    except Exception:
+        _flush_failures += 1
+        if _flush_failures == 1 or _flush_failures % FLUSH_FAILURE_LOG_EVERY == 0:
+            logger.exception("Bekleme örneklerinin yazımı başarısız (üst üste %s tur)", _flush_failures)
+
+
+def _count_scheduler_skip(event) -> None:
+    """Zamanlayıcı bir turu "maximum number of running instances" ile atladıysa özet bunu göstersin (Commit 10a).
+
+    Örnekleme turu artık beklemediği için bu sayının 0 kalması beklenir; sıfırdan farklıysa olay döngüsü doygundur."""
+    if event.job_id in (WAIT_SAMPLING_JOB_ID, WAIT_FLUSH_JOB_ID):
+        note_scheduler_skip()
+
+
+def register_wait_sampling_jobs(target: AsyncIOScheduler) -> None:
+    """Bekleme örnekleyicisinin iki işini kaydeder. `start_scheduler` ve ölçüm aracı (scripts/sampler_probe.py)
+    AYNI fonksiyonu kullanır: ölçülen iş üretimdeki işin ta kendisi olsun.
+
+    `max_instances=1` (örnekleme): tur artık beklemediği için normalde tetikleyici çakışması olmaz; ama çakışırsa
+    aynı anda iki tur başlamasın diye kalıyor. `coalesce=True`: kesintiden sonra birikmiş tetiklemeler tek turda
+    toplanır — geçmişe dönük örnek almanın anlamı yok, örnekleme ANLIK durumu ölçüyor. `next_run_time=now`: ilk
+    tur hemen; IntervalTrigger'ın "now + interval" varsayılanı burada da geçerli."""
+    target.add_listener(_count_scheduler_skip, EVENT_JOB_MAX_INSTANCES)
+    target.add_job(
+        wait_sampling_tick,
+        "interval",
+        seconds=max(1, settings.wait_sample_interval_seconds),
+        id=WAIT_SAMPLING_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(),
+    )
+    target.add_job(
+        wait_flush_tick,
+        "interval",
+        seconds=FLUSH_INTERVAL_SECONDS,
+        id=WAIT_FLUSH_JOB_ID,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        next_run_time=datetime.now(),
+    )
 
 
 async def plan_capture_tick() -> None:
@@ -333,28 +402,9 @@ async def start_scheduler() -> None:
         coalesce=True,
     )
     if settings.wait_sampling_enabled:
-        # BEKLEME ÖRNEKLEMESİ — kendi işi, toplama döngüsünden ayrı (Faz 25 İŞ 1).
-        #
-        # `max_instances=1`: bir tur (yavaş sunucu, ağ gecikmesi) 1 saniyeyi aşarsa APScheduler
-        # varsayılan olarak İKİNCİ bir turu paralel başlatır. Örnekleyici kalıcı bağlantıları ve
-        # bellek kovalarını paylaştığı için bu, aynı bağlantı üzerinde iki eşzamanlı sorgu ve
-        # bozuk sayaçlar demek. Tek tur garantisi bunu engelliyor.
-        #
-        # `coalesce=True`: kesintiden sonra birikmiş tetiklemeler tek turda toplanır — geçmişe
-        # dönük 300 örnek almanın anlamı yok, örnekleme ANLIK durumu ölçüyor.
-        #
-        # `next_run_time=now`: ilk tur hemen; IntervalTrigger'ın "now + interval" varsayılanı
-        # burada da geçerli (retention/rollup işlerinde canlıda yaşanan sorunun aynısı).
-        scheduler.add_job(
-            wait_sampling_tick,
-            "interval",
-            seconds=max(1, settings.wait_sample_interval_seconds),
-            id=WAIT_SAMPLING_JOB_ID,
-            replace_existing=True,
-            max_instances=1,
-            coalesce=True,
-            next_run_time=datetime.now(),
-        )
+        # BEKLEME ÖRNEKLEMESİ — kendi işi, toplama döngüsünden ayrı (Faz 25 İŞ 1); meta veritabanına yazım da
+        # ayrı iş (Faz 31 Commit 10a). Gerekçeler `register_wait_sampling_jobs` içinde.
+        register_wait_sampling_jobs(scheduler)
 
     if settings.plan_capture_enabled:
         scheduler.add_job(

@@ -890,6 +890,10 @@ class ActiveSessionMinute(Base):
     samples_taken: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     active_sessions_sampled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     blocked_sessions_sampled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Faz 31 Commit 10a: o dakikada ÖLÇÜLEN en uzun örnekleme boşluğu (ms). NULL = ölçülmedi (kolon eklenmeden
+    # önceki satır); 0 değil — "ölçüm yok" ile "boşluk yok" farklı şeyler. Ekranın "örnekleme aralığı
+    # tutturulamadı" uyarısı buradan geliyor: `samples_taken` tek başına aralığın DÜZENSİZLİĞİNİ göstermez.
+    max_gap_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

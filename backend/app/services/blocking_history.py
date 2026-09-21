@@ -72,6 +72,11 @@ def reset_state() -> None:
     _open_episodes.clear()
 
 
+def has_open_episode(instance_id: int) -> bool:
+    """Bu instance için bellekte açık bir bloklama olayı var mı — varsa kapanışı için kontrol sürmeli."""
+    return any(key[0] == instance_id for key in _open_episodes)
+
+
 def open_episodes() -> list[_OpenEpisode]:
     return list(_open_episodes.values())
 
