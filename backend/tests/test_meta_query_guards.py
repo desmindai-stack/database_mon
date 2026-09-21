@@ -33,13 +33,10 @@ APP = Path(__file__).resolve().parents[1] / "app"
 
 def series_models() -> dict[str, type]:
     """Zaman serisi modelleri — koddan."""
-    tree = ast.parse((APP / "services" / "retention.py").read_text(encoding="utf-8"))
-    names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.For) and isinstance(node.iter, ast.Tuple):
-            for element in node.iter.elts:
-                if isinstance(element, ast.Tuple) and isinstance(element.elts[0], ast.Name):
-                    names.add(element.elts[0].id)
+    from app.services.retention import RETENTION_TARGETS
+
+    # Saklama listesi (Faz 31 Commit 10b: silme döngüsü ve migration güvenlik denetimiyle ORTAK sabit).
+    names: set[str] = {model.__name__ for model, _ in RETENTION_TARGETS}
     by_name = {m.class_.__name__: m.class_ for m in Base.registry.mappers}
     for name, model in by_name.items():
         columns = model.__table__.columns

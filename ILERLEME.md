@@ -8746,6 +8746,98 @@ kova kova yazım ölçekle büyür (kontrol), aynı anahtar birleşir, yedek yol
 ve kapanıyor), `tests/test_sampling_statement_cache_live.py` (gerçek gecikmeli bağlantıda 0,310 vs 0,619 sn; havuzlayıcı hatasının DETERMİNİSTİK gerçeği (`DEALLOCATE ALL` → gerçek `InvalidSQLStatementNameError`) → önbellek kapanır, bağlantı önbelleksiz yeniden kurulur; gerçek PgBouncer'da (işlem modu) örnekleme her durumda sürer — çakışmanın oluşması PgBouncer'ın iç durumuna bağlı olduğundan zorunlu tutulmadı, 8 denemeye kadar tekrarlanır). PgBouncer: `python scripts/live_pg.py up`
 (`DBACE_TEST_PG_POOLER_DSN`).
 
+## Faz 31 — Commit 10b: büyük tabloya dokunan migration'lar — parçalı, CONCURRENTLY, gerçek ölçekte sınanmış
+
+**Migration:** yeni dosya YOK. Var olan dört dosyanın içeriği değişti (uygulanmış ortamlarda sonuç aynı, hepsi idempotent):
+`20250719140000_query_history_index.sql`, `20260825130000_node_credentials_and_group_alerts.sql`,
+`20260916090800_real_value_cleanup.sql`, `20260918090000_slow_query_sample_identity.sql` (#53).
+
+**Sorun:** #53, 393 bin satırlık `slow_query_samples`'ı TEK `UPDATE` ile dolduruyor ve index'i düz `CREATE INDEX` ile kuruyordu;
+Supabase'de ifade zaman aşımına uğradı ve tümüyle geri alındı (elle 50 binlik parçalarla ve CONCURRENTLY ile uygulandı). On-prem'de de
+aynısı yaşanırdı.
+
+### Kabul kriterleri (kodlamadan önce)
+
+1. #53 ≥ 400 bin satırda test edilmiş: backfill parçalı, idempotent, yeniden çalıştırılabilir; index CONCURRENTLY.
+2. Tüm migration'lar taranır; büyük tabloya dokunan, tek işlemde backfill yapan ya da CONCURRENTLY'siz index kuran BAŞKA migration
+   var mı — listelenir ve düzeltilir.
+3. Kural + CI testi: elle liste yok (koddan), negatif kontrollü.
+4. DEPLOY.md hangi migration'ın uzun süreceğini ve bakım penceresi gerekip gerekmediğini söyler (ve bu tablo CI'da dosyalardan doğrulanır).
+5. On-prem paketin uygulayıcısı CONCURRENTLY'yi işlem dışı çalıştırabiliyor mu — gerçek kurulumda gösterilir.
+
+### Tarama sonucu (madde 2): 4 dosyada 8 ihlal
+
+"Büyük tablo" = saklama politikasının temizlediği tablolar + günlük toplulaştırma tabloları (`services/retention.RETENTION_TARGETS`, koddan; 15 tablo).
+
+| Dosya | Tablo | İhlal | Düzeltme |
+|---|---|---|---|
+| `20250719140000_query_history_index.sql` | slow_query_samples | düz CREATE INDEX (yazmayı kapatır) | CONCURRENTLY |
+| `20260825130000_node_credentials_and_group_alerts.sql` | alert_events | `ADD COLUMN … REFERENCES` (tüm tabloyu doğrular, kilitler) + düz CREATE INDEX | sütun → FK `NOT VALID` → `VALIDATE` → CONCURRENTLY index |
+| `20260916090800_real_value_cleanup.sql` (#48) | wait_query_signatures ×2, captured_plans, slow_query_samples | tek DO bloğunda tek işlemde UPDATE'ler (plan başına özyinelemeli işlev; regex taraması) | tablo başına kimlik aralıklı parçalar (5 bin / 500 / 50 bin) |
+| `20260918090000_slow_query_sample_identity.sql` (#53) | slow_query_samples | tek UPDATE + düz CREATE INDEX | 20 bin aralık + CONCURRENTLY |
+
+Tarayıcının bulmadığı ama bilinen: `20260906090000_finding_status_machine.sql` `report_findings`'i UPDATE ediyor — tablo saklama listesinde YOK
+(bulgu sayısı raporla sınırlı, küçük); kural onu kapsamıyor. Bir tablo sınırsız büyümeye başlarsa saklama listesine girmek zorunda
+(zaten öyle) ve kural otomatik ona da uygulanır.
+
+### Yapılanlar
+
+- **`app/migration_sql.py`:** dolar-tırnak/string/yorum farkındalıklı `;` bölücü (eski `_statements` `;` ile böldüğü için `DO $$…$$` bloklarını
+  parçalıyordu), `-- dbace:chunked <tablo> <boy>` işareti, kurallar (index CONCURRENTLY; UPDATE/DELETE parçalı + `id >= $1 AND id < $2` + idempotent
+  koşul; tabloyu yeniden yazan/tarayan ALTER'lar; DO gövdesinde yazım yasak) ve DEPLOY doğrulaması için `long_running_tables()`.
+- **Neden LIMIT'e yakınsayan tekrar değil, kimlik aralığı:** LIMIT'li tekrarda her tur tamamlanmışları yeniden taradığı için maliyet ikinci dereceden
+  büyür ve yakınsamayan bir koşul sonsuz döngü olur; aralık doğrusal ve sonlu. Parça boyu: ölçekte 50 binlik parça 2,96 sn, **20 binlik 0,77 sn**
+  sürdü (8 sn sınırına 9× pay) → 20 bin.
+- **`app/migrations_runner.py`:** CONCURRENTLY'li ya da parçalı dosya işlem DIŞINDA, ifade ifade; parçalı ifade `min(id)..max(id)` aralıklarında; dosya
+  BAŞTAN SONA bitince kayda geçer; **yarıda kesilmiş `CREATE INDEX CONCURRENTLY`'nin bıraktığı GEÇERSİZ index** (`IF NOT EXISTS` onu "var" sanıp atlıyordu —
+  index sessizce hiç kullanılmazdı) çalıştırmadan önce `DROP INDEX CONCURRENTLY` ile temizleniyor; `--only <dosya> --no-record` (Supabase'e kayıt tablosu
+  eklemeden tek dosya), `--statement-timeout`, ölçüm kaydı.
+- **Kural + CI:** `tests/test_migration_safety.py` — dizinin tamamını tarar (elle liste yok), büyük tablolar koddan, DEPLOY.md tablosu dosyalardan hesaplanan
+  "uzun sürebilen" kümeyle karşılaştırılır (tabloda olmayan yeni uzun migration CI'ı kırar; tabloda olup uzun olmayan eskimiş satır da).
+- **DEPLOY.md:** "Uzun süren migration'lar ve bakım penceresi" tablosu, çalıştırıcıyla uygulama, elle (psql) parçalama betiği, doğrulama sorguları.
+  CLAUDE.md'ye tek satırlık kalıcı kural.
+
+### Gerçek ölçekte (420 bin satır × slow_query_samples/alert_events/metric_samples; PostgreSQL 15; `statement_timeout = 8s`)
+
+Ölçek verisi bir kez üretilip şablon veritabanında saklandı (11 sn); testler ondan kopyalıyor. Şablon en eski migration şemasıyla kurulup TÜM migration'lar
+gerçek uygulayıcıyla sırayla uygulandı (eski bir kurulumu bugüne yükseltme).
+
+| Ölçüm | Sonuç |
+|---|---|
+| Tüm migration'lar, 8 sn ifade sınırıyla | **bitti**, toplam 24,7 sn; en uzun tek ifade 0,44 sn (CONCURRENTLY index), en uzun parça 0,85 sn |
+| #53 | **16,6 sn = 21 parça × ~0,77 sn** (önce: tek UPDATE **16,2 sn** → 8 sn sınırında `QueryCanceledError`, TÜM iş geri alındı — canlıda yaşanan) |
+| #48 | 4,2 sn (60 bin imza, 20 bin plan, 420 EXPLAIN satırı); gerçek değerler temizlendi |
+| Diğer 3 dosya | 0,1–0,3 sn |
+| Sonuç doğruluğu | 0 boş `query_hash`; 400 örnek satırda SQL parmak izi = Python `query_fingerprint`; geçersiz index 0; alert_events FK doğrulanmış |
+| Yeniden çalıştırma | 0 satır güncelleniyor (idempotent); kayıtlılar bir daha uygulanmıyor |
+| Kesinti | 4. parçada bağlantı koptu → 150 bin biten, 270 bin kalan; yeniden çalıştırmada güncellenen **tam 270 bin**; sonuç kesintisiz çalıştırmayla md5 olarak AYNI |
+| Aynı sınırda eski tek UPDATE | zaman aşımı + tam geri alma (0 satır kaldı); parçalı sürüm aynı sınırla tamamlandı |
+| Yazıcılar (index kurulurken) | düz CREATE INDEX: yazıcı en çok 0,27 sn bloklandı (build 0,28 sn ≈ tamamı); CONCURRENTLY: 0,00 sn |
+| Geçersiz index | 30 ms sınırıyla kesilen CONCURRENTLY geçersiz index bıraktı; `IF NOT EXISTS` onu atladı (hâlâ geçersiz); uygulayıcı silip yeniden kurdu |
+
+Not: bu makinede index kurulumu 0,3 sn (dar (instance_id, query_hash) index'i, hızlı disk); yönetilen veritabanında saniyeler sürer, kural yine de aynı.
+
+### On-prem paketin uygulayıcısı, gerçek kurulumda (madde 5)
+
+`tests/test_onprem_package_live.py` (internetsiz dind konteyneri, paketin kendi imajları): kurulumdan sonra dbace-app konteynerinde paketin KENDİ
+`python -m app.migrations_runner /app/migrations` komutu 60 bin satırlık `slow_query_samples` üzerinde, worker yazmaya devam ederken çalıştırılıyor:
+#53 sıfırlanıp yeniden uygulanıyor. Aynı `CONCURRENTLY` dosyası SQL Editor gibi `BEGIN; …; COMMIT;` içinde gönderilince PostgreSQL
+"cannot run inside a transaction block" diye reddediyor — çalıştırıcı işlem dışı çalıştırdığı için aynı dosya geçiyor.
+
+| Gerçek kurulumda ölçülen | Sonuç |
+|---|---|
+| Tablo | 60 020 satır `slow_query_samples`, worker çalışırken |
+| Paketin uygulayıcısı, #53 | **4 parça, 0,8–0,9 sn**; günlük: `slow_query_samples parça 4/4, 60020 satır güncellendi` |
+| Sonuç | 0 boş parmak izi, 0 geçersiz index, `ix_slow_query_samples_instance_hash` geçerli+hazır, 55/55 migration kayıtlı |
+| Negatif kontrol (SQL Editor gibi `BEGIN; …; COMMIT;`) | `ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block` |
+| Faz 30 → bugün yükseltmesi (aynı test dosyasında) | yeni migration'larla (parçalı/CONCURRENTLY dosyalar dahil) geçti: 0 satır kaybı, şema farkı 0 |
+
+### Test
+
+`tests/test_migration_safety.py` (37: kural başına negatif+pozitif kontrol, ayrıştırıcı, DEPLOY doğrulaması), `tests/test_migrations_runner.py` (13: işlem dışı çalışma,
+aralıklar, kesilme, geçersiz index, seçenekler), `tests/test_migration_scale_live_postgres.py` (8: yukarıdaki tablo), `tests/test_real_value_cleanup_migration_live.py`
+(#48'in SQL↔Python paritesi yeni çalıştırma biçimiyle sürüyor), `tests/test_onprem_package_live.py` (gerçek kurulum bloğu).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

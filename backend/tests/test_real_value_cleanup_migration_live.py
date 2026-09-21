@@ -120,6 +120,15 @@ async def _seed(conn, *, store_real: bool) -> int:
     return instance
 
 
+async def _run_migration(conn) -> None:
+    """Migration'ı UYGULAYICIYLA çalıştır (Commit 10b: parçalı ifadeler `$1/$2` parametresi ister ve işlem dışında,
+    tek bağlantıda koşar — pg_temp işlevleri oturuma ait). Kayıt tablosuna dokunulmuyor: dosya her seferinde çalışır."""
+    from app.migrations_runner import apply_migrations
+
+    applied = await apply_migrations(conn, MIGRATION.parent, only=MIGRATION.name, record=False)
+    assert applied == [MIGRATION.name]
+
+
 async def _snapshot(conn):
     return (
         [dict(r) for r in await conn.fetch(
@@ -132,7 +141,7 @@ async def _snapshot(conn):
 
 async def test_sql_normalizer_is_identical_to_python(meta):
     body = MIGRATION.read_text(encoding="utf-8")
-    functions = body[body.index("CREATE OR REPLACE FUNCTION pg_temp.dbace_strip_literals"): body.index("DO $$")]
+    functions = body[body.index("CREATE OR REPLACE FUNCTION pg_temp.dbace_strip_literals"): body.index("-- 1. Sözlük metni")]
     await meta.execute(functions)
     for text in CORPUS:
         assert await meta.fetchval("SELECT pg_temp.dbace_strip_literals($1)", text) == normalize_literals(text), text
@@ -142,7 +151,7 @@ async def test_sql_normalizer_is_identical_to_python(meta):
 
 async def test_migration_with_switch_off_strips_everything_and_is_idempotent(meta, dsn):
     await _seed(meta, store_real=False)
-    await meta.execute(MIGRATION.read_text(encoding="utf-8"))
+    await _run_migration(meta)
     signatures, plans, samples = await _snapshot(meta)
     version = (await meta.fetchval("SHOW server_version")).split(" ")[0]
     print(f"\n  [{version}] imza metinleri={[s['query_text'] for s in signatures][:3]} …")
@@ -159,13 +168,13 @@ async def test_migration_with_switch_off_strips_everything_and_is_idempotent(met
     assert samples[3] == "SET application_name = 'uygulama-2'", "kapsam dışı satır değişmemeli"
 
     before = await _snapshot(meta)
-    await meta.execute(MIGRATION.read_text(encoding="utf-8"))
+    await _run_migration(meta)
     assert await _snapshot(meta) == before, "migration idempotent değil"
 
 
 async def test_migration_with_switch_on_keeps_samples_and_plans_but_still_strips_dictionary_text(meta):
     await _seed(meta, store_real=True)
-    await meta.execute(MIGRATION.read_text(encoding="utf-8"))
+    await _run_migration(meta)
     signatures, plans, _ = await _snapshot(meta)
     for row, original in zip(signatures, CORPUS):
         assert row["query_text"] == normalize_literals(original)

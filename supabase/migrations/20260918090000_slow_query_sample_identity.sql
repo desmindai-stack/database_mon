@@ -13,15 +13,24 @@
 --                metin başına BİR kez sınıflandırıp toplu UPDATE ile yazıyor).
 --
 -- Yeni satırlarda ikisini uygulama yazıyor. Aşağıdaki UPDATE var olan satırların parmak izini SQL'de
--- hesaplıyor (sunucu içinde; egress yok). Büyük tabloda tabloyu bir kez yeniden yazar — canlıda
--- ~393 bin satır: bakım penceresinde çalıştırın. CONCURRENTLY YOK.
+-- hesaplıyor (sunucu içinde; egress yok).
+--
+-- Faz 31 Commit 10b — İLK SÜRÜM BAŞARISIZ OLDU: tek UPDATE + düz CREATE INDEX, Supabase'de 393 bin satırlık tabloda
+-- zaman aşımına uğradı ve TAMAMEN geri alındı. Şimdi:
+--   * backfill 20 bin kimlik aralığı başına ayrı işlemde (`-- dbace:chunked`): her parça saniyeler sürer, zaman aşımı
+--     riski yok, kesilirse kalınan yerden değil baştan çalıştırılır ama biten parçalar `query_hash IS NULL` koşuluyla atlanır
+--     (idempotent);
+--   * index CONCURRENTLY: index kurulurken toplayıcı yazmaya devam eder.
+-- Bu dosya işlem DIŞINDA çalışır: `python -m app.migrations_runner <dizin> --only 20260918090000_slow_query_sample_identity.sql
+-- --no-record` (Supabase'de doğrudan bağlantıyla) ya da on-prem paketin çalıştırıcısı. Süre ve bakım penceresi: DEPLOY.md.
 
 ALTER TABLE slow_query_samples ADD COLUMN IF NOT EXISTS query_hash VARCHAR(40);
 ALTER TABLE slow_query_samples ADD COLUMN IF NOT EXISTS query_class TEXT;
 
+-- dbace:chunked slow_query_samples 20000
 UPDATE slow_query_samples
    SET query_hash = 'q:' || substr(encode(sha256(convert_to(
            lower(regexp_replace(btrim(query, E' \t\n\r\f\v'), E'[ \t\n\r\f\v]+', ' ', 'g')), 'UTF8')), 'hex'), 1, 24)
- WHERE query_hash IS NULL;
+ WHERE id >= $1 AND id < $2 AND query_hash IS NULL;
 
-CREATE INDEX IF NOT EXISTS ix_slow_query_samples_instance_hash ON slow_query_samples (instance_id, query_hash);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_slow_query_samples_instance_hash ON slow_query_samples (instance_id, query_hash);

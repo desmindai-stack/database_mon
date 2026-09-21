@@ -238,6 +238,43 @@ def changed_rows(before: dict, after: dict) -> dict[str, list[tuple[str, str, st
     return out
 
 
+
+
+IDENTITY_MIGRATION = "20260918090000_slow_query_sample_identity.sql"
+INDEX_MIGRATION = "20250719140000_query_history_index.sql"
+
+
+def exercise_runner_at_scale(name: str, instance_id: int, rows: int = 60_000) -> dict:
+    """Paketin KENDİ uygulayıcısı (`python -m app.migrations_runner`, dbace-app konteynerinde) gerçek veritabanında, gerçek
+    veriyle (Faz 31 Commit 10b): #53'ü sıfırlayıp `rows` satırlık tabloda yeniden çalıştırır — parçalı backfill ve
+    CONCURRENTLY, uygulama (worker) çalışıp yazmaya DEVAM ederken. Negatif kontrol: aynı CONCURRENTLY dosyası SQL Editor'ün
+    yaptığı gibi tek işleme sarılınca (BEGIN…COMMIT) PostgreSQL'in reddettiği hata.
+    """
+    psql(name, f"INSERT INTO slow_query_samples (instance_id, collected_at, queryid, query, calls, total_time_ms, mean_time_ms, rows) "
+               f"SELECT {instance_id}, now() - (g || ' seconds')::interval, (g % 200)::text, "
+               f"'SELECT   a,b FROM t_' || (g % 200) || ' WHERE x = 1', 1, 1, 1, 1 FROM generate_series(1, {rows}) g")
+    # #53'ün sonucunu sıfırla: eski kurulumdaki "migration henüz uygulanmamış" hâli.
+    psql(name, "DROP INDEX IF EXISTS ix_slow_query_samples_instance_hash")
+    psql(name, "UPDATE slow_query_samples SET query_hash = NULL")
+    psql(name, f"DELETE FROM dbace_meta.applied_migrations WHERE version = '{IDENTITY_MIGRATION}'")
+    total = int(psql(name, "SELECT count(*) FROM slow_query_samples"))
+
+    # NEGATİF KONTROL: SQL Editor gibi tek işlem — CONCURRENTLY reddediliyor.
+    editor = dx(name, "docker exec dbace-app cat /app/migrations/" + INDEX_MIGRATION + " | "
+                "docker exec -i dbace-db sh -c 'psql -U dbace -d dbace -v ON_ERROR_STOP=1 -c \"BEGIN; $(cat); COMMIT;\"' 2>&1",
+                check=False)
+
+    started = time.monotonic()
+    output = dx(name, "docker exec dbace-app python -m app.migrations_runner /app/migrations 2>&1")
+    elapsed = time.monotonic() - started
+    null_hashes = int(psql(name, "SELECT count(*) FROM slow_query_samples WHERE query_hash IS NULL"))
+    invalid = psql(name, "SELECT count(*) FROM pg_index WHERE NOT indisvalid")
+    index_valid = psql(name, "SELECT indisvalid AND indisready FROM pg_index WHERE indexrelid = to_regclass('ix_slow_query_samples_instance_hash')")
+    recorded = int(psql(name, "SELECT count(*) FROM dbace_meta.applied_migrations"))
+    return {"rows": total, "seconds": round(elapsed, 1), "output": output, "editor": editor, "null_hashes": null_hashes,
+            "invalid_indexes": invalid, "index_valid": index_valid, "recorded": recorded}
+
+
 # --- 1. Kurulum ----------------------------------------------------------------------------------------
 
 
@@ -258,6 +295,7 @@ def test_offline_install_runs_api_worker_and_collects_with_the_restricted_role(d
         containers = dx(name, "docker ps --format '{{.Names}} {{.Status}}'")
         app_log = dx(name, "docker logs dbace-app 2>&1 | grep -E '^migration:|Uvicorn running|scheduler|Scheduler' | head -5",
                      check=False)
+        scale = exercise_runner_at_scale(name, instance_id)
         grants = dx(name, "docker exec dbace-target psql -U postgres -d appdb -tAc \"SELECT rolsuper, "
                           "pg_has_role('dbace_monitor', 'pg_monitor', 'USAGE'), has_database_privilege('dbace_monitor', 'appdb', 'TEMP'), "
                           "pg_has_role('dbace_monitor', 'pg_read_server_files', 'USAGE') FROM pg_roles WHERE rolname = 'dbace_monitor'\"")
@@ -269,8 +307,19 @@ def test_offline_install_runs_api_worker_and_collects_with_the_restricted_role(d
                     "topoloji": state["topology"] and state["topology"]["kind"]})
     log("migration / şema", {"uygulanan": migrations, "dosya": len(MIGRATIONS), "şema farkı": diff or "yok"})
     log("web", {"index": "<div id=\"root\">" in web_index, "api/health": web_api.strip()})
+    log("uygulayıcı, gerçek kurulumda (%d satır)" % scale["rows"], {
+        "süre (sn)": scale["seconds"], "boş parmak izi": scale["null_hashes"], "geçersiz index": scale["invalid_indexes"],
+        "index geçerli": scale["index_valid"], "kayıtlı migration": scale["recorded"]})
+    log("uygulayıcı çıktısı (parçalı ifade)", [l for l in scale["output"].splitlines() if "parça" in l or "uygulanıyor" in l][-4:])
+    log("SQL Editor gibi tek işlem (negatif kontrol)", next((l for l in scale["editor"].splitlines() if "ERROR" in l), scale["editor"])[:200])
 
     assert grants.strip() == "f|t|f|f"
+    # Paketin uygulayıcısı CONCURRENTLY'yi ve parçalı ifadeyi işlem DIŞINDA çalıştırabiliyor (Faz 31 Commit 10b).
+    assert scale["rows"] >= 60_000 and scale["null_hashes"] == 0 and scale["invalid_indexes"] == "0"
+    assert scale["index_valid"] == "t" and scale["recorded"] == len(MIGRATIONS)
+    assert re.search(r"slow_query_samples parça \d+/\d+, \d+ satır güncellendi", scale["output"]), scale["output"][-800:]
+    assert int(re.search(r"parça \d+/(\d+)", scale["output"]).group(1)) >= 3, "60 bin satır ≥ 3 parça (20 bin)"
+    assert "cannot run inside a transaction block" in scale["editor"], "aynı dosya tek işlemde REDDEDİLMELİ (negatif kontrol)"
     assert migrations == len(MIGRATIONS)
     assert diff == []
     assert all(c in containers for c in ("dbace-db", "dbace-app", "dbace-web"))

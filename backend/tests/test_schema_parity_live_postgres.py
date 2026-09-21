@@ -63,14 +63,11 @@ async def _fresh(dsn: str):
 
 
 async def apply_migration(conn, path: Path) -> None:
-    sql = path.read_text(encoding="utf-8")
-    if "CONCURRENTLY" in sql:
-        # CONCURRENTLY işlem bloğunda çalışmaz (DEPLOY.md): komutlar tek tek.
-        for statement in re.sub(r"--[^\n]*", "", sql).split(";"):
-            if statement.strip():
-                await conn.execute(statement)
-    else:
-        await conn.execute(sql)
+    """Migration'ı UYGULAYICIYLA çalıştır (Faz 31 Commit 10b): CONCURRENTLY/parçalı dosyalar işlem dışı, dolar-tırnaklı
+    gövdeler bölünmeden — eskiden burada `;` ile bölen ayrı bir kopya vardı ve DO bloklarını parçalıyordu."""
+    from app.migrations_runner import apply_migrations
+
+    await apply_migrations(conn, path.parent, only=path.name, record=False)
 
 
 async def pg_schema(conn) -> dict[str, set[str]]:

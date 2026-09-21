@@ -65,6 +65,10 @@ denetim testleriyle korunuyor (`test_navigation_integrity.py`,
   DEPLOY.md tablosuna işle. SQLite'ta `migrate_schema()` ile otomatik oluşması yeterli
   DEĞİL — o fonksiyon Postgres'te no-op, yani migration yazılmazsa canlıda kolon hiç
   oluşmaz.
+- **Büyük tabloya dokunan migration parçalı ve CONCURRENTLY olur.** Tek işlemde uzun süren
+  UPDATE/index #53'ü Supabase'de zaman aşımıyla tümüyle geri aldırdı. UPDATE/DELETE
+  `-- dbace:chunked <tablo> <boy>` ile kimlik aralıklarına bölünür, index `CONCURRENTLY`
+  kurulur; CI denetler (`test_migration_safety.py`). Süre/bakım penceresi: DEPLOY.md.
 - **Yerel Python 3.14, canlı 3.12.** 3.14 (PEP 649) annotation'ları ertelemeli
   değerlendirir, 3.12 hemen. Bu yüzden `schemas.py`'de bir tip, kendisini KULLANAN
   modelden önce tanımlı olmalı — yoksa yerelde sessizce geçer, canlıda import anında

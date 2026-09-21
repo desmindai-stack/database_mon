@@ -52,18 +52,19 @@ Ek A.2). Hepsi `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` kullanıyor, yani
 daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güvenli
 (idempotent) — ama sıra önemli, özellikle 8 ve 9. maddeler birbirine bağımlı.
 
-⚠️ **İSTİSNA:** tabloda **"psql gerekir"** diye işaretli migration'lar SQL Editor'den ya da
+⚠️ **İSTİSNA:** tabloda **"psql gerekir"** ya da **"işlem DIŞINDA"** diye işaretli migration'lar SQL Editor'den ya da
 `supabase db push` ile ÇALIŞTIRILAMAZ (`CREATE INDEX CONCURRENTLY` transaction içinde
-çalışmaz). Onlar için aşağıdaki "CONCURRENTLY kullanan migration'lar" bölümüne bakın.
+çalışmaz; parçalı backfill her parçanın kendi işleminde bitmesini ister). Onlar için aşağıdaki "CONCURRENTLY kullanan
+migration'lar" ve "Uzun süren migration'lar ve bakım penceresi" bölümlerine bakın.
 
 | # | Dosya | Ne yapıyor |
 |---|---|---|
 | 1 | `20250717120000_dbace_core.sql` | Çekirdek tablolar: instances, metric_samples, slow_query_samples, alert_rules, alert_events, prediction_insights |
 | 2 | `20250718180000_add_instance_metadata.sql` | instances: customer_name/environment/application/cluster_name/role/services |
 | 3 | `20250718210000_add_slow_query_io_columns.sql` | slow_query_samples: shared/local/temp blk + plan/exec time kolonları |
-| 4 | `20250719140000_query_history_index.sql` | Sadece index (queryid bazlı geçmiş sorgular) |
+| 4 | `20250719140000_query_history_index.sql` | Sadece index (queryid bazlı geçmiş sorgular). **Commit 10b:** CONCURRENTLY — ⚠️ **psql gerekir** (ya da migration çalıştırıcısı): işlem DIŞINDA çalışır (bkz. "Uzun süren migration'lar") |
 | 5 | `20260825120000_multi_tenant_cluster.sql` | customers, applications, database_groups, nodes tabloları + instances.group_id |
-| 6 | `20260825130000_node_credentials_and_group_alerts.sql` | alert_rules.group_id, alert_events.group_id, **alert_events.instance_id NOT NULL kaldırılıyor** |
+| 6 | `20260825130000_node_credentials_and_group_alerts.sql` | alert_rules.group_id, alert_events.group_id, **alert_events.instance_id NOT NULL kaldırılıyor**. **Commit 10b:** alert_events'te FK NOT VALID + VALIDATE, index CONCURRENTLY — ⚠️ **psql gerekir** (ya da migration çalıştırıcısı): işlem DIŞINDA çalışır |
 | 7 | `20260826100000_group_environment.sql` | database_groups.environment |
 | 8 | `20260827090000_group_health_snapshots.sql` | group_health_snapshots tablosu |
 | 9 | `20260827100000_group_access_name.sql` | database_groups.access_name |
@@ -105,12 +106,12 @@ daha önce kısmen çalıştırılmış bir ortamda tekrar çalıştırmak güve
 | 45 | `20260916090500_collection_status.sql` | **YENİ** — instances'a toplama durumu (son başarılı toplama, son hata ve hata türü). CONCURRENTLY YOK |
 | 46 | `20260916090600_index_advice_watches.sql` | **YENİ** — index_advice_watches (çağrı eşiğini bekleyen index önerisi sorguları, eşik dolunca üretilen öneri). CONCURRENTLY YOK |
 | 47 | `20260916090700_wait_query_signature_samples.sql` | **YENİ** — wait_query_signatures: gerçek değerli temsili örnek (sample_query_text/duration/captured_at, ayar varsayılan KAPALI) ve seen_bind_parameters. CONCURRENTLY YOK |
-| 48 | `20260916090800_real_value_cleanup.sql` | **YENİ** — geriye dönük temizlik: wait_query_signatures metni, (ayar kapalıysa) örnekler ve auto_explain planları, EXPLAIN satırları değerlerden arındırılır. **ÖNCE ÖLÇÜN** (aşağıda). #47'den SONRA. CONCURRENTLY YOK |
+| 48 | `20260916090800_real_value_cleanup.sql` | **YENİ** — geriye dönük temizlik: wait_query_signatures metni, (ayar kapalıysa) örnekler ve auto_explain planları, EXPLAIN satırları değerlerden arındırılır. **ÖNCE ÖLÇÜN** (aşağıda). #47'den SONRA. **Commit 10b:** tek DO bloğu yerine tablo başına kimlik aralıklarıyla PARÇALI (`-- dbace:chunked`) — ⚠️ işlem DIŞINDA, TEK bağlantıda çalışır (pg_temp işlevleri oturuma ait): çalıştırıcı gerekir |
 | 49 | `20260916090900_slow_query_sample_origin.sql` | **YENİ** — slow_query_samples: from_monitoring_role, toplevel (imzalı satırın dbace'in kendi rolünden gelip gelmediği; iç içe çalıştırma). CONCURRENTLY YOK |
 | 50 | `20260917090000_instance_observation_status.sql` | **YENİ** — instances: izleme rolü paylaşımı (monitoring_role_checked_at/shared_at/shared_apps) ve plan yakalama durumu (auto_explain_loaded, plan_capture_checked_at/error/found). CONCURRENTLY YOK |
 | 51 | `20260917090100_index_advice_outcomes.sql` | **YENİ** — index_advice_outcomes: index önerisinin ölçülmüş etkisi (index kurulmadan önce ve sonra aynı sorgunun planlayıcı maliyeti). CONCURRENTLY YOK |
 | 52 | `20260917090200_instance_topology.sql` | **YENİ** — instances: ölçülen topoloji (tek sunucu / cluster sağlıklı-bozuk / ölçülemedi, rol, üyeler, gerekçe, gereken yetki, son cluster gözlemi). CONCURRENTLY YOK |
-| 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor: 393 bin satırlık tabloda tabloyu bir kez yeniden yazar — bakım penceresinde çalıştırın. Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor. CONCURRENTLY YOK |
+| 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor. **İLK SÜRÜMÜ Supabase'de zaman aşımına uğrayıp tümüyle geri alındı** (tek UPDATE + düz CREATE INDEX); **Commit 10b: 20 bin kimlik aralığı başına ayrı işlemde backfill + index CONCURRENTLY** — ⚠️ **psql gerekir** (ya da migration çalıştırıcısı): işlem DIŞINDA çalışır ("Uzun süren migration'lar"). Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor |
 | 54 | `20260918090100_user_password_changed_at.sql` | **YENİ** — users: şifrenin en son değiştiği an. Şifre değişince (ve yönetici sıfırlamasında) o andan ÖNCE üretilmiş access/refresh jetonları reddediliyor; eskiden access 60 dk, refresh 7 gün daha geçerliydi. CONCURRENTLY YOK |
 | 55 | `20260920090000_active_session_max_gap.sql` | **YENİ** — active_session_minutes: dakika başına ÖLÇÜLEN en uzun örnekleme boşluğu (max_gap_ms, NULL = ölçülmedi). Veritabanı yükü ekranı bu değerden "örnekleme aralığı tutturulamadı" uyarısını üretiyor. Nullable kolon ekler, tabloyu yeniden yazmaz; CONCURRENTLY YOK |
 
@@ -368,6 +369,42 @@ ERROR: CREATE INDEX CONCURRENTLY cannot run inside a transaction block
 **Satırları tek tek çalıştırmak da bu hatayı ÇÖZMEZ** — sorun kaç satır gönderdiğiniz değil,
 editörün her gönderimi sarmalaması. `supabase db push` de aynı sebeple çalışmaz.
 
+### En kolay yol: migration çalıştırıcısı (Faz 31 Commit 10b)
+
+`backend/app/migrations_runner.py` bu dosyaları doğru çalıştırır: `CREATE INDEX CONCURRENTLY` ve parçalı ifadeleri işlem
+DIŞINDA, tek tek; yarıda kesilmiş bir CONCURRENTLY'nin bıraktığı GEÇERSİZ index'i kendisi temizleyip yeniden kurar; parçalı
+ifadelerde ilerlemeyi günlüğe yazar. Supabase'e **doğrudan bağlantıyla** (session mode, port **5432** — havuzlayıcı değil):
+
+```bash
+cd backend
+export DATABASE_URL='postgresql://postgres.<proje-ref>:<sifre>@aws-0-<bolge>.pooler.supabase.com:5432/postgres'
+
+# Yalnızca bu dosya, kayıt tablosuna DOKUNMADAN (buluta dbace_meta şeması eklemez):
+python -m app.migrations_runner ../supabase/migrations --only 20260918090000_slow_query_sample_identity.sql --no-record
+
+# İfade süre sınırını görmek/denemek için (yönetilen veritabanının sınırı ~8 sn olabilir):
+python -m app.migrations_runner ../supabase/migrations --only <dosya> --no-record --statement-timeout 8s
+```
+
+Kesilirse (ağ, kapanan bilgisayar, zaman aşımı) AYNI komutu tekrar çalıştırın: biten parçalar `... IS NULL` koşuluyla
+atlanır, kalan parçalar tamamlanır (ölçek testinde kesintiden sonra sonuç kesintisiz çalıştırmayla birebir aynı çıktı).
+Bu komut on-prem paketin uygulayıcısıyla AYNI koddur.
+
+### Elle (çalıştırıcı olmadan): psql
+
+Çalıştırıcı kullanılamıyorsa: index'ler aşağıdaki gibi `psql -c` ile; parçalı backfill için tablonun kimlik aralığı elle
+20 bin adımla taranır (her `psql -c` kendi işlemidir):
+
+```bash
+read MIN MAX < <(psql "$DBACE_DB" -Atc "SELECT min(id), max(id) FROM slow_query_samples" | tr '|' ' ')
+for lo in $(seq "$MIN" 20000 "$MAX"); do
+  psql "$DBACE_DB" -c "UPDATE slow_query_samples SET query_hash = 'q:' || substr(encode(sha256(convert_to(lower(regexp_replace(btrim(query, E' \t\n\r\f\v'), E'[ \t\n\r\f\v]+', ' ', 'g')), 'UTF8')), 'hex'), 1, 24) WHERE id >= $lo AND id < $((lo + 20000)) AND query_hash IS NULL;"
+done
+```
+
+Sonra index'i (aşağıdaki gibi) `CONCURRENTLY` kurun. Bu betik #53 içindir; başka parçalı dosyalar için dosyadaki `-- dbace:chunked`
+ifadesindeki `$1`/`$2` yerine aralığı koyun.
+
 ### Doğru yol: psql
 
 Supabase panelinden bağlantı dizesini alın (**Project Settings → Database → Connection string
@@ -433,6 +470,42 @@ kilitler, yani toplama döngüsü durur.
 da bağımsızdır — asıl bağımlılığı `5` numaralı dosyadaki `nodes` tablosunun
 o anki `host`/`site`/`agent_url`/`agent_token` kolonlarına duyuyor (aşağıya
 bakın), bu yüzden sıra listede yazıldığı gibi korunmalı.
+
+## Uzun süren migration'lar ve bakım penceresi
+
+**Kural (CI denetliyor — `tests/test_migration_safety.py`):** büyük tabloya (saklama politikasının temizlediği tablolar ve günlük
+toplulaştırma tabloları; koddan hesaplanır, elle liste yok) dokunan migration'da (1) `UPDATE`/`DELETE` kimlik aralıklarıyla,
+kendi işleminde biten parçalara bölünür (`-- dbace:chunked <tablo> <boy>`), (2) index `CREATE INDEX CONCURRENTLY` ile kurulur,
+(3) kısıtlar `NOT VALID` eklenip ayrıca `VALIDATE` edilir, (4) tabloyu yeniden yazan/tarayan ALTER'lar yasaktır. Bu tablo,
+dosyalardan HESAPLANAN "uzun sürebilen" kümeyle karşılaştırılır: buraya girmemiş yeni bir uzun migration CI'ı kırar.
+
+Süreler **420 bin satırlık** tablolarla (canlı `slow_query_samples` 393 bin) gerçek PostgreSQL 15'te, `statement_timeout = 8s`
+ile (Supabase'in varsayılan ifade sınırı) ölçüldü (`tests/test_migration_scale_live_postgres.py`). Süre satır sayısıyla
+DOĞRUSAL büyür; yönetilen veritabanının diski yerelden yavaş olabilir — 3–5 katını varsayın (parça başına 0,8 sn → ~4 sn: hâlâ
+sınırın altında). Hiçbiri tabloyu yazmaya kapatmaz; ek yük WAL/disk (güncellenen satırlar, otovakum temizler) ve CPU'dur.
+
+| Migration | Büyük tablo | Ölçülen süre (420 bin satır) | Yöntem | Bakım penceresi |
+|---|---|---|---|---|
+| `20250719140000_query_history_index.sql` | slow_query_samples | 0,3 sn | CONCURRENTLY | bakım penceresi gerekmez |
+| `20260825130000_node_credentials_and_group_alerts.sql` | alert_events | 0,1 sn | FK NOT VALID + VALIDATE + CONCURRENTLY | bakım penceresi gerekmez |
+| `20260909090000_hot_table_composite_indexes.sql` | metric_samples, slow_query_samples | 0,3 sn | CONCURRENTLY | bakım penceresi gerekmez |
+| `20260916090800_real_value_cleanup.sql` | captured_plans, slow_query_samples, wait_query_signatures | 4,2 sn (60 bin imza + 20 bin plan) | parçalı (5 bin / 500 / 50 bin) | bakım penceresi gerekmez; plan başına özyinelemeli işlev CPU harcar, yoğun olmayan saat önerilir |
+| `20260918090000_slow_query_sample_identity.sql` | slow_query_samples | 16,6 sn (21 parça × ~0,8 sn; eski tek UPDATE 16,2 sn ve 8 sn sınırında zaman aşımı) | parçalı + CONCURRENTLY | bakım penceresi gerekmez; yoğun olmayan saat önerilir |
+
+Bu dosyaların HEPSİ işlem DIŞINDA çalışır: SQL Editor ve `supabase db push` kullanılamaz — yukarıdaki "En kolay yol: migration
+çalıştırıcısı". Dosya başarısız olursa kayda geçmez; aynı komutu tekrar çalıştırmak güvenlidir. Uygulamadan sonra kontrol:
+
+```sql
+-- Geçersiz index kalmamalı (0 satır). Yarıda kesilmiş CONCURRENTLY'nin izi budur.
+SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE NOT i.indisvalid;
+-- #53: doldurulmamış satır kalmamalı (0)
+SELECT count(*) FROM slow_query_samples WHERE query_hash IS NULL;
+-- alert_events FK doğrulandı mı (true)
+SELECT convalidated FROM pg_constraint WHERE conname = 'alert_events_group_id_fkey';
+```
+
+**Yeni migration yazarken:** büyük tabloya dokunuyorsanız CI size hangi kuralı çiğnediğinizi dosya:satır olarak söyler. Uzun sürecekse
+bu tabloya bir satır ekleyin (süreyi ölçek testiyle ölçün) — aksi hâlde `test_migration_safety.py` kırılır.
 
 ## ⚠️ Veri kaybı riski taşıyan değişiklikler
 

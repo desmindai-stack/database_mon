@@ -2739,3 +2739,18 @@ yeniden başladığında her hedef için tekrar yaşanır. Kalıcı çözüm o i
 
 **Bloklama ağacı okuması bir örnek aralığını uzatabilir (Commit 10a).** Okuma örnekleme bağlantısında ve sırayla yapıldığı için (aynı bağlantıda aynı anda tek sorgu), kilit beklemesi sürerken her 10 sn'de bir o instance'ın bir
 sonraki örneği ~3 gidiş-dönüş gecikir (250 ms RTT'de en uzun boşluk 3 sn ölçüldü). Ayrı ikinci bağlantı bunu çözerdi ama her instance'a fazladan kalıcı bağlantı demek; kilit beklemesi nadir olduğu için yapılmadı.
+
+**Büyük tablo tanımı saklama listesine bağlı (Commit 10b).** Migration güvenlik kuralı yalnızca `services/retention.RETENTION_TARGETS` ve günlük
+toplulaştırma tablolarını "büyük" sayıyor. Saklama listesinde olmayan ama büyüyebilecek bir tablo (bugün `report_findings`: rapor başına satırlar,
+saklama yok) kuralın dışında kalır. Şu an küçük; büyürse saklama listesine girmesi gerekir — ki girdiği anda kural ona da uygulanır.
+
+**Parça boyu yerelde ölçüldü, yönetilen diskte ölçülmedi (Commit 10b).** 20 binlik parça yerelde 0,77 sn (8 sn sınırına 9× pay); Supabase'in
+diski/CPU'su bilinmiyor. DEPLOY.md 3–5× yavaş varsayıyor (~4 sn, hâlâ sınırın altında). Canlıda ilk gerçek koşuda `--statement-timeout 8s` ile
+çalıştırıp parça sürelerine bakın; sınır aşılırsa dosyadaki boyu düşürmek yeter (idempotent, yeniden çalıştırılır).
+
+**Parçalı backfill tablo şişkinliği bırakır (Commit 10b).** Güncellenen her satır yeni bir sürüm yazar: #53'te `slow_query_samples` ~bir tablo boyu kadar
+ölü satır biriktirir; otovakum temizler, `VACUUM FULL` GEREKMEZ (ve yasak: kural `heavy-lock`). Yoğun bir Supabase'de otovakumun yetişip yetişmediği izlenmeli.
+
+**CONCURRENTLY + parçalı dosyalar Supabase SQL Editor'den çalışmaz (Commit 10b).** Bilinen sınır (eskiden de CONCURRENTLY için böyleydi); artık 5 dosya
+bu gruba giriyor. Çalıştırıcı (`--only … --no-record`) doğrudan bağlantı (5432) ister. Havuzlayıcı (6543) üzerinde uzun DDL ve `pg_temp` işlevleri
+(#48) güvenilir değil — DEPLOY.md bunu yazıyor.
