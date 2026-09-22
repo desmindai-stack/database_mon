@@ -50,6 +50,10 @@ def _login() -> httpx.Client:
         changed = client.post("/api/auth/change-password",
                               json={"current_password": password, "new_password": os.environ["DBACE_NEW_PASS"]})
         changed.raise_for_status()
+        # Şifre değişiminden ÖNCE alınan jeton (yukarıdaki Authorization header'ı) artık backend'de kasıtlı
+        # olarak geçersiz (token_is_stale, Commit 9b) — YANITTAKİ taze jetona geçilmeli, aksi hâlde bir
+        # sonraki istek 401 "Oturum gerekli" ile düşer (Faz 31 Commit 10c takip — bu satır olmadan böyleydi).
+        client.headers["Authorization"] = f"Bearer {changed.json()['access_token']}"
     return client
 
 

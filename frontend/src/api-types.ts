@@ -302,7 +302,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Change Password */
+        /**
+         * Change Password
+         * @description Faz 31 Commit 10c takip: eskiden `UserOut` dönüyordu — çağıran taraf, isteği YETKİLENDİREN jetonu
+         *     (şifre değişiminden ÖNCE alınmış) elinde tutmaya devam ediyordu. `token_is_stale` (Commit 9b) o
+         *     jetonu bilerek geçersiz sayıyor ("bu andan öncesine ait jetonlar artık geçersiz") — sonuç: değişimden
+         *     HEMEN sonraki bir sonraki istek (on-prem sürücüsünde `POST /api/customers`, gerçek arayüzde
+         *     "Şifreyi değiştir ve devam et" sonrası herhangi bir çağrı) 401 "Oturum gerekli" ile düşüyor. Bu bir
+         *     saniye hassasiyeti yarışı DEĞİL: giriş her zaman şifre değişiminden ÖNCE olduğu için o jetonun `iat`'ı
+         *     her zaman `password_changed_at`'tan erken — aynı saniyede bile olsa. Düzeltme: login gibi TAZE bir
+         *     jeton çifti dön; jeton `password_changed_at` YAZILDIKTAN SONRA üretiliyor, bu yüzden asla stale
+         *     sayılmıyor. Eski (değişimden önceki) jeton hâlâ reddediliyor — yalnızca YANITTAKİ yeni jeton kullanılmalı.
+         */
         post: operations["change_password_api_auth_change_password_post"];
         delete?: never;
         options?: never;
@@ -7207,7 +7218,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["UserOut"];
+                    "application/json": components["schemas"]["TokenOut"];
                 };
             };
             /** @description Validation Error */

@@ -136,7 +136,9 @@ async def test_change_password_flow_clears_must_change_flag():
             json={"current_password": password, "new_password": "brand-new-pass-123"},
         )
         assert ok.status_code == 200
-        assert ok.json()["must_change_password"] is False
+        # Faz 31 Commit 10c takip: yanıt artık login gibi TAZE bir jeton çifti taşıyor (UserOut değil TokenOut).
+        assert ok.json()["user"]["must_change_password"] is False
+        assert "access_token" in ok.json() and "refresh_token" in ok.json()
 
         # Old password no longer works, new one does.
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as c2:
@@ -146,6 +148,65 @@ async def test_change_password_flow_clears_must_change_flag():
                 "/api/auth/login", json={"username": username, "password": "brand-new-pass-123"}
             )
             assert new_login.status_code == 200
+
+
+async def test_the_fresh_token_from_change_password_survives_the_very_next_request():
+    """Kök neden reprodüksiyonu (SORULAR/on-prem paket testinin bulduğu 401, Faz 31 Commit 10c takip).
+
+    Giriş her zaman şifre değişiminden ÖNCE olur, bu yüzden GİRİŞ jetonunun `iat`'ı `password_changed_at`'tan
+    her zaman erken — saniye hassasiyeti farkı YOK, aynı saniyede bile olsa `token_is_stale` bu jetonu
+    reddeder (kasıtlı, Commit 9b). Gerçek dünyada (Docker-in-Docker, ağ gecikmesi) login ile change-password
+    arası kolayca bir saniye sınırını geçiyor — burada aynı etki elle bir uyku ile üretiliyor ki test rastgele
+    aynı saniyeye düşme şansına bağlı kalmasın. `onprem_driver.py`'nin GERÇEK hatası da buydu: change-password
+    sonrası eski jetonla devam ediyordu."""
+    import time
+
+    username, password = await _make_user("admin", must_change_password=True)
+    async with await _raw_client() as c:
+        login = await c.post("/api/auth/login", json={"username": username, "password": password})
+        c.headers["Authorization"] = f"Bearer {login.json()['access_token']}"
+
+        # Saniye sınırını GERÇEKTEN geç — JWT `iat` saniyeye yuvarlanıyor (bkz. security.py::token_is_stale).
+        time.sleep(1.05 - (time.time() % 1.0))
+
+        changed = await c.post(
+            "/api/auth/change-password",
+            json={"current_password": password, "new_password": "brand-new-pass-123"},
+        )
+        assert changed.status_code == 200
+        new_token = changed.json()["access_token"]
+
+        # Düzeltmeden ÖNCE: bu adımda `c.headers["Authorization"]` hâlâ giriş jetonunu taşıyordu ve
+        # aşağıdaki istek 401 "Oturum gerekli" verirdi (on-prem paket testinde gözlenen budur).
+        c.headers["Authorization"] = f"Bearer {new_token}"
+        after = await c.post("/api/customers", json={"name": "fresh-token-ok"})
+        assert after.status_code == 201, after.text
+
+
+async def test_negative_control_the_pre_change_token_still_gets_rejected():
+    """Yukarıdakinin aynası: düzeltme "her jetonu kabul et" değil — YALNIZCA yanıttaki taze jeton geçerli
+    olmalı, GİRİŞ jetonu (artık şifre değişiminden önceye ait) hâlâ reddedilmeli."""
+    import time
+
+    username, password = await _make_user("admin", must_change_password=True)
+    async with await _raw_client() as c:
+        login = await c.post("/api/auth/login", json={"username": username, "password": password})
+        old_token = login.json()["access_token"]
+        c.headers["Authorization"] = f"Bearer {old_token}"
+
+        time.sleep(1.05 - (time.time() % 1.0))
+
+        changed = await c.post(
+            "/api/auth/change-password",
+            json={"current_password": password, "new_password": "brand-new-pass-123"},
+        )
+        assert changed.status_code == 200
+
+        # Elle ESKİ (giriş) jetonuna geri dön — tam olarak düzeltmeden önceki `onprem_driver.py` davranışı.
+        c.headers["Authorization"] = f"Bearer {old_token}"
+        after = await c.post("/api/customers", json={"name": "stale-token-rejected"})
+        assert after.status_code == 401
+        assert after.json()["detail"] == "Oturum gerekli"
 
 
 async def test_inactive_user_cannot_login():

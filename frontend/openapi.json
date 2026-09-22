@@ -13386,6 +13386,7 @@
     },
     "/api/auth/change-password": {
       "post": {
+        "description": "Faz 31 Commit 10c takip: eskiden `UserOut` dönüyordu — çağıran taraf, isteği YETKİLENDİREN jetonu\n(şifre değişiminden ÖNCE alınmış) elinde tutmaya devam ediyordu. `token_is_stale` (Commit 9b) o\njetonu bilerek geçersiz sayıyor (\"bu andan öncesine ait jetonlar artık geçersiz\") — sonuç: değişimden\nHEMEN sonraki bir sonraki istek (on-prem sürücüsünde `POST /api/customers`, gerçek arayüzde\n\"Şifreyi değiştir ve devam et\" sonrası herhangi bir çağrı) 401 \"Oturum gerekli\" ile düşüyor. Bu bir\nsaniye hassasiyeti yarışı DEĞİL: giriş her zaman şifre değişiminden ÖNCE olduğu için o jetonun `iat`'ı\nher zaman `password_changed_at`'tan erken — aynı saniyede bile olsa. Düzeltme: login gibi TAZE bir\njeton çifti dön; jeton `password_changed_at` YAZILDIKTAN SONRA üretiliyor, bu yüzden asla stale\nsayılmıyor. Eski (değişimden önceki) jeton hâlâ reddediliyor — yalnızca YANITTAKİ yeni jeton kullanılmalı.",
         "operationId": "change_password_api_auth_change_password_post",
         "requestBody": {
           "content": {
@@ -13402,7 +13403,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/UserOut"
+                  "$ref": "#/components/schemas/TokenOut"
                 }
               }
             },

@@ -90,10 +90,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const changePassword = async (currentPassword: string, newPassword: string) => {
-    const updated = await api.changePassword(currentPassword, newPassword);
-    setUser(updated);
-    const stored = loadStored();
-    if (stored) persist(stored.access, stored.refresh, updated);
+    // Şifre değişiminden ÖNCE alınan jeton (bu isteği yetkilendiren jetonun ta kendisi) artık backend'de
+    // kasıtlı olarak geçersiz sayılıyor (token_is_stale, Faz 31 Commit 9b) — eski token'ı saklamaya devam
+    // etseydik BİR SONRAKİ istek 401 "Oturum gerekli" ile düşerdi. Bu yüzden login'de olduğu gibi YANITTAKİ
+    // taze jeton çiftine geçiliyor (Faz 31 Commit 10c takip).
+    const result = await api.changePassword(currentPassword, newPassword);
+    setAuthTokens(result.access_token, result.refresh_token);
+    persist(result.access_token, result.refresh_token, result.user);
+    setUser(result.user);
   };
 
   return (

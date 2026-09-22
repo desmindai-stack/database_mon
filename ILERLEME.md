@@ -9012,6 +9012,66 @@ hesaplaması (zaten düzeltildi). DEPLOY.md'ye canlı etkiyi doğrulayan salt-ok
 SQL Server standalone + AG, ODBC Driver 18 kurulu). 4 atlanan: önceki commit'lerden değişmeyen, ortam bağımlılığı
 olmayan testler (sürüm koşulu, on-prem paket testi kapalı, bir UI sayfası "daha göster" kullanıyor).
 
+## Faz 31 — Commit 10c takip 2: zorunlu şifre değişiminden hemen sonra oturum düşüyordu
+
+**Semptom (CI, Commit 9b'den beri):** `test_onprem_package_live.py::test_offline_install_runs_api_worker_and_collects_with_the_restricted_role`
+kırmızı — admin şifresini değiştirdikten sonra `POST /api/customers` → 401 "Oturum gerekli".
+
+**Kök neden — hipotez YANLIŞTI, gerçek neden farklı.** Hipotez "iat saniye, `password_changed_at` mikrosaniye
+hassasiyeti" idi; ama `password_changed_at` zaten `.replace(microsecond=0)` ile saniyeye yuvarlanıyordu ve JWT'nin
+kendi `iat` kodlaması da saniyeye taşıyor (`utctimetuple()`) — AYNI saniyede kanıtlanan bir yerel reprodüksiyon
+(`repro_auth.py`, atılan geçici betik) 401 ÜRETMEDİ. Gerçek neden: **giriş her zaman şifre değişiminden ÖNCE
+olur**, bu yüzden GİRİŞ jetonunun `iat`'ı `password_changed_at`'tan HER ZAMAN erken — aynı saniyede bile olsa
+fark etmez, çünkü `onprem_driver.py`'nin `_login()`'ü şifreyi değiştirdikten SONRA da aynı (giriş anında alınmış)
+jetonu kullanmaya devam ediyordu. Round-trip bir saniye sınırını geçtiği an (gerçek Docker-in-Docker'da kolayca
+oluyor) `token_is_stale` bu jetonu KASITLI olarak reddediyor (Commit 9b'nin tasarımı — "bu andan öncesine ait
+jetonlar artık geçersiz"). Elle bir uyku ekleyip saniye sınırını zorlayan bir yerel reprodüksiyon (`repro_auth.py`,
+geçici) 401'i birebir yeniden üretti. **Aynı hata frontend'de de vardı** (`auth.tsx::changePassword` eski jetonları
+saklamaya devam ediyordu) — yalnızca on-prem testine özgü değil, gerçek "ilk girişte zorunlu şifre değiştirme"
+akışını kullanan HER kullanıcıyı etkileyen canlı bir hataydı (e2e testi bunu YAKALAMAMIŞ: `global.setup.ts`
+şifre değiştirdikten sonra API oturumunu atıp TARAYICIDA sıfırdan giriş yapıyor, bu spesifik hatayı tesadüfen
+es geçiyor).
+
+**Düzeltme:** `POST /api/auth/change-password` artık `UserOut` değil `TokenOut` dönüyor — login gibi TAZE bir
+access+refresh jeton çifti (`password_changed_at` YAZILDIKTAN SONRA üretiliyor, bu yüzden asla stale sayılmıyor).
+Üç çağıran taraf güncellendi: `frontend/src/auth.tsx::changePassword` (yeni jetonlara geçiyor, `setAuthTokens`+
+`persist`), `frontend/src/api.ts` (dönüş tipi `TokenOut`), `tests/onprem_driver.py::_login()` (change-password
+sonrası `Authorization` header'ı yanıttaki yeni jetona güncelleniyor). `services/security.py::token_is_stale`
+KASITLI olarak toleranssız kalıyor (davranışı değişmedi) — yorum, gerçek düzeltmenin nerede olduğuna işaret
+edecek şekilde güncellendi.
+
+**Neden yerel tam pakette yakalanmadı:** evet, `DBACE_TEST_ONPREM=1` olmadan `test_onprem_package_live.py`
+TAMAMEN atlanıyor (`tests/live_onprem.py::ONPREM_TARGETS` boş) — bu oturumdaki HER "tam paket" koşusu
+(Commit 10a/10b/10c, hepsi) bunu içermiyordu, gerçek Docker DIND + dolu `deploy/onprem/vendor/` gerektiriyor.
+CI'da da aynı iş yalnızca gecelik/elle tetiklemede çalışıyor (`if: schedule || workflow_dispatch`), her push'ta
+DEĞİL. Daha da önemlisi: `tests/test_auth.py`'de "değişimden hemen sonra AYNI jetonla bir istek daha at" deseni
+hiç sınanmıyordu — `test_change_password_flow_clears_must_change_flag` şifre değiştirip yalnızca YENİ ŞİFREYLE
+login'i kontrol ediyordu, jeton yeniden kullanımını hiç denemiyordu. **Bu, ucuz/hızlı bir testle de yakalanabilirdi
+ve şimdi yakalanıyor:** `tests/test_auth.py::test_the_fresh_token_from_change_password_survives_the_very_next_request`
++ `test_negative_control_the_pre_change_token_still_gets_rejected` (offline, SQLite, ~saniyeler — Docker gerektirmiyor,
+saniye sınırını elle bir uyku ile geçiyor).
+
+**On-prem testinin push öncesi kontrol listesine girmesi için öneri (uygulanmadı — kapsam dışı bırakıldı, yalnızca
+öneri):** tam Docker DIND koşusunu HER push'a eklemek pahalı (dakikalarca, hazırlanmış `vendor/` arşivi ister).
+Daha orantılı iki seçenek: (1) `.github/workflows/ci.yml`'deki `onprem-package` işine `paths:` filtresi eklenip
+yalnızca kimlik doğrulama/migration/on-prem paketleme dosyaları (`backend/app/routers/auth.py`,
+`backend/app/services/security.py`, `supabase/migrations/**`, `deploy/onprem/**`) değiştiğinde PR'da da
+tetiklenmesi — GitHub Actions'ın standart `on.pull_request.paths` mekanizmasıyla, iş tanımını değiştirmeden.
+(2) Bu sınıftaki hataları (bir uç noktanın yanıtının kimlik doğrulamayı nasıl etkilediği) HER ZAMAN önce ucuz bir
+offline test olarak yakalayacak bir alışkanlık/kural: kimlik doğrulama durumunu DEĞİŞTİREN her uç nokta
+(şifre/rol/aktiflik değişikliği) için "bu değişiklikten hemen sonra AYNI oturumla bir istek daha at" negatif
+kontrolü `test_auth.py`'ye eklensin — pahalı on-prem testi yalnızca PAKETLEME'nin kendisini (gerçek Docker,
+gerçek migration sırası) doğrulasın, DAVRANIŞ mantığını değil.
+
+**Test:** `tests/test_auth.py` (+2 yeni, 1 güncellenen — üstte). Ayrıca tam paket koşusu response şekli
+değişikliğinin gözden kaçan BİR yerini daha buldu: `tests/test_secret_policy.py::test_password_change_invalidates_tokens_issued_before_it`
+(Commit 9b'nin kendi testi — tam da "eski jeton reddedilsin" senaryosunu sınıyordu) `changed.json()["username"]`
+okuyordu, artık `changed.json()["user"]["username"]`; düzeltildi, testin ASIL iddiaları (eski jeton 401, yeni
+jeton 200, eski refresh 401) değişmedi.
+
+**Tam paket (bir kez, `-rs`, bu düzeltmeden sonra):** 2414 passed, 4 skipped, 0 failed — offline + tüm canlı
+hedefler (PostgreSQL 15/16/17 + replikalar, PgBouncer, SQL Server standalone + AG).
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile
@@ -9026,3 +9086,10 @@ ve `/api/auth/login`/`/refresh` DIŞINDA her `/api/*` ucu artık
 istemcinin (script, entegrasyon vb.) artık çalışmayacağı anlamına
 geliyor — beklenen ve istenen davranış, ama var olan otomasyon varsa
 önce bir token alıp `Authorization` header'ı eklemesi gerekecek.
+
+**Faz 31 Commit 10c takip 2 kırıyor (bilerek — gerekçesi düzeltilen hatanın kendisi):**
+`POST /api/auth/change-password` artık `UserOut` değil `TokenOut` dönüyor (`{access_token, refresh_token,
+token_type, user}`). Eskiden yanıttaki `user` alanları doğrudan kökteydi (`response.username`); artık
+`response.user.username`. Eski jetonla devam eden HERHANGİ bir istemci zaten bu yüzden kırılıyordu (401) —
+bu şema değişikliği o hatayı düzeltiyor, yeni bir kırılma eklemiyor. Frontend (`auth.tsx`, `api.ts`) ve
+on-prem sürücüsü (`tests/onprem_driver.py`) güncellendi.

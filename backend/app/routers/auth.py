@@ -84,18 +84,29 @@ async def me(user: User = Depends(get_current_user)) -> UserOut:
     return UserOut.model_validate(user)
 
 
-@router.post("/change-password", response_model=UserOut)
+@router.post("/change-password", response_model=TokenOut)
 async def change_password(
     payload: ChangePasswordRequest, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)
-) -> UserOut:
+) -> TokenOut:
+    """Faz 31 Commit 10c takip: eskiden `UserOut` dönüyordu — çağıran taraf, isteği YETKİLENDİREN jetonu
+    (şifre değişiminden ÖNCE alınmış) elinde tutmaya devam ediyordu. `token_is_stale` (Commit 9b) o
+    jetonu bilerek geçersiz sayıyor ("bu andan öncesine ait jetonlar artık geçersiz") — sonuç: değişimden
+    HEMEN sonraki bir sonraki istek (on-prem sürücüsünde `POST /api/customers`, gerçek arayüzde
+    "Şifreyi değiştir ve devam et" sonrası herhangi bir çağrı) 401 "Oturum gerekli" ile düşüyor. Bu bir
+    saniye hassasiyeti yarışı DEĞİL: giriş her zaman şifre değişiminden ÖNCE olduğu için o jetonun `iat`'ı
+    her zaman `password_changed_at`'tan erken — aynı saniyede bile olsa. Düzeltme: login gibi TAZE bir
+    jeton çifti dön; jeton `password_changed_at` YAZILDIKTAN SONRA üretiliyor, bu yüzden asla stale
+    sayılmıyor. Eski (değişimden önceki) jeton hâlâ reddediliyor — yalnızca YANITTAKİ yeni jeton kullanılmalı."""
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Mevcut şifre hatalı")
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
     # Faz 31 Commit 9: bu andan öncesine ait jetonlar (başka tarayıcı, çalınmış jeton) artık geçersiz.
-    # Saniyeye yuvarlanıyor: jetonun `iat` değeri de saniye hassasiyetinde — aynı saniyede üretilen YENİ
-    # jeton (kullanıcı hemen tekrar giriyor) haksız yere düşmesin.
     user.password_changed_at = datetime.now(timezone.utc).replace(microsecond=0)
     await db.commit()
     await db.refresh(user)
-    return UserOut.model_validate(user)
+    return TokenOut(
+        access_token=create_access_token(user.id, user.role),
+        refresh_token=create_refresh_token(user.id, user.role),
+        user=UserOut.model_validate(user),
+    )

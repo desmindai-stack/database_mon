@@ -70,8 +70,13 @@ def token_is_stale(payload: dict[str, Any], password_changed_at) -> bool:
     if issued_at is None:
         return True
     changed = password_changed_at if password_changed_at.tzinfo else password_changed_at.replace(tzinfo=timezone.utc)
-    # Tolerans YOK: `iat` saniyeye yuvarlanıyor, şifre değişimi aynı saniyede olsa bile jeton düşsün
-    # (şüpheli durumda kapalı taraf: bir kullanıcıya yeniden giriş yaptırmak, çalınmış jetonu yaşatmaktan iyi).
+    # Tolerans YOK: değişimden ÖNCEKİ bir jeton (aynı saniyede alınmış olsa bile) düşsün — şüpheli durumda
+    # kapalı taraf, bir kullanıcıya yeniden giriş yaptırmak çalınmış jetonu yaşatmaktan iyi. Bunun bir
+    # yan etkisi vardı: şifre değişimini AUTHORIZE eden jeton, girişten (dolayısıyla `password_changed_at`'tan
+    # ÖNCE) alındığı için bu kontrole HER ZAMAN takılır — değişimden hemen sonraki bir sonraki istek 401
+    # düşerdi (Faz 31 Commit 10c takip). Düzeltme burada DEĞİL: `/api/auth/change-password` artık login gibi
+    # TAZE bir jeton çifti dönüyor (`routers/auth.py::change_password`) — çağıran taraf YANITTAKİ yeni
+    # jetonu kullanmalı, eskisini değil. Bu fonksiyon kasıtlı olarak hâlâ toleranssız.
     return float(issued_at) < changed.timestamp()
 
 

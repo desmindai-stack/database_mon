@@ -137,7 +137,8 @@ async def test_password_change_invalidates_tokens_issued_before_it():
                                     json={"current_password": _TEST_PASSWORD, "new_password": "Yeni_Parola_2026"})
         assert changed.status_code == 200
         old_token_after_change = await client.get("/api/auth/me", headers={"Authorization": before})
-        username = changed.json()["username"]
+        # Faz 31 Commit 10c takip: change-password artık UserOut değil TokenOut dönüyor (kullanıcı iç içe).
+        username = changed.json()["user"]["username"]
         fresh = await client.post("/api/auth/login", json={"username": username, "password": "Yeni_Parola_2026"})
         new_token_works = await client.get("/api/auth/me",
                                            headers={"Authorization": f"Bearer {fresh.json()['access_token']}"})
