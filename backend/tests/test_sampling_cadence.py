@@ -717,3 +717,103 @@ async def test_analysis_setting_is_read_once_per_flush_not_per_bucket(monkeypatc
         await wait_sampling.flush_completed_buckets(session)
         await session.commit()
     assert reads["n"] == 1
+
+
+# --- 8. Örnekleme sağlığı: 'örnek yok' ile 'bağlanamıyor' ayrımı için kalıcı durum (Faz 31 Commit 10c-B) --------
+#
+# database_load.py / bloklama geçmişi ekranı, RTT ≥ ~1 sn ya da yetki hatası nedeniyle örnekleyici hiç
+# bağlanamadığında "örnek/olay yok" diyordu — sağlıklı bir sistemle karışabilen bir cümle. Instance satırındaki
+# last_sample_error*/last_sample_ok_at bu ayrımı taşıyor; burada `_sample_instance`'ın bu alanları NE ZAMAN
+# yazdığı (yalnızca durum DEĞİŞİRKEN — 1 sn'lik döngüde her turda değil) test ediliyor.
+
+
+async def test_the_first_failure_of_a_streak_is_persisted_once():
+    instance = await _instance()
+    collector = ScriptedCollector(fail_next=5)  # 5 ardışık başarısız tur
+    _register(instance, collector)
+    for i in range(5):
+        await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=i))
+
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance.id)
+    assert row.last_sample_error is not None and "hedef yanıt vermiyor" in row.last_sample_error
+    assert row.last_sample_error_at is not None and row.last_sample_ok_at is None
+
+
+async def test_repeated_failures_do_not_rewrite_the_row_every_tick():
+    """NEGATİF KONTROL: 1 sn'lik döngüde her turda yazsaydı bu test 1 yerine 20 UPDATE görürdü — tam da Faz 31'in
+    tekrar tekrar düzelttiği egress hatası."""
+    instance = await _instance()
+    collector = ScriptedCollector(fail_next=20)
+    _register(instance, collector)
+    writes: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if "UPDATE instances" in statement or ("instances" in statement and parameters and "last_sample" in str(context.compiled_parameters)):
+            writes.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        for i in range(20):
+            await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=i))
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+    updates = [w for w in writes if w.strip().upper().startswith("UPDATE")]
+    assert len(updates) == 1, f"20 ardışık başarısızlıkta TEK yazım beklenir, {len(updates)} görüldü"
+
+
+async def test_recovery_after_a_failure_streak_is_persisted_once():
+    instance = await _instance()
+    collector = ScriptedCollector(fail_next=3)
+    _register(instance, collector)
+    for i in range(3):
+        await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=i))  # başarısız
+    await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=3))  # toparlanma
+
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance.id)
+    assert row.last_sample_ok_at is not None
+    assert row.last_sample_error_at is not None and row.last_sample_ok_at >= row.last_sample_error_at
+
+
+async def test_a_healthy_streak_writes_ok_at_once_on_the_first_sample_only():
+    """Sağlıklı bir instance'ta hata alanları HİÇ dokunulmadan NULL kalır. `last_sample_ok_at` ise sürecin bu
+    instance'ı İLK örneklediği anı bir kez taşır (worker yeniden başladıktan sonra ESKİ bir arızanın kalıntısının
+    sonsuza dek 'bağlanamıyor' göstermemesi için gerekli — bkz. `_sample_instance` yorumu); NEGATİF KONTROL:
+    sonraki 9 sağlıklı turda satır TEKRAR yazılmıyor (10 turda tam 1 UPDATE)."""
+    instance = await _instance()
+    collector = ScriptedCollector()
+    _register(instance, collector)
+    writes: list[str] = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        if statement.strip().upper().startswith("UPDATE INSTANCES"):
+            writes.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record)
+    try:
+        for i in range(10):
+            await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=i))
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record)
+
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance.id)
+    assert row.last_sample_error is None and row.last_sample_error_at is None
+    assert row.last_sample_ok_at is not None
+    assert len(writes) == 1, f"10 sağlıklı turda TEK yazım beklenir, {len(writes)} görüldü"
+
+
+async def test_a_second_failure_streak_overwrites_the_previous_error_text():
+    """İki AYRI arıza olayı: ikincisinin metni/gerekçesi birinciyi geçersiz kılmalı (en son bilgi güncel kalsın)."""
+    instance = await _instance()
+    collector = ScriptedCollector(fail_next=1)
+    _register(instance, collector)
+    await wait_sampling._sample_instance(instance, NOW)      # 1. arıza
+    await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=1))  # toparlanma
+    collector.fail_next = 1
+    await wait_sampling._sample_instance(instance, NOW + timedelta(seconds=2))  # 2. arıza (yeni akış)
+
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance.id)
+    assert row.last_sample_error_at is not None and row.last_sample_error_at > row.last_sample_ok_at

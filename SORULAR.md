@@ -2707,14 +2707,13 @@ rollup, günlük şema fotoğrafı) günde bir değişiyor.
 **Satır sınırı (10.000) aşılırsa hata.** Sessiz kırpma yerine hata bilinçli: kırpılmış bir liste "sorun yok"
 gibi görünür. Bilinçli büyük okuma `execution_options(dbace_max_rows=...)` ile ve gerekçesiyle yapılır.
 
-**Bekleme farkının tabanı süreç içi bellekte (Commit 9f).** `sys.dm_os_wait_stats` kümülatif; fark için bir
-önceki okuma gerekiyor ve bu taban meta veritabanına YAZILMIYOR (egress dersi: sürekli büyüyen bir tabloyu
-beslememek için). Sonucu: (1) dbace yeniden başlatıldığında ilk okuma "fark hesaplanamadı — ilk okuma" diyor,
-ikinci okumadan sonra normale dönüyor; (2) birden fazla süreçle (web + worker, ya da çok işçili sunucu)
-çalışıldığında her sürecin kendi tabanı oluyor, yani fark "o sürecin son okumasından bu yana" demek.
-Kullanıcıya gösterilen "karşılaştırma anı" bu yüzden ekranda yazıyor — yanlış bir zaman aralığı varsayılmasın.
-**Açık iş:** bekleme farkı zaman serisi olarak istenirse (grafik, alarm, rapor), taban okuma örnek olarak
-saklanmalı; o zaman saklama penceresi ve satır maliyeti ayrıca kararlaştırılmalı.
+**Bekleme farkının tabanı — ÇÖZÜLDÜ (Commit 10c-A).** Taban artık PAYLAŞILAN yerde (meta veritabanı,
+`wait_stats_baselines`, instance başına tek satır, en çok dakikada bir yenilenir). Ölçüldü (gerçek 2 süreçli
+`uvicorn`, `scripts/waitstats_multiprocess_demo.py`): eski (süreç içi) tabanla 6 ardışık istekten 2'si "fark
+hesaplanamadı" diyordu (her süreç geçişinde); yeni tabanla yalnızca 1'i (ilk okuma). Uygulama YENİDEN
+BAŞLATILDIKTAN sonra bile taban meta veritabanında kaldığı için fark hemen hesaplanabiliyor — eski davranışta
+ikisi de "hayır" dönüyordu. `WAIT_STATS_BASELINE=process` eski (süreç içi) davranışa dönüş anahtarı. Hâlâ açık:
+taban yalnızca EN SON okumayı tutuyor, zaman serisi (grafik/alarm) istenirse ayrı bir tasarım gerekir.
 
 **Kullanıcı beklemesi ayrımı AÇIK oturumlara dayanıyor (Commit 9f).** Bir bekleme türünün "arka plan" sayılması,
 `sys.dm_exec_session_wait_stats`'te o an AÇIK kullanıcı oturumlarında hiç görülmemesine bakıyor; SQL Server bu
@@ -2723,15 +2722,24 @@ türü, boş bir sunucuda arka plan sayılabilir. Bu yüzden filtre GİZLEMİYOR
 göster" tek tık. Daha kesin ayrım için beklemelerin oturum bazında örneklenmesi (Extended Events / düzenli
 anlık görüntü) gerekir — bugünkü toplama yükünü artıracağı için yapılmadı.
 
-**Bekleme örnekleyicisinin yazım hacmi (Commit 10a, ölçüldü, uygulanmadı).** `wait_sample_minutes` satır başına ≈ 300 bayt (indeksler dahil) ve dakika × sorgu × kategori × olay başına bir satır: ağır bir iş
-yükünde (dakikada 27 farklı birleşim) instance başına ≈ 1 660 satır/saat ≈ 12 MB/gün ≈ 360 MB / 30 gün; 20 instance ≈ 7 GB / 30 gün. Canlıdaki gerçek değeri şu sorgu verir:
-`SELECT instance_id, count(*) AS satir_saat FROM wait_sample_minutes WHERE minute > now() - interval '1 hour' GROUP BY 1;` (× 300 bayt × 24 × saklama günü). **Öneriler:** (a) `wait_sample_minutes` için ayrı ve kısa saklama
-(ör. 7 gün) + saatlik toplulaştırma tablosu (haftalık/aylık görünüm için; kategori kırılımı saatte yeter); (b) `blocking_episodes` aynı sunucuyu izleyen instance'lar için tekilleştirme. Karar verilmeden önce canlıda yukarıdaki
-sorguyla ölçülmeli.
+**Bekleme örnekleyicisinin yazım hacmi — ÇÖZÜLDÜ (Commit 10c-C).** Ham `wait_sample_minutes`/`active_session_minutes`
+artık yalnızca 7 gün saklanıyor (`services/retention.WAIT_LOAD_RAW_RETENTION_DAYS`, genel saklama ayarından
+BAĞIMSIZ); silinmeden önce saatlik toplamlara biriktiriliyor (`active_session_rollup_hourly` +
+`wait_load_rollup_hourly`, `services/wait_load_rollup.py`). Gerçek Postgres'te kanıtlandı
+(`tests/test_wait_load_rollup_live_postgres.py`): 12 dakikalık ham veri tek saatlik satıra doğru gruplandı, saat
+sınırını bölen İKİ ayrı saklama turu doğru BİRİKTİ (60 → 120), `database_load.py` 7 günden eski pencerede otomatik
+rollup'a geçip aynı sonucu üretti. Canlıdaki gerçek hacmi ölçen salt okunur SQL: DEPLOY.md "Faz 31 Commit 10c-C"
+bölümü. **Bilinçli kapsam daralması:** rollup'ta sorgu bazlı (queryid) kırılım YOK — 7 günden eski bir aralıkta
+"yük üreten sorgular" listesi boş döner ve nedeni ekranda yazar (kanıtsız bulgu değil, açık bir sınır).
+`blocking_episodes` tekilleştirmesi hâlâ AÇIK iş (aynı sunucuyu izleyen instance'lar aynı olayı ayrı kaydediyor).
 
-**Örnekleyici bir instance'a bağlanamıyorsa ekran bunu söylemiyor (Commit 10a).** RTT ≥ ~1 sn ya da kimlik/yetki hatası olan hedefte hiç örnek yok; `sampling_status().instances_failing` worker sürecinde sayıyor ama web sürecinde
-(ayrı süreç) görünmüyor, ekran yalnızca "Bu aralıkta hiç bekleme örneği yok" diyor. **Açık iş:** son bağlanma hatasını (kısa, sanitize) meta veritabanına yazıp ekranda "örnekleyici bağlanamıyor: neden" göstermek — yazım hacmi
-küçük ama yeni bir tablo/kolon gerekir.
+**Örnekleyici bir instance'a bağlanamıyorsa — ÇÖZÜLDÜ (Commit 10c-B).** `Instance.last_sample_error`/
+`last_sample_error_at`/`last_sample_ok_at` bağlantı durumunu meta veritabanında taşıyor (yalnızca durum
+DEĞİŞİMİNDE yazılır — bir arıza olayı başına en fazla 2 yazım). `database_load.py` ve bloklama geçmişi ucu artık
+"Ölçülemedi: bekleme örnekleyicisi bu veritabanına bağlanamıyor — <gerçek hata>" diyor; "örnek/olay yok" yalnızca
+örnekleyici gerçekten sağlıklıyken görünüyor. Gerçek SQL Server'da kanıtlandı (yanlış parola →
+"Login failed for user" hatası iki uçta da doğru gösterildi, parola düzeltilince normale döndü;
+`tests/test_sampling_health_live_mssql.py`).
 
 **Örnekleme bağlantısında hazırlanmış ifade önbelleği açık başlıyor (Commit 10a).** Havuzlayıcı hatası görülürse kalıcı kapanıyor ve bağlantı yeniden kuruluyor (bir kez, ~1–3 tur kaybı); havuzlayıcı arkasındaki hedefte bu, worker
 yeniden başladığında her hedef için tekrar yaşanır. Kalıcı çözüm o instance'ta `uses_pooler` seçeneğini işaretlemek (Supabase havuzlayıcı adresi zaten tanınıyor). Supavisor'un davranışı bu ortamda ölçülmedi — yalnızca PgBouncer
@@ -2754,3 +2762,21 @@ diski/CPU'su bilinmiyor. DEPLOY.md 3–5× yavaş varsayıyor (~4 sn, hâlâ sı
 **CONCURRENTLY + parçalı dosyalar Supabase SQL Editor'den çalışmaz (Commit 10b).** Bilinen sınır (eskiden de CONCURRENTLY için böyleydi); artık 5 dosya
 bu gruba giriyor. Çalıştırıcı (`--only … --no-record`) doğrudan bağlantı (5432) ister. Havuzlayıcı (6543) üzerinde uzun DDL ve `pg_temp` işlevleri
 (#48) güvenilir değil — DEPLOY.md bunu yazıyor.
+
+**Rollup'a geçiş pencere sınırında SPLICE yapmıyor (Commit 10c-C).** `database_load.py` bir pencerenin `window_start`ını
+7 günlük ham saklama sınırıyla karşılaştırıp TÜMÜYLE ham ya da TÜMÜYLE rollup okuyor — sınırı KESEN bir pencerede (ör.
+"son 10 gün") ham kaynağın son 7 günü de rollup çözünürlüğüne (saatlik, sorgusuz) düşürülüyor, hâlbuki o kısım için
+dakikalık/sorgu bazlı veri hâlâ mevcut. Bilinçli basitleştirme: iki kaynağı aynı seri/kategori yapısında birleştirmek
+(farklı kova genişlikleri, sorgu kırılımının yalnızca bir kısmı) karmaşıklığı önemli ölçüde artırırdı. Kullanıcıya
+görünen etkisi: 7 günden UZUN bir özel aralık seçildiğinde TÜM pencere rollup çözünürlüğünde gösteriliyor (`source`
+alanı ekrana bunu yazıyor). **Açık iş:** talep gelirse iki kaynağı gerçekten birleştiren bir versiyon yazılabilir.
+
+**Query Store plan geçmişi, ODBC Driver 18'in bu makinedeki sürümüyle (18.6.2.1) okunamıyor — Commit 10c dışı, Commit 9e'nin
+kapsamı.** `tests/test_query_store_live_mssql.py::test_plan_regression_is_measured_with_the_read_only_login` gerçek SQL Server'da
+`ODBC SQL type -155 is not yet supported. column-index=4 type=-155` hatasıyla düşüyor (`-155` = `datetimeoffset`; pyodbc'de bu tip
+için `add_output_converter` KAYITLI DEĞİL). Commit 10c'nin tam paket koşusu sırasında bu makinede "ODBC Driver 18 for SQL Server"ın
+HİÇ KURULU OLMADIĞI (yalnızca eski "SQL Server" sürücüsü) fark edildi ve kuruldu (`winget install Microsoft.msodbcsql.18`,
+kullanıcı onayıyla) — sürücü kurulunca bu Query Store testi ilk kez gerçekten "ODBC Driver 18" yolundan geçti ve gizli kalmış bu
+tip-dönüştürme boşluğunu ortaya çıkardı. Commit 9e'nin kodu (`services/query_store.py`) bu işten hiç değişmedi; düzeltme kapsam dışı
+bırakıldı (Süre kuralı, ilgisiz commit'e kayma). Düzeltme: `pyodbc.add_output_converter(-155, ...)` ile `datetimeoffset`'i elle
+çözen bir dönüştürücü eklemek gerekiyor — ayrı bir işte.

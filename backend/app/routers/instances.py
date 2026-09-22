@@ -68,8 +68,10 @@ from app.services.table_access_advice import advice_for_signal
 from app.services.advice import advice_to_dict
 from app.services.blocking import build_blocking_tree, tree_to_dict
 from app.services.blocking_history import recent_episodes
+from app.services.sampling_health import sampling_status_for, unavailable_message
 from app.services.server_topology import topology_status
 from app.services.wait_stats import build_report as build_wait_stats_report
+from app.services.wait_stats import make_store as make_wait_stats_store
 from app.services.collection import connection_target_for
 from app.services.blocking_advice import advice_for_blocking
 from app.services.database_load import build_database_load, report_to_dict
@@ -868,6 +870,10 @@ async def get_blocking_history(
             out.unavailable_reason = (
                 "MongoDB'de kilit bekleme zinciri ve deadlock kaydı bu şekilde toplanmıyor."
             )
+        elif (health := sampling_status_for(instance)).broken:
+            # Aynı sınıf bug database_load.py'de vardı (Faz 31 Commit 10c-B): global ayar açık olsa bile BU
+            # instance'ın örnekleyicisi bağlanamıyor olabilir — "olay görülmedi" o zaman yanlış bir güvence.
+            out.unavailable_reason = unavailable_message(health, context="bloklama olayı")
         else:
             # Deadlock ölçülemiyorsa "deadlock görülmedi" DENMİYOR (Faz 31 Commit 8).
             seen = "bloklama olayı" if out.deadlock_detail_reason else "bloklama olayı ya da deadlock"
@@ -898,10 +904,9 @@ async def get_wait_stats(
     if not instance:
         raise HTTPException(status_code=404, detail="Instance bulunamadı")
     try:
-        # SQL TOP sayfanın SONUNU kapsamalı: offset atlanacak satırları da getirtiyoruz, yoksa
-        # ikinci sayfa boş dönerdi (satırlar Python'da dilimleniyor — kaynak DMV, tablo değil).
-        report = await build_wait_stats_report(instance, limit=page.limit + page.offset,
-                                               include_background=include_background)
+        # Tüm bekleme türleri okunur (taban eksiksiz kalsın); sayfalama yanıtta uygulanıyor.
+        report = await build_wait_stats_report(instance, include_background=include_background,
+                                               store=make_wait_stats_store(db))
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=classify_connection_error(exc)) from exc
 
@@ -920,6 +925,11 @@ async def get_wait_stats(
         delta=[out(e) for e in page.slice(report.delta)],
         delta_since=report.delta_since,
         delta_unavailable_reason=report.delta_unavailable_reason,
+        delta_window_seconds=report.delta_window_seconds,
+        delta_note=report.delta_note,
+        baseline_source=report.baseline_source,
+        baseline_saved=report.baseline_saved,
+        process_id=report.process_id,
         restarted=report.restarted,
         filtered_background=report.filtered_background,
         background_types=report.background_types[:page.limit],

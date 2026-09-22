@@ -45,6 +45,13 @@ function WaitTable({ rows }: { rows: WaitStatEntry[] }) {
   );
 }
 
+function windowLabel(seconds: number): string {
+  if (seconds < 90) return `${Math.round(seconds)} sn`;
+  if (seconds < 5400) return `${Math.round(seconds / 60)} dk`;
+  if (seconds < 172800) return `${(seconds / 3600).toFixed(1)} saat`;
+  return `${(seconds / 86400).toFixed(1)} gün`;
+}
+
 export default function WaitStatsPanel({ instanceId }: { instanceId: number }) {
   const [report, setReport] = useState<WaitStatsReport | null>(null);
   const [includeBackground, setIncludeBackground] = useState(false);
@@ -122,9 +129,20 @@ export default function WaitStatsPanel({ instanceId }: { instanceId: number }) {
         <p className="muted-note">Son okumadan bu yana kayda değer bekleme olmadı.</p>
       ) : (
         <>
-          {deltaSince && <p className="muted-note">Karşılaştırma anı: {deltaSince}</p>}
+          {deltaSince && (
+            <p className="muted-note">
+              Karşılaştırma anı: {deltaSince}
+              {report.delta_window_seconds != null && ` (${windowLabel(report.delta_window_seconds)} önce)`}
+            </p>
+          )}
           <WaitTable rows={report.delta} />
         </>
+      )}
+      {report.delta_note && <p className="warn-text">{report.delta_note}</p>}
+      {report.baseline_source === "process" && (
+        <p className="muted-note">
+          Taban bu sürecin belleğinde (WAIT_STATS_BASELINE=process): yeniden başlatmada ve diğer süreçlerle paylaşılmıyor.
+        </p>
       )}
 
       <h4 className="chart-title">Sunucu açılışından beri (kümülatif)</h4>

@@ -114,6 +114,9 @@ migration'lar" ve "Uzun süren migration'lar ve bakım penceresi" bölümlerine 
 | 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor. **İLK SÜRÜMÜ Supabase'de zaman aşımına uğrayıp tümüyle geri alındı** (tek UPDATE + düz CREATE INDEX); **Commit 10b: 20 bin kimlik aralığı başına ayrı işlemde backfill + index CONCURRENTLY** — ⚠️ **psql gerekir** (ya da migration çalıştırıcısı): işlem DIŞINDA çalışır ("Uzun süren migration'lar"). Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor |
 | 54 | `20260918090100_user_password_changed_at.sql` | **YENİ** — users: şifrenin en son değiştiği an. Şifre değişince (ve yönetici sıfırlamasında) o andan ÖNCE üretilmiş access/refresh jetonları reddediliyor; eskiden access 60 dk, refresh 7 gün daha geçerliydi. CONCURRENTLY YOK |
 | 55 | `20260920090000_active_session_max_gap.sql` | **YENİ** — active_session_minutes: dakika başına ÖLÇÜLEN en uzun örnekleme boşluğu (max_gap_ms, NULL = ölçülmedi). Veritabanı yükü ekranı bu değerden "örnekleme aralığı tutturulamadı" uyarısını üretiyor. Nullable kolon ekler, tabloyu yeniden yazmaz; CONCURRENTLY YOK |
+| 56 | `20260921090000_wait_stats_baselines.sql` | **YENİ** — wait_stats_baselines: SQL Server bekleme istatistiği (dm_os_wait_stats) kümülatif sayaç TABANI paylaşılan yerde (instance başına tek satır, en çok dakikada bir güncellenir). dbace yeniden başlayınca / çok süreçli çalışmada fark artık kaybolmuyor. Yeni tablo; CONCURRENTLY YOK |
+| 57 | `20260922090000_wait_sampling_health.sql` | **YENİ** — instances: last_sample_ok_at/last_sample_error/last_sample_error_at (bekleme örnekleyicisinin bağlantı durumu, ana toplama döngüsünden ayrı). "Örnek yok" ile "örnekleyici bağlanamıyor" artık ayrışıyor. Yalnızca durum değişiminde yazılır. instances küçük tablo, backfill yok; CONCURRENTLY YOK |
+| 58 | `20260922090100_wait_load_hourly_rollup.sql` | **YENİ** — active_session_rollup_hourly + wait_load_rollup_hourly: bekleme yükünün SAATLİK toplulaştırması. Ham wait_sample_minutes/active_session_minutes artık 7 gün saklanıyor (`services/retention.WAIT_LOAD_RAW_RETENTION_DAYS`); saklama temizliği silmeden önce kendisi dolduruyor. İki YENİ boş tablo, backfill yok; CONCURRENTLY YOK |
 
 ## Faz 31: migration adları ve geriye dönük temizlik
 
@@ -328,6 +331,64 @@ WHERE i.engine = 'postgresql' AND i.enabled
 ORDER BY i.id;
 ROLLBACK;
 ```
+
+### Faz 31 Commit 10c-C: wait_sample_minutes/active_session_minutes gerçek hacmi ve rollup durumu
+
+**Madde C.1'in ölçüm SQL'i.** Bu deploy'dan ÖNCE (henüz saatlik toplulaştırma yokken) canlıdaki gerçek hacmi ve
+büyüme hızını gösterir; deploy'dan SONRA rollup'ın gerçekten devreye girip girmediğini ve ham tablonun 7 güne
+indiğini doğrular. Tamamı salt okunur.
+
+```sql
+BEGIN READ ONLY;
+-- 1. Ham tabloların GERÇEK boyutu, satır sayısı ve büyüme hızı (deploy ÖNCESİ referans).
+SELECT 'wait_sample_minutes' AS tablo, count(*) AS satir,
+       pg_size_pretty(pg_total_relation_size('wait_sample_minutes')) AS toplam_boyut,
+       min(minute) AS en_eski, max(minute) AS en_yeni,
+       round(count(*) FILTER (WHERE minute >= now() - interval '1 hour')::numeric /
+             greatest(count(DISTINCT instance_id) FILTER (WHERE minute >= now() - interval '1 hour'), 1), 0)
+           AS instance_basina_saatlik_satir
+FROM wait_sample_minutes
+UNION ALL
+SELECT 'active_session_minutes', count(*),
+       pg_size_pretty(pg_total_relation_size('active_session_minutes')),
+       min(minute), max(minute),
+       round(count(*) FILTER (WHERE minute >= now() - interval '1 hour')::numeric /
+             greatest(count(DISTINCT instance_id) FILTER (WHERE minute >= now() - interval '1 hour'), 1), 0)
+FROM active_session_minutes;
+-- 2. Gerçek saatlik yazım hacmi — bayt/saat tahmini (satır boyutu x saatlik satır sayısı).
+SELECT count(*) FILTER (WHERE minute >= now() - interval '1 hour') AS son_1_saat_satir,
+       pg_size_pretty((count(*) FILTER (WHERE minute >= now() - interval '1 hour')
+           * (pg_total_relation_size('wait_sample_minutes')::numeric /
+              greatest((SELECT count(*) FROM wait_sample_minutes), 1)))::bigint) AS son_1_saat_tahmini_bayt
+FROM wait_sample_minutes;
+-- 3. 7 günden eski satır oranı (deploy sonrası bu SIFIRA inmeli — rollup silmiş olmalı).
+SELECT count(*) FILTER (WHERE minute < now() - interval '7 days') AS yedi_gunden_eski,
+       count(*) AS toplam
+FROM wait_sample_minutes;
+ROLLBACK;
+```
+
+**Deploy SONRASI doğrulama** (bir gece — 03:00 saklama turu — geçtikten sonra):
+
+```sql
+BEGIN READ ONLY;
+-- 4. Ham veri gerçekten 7 güne indi mi.
+SELECT min(minute) AS en_eski_ham, now() - interval '7 days' AS beklenen_alt_sinir FROM wait_sample_minutes;
+-- 5. Rollup doluyor mu (satır sayısı, kapsadığı tarih aralığı).
+SELECT count(*) AS saat_x_instance_x_kategori, min(hour) AS en_eski_saat, max(hour) AS en_yeni_saat,
+       pg_size_pretty(pg_total_relation_size('wait_load_rollup_hourly')) AS boyut
+FROM wait_load_rollup_hourly;
+SELECT count(*) AS saat_x_instance, min(hour) AS en_eski_saat, max(hour) AS en_yeni_saat,
+       pg_size_pretty(pg_total_relation_size('active_session_rollup_hourly')) AS boyut
+FROM active_session_rollup_hourly;
+-- 6. Kayıpsızlık kontrolü: rollup'taki bir saatin toplamı, o saatin (silinmeden önceki) ham toplamıyla aynı
+--    olmalıydı — bunu deploy SONRASI doğrudan doğrulayamazsınız (ham satırlar silindi); referans olarak yukarıdaki
+--    madde 1'in deploy ÖNCESİ çıktısını saklayın ve madde 5'in toplamıyla karşılaştırın.
+ROLLBACK;
+```
+
+Beklenen sonuç: ham tablo ~10 MB/saat×instance sayısı büyümeye devam ETMİYOR (7 günde sabitleniyor); rollup
+tabloları çok daha yavaş büyüyor (instance başına saatte birkaç satır, ~kategorik kırılım kadar).
 
 ## Faz 31 Commit 6: tek sunucuya eklenmiş cluster alarm kuralları
 

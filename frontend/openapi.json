@@ -3186,6 +3186,11 @@
             "title": "Series",
             "type": "array"
           },
+          "source": {
+            "default": "raw",
+            "title": "Source",
+            "type": "string"
+          },
           "start": {
             "format": "date-time",
             "title": "Start",
@@ -11662,6 +11667,16 @@
             "title": "Background Types",
             "type": "array"
           },
+          "baseline_saved": {
+            "default": false,
+            "title": "Baseline Saved",
+            "type": "boolean"
+          },
+          "baseline_source": {
+            "default": "shared",
+            "title": "Baseline Source",
+            "type": "string"
+          },
           "delta": {
             "default": [],
             "items": {
@@ -11669,6 +11684,17 @@
             },
             "title": "Delta",
             "type": "array"
+          },
+          "delta_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Note"
           },
           "delta_since": {
             "anyOf": [
@@ -11693,6 +11719,17 @@
             ],
             "title": "Delta Unavailable Reason"
           },
+          "delta_window_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Window Seconds"
+          },
           "filtered_background": {
             "counted_from": "hidden: arka plan bekleme türü",
             "default": 0,
@@ -11702,6 +11739,17 @@
           "instance_id": {
             "title": "Instance Id",
             "type": "integer"
+          },
+          "process_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Process Id"
           },
           "required_grant": {
             "anyOf": [

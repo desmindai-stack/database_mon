@@ -65,8 +65,22 @@ class Dependent:
         return TABLE_LABELS.get(self.table, self.table)
 
 
+def _primary_key_column(table: Table) -> "object":
+    """Bir tablonun tek sütunlu birincil anahtarı.
+
+    Çoğu tabloda bu `id`; ama tekil (bir hedefe bir satır) tablolarda birincil anahtarın
+    kendisi FOREIGN KEY olabilir (ör. `wait_stats_baselines.instance_id` — `id` sütunu hiç
+    yok). Sabit `"id"` varsayımı böyle tablolarda `KeyError` verirdi (silme cascade'i tüm
+    bağımlı tablolarda döngüsel çalıştığı için, hangi tablonun eklendiği önemli değil).
+    """
+    pk_cols = list(table.primary_key.columns)
+    if len(pk_cols) != 1:  # pragma: no cover - şemada bileşik birincil anahtar yok
+        raise RuntimeError(f"{table.name}: bileşik birincil anahtarlı tablo cascade'de desteklenmiyor")
+    return pk_cols[0]
+
+
 def dependent_columns(target_table: str) -> list[tuple[Table, str, bool]]:
-    """`target_table.id`'ye foreign key ile bağlı (tablo, kolon, nullable) üçlüleri.
+    """`target_table`'ın birincil anahtarına foreign key ile bağlı (tablo, kolon, nullable) üçlüleri.
 
     Elle tutulan bir listeye göre kritik farkı: yeni bir tablo eklendiğinde burayı güncellemek
     GEREKMİYOR — unutulması mümkün değil.
@@ -80,11 +94,14 @@ def dependent_columns(target_table: str) -> list[tuple[Table, str, bool]]:
     if not Base.metadata.tables:  # pragma: no cover - import zinciri bozulursa
         raise RuntimeError("model metadata boş — bağımlılık taraması güvenilir değil")
 
+    target = Base.metadata.tables[target_table]
+    target_pk_fullname = f"{target_table}.{_primary_key_column(target).name}"
+
     found: list[tuple[Table, str, bool]] = []
     for table in Base.metadata.sorted_tables:
         for column in table.columns:
             for fk in column.foreign_keys:
-                if fk.target_fullname == f"{target_table}.id":
+                if fk.target_fullname == target_pk_fullname:
                     # Kendine referans (ör. health_reports.previous_report_id) sayılmaz:
                     # aynı tablonun kaydını silerken kendi zincirini bağımlılık saymak
                     # kullanıcıya anlamsız gelir ve ORM zaten hallediyor.
@@ -157,10 +174,11 @@ async def clear_dependents(
             continue
 
         # Zorunlu bağ: kaydın kendisi silinecek. Önce ONUN bağımlıları temizlenmeli.
+        child_pk = _primary_key_column(table)
         child_ids = [
             row[0]
             for row in (
-                await session.execute(select(table.c.id).where(table.c[column] == target_id))
+                await session.execute(select(child_pk).where(table.c[column] == target_id))
             ).all()
         ]
         for child_id in child_ids:

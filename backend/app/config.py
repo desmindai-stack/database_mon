@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # izlenen sunucuya gereksiz yük bindirir.
     wait_sampling_enabled: bool = True
     wait_sample_interval_seconds: int = 1
+    # SQL Server bekleme istatistiği (dm_os_wait_stats) fark tabanı nerede tutulur (Faz 31 Commit 10c-A):
+    # "shared" = meta veritabanı (süreçler arası paylaşılan, yeniden başlatmadan etkilenmez; varsayılan),
+    # "process" = süreç belleği (eski davranış; teşhis/geri dönüş için).
+    wait_stats_baseline: Literal["shared", "process"] = "shared"
     # Plan yakalama (auto_explain) — Faz 26 İŞ 1. Log çekimi host-agent üzerinden HTTP ile
     # yapılıyor, hedef veritabanına hiç bağlanılmıyor. 5 dakika: auto_explain eşiği genelde
     # saniyeler mertebesinde olduğu için daha sık çekmenin bir kazancı yok, üstelik her çekim

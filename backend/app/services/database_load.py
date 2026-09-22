@@ -32,9 +32,17 @@ from app.domain.waits import (
     category_meaning,
     is_load_bearing,
 )
-from app.models import ActiveSessionMinute, Instance, WaitQuerySignature, WaitSampleMinute
+from app.models import (
+    ActiveSessionMinute,
+    ActiveSessionRollupHourly,
+    Instance,
+    WaitLoadRollupHourly,
+    WaitQuerySignature,
+    WaitSampleMinute,
+)
 from app.services.advice import Advice, advice_to_dict
 from app.services.sampling_cadence import Cadence, assess as assess_cadence
+from app.services.sampling_health import sampling_status_for, unavailable_message
 from app.services.wait_advice import advice_for_wait_category
 
 #: Grafikte hedeflenen nokta sayısı. Daha fazlası hem ağdan boşuna geçer hem de ekranda
@@ -109,6 +117,9 @@ class DatabaseLoadReport:
     # Faz 31 Commit 10a: hedeflenen değil ÖLÇÜLEN örnekleme aralığı ve tutturulamadıysa uyarı cümlesi. Veri
     # yetersiz olsa da (unavailable_reason dolu) doldurulur: örnek azlığının nedeni çoğu zaman tam da budur.
     cadence: Cadence | None = None
+    # "raw" (ham dakikalık veri) | "rollup" (saatlik toplulaştırma — pencere RAW_RETENTION_DAYS'ten eski;
+    # Faz 31 Commit 10c-C). Ekran bu aralıkta sorgu kırılımının neden boş olduğunu buradan anlatıyor.
+    source: str = "raw"
 
 
 def choose_bucket_seconds(start: datetime, end: datetime) -> int:
@@ -131,7 +142,11 @@ def _epoch_bucket(column, bucket_seconds: int):
         epoch = cast(func.strftime("%s", column), BigInteger)
     else:
         epoch = cast(func.extract("epoch", column), BigInteger)
-    return (epoch / bucket_seconds) * bucket_seconds
+    # `//` — SQLAlchemy 2.0'da `/` GERÇEK (kayan noktalı) bölme üretiyor: `(epoch / N) * N` neredeyse ORİJİNAL
+    # epoch'a geri dönüyor ve hiçbir satır GRUPLANMIYOR (Faz 31 Commit 10c-C'de bulundu — mevcut testler yalnızca
+    # kova genişliği zaten dakika çözünürlüğündeyken çalıştığı için bu gizli kalmıştı; `wait_load_rollup.py`nin
+    # çok-satırlı gruplaması ortaya çıkardı). `//` TABAN (floor) bölmeyi zorluyor.
+    return (epoch // bucket_seconds) * bucket_seconds
 
 
 def _as_utc(value: datetime) -> datetime:
@@ -176,34 +191,65 @@ async def build_database_load(
         )
         return report
 
-    bucket_col = _epoch_bucket(ActiveSessionMinute.minute, bucket_seconds)
-    totals_rows = (
-        await session.execute(
-            select(
-                bucket_col.label("bucket"),
-                func.sum(ActiveSessionMinute.samples_taken).label("samples"),
-                func.sum(ActiveSessionMinute.active_sessions_sampled).label("active"),
-                func.sum(ActiveSessionMinute.blocked_sessions_sampled).label("blocked"),
-                # Aralık ölçümü AYNI sorguda (ek gidiş-dönüş yok): satır sayısı = örnekleme yapılan dakika sayısı,
-                # max_gap_ms NULL ise o dakika ölçülmemiş (kolon eklenmeden önceki satır).
-                func.count().label("minutes"),
-                func.max(ActiveSessionMinute.max_gap_ms).label("max_gap"),
+    # Faz 31 Commit 10c-C: ham wait_sample_minutes/active_session_minutes yalnızca RAW_RETENTION_DAYS gün
+    # saklanıyor; pencere bunun dışına taşıyorsa saatlik toplulaştırmadan (wait_load_rollup.py) okunuyor.
+    # Döngüsel import'tan kaçınmak için erteleniyor (retention.py bu modülü zaten import ediyor).
+    from app.services.retention import WAIT_LOAD_RAW_RETENTION_DAYS
+
+    raw_cutoff = now - timedelta(days=WAIT_LOAD_RAW_RETENTION_DAYS)
+    use_rollup = window_start < raw_cutoff
+    report.source = "rollup" if use_rollup else "raw"
+
+    if use_rollup:
+        rollup_bucket_seconds = max(bucket_seconds, 3600)  # rollup zaten saatlik; daha ince kova UYDURMAZ
+        report.bucket_seconds = rollup_bucket_seconds
+        totals_bucket = _epoch_bucket(ActiveSessionRollupHourly.hour, rollup_bucket_seconds)
+        totals_rows = (
+            await session.execute(
+                select(
+                    totals_bucket.label("bucket"),
+                    func.sum(ActiveSessionRollupHourly.samples_taken).label("samples"),
+                    func.sum(ActiveSessionRollupHourly.active_sessions_sampled).label("active"),
+                    func.sum(ActiveSessionRollupHourly.blocked_sessions_sampled).label("blocked"),
+                )
+                .where(
+                    ActiveSessionRollupHourly.instance_id == instance.id,
+                    ActiveSessionRollupHourly.hour >= window_start,
+                    ActiveSessionRollupHourly.hour <= window_end,
+                )
+                .group_by(totals_bucket).order_by(totals_bucket)
             )
-            .where(
-                ActiveSessionMinute.instance_id == instance.id,
-                ActiveSessionMinute.minute >= window_start,
-                ActiveSessionMinute.minute <= window_end,
+        ).all()
+    else:
+        bucket_col = _epoch_bucket(ActiveSessionMinute.minute, bucket_seconds)
+        totals_rows = (
+            await session.execute(
+                select(
+                    bucket_col.label("bucket"),
+                    func.sum(ActiveSessionMinute.samples_taken).label("samples"),
+                    func.sum(ActiveSessionMinute.active_sessions_sampled).label("active"),
+                    func.sum(ActiveSessionMinute.blocked_sessions_sampled).label("blocked"),
+                    # Aralık ölçümü AYNI sorguda (ek gidiş-dönüş yok): satır sayısı = örnekleme yapılan dakika
+                    # sayısı, max_gap_ms NULL ise o dakika ölçülmemiş (kolon eklenmeden önceki satır).
+                    func.count().label("minutes"),
+                    func.max(ActiveSessionMinute.max_gap_ms).label("max_gap"),
+                )
+                .where(
+                    ActiveSessionMinute.instance_id == instance.id,
+                    ActiveSessionMinute.minute >= window_start,
+                    ActiveSessionMinute.minute <= window_end,
+                )
+                .group_by(bucket_col)
+                .order_by(bucket_col)
             )
-            .group_by(bucket_col)
-            .order_by(bucket_col)
-        )
-    ).all()
+        ).all()
 
     total_samples = sum(int(r.samples or 0) for r in totals_rows)
     report.samples_taken = total_samples
-    if total_samples:
+    if not use_rollup and total_samples:
         # Ölçülen ortalama aralık = örnekleme yapılan dakikaların toplam süresi / alınan örnek. Dakikalar bir
         # instance'ın yalnızca ÇALIŞTIĞI dakikaları: worker kapalıyken satır yok, bu bir aralık sorunu değil.
+        # Rollup kaynaklı raporda cadence YOK: saatlik toplamda dakikalar arası boşluk bilgisi kalmıyor.
         minutes = sum(int(r.minutes or 0) for r in totals_rows)
         gaps = [int(r.max_gap) for r in totals_rows if r.max_gap is not None]
         report.cadence = assess_cadence(
@@ -212,11 +258,24 @@ async def build_database_load(
             max_gap_ms=max(gaps) if gaps else None,
         )
     if total_samples == 0:
-        report.unavailable_reason = (
-            "Bu aralıkta hiç bekleme örneği yok. Örnekleyici yalnızca worker sürecinde "
-            "(RUN_MODE=worker/all) çalışıyor; yeni eklenen bir instance'ta ilk verinin "
-            "birikmesi birkaç dakika sürer."
-        )
+        if use_rollup:
+            report.unavailable_reason = (
+                "Bu aralıkta toplulaştırılmış bekleme yükü verisi yok — bu dönem için hiç ham örnek "
+                "toplanmamış olabilir (RUN_MODE=worker/all bu tarihte çalışmıyordu ya da instance o "
+                "tarihten sonra eklendi)."
+            )
+            return report
+        health = sampling_status_for(instance)
+        if health.broken:
+            # "Örnek yok" ile "örnekleyici bağlanamıyor" farklı şeyler (Faz 31 Commit 10c-B): ikincisini
+            # "veri yok" gibi göstermek yanlış bir güvence verirdi.
+            report.unavailable_reason = unavailable_message(health, context="bekleme örneği")
+        else:
+            report.unavailable_reason = (
+                "Bu aralıkta hiç bekleme örneği yok. Örnekleyici yalnızca worker sürecinde "
+                "(RUN_MODE=worker/all) çalışıyor; yeni eklenen bir instance'ta ilk verinin "
+                "birikmesi birkaç dakika sürer."
+            )
         return report
     if total_samples < MIN_SAMPLES_FOR_ANALYSIS:
         report.unavailable_reason = (
@@ -226,22 +285,40 @@ async def build_database_load(
         )
         return report
 
-    breakdown_bucket = _epoch_bucket(WaitSampleMinute.minute, bucket_seconds)
-    breakdown_rows = (
-        await session.execute(
-            select(
-                breakdown_bucket.label("bucket"),
-                WaitSampleMinute.wait_category,
-                func.sum(WaitSampleMinute.sample_count).label("samples"),
+    if use_rollup:
+        breakdown_bucket = _epoch_bucket(WaitLoadRollupHourly.hour, rollup_bucket_seconds)
+        breakdown_rows = (
+            await session.execute(
+                select(
+                    breakdown_bucket.label("bucket"),
+                    WaitLoadRollupHourly.wait_category,
+                    func.sum(WaitLoadRollupHourly.sample_count).label("samples"),
+                )
+                .where(
+                    WaitLoadRollupHourly.instance_id == instance.id,
+                    WaitLoadRollupHourly.hour >= window_start,
+                    WaitLoadRollupHourly.hour <= window_end,
+                )
+                .group_by(breakdown_bucket, WaitLoadRollupHourly.wait_category)
             )
-            .where(
-                WaitSampleMinute.instance_id == instance.id,
-                WaitSampleMinute.minute >= window_start,
-                WaitSampleMinute.minute <= window_end,
+        ).all()
+    else:
+        breakdown_bucket = _epoch_bucket(WaitSampleMinute.minute, bucket_seconds)
+        breakdown_rows = (
+            await session.execute(
+                select(
+                    breakdown_bucket.label("bucket"),
+                    WaitSampleMinute.wait_category,
+                    func.sum(WaitSampleMinute.sample_count).label("samples"),
+                )
+                .where(
+                    WaitSampleMinute.instance_id == instance.id,
+                    WaitSampleMinute.minute >= window_start,
+                    WaitSampleMinute.minute <= window_end,
+                )
+                .group_by(breakdown_bucket, WaitSampleMinute.wait_category)
             )
-            .group_by(breakdown_bucket, WaitSampleMinute.wait_category)
-        )
-    ).all()
+        ).all()
 
     samples_by_bucket = {int(r.bucket): int(r.samples or 0) for r in totals_rows}
     blocked_by_bucket = {int(r.bucket): int(r.blocked or 0) for r in totals_rows}
@@ -278,7 +355,12 @@ async def build_database_load(
     report.blocked_aas = round(sum(blocked_by_bucket.values()) / total_samples, 3)
     report.categories = _category_shares(window_category_samples, total_samples)
 
-    report.top_queries = await _top_queries(session, instance.id, window_start, window_end, total_samples)
+    if use_rollup:
+        # Sorgu bazlı kırılım (queryid) saatlik toplulaştırmada YOK — bilinçli kapsam daralması (bkz.
+        # wait_load_rollup.py docstring), kanıtsız bulgu değil: liste boş, nedeni `source`/arayüz notundan okunur.
+        report.query_attribution_available = False
+    else:
+        report.top_queries = await _top_queries(session, instance.id, window_start, window_end, total_samples)
 
     if report.categories:
         top = report.categories[0]
@@ -498,6 +580,7 @@ def report_to_dict(report: DatabaseLoadReport) -> dict[str, Any]:
         "query_attribution_available": report.query_attribution_available,
         "advice": advice_to_dict(report.advice),
         "unavailable_reason": report.unavailable_reason,
+        "source": report.source,
         "cadence": None if report.cadence is None else {
             "target_interval_ms": report.cadence.target_interval_ms,
             "measured_interval_ms": report.cadence.measured_interval_ms,

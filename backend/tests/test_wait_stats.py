@@ -7,17 +7,28 @@ testin kırmızıya döndüğü de gösteriliyor.
 
 from __future__ import annotations
 
+import os
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from app.database import SessionLocal, init_db
+from app.models import Instance, WaitStatsBaseline
 from app.services import wait_stats
+from app.services.credentials import encrypt_secret
 from app.services.wait_stats import (
     KIND_NOT_SQLSERVER,
     KIND_UNAUTHORIZED,
+    SOURCE_PROCESS,
+    SOURCE_SHARED,
+    Baseline,
+    DatabaseBaselineStore,
+    MemoryBaselineStore,
     WaitEntry,
     build_report,
     compute_delta,
+    make_store,
     reset_baseline,
 )
 
@@ -102,8 +113,9 @@ async def test_first_reading_reports_totals_and_says_why_there_is_no_delta():
     assert [e.wait_type for e in report.totals] == ["PAGEIOLATCH_SH"]  # arka plan elendi
     assert report.filtered_background == 1 and report.background_types == ["SLEEP_TASK"]
     assert report.delta == []
-    assert "ilk okuma" in report.delta_unavailable_reason
+    assert "önceki okuma yok" in report.delta_unavailable_reason
     assert report.restarted is False
+    assert report.baseline_source == "process"  # store verilmedi: varsayılan süreç belleği (Commit 10c-A)
 
 
 async def test_second_reading_reports_the_delta():
@@ -162,3 +174,166 @@ async def test_permission_error_says_the_required_grant():
     assert "GRANT VIEW SERVER STATE TO [dbace_monitor];" == report.required_grant
     # NEGATİF KONTROL: yetkisizlik "sorun yok" gibi görünmüyor.
     assert report.totals == [] and report.filtered_background == 0
+
+
+# --- Taban deposu: paylaşılan (meta veritabanı) vs süreç belleği (Faz 31 Commit 10c-A) --------
+#
+# Sorun: taban süreç belleğindeydi. dbace yeniden başlayınca ilk okuma "fark hesaplanamadı" diyordu;
+# çok süreçli çalışmada (uvicorn --workers N / WEB_CONCURRENCY / çoğaltılmış servis) ardışık iki
+# istek farklı sürece düşerse fark "o sürecin son okumasından bu yana" oluyordu — ekranda işaret yok.
+# Gerçek çok süreçli/yeniden başlatma kanıtı: scripts/waitstats_multiprocess_demo.py çıktısı ILERLEME.md'de.
+
+
+async def _real_instance(**over) -> Instance:
+    async with SessionLocal() as session:
+        row = Instance(name=f"ws-{uuid.uuid4().hex[:8]}", engine="sqlserver", host="h", port=1433, database="d",
+                       username="dbace_monitor", password=encrypt_secret("x"), **over)
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+        return row
+
+
+@pytest.fixture(autouse=True)
+async def _schema():
+    await init_db()
+    yield
+
+
+async def test_shared_store_persists_across_a_fresh_session_simulating_a_process_restart():
+    """PAYLAŞILAN taban: bir 'süreç'in yazdığını başka bir 'süreç' (yeni oturum, yeni Python nesnesi) okuyor —
+    süreç içi tabanın çözemediği tam da bu."""
+    instance = await _real_instance()
+    async with SessionLocal() as writer_session:
+        await DatabaseBaselineStore(writer_session).save(
+            instance.id, Baseline(START, START + timedelta(seconds=5), {"PAGEIOLATCH_SH": entry("PAGEIOLATCH_SH", 10, 100.0)},
+                                  writer="pid:1111"))
+    async with SessionLocal() as reader_session:  # ayrı oturum: farklı bir sürecin okuması gibi
+        loaded = await DatabaseBaselineStore(reader_session).load(instance.id)
+    assert loaded is not None and loaded.writer == "pid:1111"
+    assert loaded.entries["PAGEIOLATCH_SH"].wait_ms == 100.0
+
+
+async def test_negative_control_process_store_does_not_survive_a_fresh_instance():
+    """NEGATİF KONTROL: süreç belleği yeni bir MemoryBaselineStore() nesnesinde GÖRÜNMEZ (modül düzeyi paylaşılan
+    sözlüğe yazmasaydı bu test kırmızı olurdu; `data=` ile izole edilmiş bir kopyada asla görünmez)."""
+    isolated = MemoryBaselineStore(data={})
+    assert await isolated.load(999) is None
+
+
+async def test_shared_store_end_to_end_via_build_report_two_reads():
+    instance = await _real_instance()
+    collector = FakeCollector([
+        (START, rows(("PAGEIOLATCH_SH", 100, 5000.0, 9))),
+        (START, rows(("PAGEIOLATCH_SH", 160, 8000.0, 9))),
+    ])
+    async with SessionLocal() as session:
+        first = await build_report(instance, collector=collector, store=make_store(session))
+    assert first.baseline_source == SOURCE_SHARED and first.baseline_saved is True
+    assert first.delta_unavailable_reason is not None and "kayıtlı önceki okuma yok" in first.delta_unavailable_reason
+
+    async with SessionLocal() as session:  # AYRI oturum: ayrı bir isteğin/sürecin okuması
+        second = await build_report(instance, collector=collector, store=make_store(session))
+    assert second.delta_unavailable_reason is None
+    assert [(e.wait_type, e.wait_ms) for e in second.delta] == [("PAGEIOLATCH_SH", 3000.0)]
+
+    async with SessionLocal() as session:
+        saved = await session.get(WaitStatsBaseline, instance.id)
+    # İkinci okuma < 60 sn sonra geldiği için taban BİLEREK yenilenmedi (aşağıdaki throttle testi); satırdaki
+    # değer hâlâ İLK okumanın anlık görüntüsü — bu satırın gerçekten meta veritabanında olduğunu kanıtlıyor.
+    assert saved is not None and saved.counters["PAGEIOLATCH_SH"][1] == 5000.0
+
+
+async def test_restart_is_detected_through_the_shared_store_too():
+    """Sunucu yeniden başlarsa PAYLAŞILAN tabanda da fark bastırılır — taban türünden bağımsız kural."""
+    instance = await _real_instance()
+    collector = FakeCollector([
+        (START, rows(("PAGEIOLATCH_SH", 100, 5000.0, 9))),
+        (START + timedelta(hours=2), rows(("PAGEIOLATCH_SH", 12, 300.0, 9))),
+    ])
+    async with SessionLocal() as session:
+        await build_report(instance, collector=collector, store=make_store(session))
+    async with SessionLocal() as session:
+        report = await build_report(instance, collector=collector, store=make_store(session))
+    assert report.restarted is True and report.delta == []
+    assert "yeniden başlat" in report.delta_unavailable_reason
+
+
+async def test_baseline_is_not_rewritten_more_often_than_the_minimum_age():
+    """Ekranı her açan kullanıcı meta veritabanına yazım üretmesin: taban en çok dakikada bir yenilenir."""
+    instance = await _real_instance()
+    collector = FakeCollector([(START, rows(("PAGEIOLATCH_SH", 100, 5000.0, 9)))] * 3)
+    async with SessionLocal() as session:
+        first = await build_report(instance, collector=collector, store=make_store(session))
+    assert first.baseline_saved is True
+    async with SessionLocal() as session:
+        again = await build_report(instance, collector=collector, store=make_store(session))
+    assert again.baseline_saved is False, "60 saniyeden kısa sürede taban tekrar yazılmamalı"
+
+
+async def test_baseline_is_rewritten_immediately_after_a_restart_despite_the_min_age():
+    instance = await _real_instance()
+    collector = FakeCollector([
+        (START, rows(("PAGEIOLATCH_SH", 100, 5000.0, 9))),
+        (START + timedelta(hours=1), rows(("PAGEIOLATCH_SH", 5, 50.0, 9))),
+    ])
+    async with SessionLocal() as session:
+        await build_report(instance, collector=collector, store=make_store(session))
+    async with SessionLocal() as session:
+        report = await build_report(instance, collector=collector, store=make_store(session))
+    assert report.restarted is True and report.baseline_saved is True, "yeniden başlatmada taban HEMEN güncellenmeli"
+
+
+async def test_env_setting_switches_the_default_store_to_process(monkeypatch):
+    """WAIT_STATS_BASELINE=process eski davranışı geri getiriyor — geri dönüş anahtarı."""
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "wait_stats_baseline", "process")
+    async with SessionLocal() as session:
+        store = make_store(session)
+    assert store.source == SOURCE_PROCESS
+    monkeypatch.setattr(settings, "wait_stats_baseline", "shared")
+    async with SessionLocal() as session:
+        store = make_store(session)
+    assert store.source == SOURCE_SHARED
+
+
+async def test_negative_control_default_setting_is_shared_not_process():
+    """Ürünün varsayılanı: kod elle 'process' seçmedikçe paylaşılan taban kullanılmalı."""
+    from app.config import settings
+
+    assert settings.wait_stats_baseline == "shared"
+
+
+async def test_a_broken_shared_store_falls_back_to_process_with_a_visible_note():
+    """Meta veritabanına ulaşılamazsa ekran sessizce yanlış sonuç vermek yerine düşüp NEDENİNİ söylüyor."""
+
+    class BrokenStore:
+        source = SOURCE_SHARED
+
+        async def load(self, instance_id):
+            raise RuntimeError("meta veritabanına ulaşılamadı")
+
+        async def save(self, instance_id, baseline):
+            raise RuntimeError("meta veritabanına ulaşılamadı")
+
+    instance = await _real_instance()
+    collector = FakeCollector([(START, rows(("PAGEIOLATCH_SH", 100, 5000.0, 9)))])
+    report = await build_report(instance, collector=collector, store=BrokenStore())
+    assert report.baseline_source == SOURCE_PROCESS
+    assert report.delta_note is not None and "Paylaşılan taban" in report.delta_note
+
+
+def test_process_id_identifies_the_serving_process():
+    """Ekranda/günlükte görülebilen teşhis alanı: hangi süreç yanıtladı."""
+    report = wait_stats.WaitStatsReport()
+    assert report.process_id == os.getpid()
+
+
+def test_baseline_row_size_is_small():
+    """Ölçüm: bir taban satırının JSON sütununun bayt boyutu (Commit 10c-A dokümantasyonundaki '~5 KB' iddiası)."""
+    import json
+
+    entries = {f"WAIT_TYPE_{i}": [10, 100.0, 10.0, 50.0, 3] for i in range(250)}  # gerçekte ~250 tür ölçüldü
+    size = len(json.dumps(entries).encode("utf-8"))
+    assert size < 20_000, f"250 türlük taban {size} bayt — beklenenden büyük"

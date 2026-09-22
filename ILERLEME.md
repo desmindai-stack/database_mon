@@ -8838,6 +8838,125 @@ Not: bu makinede index kurulumu 0,3 sn (dar (instance_id, query_hash) index'i, h
 aralıklar, kesilme, geçersiz index, seçenekler), `tests/test_migration_scale_live_postgres.py` (8: yukarıdaki tablo), `tests/test_real_value_cleanup_migration_live.py`
 (#48'in SQL↔Python paritesi yeni çalıştırma biçimiyle sürüyor), `tests/test_onprem_package_live.py` (gerçek kurulum bloğu).
 
+## Faz 31 — Commit 10c: bekleme istatistiği tabanı, "bağlanamıyor"/"örnek yok" ayrımı, saatlik toplulaştırma
+
+**Migration'lar:** `20260921090000_wait_stats_baselines.sql` (#56, yeni küçük tablo, kilitsiz), `20260922090000_wait_sampling_health.sql`
+(#57, `instances`'a 3 nullable kolon, `ADD COLUMN IF NOT EXISTS`), `20260922090100_wait_load_hourly_rollup.sql` (#58, 2 yeni tablo + 2
+index, kilitsiz). Üçü de `test_migration_safety.py`'ye göre ihlalsiz (büyük tabloya dokunmuyorlar); DEPLOY.md'ye işlendi.
+
+### A) Bekleme farkının süreç içi tabanı
+
+**Sorun:** taban (`_baselines` sözlüğü) süreç belleğindeydi; çok süreçli çalışmada ardışık iki istek farklı sürece düşerse "fark" o
+sürecin son okumasından beri anlamına geliyordu, restart sonrası ilk okuma da sebepsizce "fark hesaplanamadı" diyordu.
+
+**Ölçüm (`scripts/waitstats_multiprocess_demo.py`, gerçek 6 `uvicorn` süreci + gerçek SQL Server, round-robin HTTP):** eski (süreç içi)
+tabanla 6 istekten 2'si güvenilir fark üretti (diğer 4'ü farklı sürece düştüğü için ya "ilk okuma" ya da yanlış pencereli fark); yeni
+(paylaşılan, `wait_stats_baselines` tablosunda) tabanla 6/6 tutarlı, doğru pencereli. Süreç yeniden başlatma sonrası: eski tabanla 2/2
+istek yine "ilk okuma"; paylaşılan tabanla restart sonrası bile 0/2 (taban veritabanında hayatta kalıyor).
+
+**Yapılanlar:** `DatabaseBaselineStore` (varsayılan, `wait_stats_baselines` tablosu) + `MemoryBaselineStore` (yedek yol — DB yazımı
+başarısızsa otomatik düşer, `report.baseline_source = "process"` ve `delta_note` gerekçeyi ekrana yazar). `config.wait_stats_baseline`
+(`shared`/`process`) ile kapatılabilir. Yazım hacmi: instance başına tek satır UPSERT (o instance'ın son okumasında), tablo büyümüyor —
+"satır/saat" değil "satır sayısı = instance sayısı" ölçeğinde. İlk okuma nedeni ekranda: "önceki okuma yok" (taban ilk kez yazılıyor) ile
+"süreç yeniden başladı, önceki taban okunamadı" ayrı metinler (`first_reading_reason`).
+
+**Test:** `tests/test_wait_stats.py` (21, taban kaynağı geçişleri + yedek yol dahil), `scripts/waitstats_multiprocess_demo.py` (gerçek
+kanıt, yukarıdaki tablo).
+
+### B) "Bağlanamıyor" ile "örnek yok" ayrımı
+
+**Sorun:** arka plan örnekleyicisi hedefe hiç bağlanamıyorsa (zaman aşımı, kimlik doğrulama hatası) ekran sessizce "örnek yok" diyordu —
+"ölçüm yaptık, yük yok" ile "hiç ölçemedik" ayrımı kayboluyordu.
+
+**Yapılanlar:** `Instance`'a `last_sample_ok_at` / `last_sample_error` / `last_sample_error_at`; `wait_sampling.py` her ardışık hata
+serisinin İLK'inde ve her toparlanmanın İLK'inde (yeniden başlatma sonrası ilk başarılı örnek dahil — `first_ever` düzeltmesi, aşağıda)
+bu alanları TEK satırlık UPDATE ile yazıyor (`sampling_health.py::sampling_status_for` / `unavailable_message`, tek kaynak).
+`database_load.py` ve `/blocking-history` artık `total_samples == 0` iken önce sağlık durumuna bakıyor: bağlantı kırıksa "Ölçülemedi:
+<gerekçe>", sağlıklıysa eskisi gibi "örnek yok".
+
+**Tarama (`unavailable_reason\s*=` deseniyle koddaki 7 eşleşme, tek tek incelendi):** `query_store.py`, `table_access_advice.py`,
+`plan_analysis.py` ve senkron `/blocking` (canlı ağaç) zaten istek anında `classify_connection_error()` ile hatayı geçiriyor — arka plan
+örneklemesi değiller, bu belirsizlik onlarda yok. Yalnızca `database_load.py` ve `/blocking-history` aynı hata sınıfını taşıyordu, ikisi
+de aynı `sampling_health.py` ile düzeltildi (ayrı hesaplama yok).
+
+**Gerçek kanıt (`test_sampling_health_live_mssql.py`, gerçek SQL Server, yanlış parola):** örnekleyici gerçek `Login failed for user
+'dbace_monitor'. (18456)` hatası alıyor; `/database-load` ve `/blocking-history` ikisi de "Ölçülemedi: bekleme örnekleyicisi bu
+veritabanına bağlanamıyor..." döndürüyor; parola düzeltilip `reset_state()` sonrası bir örnekte `last_sample_ok_at` doluyor ve her iki
+uç eski mesaja dönüyor. (10a'nın RTT≥1sn senaryosu SQL Server'da tekrar üretilemedi — `LOCK_TIMEOUT` yalnızca kilit beklemesini etkiliyor,
+genel sorgu/bağlantı zaman aşımı değil; bu yüzden kanıt kimlik doğrulama hatasına kaydırıldı, istekte adı geçen "yetki hatası" durumunu
+zaten doğrudan karşılıyor.)
+
+**Düzeltilen tasarım hatası:** toparlanma yazımı yalnızca bellekteki `consecutive_failures > 0` iken tetikleniyordu; gerçek bir worker
+restart'ında (ya da `reset_state()`'te) YENİ örnekleyicinin sayacı 0'dan başladığı için restart sonrası İLK başarılı örnek bunu hiç
+tetiklemiyordu — restart öncesinden kalma `last_sample_error_at` sonsuza dek "Ölçülemedi" gösterirdi. `first_ever = sampler.last_success
+is None` koşulu eklenip `if was_failing or first_ever:` yapıldı; canlı testte yakalandı (`last_sample_ok_at is None` başarısızlığıyla).
+
+**Test:** `tests/test_sampling_health.py` (8, saf birim), `tests/test_database_load.py` ve `tests/test_blocking_history_api.py` (3'er
+yeni: bağlantı hatası → "Ölçülemedi", toparlanma → eski mesaja döner (negatif kontrol), gerçek sıfır yük + sağlıklı bağlantı → eski
+mesaj değişmez (negatif kontrol)), `tests/test_sampling_cadence.py` (+5: ilk hata bir kez yazılır, tekrarlayan hatalar tabloyu yeniden
+yazmaz (SQLAlchemy `before_cursor_execute` ile `UPDATE` sayısı sayılarak), toparlanma bir kez yazılır, sağlıklı seri de `ok_at`'ı yalnızca
+İLK örnekte yazar (negatif kontrol — tekrar tekrar değil), ikinci hata serisi önceki hata metninin üzerine yazar).
+
+### C) wait_sample_minutes / active_session_minutes hacmi — kısa ham saklama + saatlik toplulaştırma
+
+**Canlı hacmi ölçen salt-okunur SQL:** DEPLOY.md'nin yeni "Faz 31 Commit 10c-C" bölümünde (`BEGIN READ ONLY; ...; ROLLBACK;`, kullanıcı
+kendisi çalıştıracak) — tablo boyutu, günlük büyüme, 30 günlük projeksiyon.
+
+**Yapılanlar:** `retention.WAIT_LOAD_RAW_RETENTION_DAYS = 7` (genel `ALLOWED_RETENTION_DAYS`'ten bağımsız, sabit); her retention
+turunda `ensure_wait_load_rollup(before=now-7gün)` — instance başına `active_session_minutes`/`wait_sample_minutes` satırlarını saatlik
+kovaya toplayıp (additive `ON CONFLICT DO UPDATE SET x = x + excluded.x` — kova sınırını iki ayrı retention turu kesebildiği için
+biriktirme zorunlu, `DO NOTHING` veri kaybettirir) ham satırları siliyor. `database_load.py::build_database_load` pencerenin
+`window_start`ı 7 günden eskiyse rollup tablolarını (`ActiveSessionRollupHourly`/`WaitLoadRollupHourly`), değilse ham tabloları okuyor;
+`report.source` (`"raw"`/`"rollup"`) ekranda görünüyor (`DatabaseLoadPanel.tsx` not banner'ı), rollup yolunda sorgu kırılımı/cadence yok
+(`query_attribution_available = False`, ayrı boş-durum mesajı). Backfill işi ayrı bir migration/tek seferlik betik GEREKTİRMİYOR:
+`ensure_wait_load_rollup` her turda 7 günden eski TÜM ham satırları işliyor, ilk deploy sonrası birikmiş ~30 günlük geçmişi de kendisi
+toparlıyor.
+
+**Önemli düzeltme (bu işin yan ürünü, önceden var olan gizli hata):** `_epoch_bucket`'ta `(epoch / bölüm) * bölüm` SQLAlchemy 2.0'da
+GERÇEK (float) bölme yapıyordu — bölüp aynı sayıyla çarpınca neredeyse orijinal değere dönülüyor, yani üretimde hiçbir zaman gerçek
+kovalama/gruplama OLMAMIŞ. Var olan testler hep kova genişliğiyle aynı granülerlikte veri tohumladığı için ("bucket başına bir satır"
+zaten doğruydu) fark edilmemiş; yeni rollup kodu 5 dakika arayla 12 satırı TEK saate gruplamaya çalışınca 12 ayrı "saat" üretildiğini
+gösterdi. `//` (tam bölme) ile düzeltildi; 21 eski `test_database_load.py` testi hâlâ geçiyor (dakika granülerliğinde iki bölme türü
+aynı sonucu veriyor), ayrı regresyon testi eklendi.
+
+**Gerçek Postgres kanıtı (`test_wait_load_rollup_live_postgres.py`):** 5'er dakika arayla 12 ham satır → saat sınırını ikiye bölen 2
+ayrı `ensure_wait_load_rollup` turu → saatlik satır BİRİKEREK 60 → 120'ye çıkıyor (üzerine yazılmıyor), ham satırların tamamı siliniyor;
+`build_database_load` aynı pencereyi `source="rollup", samples_taken=120, average_aas≈0,4` ile doğru okuyor.
+
+**Kapsam sınırlaması (SORULAR.md'ye yazıldı):** yönlendirme pencere BAŞLANGICINA bakıp TÜMÜYLE ham ya da TÜMÜYLE rollup okuyor —
+7 günlük sınırı kesen bir pencerede (ör. "son 10 gün") son 7 günün ham/dakikalık verisi de rollup çözünürlüğüne düşüyor. Ekranda
+`source` alanı bunu gösteriyor; iki kaynağı gerçekten birleştirmek (splice) kapsam dışı bırakıldı.
+
+**Test:** `tests/test_wait_load_rollup.py` (8: toplama+silme doğruluğu, toplam korunuyor, boşta kategoriler dışlanıyor (negatif kontrol),
+pencere içi satırlar dokunulmuyor (negatif kontrol), saat sınırını bölen iki tur biriktiriyor (negatif kontrol — `DO NOTHING` değil),
+çoklu instance izolasyonu, `RETENTION_TARGETS` her iki modeli de listeliyor, retention turu sabit 7 gün kullanıyor), `tests/test_database_load.py`
+(+4: eski pencere rollup okuyor + ham tablolar boşken bile, negatif kontrol — yalnızca ham veri varken eski pencere "hiçbir şey
+ölçülmedi" diyor, sınırın hemen içindeki pencere hâlâ ham okuyor, ham yolda sorgu kırılımı/cadence hâlâ doğru), `tests/test_wait_load_rollup_live_postgres.py`
+(gerçek Postgres, yukarıdaki kanıt).
+
+### Tam paket (bir kez, `-rs`)
+
+İlk koşuda 17 failed + 8 errors çıktı; ikisi gerçek, geri kalanı bu makineye özgüydü:
+
+- **Gerçek regresyon (bu commit'in yan etkisi, düzeltildi):** `services/deletion.py`'nin genel cascade-silme taraması
+  hedef tablonun birincil anahtarının hep `id` adında olduğunu varsayıyordu (`table.c.id`). Yeni `WaitStatsBaseline`
+  modelinin birincil anahtarı `instance_id` (`id` sütunu yok) — bu yüzden `DELETE /api/instances/{id}?cascade=true`
+  `KeyError: 'id'` ile 500 veriyordu (`test_delete_dependencies.py`, 4 test). Düzeltme: `dependent_columns`/`clear_dependents`
+  artık hedef tablonun GERÇEK birincil anahtar sütununu (`table.primary_key.columns`) kullanıyor, `"id"` varsaymıyor —
+  hem `wait_stats_baselines` gibi PK=FK tablolarda hem var olan `id` PK'li tablolarda doğru.
+  Ayrıca yeni `WAIT_STATS_BASELINE` ayarı `.env.example`/`deploy/onprem/.env.example`'a hiç eklenmemişti
+  (`test_onprem_package_drift.py`, 2 test) — ikisine de eklendi.
+- **Bu makineye özgü (koddan bağımsız):** kalan 11 failed + 8 error hep aynı nedenden — bu makinede
+  "ODBC Driver 18 for SQL Server" hiç KURULU DEĞİLDİ (`Get-OdbcDriver` ile doğrulandı; yalnızca eski "SQL Server"
+  sürücüsü vardı). Kullanıcı onayıyla kuruldu (`winget install Microsoft.msodbcsql.18`). Kurulumdan sonra bu
+  19 testin 18'i geçti; kalan 1'i (`test_query_store_live_mssql.py::test_plan_regression_is_measured_with_the_read_only_login`,
+  Commit 9e'nin kapsamı, bu commit'te DEĞİŞMEDİ) sürücünün `datetimeoffset` (ODBC tip -155) için pyodbc çıktı
+  dönüştürücüsü eksik olduğu için düşüyor — SORULAR.md'ye yazıldı, ayrı iş.
+
+**Son koşu:** 2408 passed, 4 skipped, **1 failed** (yukarıdaki, Commit 9e kapsamlı, bilinen sınır) — offline + tüm canlı
+hedefler (PostgreSQL 15/16/17 + replikalar, PgBouncer, SQL Server standalone + AG). 4 atlanan: önceki commit'lerden
+değişmeyen, ortam bağımlılığı olmayan testler.
+
 ## API uyumluluğu
 
 Faz 15 İŞ 1 hariç mevcut hiçbir endpoint kırılmadı; `Instance` ile

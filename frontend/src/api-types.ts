@@ -3195,6 +3195,11 @@ export interface components {
              */
             series: components["schemas"]["DatabaseLoadPointOut"][];
             /**
+             * Source
+             * @default raw
+             */
+            source: string;
+            /**
              * Start
              * Format: date-time
              */
@@ -6265,14 +6270,28 @@ export interface components {
              */
             background_types: string[];
             /**
+             * Baseline Saved
+             * @default false
+             */
+            baseline_saved: boolean;
+            /**
+             * Baseline Source
+             * @default shared
+             */
+            baseline_source: string;
+            /**
              * Delta
              * @default []
              */
             delta: components["schemas"]["WaitStatEntryOut"][];
+            /** Delta Note */
+            delta_note?: string | null;
             /** Delta Since */
             delta_since?: string | null;
             /** Delta Unavailable Reason */
             delta_unavailable_reason?: string | null;
+            /** Delta Window Seconds */
+            delta_window_seconds?: number | null;
             /**
              * Filtered Background
              * @default 0
@@ -6280,6 +6299,8 @@ export interface components {
             filtered_background: number;
             /** Instance Id */
             instance_id: number;
+            /** Process Id */
+            process_id?: number | null;
             /** Required Grant */
             required_grant?: string | null;
             /**

@@ -1620,6 +1620,14 @@ class WaitStatsReportOut(BaseModel):
     delta: list[WaitStatEntryOut] = []
     delta_since: datetime | None = None
     delta_unavailable_reason: str | None = None
+    # Fark penceresinin uzunluğu (sn) ve varsa bağlam notu (Faz 31 Commit 10c-A): "son okumadan bu yana" ne kadar?
+    delta_window_seconds: float | None = None
+    delta_note: str | None = None
+    # Tabanın nerede tutulduğu: "shared" (meta veritabanı) | "process" (bu sürecin belleği).
+    baseline_source: str = "shared"
+    baseline_saved: bool = False
+    # Teşhis: bu okumayı işleyen süreç. Ardışık isteklerde farklı değerler = çok süreçli çalışıyor.
+    process_id: int | None = None
     restarted: bool = False
     # Kullanıcı oturumlarında görülmediği için elenen tür sayısı — gizlenmiyor, sayılıyor.
     filtered_background: int = Field(default=0, json_schema_extra={"counted_from": 'hidden: arka plan bekleme türü'})
@@ -2533,3 +2541,6 @@ class DatabaseLoadOut(BaseModel):
     unavailable_reason: str | None = None
     # Örnekleme aralığı ölçümü: tutturulamadıysa `message` dolu ve ekran bunu gösteriyor (Faz 31 Commit 10a).
     cadence: SamplingCadenceOut | None = None
+    # "raw" (ham dakikalık veri) | "rollup" (saatlik toplulaştırma — pencere 7 günden eski; Faz 31 Commit 10c-C).
+    # Ekran rollup'ta sorgu kırılımının neden boş olduğunu buradan anlatıyor.
+    source: str = "raw"

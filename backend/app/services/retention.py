@@ -23,6 +23,7 @@ from app.models import (
     WaitQuerySignature,
     WaitSampleMinute,
 )
+from app.services.wait_load_rollup import ensure_wait_load_rollup
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,13 @@ DEFAULT_RETENTION_DAYS = 30
 #: Yedek kayıtları en az bu kadar saklanıyor — genel pencere daha kısa olsa bile.
 #: Gerekçe yukarıda: kısa pencere en son yedeği silip izlemeyi bozuyor.
 BACKUP_MIN_RETENTION_DAYS = 60
+
+#: Bekleme örneklerinin (WaitSampleMinute/ActiveSessionMinute) HAM saklama süresi — genel ayardan (7-90 gün)
+#: BAĞIMSIZ, her zaman sabit (Faz 31 Commit 10c-C). Ölçüldü: 20 instance'ta yazım hacmi ~10 MB/saat; 30 günde
+#: ~7 GB (Supabase Pro'nun 8 GB veritabanı kotasının neredeyse tamamı). Dakika dakika ayrıntı yalnızca SON
+#: GÜNLERİN sorgu teşhisinde işe yarıyor; eskisi silinmeden önce saatlik toplama biriktirilir
+#: (`services/wait_load_rollup.py`) — veri kaybolmuyor, çözünürlüğü düşüyor.
+WAIT_LOAD_RAW_RETENTION_DAYS = 7
 
 
 async def get_retention_days(session: AsyncSession) -> int:
@@ -127,11 +135,20 @@ async def run_retention_cleanup() -> int:
         # der. Yani saklama politikası, izlemenin kendisini bozar. Yedek yaşı eşiklerinin en
         # gevşeği 14 gün olduğu için taban ondan geniş tutuluyor.
         backup_cutoff = datetime.now(UTC) - timedelta(days=max(days, BACKUP_MIN_RETENTION_DAYS))
+        # BEKLEME ÖRNEKLERİ İÇİN AYRI VE DAHA KISA PENCERE (Faz 31 Commit 10c-C) — genel ayardan bağımsız, HER
+        # ZAMAN 7 gün. Ham satırlar silinmeden önce saatlik toplama biriktiriliyor (aşağıya bakın); bu yüzden bu
+        # iki tablo genel döngünün DIŞINDA, kendi fonksiyonlarıyla işleniyor.
+        wait_load_cutoff = datetime.now(UTC) - timedelta(days=WAIT_LOAD_RAW_RETENTION_DAYS)
         total_deleted = 0
         for model, ts_column in RETENTION_TARGETS:
+            if model in (WaitSampleMinute, ActiveSessionMinute):
+                continue
             window = backup_cutoff if model is BackupRecord else cutoff
             result = await session.execute(delete(model).where(ts_column < window))
             total_deleted += result.rowcount or 0
+
+        rollup = await ensure_wait_load_rollup(session, before=wait_load_cutoff)
+        total_deleted += rollup.active_session_rows_deleted + rollup.wait_sample_rows_deleted
 
         now_iso = datetime.now(UTC).isoformat()
         for key, value in ((RETENTION_LAST_RUN_KEY, now_iso), (RETENTION_LAST_DELETED_KEY, str(total_deleted))):

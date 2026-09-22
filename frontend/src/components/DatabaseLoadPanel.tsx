@@ -224,6 +224,12 @@ export default function DatabaseLoadPanel({ instanceId, rangeHours, customRange 
 
   return (
     <div className="db-load">
+      {shown.source === "rollup" && (
+        <p className="muted-note">
+          Bu aralık 7 günden eski: saatlik toplulaştırılmış veriden gösteriliyor (dakika dakika ayrıntı yalnızca
+          son 7 gün için tutuluyor).
+        </p>
+      )}
       <CadenceNotice cadence={shown.cadence} />
       <div className="stats-grid compact">
         <div className="card stat-card">
@@ -371,6 +377,16 @@ export default function DatabaseLoadPanel({ instanceId, rangeHours, customRange 
         </p>
         {pickedLoading ? (
           <PageSkeleton rows={3} />
+        ) : shown.source === "rollup" ? (
+          <EmptyState
+            title="Bu dönem için sorgu kırılımı yok"
+            detail={
+              "Bu aralık 7 günden eski: ham örnekler yalnızca 7 gün saklanıyor, daha eski dönemler " +
+              "saatlik toplulaştırılmış veriden okunuyor. Toplulaştırma sorgu bazında ayrıntı " +
+              "TUTMUYOR — yük kırılımı (CPU/IO/kilit vb.) yine de doğru, yalnızca hangi sorgunun " +
+              "yük ürettiği son 7 gün için görülebiliyor."
+            }
+          />
         ) : !shown.query_attribution_available ? (
           <EmptyState
             title="Bekleme sorguya bağlanamıyor"

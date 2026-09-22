@@ -209,6 +209,17 @@ class Instance(Base):
     last_collect_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_collect_error_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
+    # Faz 31 Commit 10c-B: bekleme ÖRNEKLEYİCİSİNİN (wait_sampling.py, 1 sn'lik ayrı döngü) bağlantı durumu —
+    # ana toplama döngüsünden (last_collect_*) AYRI, çünkü ayrı bir bağlantı ve ayrı bir hata sınıfı.
+    #
+    # "Bu aralıkta örnek yok" iki farklı şey olabilir: (a) örnekleyici bağlanamıyor/zaman aşımına uğruyor/yetkisiz
+    # — hiçbir şey ÖLÇÜLEMEDİ; (b) örnekleyici sağlıklı çalışıyor ve gerçekten aktif oturum görmedi. İkisini
+    # ayırt etmeden "örnek yok" demek (b) gibi bir güvence verirdi. Yalnızca DURUM DEĞİŞİMİNDE yazılıyor (arıza
+    # başlangıcı / toparlanma) — 1 sn'lik döngüde her turda yazmak egress'i katbekat artırırdı.
+    last_sample_ok_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_sample_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_sample_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     # Faz 31 Commit 5: izleme rolü uygulamayla paylaşılıyor mu (services/monitoring_role.py).
     # Toplayıcı her döngüde bakıyor; NULL checked_at = hiç ölçülmedi ("ayrı" DEĞİL).
     monitoring_role_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -935,6 +946,55 @@ class WaitSampleMinute(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ActiveSessionRollupHourly(Base):
+    """`ActiveSessionMinute`'ın SAATLİK toplulaştırması (Faz 31 Commit 10c-C).
+
+    Ham dakikalık veri artık yalnızca 7 gün saklanıyor (bkz. `services/retention.WAIT_LOAD_RAW_RETENTION_DAYS`) —
+    20 instance'ta ölçülen yazım hacmi (Commit 10a: ~10 MB/saat) 30 günde ~7 GB'a çıkıyordu. Bu tablo, ham satırlar
+    SİLİNMEDEN ÖNCE `services/wait_load_rollup.py` tarafından dolduruluyor; saatlik çözünürlük ("bu saatte ortalama
+    yük neydi") uzun vadeli trend için yeterli — dakika dakika ayrıntı zaten yalnızca son 7 gün için anlamlı bir soru.
+
+    Saat sınırında İKİ retention turu aynı satıra düşebilir (cutoff tam o saatin ortasından geçtiğinde): bu yüzden
+    yazım `+=` biriktirerek yapılıyor (INSERT .. ON CONFLICT DO UPDATE), tek seferlik değil.
+    """
+
+    __tablename__ = "active_session_rollup_hourly"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "hour", name="uq_active_session_rollup_hourly"),
+        Index("ix_active_session_rollup_hourly_instance_hour", "instance_id", "hour"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id", ondelete="CASCADE"), index=True, nullable=False)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    samples_taken: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_sessions_sampled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    blocked_sessions_sampled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WaitLoadRollupHourly(Base):
+    """`WaitSampleMinute`'ın SAATLİK, KATEGORİ bazında toplulaştırması (Faz 31 Commit 10c-C).
+
+    Sorgu bazında kırılım (queryid) BİLEREK tutulmuyor — o düzeyde ayrıntı ham veride, yalnızca son 7 gün için.
+    7 günden eski bir aralıkta "yük üreten sorgular" listesi boş döner ve nedeni söylenir
+    (`services/database_load.py::query_attribution_available`); bu bilinçli bir kapsam daralması, kayıp değil.
+    """
+
+    __tablename__ = "wait_load_rollup_hourly"
+    __table_args__ = (
+        UniqueConstraint("instance_id", "hour", "wait_category", name="uq_wait_load_rollup_hourly"),
+        Index("ix_wait_load_rollup_hourly_instance_hour", "instance_id", "hour"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id", ondelete="CASCADE"), index=True, nullable=False)
+    hour: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    wait_category: Mapped[str] = mapped_column(String(16), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class WaitQuerySignature(Base):
     """queryid → sorgu metni sözlüğü (Faz 25 İŞ 1).
 
@@ -1317,3 +1377,25 @@ class SlaTarget(Base):
     created_by: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WaitStatsBaseline(Base):
+    """SQL Server `dm_os_wait_stats` KÜMÜLATİF sayaçlarının son kayıtlı okuması (Faz 31 Commit 10c-A).
+
+    Sayaç sunucu açılışından beri birikiyor; anlamlı olan iki okuma arasındaki FARK. Taban eskiden süreç belleğindeydi:
+    dbace yeniden başlayınca ilk okuma "fark hesaplanamadı" diyordu ve birden çok süreçte (`uvicorn --workers N`,
+    `WEB_CONCURRENCY`, çoğaltılmış servis) ardışık iki istek farklı sürece düşerse fark "o sürecin son okumasından bu
+    yana" anlamına geliyordu — ekranda hiçbir işaret olmadan. Taban artık PAYLAŞILAN yerde (meta veritabanı): instance
+    başına TEK satır, en çok dakikada bir güncellenir.
+    """
+
+    __tablename__ = "wait_stats_baselines"
+
+    instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id", ondelete="CASCADE"), primary_key=True)
+    # Sunucunun açılış zamanı: değişmişse sayaçlar sıfırlanmıştır, fark hesaplanmaz.
+    server_start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sampled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # {bekleme_türü: [bekleyen_görev, süre_ms, sinyal_ms, en_uzun_ms, kullanıcı_görevi]}
+    counters: Mapped[dict[str, list[float]]] = mapped_column(JSON, nullable=False)
+    # Kaydı yazan süreç (teşhis: hangi süreç yazdı) — "pid:1234".
+    writer: Mapped[str | None] = mapped_column(String(64), nullable=True)

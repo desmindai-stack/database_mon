@@ -178,6 +178,51 @@ async def test_no_events_says_why_instead_of_returning_a_bare_empty_list():
     assert "5 saniye" in body["unavailable_reason"]
 
 
+async def test_a_sampler_connection_failure_says_measurement_failed_not_no_events():
+    """Faz 31 Commit 10c-B: global ayar açık olsa bile BU instance'ın örnekleyicisi bağlanamıyor olabilir
+    (RTT ≥ ~1 sn, yetki hatası, zaman aşımı). 'Kayda değer olay görülmedi' o zaman YANLIŞ bir güvence verirdi."""
+    instance = await _instance()
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance.id)
+        row.last_sample_error = "Bağlantı zaman aşımına uğradı: host erişilebilir mi kontrol edin. (timeout)"
+        row.last_sample_error_at = NOW - timedelta(minutes=3)
+        await session.commit()
+
+    async with await authed_client() as client:
+        body = (await client.get(f"/api/instances/{instance.id}/blocking-history")).json()
+    assert body["episodes"] == [] and body["deadlocks"] == []
+    assert "Ölçülemedi" in body["unavailable_reason"]
+    assert "zaman aşımına uğradı" in body["unavailable_reason"]
+    assert "kayda değer" not in body["unavailable_reason"], "arıza durumunda 'olay görülmedi' cümlesi kalmamalı"
+
+
+async def test_negative_control_a_later_success_clears_the_broken_state():
+    """NEGATİF KONTROL: hata kaydı hâlâ satırda ama ondan SONRA bir başarı varsa artık 'bağlanamıyor' denmez —
+    eski bir arızanın izi süresiz 'ölçülemedi' göstermemeli."""
+    instance = await _instance()
+    async with SessionLocal() as session:
+        row = await session.get(Instance, instance.id)
+        row.last_sample_error = "Bağlantı reddedildi: port kapalı veya yanlış port numarası. (refused)"
+        row.last_sample_error_at = NOW - timedelta(hours=2)
+        row.last_sample_ok_at = NOW - timedelta(minutes=1)  # arızadan SONRA toparlanmış
+        await session.commit()
+
+    async with await authed_client() as client:
+        body = (await client.get(f"/api/instances/{instance.id}/blocking-history")).json()
+    assert "Ölçülemedi" not in (body["unavailable_reason"] or "")
+    assert "kayda değer" in body["unavailable_reason"]
+
+
+async def test_negative_control_no_sampling_history_at_all_uses_the_normal_message():
+    """NEGATİF KONTROL: last_sample_error_at hiç dolmamışsa (yeni instance, hiç deneme yok) eski davranış korunuyor
+    — 'ölçülemedi' iddiası yalnızca GERÇEKTEN görülmüş bir arızaya dayanmalı."""
+    instance = await _instance()
+    async with await authed_client() as client:
+        body = (await client.get(f"/api/instances/{instance.id}/blocking-history")).json()
+    assert "Ölçülemedi: bekleme örnekleyicisi" not in body["unavailable_reason"]
+    assert "kayda değer" in body["unavailable_reason"]
+
+
 async def test_mongodb_says_the_feature_does_not_apply():
     instance = await _instance(engine="mongodb")
     async with await authed_client() as client:

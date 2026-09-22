@@ -241,6 +241,30 @@ async def _ensure_sampler(instance: Instance) -> _InstanceSampler:
     return sampler
 
 
+async def _persist_sampling_transition(instance_id: int, *, error: Exception | None = None, ok: bool = False) -> None:
+    """Örnekleyicinin arıza BAŞLANGICINI ya da TOPARLANMASINI meta veritabanına yazar (Faz 31 Commit 10c-B).
+
+    Yalnızca durum DEĞİŞİRKEN çağrılır (bkz. `_sample_instance`) — bir arıza olayı başına en fazla 2 yazım. Kendi
+    hatası yutulur: bu yazımın başarısız olması örneklemeyi durdurmamalı (aynı ilke `flush_tick` için de geçerli).
+    """
+    from app.collectors.base import classify_connection_error
+
+    now = datetime.now(UTC)
+    try:
+        async with SessionLocal() as session:
+            row = await session.get(Instance, instance_id)
+            if row is None:
+                return
+            if ok:
+                row.last_sample_ok_at = now
+            else:
+                row.last_sample_error = classify_connection_error(error)[:500]
+                row.last_sample_error_at = now
+            await session.commit()
+    except Exception:
+        logger.exception("Örnekleme durum geçişi kaydedilemedi (instance %s, ok=%s)", instance_id, ok)
+
+
 async def _drop_connection(sampler: _InstanceSampler) -> None:
     if sampler.conn is not None:
         try:
@@ -280,6 +304,10 @@ async def _sample_instance(instance: Instance, now: datetime, *, clock=time.mono
                 "Bekleme örneklemesi başarısız (instance %s, üst üste %s tur): %s",
                 instance.name, sampler.consecutive_failures, exc,
             )
+        if sampler.consecutive_failures == 1:
+            # Arızanın BAŞLANGICI: bir kez yazılır (Faz 31 Commit 10c-B). Süregelen arızada tekrar
+            # yazılmaz — 1 sn'lik döngüde her turda meta veritabanına gitmek egress'i katlardı.
+            await _persist_sampling_transition(instance.id, error=exc)
         _record_round(now, clock() - started, len(_samplers))
         return
 
@@ -288,10 +316,19 @@ async def _sample_instance(instance: Instance, now: datetime, *, clock=time.mono
     finished = clock()
     # Gerçek aralık: bu örneğin geliş anı - önceki başarılı örneğin geliş anı. Başarısız turlar, atlanan turlar ve
     # yeniden bağlanma süresi bu farka OTOMATİK girer (hiçbiri ayrıca sayılmak zorunda değil).
-    gap = None if sampler.last_success is None else finished - sampler.last_success
+    first_ever = sampler.last_success is None
+    gap = None if first_ever else finished - sampler.last_success
     sampler.last_success = finished
+    was_failing = sampler.consecutive_failures > 0
     sampler.consecutive_failures = 0
     sampler.has_query_id = bool(snapshot.get("has_query_id", True))
+    if was_failing or first_ever:
+        # TOPARLANMA (`was_failing`) ya da bu sampler'ın İLK başarısı (`first_ever`, örn. worker yeniden başladı):
+        # bir kez yazılır. `first_ever` olmadan, süreç yeniden başladıktan sonra ESKİ bir arızanın kalıntısı
+        # last_sample_error_at'ta sonsuza dek kalırdı — yeni sampler'ın in-memory `consecutive_failures`'ı 0'dan
+        # başladığı için toparlanma hiç GÖRÜLMEZDİ (bu süreç arızayı hiç yaşamadı ki). Bundan sonra last_sample_ok_at,
+        # last_sample_error_at'tan hep daha yeni kalır — okuma tarafı periyodik tazeleme olmadan doğru sonuç verir.
+        await _persist_sampling_transition(instance.id, ok=True)
 
     minute = minute_floor(now)
     bucket = _buckets.get(instance.id)
