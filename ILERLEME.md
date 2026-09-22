@@ -8934,7 +8934,7 @@ pencere içi satırlar dokunulmuyor (negatif kontrol), saat sınırını bölen 
 ölçülmedi" diyor, sınırın hemen içindeki pencere hâlâ ham okuyor, ham yolda sorgu kırılımı/cadence hâlâ doğru), `tests/test_wait_load_rollup_live_postgres.py`
 (gerçek Postgres, yukarıdaki kanıt).
 
-### Tam paket (bir kez, `-rs`)
+### Tam paket, ilk koşu ve iki gerçek regresyon
 
 İlk koşuda 17 failed + 8 errors çıktı; ikisi gerçek, geri kalanı bu makineye özgüydü:
 
@@ -8946,16 +8946,71 @@ pencere içi satırlar dokunulmuyor (negatif kontrol), saat sınırını bölen 
   hem `wait_stats_baselines` gibi PK=FK tablolarda hem var olan `id` PK'li tablolarda doğru.
   Ayrıca yeni `WAIT_STATS_BASELINE` ayarı `.env.example`/`deploy/onprem/.env.example`'a hiç eklenmemişti
   (`test_onprem_package_drift.py`, 2 test) — ikisine de eklendi.
-- **Bu makineye özgü (koddan bağımsız):** kalan 11 failed + 8 error hep aynı nedenden — bu makinede
-  "ODBC Driver 18 for SQL Server" hiç KURULU DEĞİLDİ (`Get-OdbcDriver` ile doğrulandı; yalnızca eski "SQL Server"
-  sürücüsü vardı). Kullanıcı onayıyla kuruldu (`winget install Microsoft.msodbcsql.18`). Kurulumdan sonra bu
-  19 testin 18'i geçti; kalan 1'i (`test_query_store_live_mssql.py::test_plan_regression_is_measured_with_the_read_only_login`,
-  Commit 9e'nin kapsamı, bu commit'te DEĞİŞMEDİ) sürücünün `datetimeoffset` (ODBC tip -155) için pyodbc çıktı
-  dönüştürücüsü eksik olduğu için düşüyor — SORULAR.md'ye yazıldı, ayrı iş.
+- **Bu makineye özgü (koddan bağımsız, ama SONRADAN 10c'nin kapsamına alındı — aşağıya bakın):** kalan 11 failed + 8
+  error hep aynı nedenden — bu makinede "ODBC Driver 18 for SQL Server" hiç KURULU DEĞİLDİ (`Get-OdbcDriver` ile
+  doğrulandı; yalnızca eski "SQL Server" sürücüsü vardı).
 
-**Son koşu:** 2408 passed, 4 skipped, **1 failed** (yukarıdaki, Commit 9e kapsamlı, bilinen sınır) — offline + tüm canlı
-hedefler (PostgreSQL 15/16/17 + replikalar, PgBouncer, SQL Server standalone + AG). 4 atlanan: önceki commit'lerden
-değişmeyen, ortam bağımlılığı olmayan testler.
+### D) ODBC sürücüsü soruşturması — driver yokluğu ve `datetimeoffset` (kullanıcı takibi)
+
+Kullanıcı sürücü eksikliğinin kapsam dışı bırakılmasına itiraz etti: Railway'e SQL Server hedefleri eklenecek ve
+on-prem paketi de SQL Server izleyecek, bu yüzden bulgular 10c'nin parçası yapıldı.
+
+1. **Commit 8/9e/9f'in SQL Server ölçümleri hangi sürücüyle koştu?** Koddan ve ILERLEME.md'nin o commit'lerin
+   "Sayılar"/"Gerçek SQL Server'da ölçüldü" bölümlerinden: **GitHub Actions CI'da SQL Server için hiçbir iş YOK**
+   (`.github/workflows/ci.yml`'de yalnızca `live-postgres` matrisi vardı — Commit 8'in kendi metni de "CI EŞDEĞERİ"
+   diyor, gerçek CI değil). Bütün SQL Server kanıtları bu geliştirme makinesinde, `scripts/live_mssql.py`'nin kurduğu
+   yerel Docker konteynerlerine karşı, `pyodbc`/`aioodbc` ile (kod hep `"ODBC Driver 18 for SQL Server"` varsayılanını
+   kullanıyor, `requirements.txt`'te pyodbc SÜRÜMÜ SABİTLENMEMİŞ — yalnızca `aioodbc>=0.5.0`). O commit'lerin yazdığı
+   sayılar (8,29× yavaşlama, LCK_M_S 2 950 ms, vb.) GERÇEK ölçümler — sürücü o an kuruluydu ve çalışıyordu, yoksa
+   bağlantı hiç kurulamaz, sayı üretilemezdi. **Sessizce atlanan/farklı yoldan geçen SQL Server testi bulunamadı**:
+   `tests/conftest.py`'nin "canlı test denetimi" DSN tanımlıyken bir testin (sürüm koşulu dışında) atlanmasını
+   oturumu kırmızı yaparak yakalıyor; sürücü YOKKEN test SESSİZCE atlanmıyor, `pyodbc.InterfaceError` ile GÜRÜLTÜLÜ
+   düşüyor (bu oturumun ilk koşusunda 17 failed + 8 errors olarak birebir görüldü). Sürücünün ne zaman/nasıl
+   kaybolduğuna dair commit geçmişinde kayıt yok (muhtemelen bu makineye özgü bir Windows güncellemesi/araç kaldırma).
+2. **Railway ve on-prem imajı hangi sürücüyü kullanıyor?** İkisi de AYNI dosya: `railway.toml`'un
+   `dockerfilePath = "deploy/onprem/Dockerfile.backend"` demesiyle Railway de on-prem imajını derliyor. O dosya
+   `msodbcsql18` (= "ODBC Driver 18 for SQL Server") kuruyor — kodun hardcoded varsayılanıyla BİREBİR eşleşiyor.
+   Sürüm sabitlenmemiş (apt'ten o anki en güncel `18.x` iniyor, vendor ile önceden indirilmişse o an vendor'a ne
+   konduysa).
+3. **Aynı sürücüyle gerçek SQL Server'a karşı ölçüm:** kullanıcı onayıyla `winget install Microsoft.msodbcsql.18`
+   (18.6.2.1 — bugün apt/winget'ten inen güncel sürüm, üretim imajının çekeceğiyle aynı aile). Kurulumdan hemen sonra
+   `test_query_store_live_mssql.py::test_plan_regression_is_measured_with_the_read_only_login` GERÇEKTEN patladı:
+   `sys.query_store_runtime_stats_interval.start_time`/`end_time` (`datetimeoffset`, ODBC tip -155) pyodbc 5.3.0'da
+   hiçbir sürücüyle KENDİLİĞİNDEN çözülmüyor — `ODBC SQL type -155 is not yet supported`. **Bu üretim imajıyla da
+   olurdu** (aynı sürücü ailesi) — ayrı iş DEĞİL, düzeltildi: `app/collectors/sqlserver_mongodb.py`'ye
+   `_decode_datetimeoffset` (ODBC'nin `SQL_SS_TIMESTAMPOFFSET_STRUCT`'ını çözen, Microsoft'un belgelediği yöntem) +
+   `register_datetimeoffset_converter(conn)` — pyodbc 5.3.0'da MODÜL seviyesinde varsayılan dönüştürücü YOK (eski
+   sürümlerde vardı, `pyodbc.add_output_converter` kaldırılmış), yalnızca BAĞLANTI başına `Connection.add_output_converter`
+   var; bu yüzden HER yeni `aioodbc.connect(...)` sonrası çağrılması gerekiyor. Tüm 5 üretim bağlantı noktasına
+   eklendi (`sqlserver_mongodb.py`, `alwayson_health.py`, `config_comparison.py`, `custom_alert_rules.py`,
+   `prerequisites.py`) — hepsi `build_odbc_connection_string`'i aynı modülden kullanıyor. Offline birim testi
+   (`tests/test_engine_specific_options.py`, gerçek SQL Server olmadan, ODBC'nin ham bayt biçimini elle üreterek):
+   UTC değer + sıfır olmayan saat dilimi (negatif kontrol — dilim sessizce UTC'ye yuvarlanmıyor) + dönüştürücünün
+   gerçekten -155 için kaydedildiği. Düzeltmeden sonra Query Store testi de dahil TÜM SQL Server testleri geçti.
+4. **CI'da aynı sürücü + sessiz atlama yasağı:** `.github/workflows/ci.yml`'ye yeni `live-mssql` işi — Microsoft'un
+   resmi Ubuntu paketinden (`msodbcsql18`, üretim imajıyla aynı paket) sürücüyü kurup `scripts/live_mssql.py up` ile
+   gerçek SQL Server (standalone + Always On) ayağa kaldırıp tam paketi `-rs` ile koşuyor. Sürücü kurulum adımı
+   başarısız olursa iş o adımda kırmızı olur (testlere hiç sıra gelmez); sürücü kurulur ama bir test DSN tanımlıyken
+   atlanırsa `tests/conftest.py`'nin denetimi oturumu kırmızı yapar — ikisi de "sessizce atlandı" durumunu CI'da
+   imkânsız kılıyor. **Bu iş bu oturumda gerçek bir GitHub Actions çalıştırmasıyla DOĞRULANAMADI** (push yok);
+   YAML `yaml.safe_load` ile ayrıştırma doğrulaması yapıldı, `live-postgres`'in çalışan kalıbı birebir izlendi.
+
+### E) `_epoch_bucket` float bölme — canlı veri etkisi
+
+Bug Faz 25'ten beri kodda (bu commit'te girmedi, yalnızca bu commit'in rollup kodu ortaya çıkardı) ve yalnızca
+`database_load.py`'nin RAW yolunu da etkiliyor: `choose_bucket_seconds` 3 saatten uzun pencerelerde 60 sn'nin
+üstüne çıkıyor (`TARGET_POINTS=180`), o noktadan sonra bug devreye giriyor. **Etki yalnızca EKRAN grafiği NOKTA
+ÇÖZÜNÜRLÜĞÜ** — `total_samples`/`average_aas`/kategori yüzdeleri `totals_rows`/`breakdown_rows` üzerinde TOPLAM
+alınarak hesaplanıyor, kova sayısından bağımsız (kaç parçaya bölündüğü toplamı değiştirmez, doğrulandı: SQLAlchemy'nin
+gerçekte ürettiği SQL derlenip incelendi — `CAST(... AS BIGINT) / CAST(N AS NUMERIC)`, sağ taraf NUMERIC'e
+zorlanıyor). **Kayıtlı veride hiçbir satır yanlış YAZILMADI** — düzeltilecek geçmiş veri yok, yalnızca kova
+hesaplaması (zaten düzeltildi). DEPLOY.md'ye canlı etkiyi doğrulayan salt-okunur SQL eklendi (kullanıcı çalıştıracak).
+
+### Tam paket (bir kez, `-rs`) — TÜM düzeltmelerden sonra
+
+**2412 passed, 4 skipped, 0 failed** — offline + tüm canlı hedefler (PostgreSQL 15/16/17 + replikalar, PgBouncer,
+SQL Server standalone + AG, ODBC Driver 18 kurulu). 4 atlanan: önceki commit'lerden değişmeyen, ortam bağımlılığı
+olmayan testler (sürüm koşulu, on-prem paket testi kapalı, bir UI sayfası "daha göster" kullanıyor).
 
 ## API uyumluluğu
 

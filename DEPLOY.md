@@ -390,6 +390,48 @@ ROLLBACK;
 Beklenen sonuç: ham tablo ~10 MB/saat×instance sayısı büyümeye devam ETMİYOR (7 günde sabitleniyor); rollup
 tabloları çok daha yavaş büyüyor (instance başına saatte birkaç satır, ~kategorik kırılım kadar).
 
+**#56, #57, #58'in uygulanma biçimi** (kullanıcı sorusu — 10c'nin ilk raporu bunu atlamıştı): üçü de
+`test_migration_safety.py`'nin `large_tables()` (koddan, `services/retention.RETENTION_TARGETS`) listesine
+GİRMİYOR — #56 ve #58 yeni ve BOŞ tablo (backfill yok), #57 küçük `instances` tablosuna 3 nullable kolon
+ekliyor. **Parçalı/CONCURRENTLY GEREKMİYOR, bakım penceresi gerekmiyor.** Üçü de tek işlemde, Supabase SQL
+Editor'den DOĞRUDAN çalıştırılabilir (`psql` ya da uygulamanın `app/migrations_runner.py`'si ile de olur,
+fark etmez — CONCURRENTLY ifadesi olmadığı için işlem dışı çalıştırma zorunluluğu yok). Doğrulandı:
+`migration_sql.analyze_sql()` üçü için de `[]` (ihlal yok) döndürüyor.
+
+### `_epoch_bucket` float bölme hatası — canlıdaki etkiyi ölçen SQL (Faz 31 Commit 10c, kullanıcı sorusu)
+
+`services/database_load.py::_epoch_bucket` Faz 25'ten beri (bu commit'te DEĞİL, çok daha önce girmiş) SQLAlchemy'nin
+GERÇEK (ondalıklı) bölmesini kullanıyordu: `(epoch / N) * N` neredeyse ORİJİNAL epoch'a dönüyor, yani `GROUP BY`
+kovaları birleştirmiyordu. **Etkilenen: yalnızca EKRANDAKİ grafik noktası ÇÖZÜNÜRLÜĞÜ** (3 saatten uzun bir pencerede
+`TARGET_POINTS=180` hedefi tutmuyor, her dakika/saat ayrı nokta kalıyor). **Etkilenmeyen: toplam/ortalama AAS,
+kategori yüzdeleri, örnek sayısı** — bunlar `totals_rows`/`breakdown_rows` üzerinde TOPLAM alınarak hesaplanıyor
+(`sum(...)`), kova sayısından bağımsız; kaç parçaya bölündüğü toplamı değiştirmez. **Ham veride hiçbir satır
+yanlış yazılmadı, hiçbir şey silinmedi** — düzeltilmesi gereken KAYITLI veri yok, yalnızca kod (zaten düzeltildi).
+Aşağıdaki SQL bunu GERÇEK veride kanıtlıyor (salt okunur, hiçbir şey değiştirmiyor):
+
+```sql
+-- Salt okunur. `instance_id`'yi kendi ortamınızdaki gerçek bir instance ile değiştirin; pencere 3 saatten
+-- UZUN seçilmeli (TARGET_POINTS=180 hedefi ~3 saatin altında zaten 60 sn'lik en küçük kovaya iniyor, bug orada
+-- görünmez). Örnek: son 7 gün.
+BEGIN READ ONLY;
+WITH ham AS (
+    SELECT extract(epoch FROM minute)::bigint AS epoch
+    FROM active_session_minutes
+    WHERE instance_id = :instance_id
+      AND minute >= now() - interval '7 days'
+)
+SELECT
+    count(*)                                                          AS ham_satir,
+    count(DISTINCT (epoch / CAST(3420 AS NUMERIC)) * 3420)            AS hatali_kova_sayisi,   -- eski (float) davranış — SQLAlchemy'nin ürettiği GERÇEK ifade
+    count(DISTINCT (epoch / 3420) * 3420)                             AS dogru_kova_sayisi     -- düzeltilmiş (taban/floor bölme, Postgres'te bigint/int doğal olarak floor'lar)
+FROM ham;
+ROLLBACK;
+```
+
+Beklenen (eğer bug canlıda da üretim etkisi gösteriyorsa): `hatali_kova_sayisi` ≈ `ham_satir` (neredeyse hiç
+birleşme yok), `dogru_kova_sayisi` çok daha küçük (7 gün / 57 dakika ≈ 177 kova). Yalnızca EKRAN çözünürlüğü
+farkı; veri kaybı ya da yanlış toplam YOK — bu yüzden geçmiş veriye dönük bir düzeltme/backfill GEREKMİYOR.
+
 ## Faz 31 Commit 6: tek sunucuya eklenmiş cluster alarm kuralları
 
 Düzeltmeden önce sihirbaz/düğüm ekleme yoluyla eklenen TEK SUNUCULU veritabanlarına 6 cluster kuralı

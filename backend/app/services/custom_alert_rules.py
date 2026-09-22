@@ -130,11 +130,12 @@ async def _run_query(instance: Instance, query: str) -> float | None:
     if instance.engine == "sqlserver":
         import aioodbc
 
-        from app.collectors.sqlserver_mongodb import build_odbc_connection_string
+        from app.collectors.sqlserver_mongodb import build_odbc_connection_string, register_datetimeoffset_converter
 
         conn = await aioodbc.connect(
             dsn=build_odbc_connection_string(target), timeout=QUERY_TIMEOUT_SECONDS, autocommit=True
         )
+        await register_datetimeoffset_converter(conn)
         try:
             async with conn.cursor() as cur:
                 await cur.execute(query)

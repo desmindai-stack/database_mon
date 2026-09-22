@@ -91,3 +91,8 @@ class FakeSqlServerConnection:
 
     async def close(self) -> None:
         return None
+
+    async def add_output_converter(self, sqltype: int, func: Any) -> None:
+        # Gerçek aioodbc/pyodbc bağlantısının `register_datetimeoffset_converter`'ı (Faz 31 Commit 10c)
+        # çağırabileceği yer — bu sahte bağlantıda çözülecek gerçek ODBC tipi yok, no-op yeterli.
+        return None

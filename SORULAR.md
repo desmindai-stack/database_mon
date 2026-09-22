@@ -2771,12 +2771,11 @@ dakikalık/sorgu bazlı veri hâlâ mevcut. Bilinçli basitleştirme: iki kayna�
 görünen etkisi: 7 günden UZUN bir özel aralık seçildiğinde TÜM pencere rollup çözünürlüğünde gösteriliyor (`source`
 alanı ekrana bunu yazıyor). **Açık iş:** talep gelirse iki kaynağı gerçekten birleştiren bir versiyon yazılabilir.
 
-**Query Store plan geçmişi, ODBC Driver 18'in bu makinedeki sürümüyle (18.6.2.1) okunamıyor — Commit 10c dışı, Commit 9e'nin
-kapsamı.** `tests/test_query_store_live_mssql.py::test_plan_regression_is_measured_with_the_read_only_login` gerçek SQL Server'da
-`ODBC SQL type -155 is not yet supported. column-index=4 type=-155` hatasıyla düşüyor (`-155` = `datetimeoffset`; pyodbc'de bu tip
-için `add_output_converter` KAYITLI DEĞİL). Commit 10c'nin tam paket koşusu sırasında bu makinede "ODBC Driver 18 for SQL Server"ın
-HİÇ KURULU OLMADIĞI (yalnızca eski "SQL Server" sürücüsü) fark edildi ve kuruldu (`winget install Microsoft.msodbcsql.18`,
-kullanıcı onayıyla) — sürücü kurulunca bu Query Store testi ilk kez gerçekten "ODBC Driver 18" yolundan geçti ve gizli kalmış bu
-tip-dönüştürme boşluğunu ortaya çıkardı. Commit 9e'nin kodu (`services/query_store.py`) bu işten hiç değişmedi; düzeltme kapsam dışı
-bırakıldı (Süre kuralı, ilgisiz commit'e kayma). Düzeltme: `pyodbc.add_output_converter(-155, ...)` ile `datetimeoffset`'i elle
-çözen bir dönüştürücü eklemek gerekiyor — ayrı bir işte.
+**ÇÖZÜLDÜ (Faz 31 Commit 10c, kullanıcı takibiyle).** Önceki not "Query Store plan geçmişi ODBC Driver 18'de okunamıyor,
+ayrı iş" diyordu — kullanıcı Railway'e SQL Server eklenecek olması ve on-prem paketinin AYNI sürücüyü kullanması nedeniyle
+bunun 10c'nin parçası olmasını istedi. `sys.query_store_runtime_stats_interval.start_time`/`end_time` (`datetimeoffset`,
+ODBC tip -155) pyodbc 5.3.0'da (üretim imajının kurduğu ODBC Driver 18 ailesiyle) hiçbir sürücüyle kendiliğinden
+çözülmüyordu. Düzeltme: `app/collectors/sqlserver_mongodb.py::register_datetimeoffset_converter` — her yeni `aioodbc`
+bağlantısında `Connection.add_output_converter(-155, ...)` çağrılıyor (pyodbc 5.3.0'da modül seviyesinde varsayılan
+dönüştürücü YOK, yalnızca bağlantı başına var). 5 üretim bağlantı noktasının hepsine eklendi. Offline test:
+`tests/test_engine_specific_options.py`. Gerçek SQL Server'da doğrulandı: `test_query_store_live_mssql.py` artık geçiyor.

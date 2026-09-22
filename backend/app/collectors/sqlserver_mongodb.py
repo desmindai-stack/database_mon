@@ -321,6 +321,34 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
+def _decode_datetimeoffset(raw: bytes) -> datetime:
+    """SQL Server `datetimeoffset` (ör. `sys.query_store_runtime_stats_interval.start_time`) → aware `datetime`.
+
+    pyodbc bu tipi (ODBC SQL type -155) hiçbir sürücüyle KENDİLİĞİNDEN çözmüyor — kayıt
+    çekilirken "ODBC SQL type -155 is not yet supported" ile patlıyor (ODBC Driver 18,
+    18.6.2.1'de gerçek Query Store karşısında ölçüldü; Faz 31 Commit 10c). `raw`,
+    ODBC'nin `SQL_SS_TIMESTAMPOFFSET_STRUCT`'ı: 6×int16 (yıl..saniye) + uint32 (saniyenin
+    milyarda biri) + 2×int16 (saat dilimi saat/dakika) — Microsoft'un belgelediği çözüm.
+
+    Bu pyodbc sürümünde (5.3.0) modül seviyesinde `pyodbc.add_output_converter` YOK —
+    yalnızca `Connection.add_output_converter` var, yani her yeni bağlantıda AYRI
+    kaydedilmesi gerekiyor (bkz. `register_datetimeoffset_converter`).
+    """
+    import struct
+    from datetime import timedelta, timezone
+
+    year, month, day, hour, minute, second, fraction, tz_hour, tz_minute = struct.unpack("<6hI2h", raw)
+    return datetime(
+        year, month, day, hour, minute, second, fraction // 1000,
+        timezone(timedelta(hours=tz_hour, minutes=tz_minute)),
+    )
+
+
+async def register_datetimeoffset_converter(conn) -> None:
+    """Her yeni aioodbc bağlantısında ÇAĞRILMALI — `build_odbc_connection_string` kullanan her yer."""
+    await conn.add_output_converter(-155, _decode_datetimeoffset)
+
+
 def build_odbc_connection_string(target: ConnectionTarget) -> str:
     opts = target.options or {}
     driver = opts.get("odbc_driver", "ODBC Driver 18 for SQL Server")
@@ -460,6 +488,7 @@ class SqlServerCollector(BaseCollector):
                 "(e.g. 'ODBC Driver 18 for SQL Server') on the worker image."
             ) from exc
         conn = await aioodbc.connect(dsn=build_odbc_connection_string(self.target), timeout=10, autocommit=True)
+        await register_datetimeoffset_converter(conn)
         # SQL Server has no direct, client-agnostic equivalent of PostgreSQL's
         # statement_timeout settable via plain SQL — LOCK_TIMEOUT bounds the most common real
         # cause of a monitoring query hanging (waiting on a lock held by another session), but

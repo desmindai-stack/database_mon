@@ -79,7 +79,7 @@ async def fetch_sqlserver_settings(instance: Instance) -> dict[str, str | None]:
     import aioodbc
 
     from app.collectors.base import ConnectionTarget
-    from app.collectors.sqlserver_mongodb import build_odbc_connection_string
+    from app.collectors.sqlserver_mongodb import build_odbc_connection_string, register_datetimeoffset_converter
 
     target = ConnectionTarget(
         host=instance.host,
@@ -92,6 +92,7 @@ async def fetch_sqlserver_settings(instance: Instance) -> dict[str, str | None]:
     conn = await aioodbc.connect(
         dsn=build_odbc_connection_string(target), timeout=10, autocommit=True
     )
+    await register_datetimeoffset_converter(conn)
     settings: dict[str, str | None] = {}
     try:
         async with conn.cursor() as cur:

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.collectors.base import ConnectionTarget
-from app.collectors.sqlserver_mongodb import build_odbc_connection_string
+from app.collectors.sqlserver_mongodb import build_odbc_connection_string, register_datetimeoffset_converter
 from app.models import DatabaseGroup, Node
 from app.services.credentials import decrypt_secret
 
@@ -59,7 +59,9 @@ async def _connect(node: Node):
         password=decrypt_secret(instance.password),
         options=node.options,
     )
-    return await aioodbc.connect(dsn=build_odbc_connection_string(target), timeout=10, autocommit=True)
+    conn = await aioodbc.connect(dsn=build_odbc_connection_string(target), timeout=10, autocommit=True)
+    await register_datetimeoffset_converter(conn)
+    return conn
 
 
 def _select_target_node(nodes: list[Node]) -> Node:

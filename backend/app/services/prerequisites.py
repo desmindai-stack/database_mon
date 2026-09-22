@@ -825,10 +825,11 @@ async def check_postgresql_prerequisites(target: ConnectionTarget) -> list[Prere
 async def check_sqlserver_prerequisites(target: ConnectionTarget) -> list[PrerequisiteCheck]:
     import aioodbc
 
-    from app.collectors.sqlserver_mongodb import build_odbc_connection_string
+    from app.collectors.sqlserver_mongodb import build_odbc_connection_string, register_datetimeoffset_converter
 
     checks: list[PrerequisiteCheck] = []
     conn = await aioodbc.connect(dsn=build_odbc_connection_string(target), timeout=10, autocommit=True)
+    await register_datetimeoffset_converter(conn)
     try:
         async with conn.cursor() as cur:
             await cur.execute("SET LOCK_TIMEOUT 5000")

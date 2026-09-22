@@ -104,6 +104,54 @@ jobs:
       - name: Testler (canlı dahil)
         run: python -m pytest tests/ -q -rs
 
+  live-mssql:
+    name: Canlı SQL Server
+    # Faz 31 Commit 10c: bu iş olmadan "gerçek sunucuda ölçüldü" iddiaları HİÇ CI'da doğrulanmıyordu —
+    # SQL Server testleri yalnızca yerel geliştirme makinesinde koşuyordu. Orada ODBC Driver 18 sessizce
+    # kaybolmuştu (Windows Update ya da başka bir kurulum kaldırmış olmalı — commit geçmişinde kayıt yok)
+    # ve bu, aylarca bir Query Store hatasını (datetimeoffset, ODBC tip -155) gizlemişti: sürücü YOKKEN
+    # bağlantı IM002 ile patlıyor, sürücü kurulunca bu sefer pyodbc'nin çözemediği bir SQL tipiyle
+    # patlıyordu — ikisi de gerçek sunucu koşulmadan asla görülemezdi. Sürücü üretim imajıyla
+    # (deploy/onprem/Dockerfile.backend) AYNI paketten (`msodbcsql18`) kuruluyor. DSN tanımlıyken bir SQL
+    # Server testi ATLANIRSA oturum kırmızı (tests/conftest.py — live-postgres'teki denetimin aynısı);
+    # sürücü kurulum adımı başarısız olursa iş zaten o adımda kırmızı olur, testlere hiç sıra gelmez.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python 3.12 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-dev.txt
+
+      - name: ODBC Driver 18 kur (Microsoft'un resmi Ubuntu paketi — üretim imajıyla aynı sürücü)
+        run: |
+          curl -sSL -O https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb
+          sudo dpkg -i packages-microsoft-prod.deb
+          rm packages-microsoft-prod.deb
+          sudo apt-get update
+          ACCEPT_EULA=Y sudo apt-get install -y msodbcsql18 unixodbc-dev
+
+      - name: Bağımlılıkları kur
+        run: pip install -r requirements-dev.txt
+
+      - name: SQL Server konteynerlerini kur (standalone + Always On, scripts/live_mssql.py)
+        run: python scripts/live_mssql.py up
+
+      - name: DSN
+        run: python scripts/live_mssql.py env >> "$GITHUB_ENV"
+
+      - name: Testler (canlı dahil)
+        run: python -m pytest tests/ -q -rs
+
   onprem-package:
     name: On-prem paketi (internetsiz kurulum + yükseltme)
     # Faz 31 Commit 8. Bankaya giden paketin kendisi: sürüm arşivi üretiliyor, ağı KAPALI bir
