@@ -9093,3 +9093,59 @@ token_type, user}`). Eskiden yanıttaki `user` alanları doğrudan kökteydi (`r
 `response.user.username`. Eski jetonla devam eden HERHANGİ bir istemci zaten bu yüzden kırılıyordu (401) —
 bu şema değişikliği o hatayı düzeltiyor, yeni bir kırılma eklemiyor. Frontend (`auth.tsx`, `api.ts`) ve
 on-prem sürücüsü (`tests/onprem_driver.py`) güncellendi.
+
+## Faz 31 — Commit 10c takip 3: `live-postgres` CI işi SQL Server yokluğu yüzünden kırmızıydı
+
+**Semptom:** CI'nin `live-postgres` işinde `tests/conftest.py`nin canlı-test-atlama denetimi 5 testi
+yakalayıp oturumu kırmızı yapıyordu (hepsi `tests/test_sampling_cadence_live.py`, Commit 10a'dan).
+
+**Gerçek neden (koddan doğrulandı, tahmin edilmedi — CI'nin matris kolunu birebir yerelde yeniden üreterek):**
+`.github/workflows/ci.yml`'nin `live-postgres` işi PostgreSQL'i HER matris kolunda TEK sürümle kurar
+(`scripts/live_pg.py up --versions ${{ matrix.pg }}`) — yerel geliştirmede (3 sürüm + replikalar + SQL
+Server) `LIVE_DSNS` her zaman ≥3 öğeliyken, CI'da tam olarak **1** öğeli. Bunun iki AYRI, gerçek etkisi var:
+
+1. `test_one_slow_target_delays_only_itself_and_the_legacy_tick_shape_delays_everyone`: `targets[1:] * 3`
+   ("yavaş" hedef dışındaki "hızlı" havuz) `len(targets) == 1`'de BOŞ kalıyor → `min(fast_counts)` boş
+   listede `ValueError` ile ÇÖKÜYOR (atlama değil, gerçek bir çökme). Yerelde `DBACE_TEST_PG_DSN`'i TEK
+   DSN'e indirip birebir yeniden üretildi.
+2. `test_sqlserver_blocking_is_read_only_when_needed_and_a_real_conflict_becomes_an_episode`: dosyanın
+   modül-seviyeli `pytestmark`ı `skipif(not LIVE_DSNS, ...)` — bu SQL Server testi PostgreSQL'le HİÇ
+   ilgilenmiyor (yalnızca `MSSQL_TARGETS` kullanıyor) ama modülün PG'ye bağlı işaretine miras kalmışsa da
+   `live-postgres` işinde `LIVE_DSNS` DOLU olduğu için modül atlanmıyor, kendi içindeki
+   `pytest.skip("SQL Server hedefi tanımlı değil")`'e düşüyordu — bu metin `tests/conftest.py`nin kabul
+   ettiği TEK örüntüyle ("sürüm koşulu: sunucu X < Y") eşleşmediği için YASAK atlama sayılıyor. SQL
+   Server'ın CI'nin PostgreSQL işinde tanımlı olmaması PostgreSQL işinin sorumluluğunda değil.
+
+**Düzeltme:**
+1. `_watch_blocking`/`_register_row`/`_episodes`/`_pin_instances`/`clean_sampling_state` PostgreSQL ve SQL
+   Server canlı bloklama testleri arasında PAYLAŞILAN düzenek olarak yeni `tests/blocking_probe.py`'ye
+   çıkarıldı (+ ortak `assert_blocking_episode_was_recorded`).
+2. SQL Server bloklama testi kendi dosyasına taşındı: `tests/test_blocking_live_mssql.py`, `pytestmark`ı
+   YALNIZCA `MSSQL_TARGETS`'a bağlı (`"standalone" not in MSSQL_TARGETS`, diğer MSSQL canlı test
+   dosyalarıyla AYNI örüntü — gerekçe elle yazılmıyor, `tests/live_mssql.py::MSSQL_SKIP_REASON`'dan geliyor).
+3. `test_one_slow_target_...`: `targets[1:]` boşsa `targets`in kendisine (doğrudan, proxy'siz bağlantı)
+   düşülüyor — aynı iddiayı (proxy'li yavaş bağlantı, doğrudan hızlı bağlantıyı geciktirmiyor) tek gerçek
+   sunucuyla da kanıtlıyor.
+4. **İkincil bir sezgisel-izleme hatası da bulundu ve düzeltildi:** `test_sampling_cadence_live.py`
+   `MSSQL_TARGETS`'ı (yerel geliştirmede hedef havuzunu ZENGİNLEŞTİRMEK için, gerçek bağımlılık değil)
+   `from tests.live_mssql import MSSQL_TARGETS` ile modül seviyesinde bağlıyordu — `tests/conftest.py`nin
+   canlı-test izleme sezgiseli "bir modül, o an tanımlı bir canlı kaynağa AYNI NESNE KİMLİĞİYLE değiniyorsa
+   izlenen canlı test say" kuralını kullandığı için, bu SADECE MSSQL_TARGETS tanımlıyken (CI'nin YENİ
+   `live-mssql` işinde, PostgreSQL YOK) bu 4 PostgreSQL testini de "SQL Server'a bağlıymış" gibi
+   işaretleyip O İŞİ de kırmızı yapardı — yerelde MSSQL-yalnız ortam simüle edilerek doğrulandı. Düzeltme:
+   `from tests import live_mssql` + nitelikli erişim (`live_mssql.MSSQL_TARGETS`) — modül artık bu ismi
+   doğrudan BAĞLAMIYOR, sezgisel yanlış eşleşmiyor.
+
+**Doğrulama (üç ortam da yerelde gerçek sunucularla yeniden üretildi):**
+
+| Ortam (CI karşılığı) | Önce | Sonra |
+|---|---|---|
+| Yalnızca PostgreSQL, TEK DSN (`live-postgres`) | 1 çöküyor (`ValueError`) + 1 yasak atlama (SQL Server testi) → kırmızı | 4 passed, 1 skipped (SQL Server, izlenmiyor) → yeşil |
+| Yalnızca SQL Server (`live-mssql`, yeni iş) | 4 yasak atlama (bu testler MSSQL_TARGETS'a yanlışlıkla bağlıydı) → kırmızı | 1 passed, 4 skipped (PostgreSQL, izlenmiyor) → yeşil |
+| İkisi de (yerel geliştirme) | 5 passed | 5 passed (değişmedi) |
+
+**Test:** kod değişikliği testler ÜZERİNDE (test altyapısı) — ayrı bir "test edelim mi" sorusu yok, üç
+ortamın da üstteki tabloyla gerçek sunucularda doğrulanması kanıtın kendisi.
+
+**Tam paket (bir kez, `-rs`, yerel geliştirme ortamı — 3 PostgreSQL + replikalar + PgBouncer + SQL Server
+standalone/AG hepsi tanımlı):** 2414 passed, 4 skipped, 0 failed.
