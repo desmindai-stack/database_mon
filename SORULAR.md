@@ -2779,3 +2779,17 @@ ODBC tip -155) pyodbc 5.3.0'da (üretim imajının kurduğu ODBC Driver 18 ailes
 bağlantısında `Connection.add_output_converter(-155, ...)` çağrılıyor (pyodbc 5.3.0'da modül seviyesinde varsayılan
 dönüştürücü YOK, yalnızca bağlantı başına var). 5 üretim bağlantı noktasının hepsine eklendi. Offline test:
 `tests/test_engine_specific_options.py`. Gerçek SQL Server'da doğrulandı: `test_query_store_live_mssql.py` artık geçiyor.
+
+**Aynı sınıftan (CI diski/ağı yerelden yavaş) iki HENÜZ DOĞRULANMAMIŞ risk taranıp bulundu — Faz 31 Commit 10c
+takip 4'te #53'ü kıran koşulla birebir aynı desen (ölçülen süreye karşı SABİT, tek ortamda (yerel) kalibre
+edilmiş bir eşik), ama bu ikisi şu an CI'da KIRDIĞI GÖZLENMEDİ; koddan taranarak bulundu, düzeltilmedi:**
+- `tests/test_migration_scale_live_postgres.py::test_concurrent_index_build_does_not_block_writers_but_a_plain_build_does`
+  — `assert conc_latency < conc_build * 0.3 and conc_latency < 1.0` — `conc_build * 0.3` kısmı ORANSAL (güvenli),
+  ama `< 1.0` MUTLAK bir tavan; AYNI 420 bin satırlık, aynı yavaş-CI-diski riskine açık veri seti üzerinde.
+- `tests/test_plan_source_live_postgres.py::test_statement_timeout_cancels_a_long_analyze` — `elapsed < 5`,
+  yapılandırılan zaman aşımı 0,7 sn (7× pay var, migration testindeki 1,6×'tan daha güvenli ama yine de mutlak).
+
+İkisi de "CI ortamı yerelden yavaş" sınıfından — talep gelirse ya da CI'da kırmızı görülürse aynı yöntemle
+(gerçek CI ölçümüyle payı doğrulayıp gerekirse eşiği ORANSAL bir şeye bağlamak) ele alınmalı. Şimdilik
+dokunulmadı: gerçek bir kırılma kanıtı yok, spekülatif değişiklik riski (özellikle CONCURRENTLY/kilit
+davranışını sınayan testlerde) faydasından fazla olurdu.

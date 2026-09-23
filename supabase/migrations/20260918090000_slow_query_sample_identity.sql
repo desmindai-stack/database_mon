@@ -27,7 +27,7 @@
 ALTER TABLE slow_query_samples ADD COLUMN IF NOT EXISTS query_hash VARCHAR(40);
 ALTER TABLE slow_query_samples ADD COLUMN IF NOT EXISTS query_class TEXT;
 
--- dbace:chunked slow_query_samples 20000
+-- dbace:chunked slow_query_samples 8000
 UPDATE slow_query_samples
    SET query_hash = 'q:' || substr(encode(sha256(convert_to(
            lower(regexp_replace(btrim(query, E' \t\n\r\f\v'), E'[ \t\n\r\f\v]+', ' ', 'g')), 'UTF8')), 'hex'), 1, 24)

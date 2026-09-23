@@ -107,10 +107,14 @@ async def test_behind_a_real_pooler_the_cache_switches_itself_off_and_sampling_c
     from app.services import wait_sampling
     from app.services.credentials import encrypt_secret
 
-    assert POOLER_DSN, "DBACE_TEST_PG_POOLER_DSN tanımlı değil — `python scripts/live_pg.py up` yazdırır"
-    pg16 = [d for d in LIVE_DSNS if ":55434/" in d]
-    assert pg16, "PgBouncer'ın arkasındaki PostgreSQL 16 birincili (55434) DBACE_TEST_PG_DSN'de yok"
-    await prepare_restricted_database(pg16[0])  # rol ve veritabanı (PgBouncer bu role bağlanır)
+    # `assert` DEĞİL `pytest.skip`: LIVE_DSNS tanımlıyken POOLER_DSN'in de tanımlı olması artık NORMALDE
+    # HER ZAMAN doğru (Faz 31 Commit 10c takip 4 — `scripts/live_pg.py up`, PgBouncer'ı LIVE_DSNS'nin İLK
+    # sürümünün önünde HER ZAMAN kuruyor, yalnızca PostgreSQL 16'da değil — CI'nin `live-postgres` matrisi
+    # her kolu TEK sürümle kurduğu için eskiden 15/17 kollarında pooler hiç kurulmuyordu). Bu satır yalnızca
+    # `live_pg.py up` KULLANILMADAN elle bir DSN verildiği (pooler'sız) nadir durum için savunma.
+    if not POOLER_DSN:
+        pytest.skip("DBACE_TEST_PG_POOLER_DSN tanımlı değil — `python scripts/live_pg.py up` yazdırır")
+    await prepare_restricted_database(LIVE_DSNS[0])  # rol ve veritabanı — PgBouncer LIVE_DSNS[0]'ın arkasında
     await init_db()
     url = urlparse(POOLER_DSN)
 

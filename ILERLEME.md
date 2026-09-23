@@ -9149,3 +9149,89 @@ ortamın da üstteki tabloyla gerçek sunucularda doğrulanması kanıtın kendi
 
 **Tam paket (bir kez, `-rs`, yerel geliştirme ortamı — 3 PostgreSQL + replikalar + PgBouncer + SQL Server
 standalone/AG hepsi tanımlı):** 2414 passed, 4 skipped, 0 failed.
+
+## Faz 31 — Commit 10c takip 4: `live-postgres` CI işi iki AYRI nedenden kırmızıydı (parça payı, PgBouncer)
+
+**Semptom (CI, atlama denetimi bu sefer TEMİZ — iki testin kendisi kırmızı):**
+1. `test_migration_scale_live_postgres.py`: parça başına 4 sn eşiği CI'da aşıldı (en uzun parça 5,0 sn;
+   yerelde 0,77–0,96 sn). Toplam yükseltme 73,3 sn, #53 tek başına 49,7 sn. 8 sn'lik Supabase
+   `statement_timeout`'una pay yalnızca ~1,6×.
+2. `test_sampling_statement_cache_live.py`: `DBACE_TEST_PG_POOLER_DSN` CI'da tanımlı değildi, test
+   `assert` ile (skip değil) düşüyordu.
+
+### 1) Parça payı — GERÇEK CI oranıyla (5,0/0,77 ≈ 6,5×) yeniden ölçülerek düzeltildi
+
+#53'ün parça boyu 20.000 → **8.000** satıra indirildi (yerelde ölçülerek: 20.000'de 0,96 sn, 10.000'de
+0,45 sn, 8.000'de 0,37 sn — maliyet satır sayısıyla DOĞRUSAL, sabit ek yük baskın değil). 6,5× CI oranı
+uygulanınca: CI'da beklenen en uzun parça ≈ 0,37 × 6,5 ≈ 2,4 sn → **8 sn sınırına ≈3,3× pay** (istenen
+"en az 3×" karşılandı). Eşik (`< 4.0`) YÜKSELTİLMEDİ — kullanıcının açık isteğiyle aynen kaldı, artık
+rahatça altında.
+
+**#48'in `captured_plans` parçaları (40 parça, 500 satır) gözden geçirildi:** ayrı ölçüldü — ortalama
+0,057 sn, en uzun 0,082 sn (yerelde; #53'ün ONDA BİRİNDEN az). 6,5× CI oranıyla bile ≈0,53 sn — 8 sn
+sınırına ≈15× pay. **Değiştirilmedi, güvenli.**
+
+**Parça boyu elle sabit mi, ölçülen süreye göre mi belirlenmeli — değerlendirme (kullanıcı sorusu):**
+Tam ADAPTİF (her parçadan sonra ölçülen hıza göre bir sonraki parçanın genişliğini ayarlayan) bir tasarım
+DEĞERLENDİRİLDİ ama UYGULANMADI. Lehine: farklı maliyet profilindeki tablolar (ör. #53'ün sha256/regex'i
+vs #48'in daha ucuz UPDATE'leri) için ayrı ayrı elle ayarlama gerektirmez, ortam hızından (yerel/CI/gerçek
+Supabase) bağımsız kendiliğinden kalibre olur — bu projenin tekrar eden "elle sabit liste/sayı sessizce
+ayrıştı" hata sınıfını (bkz. `services/deletion.py`, `PredictionOut.advice`, `ReportFindingOut.facts`
+yorumları) kökten çözer. Aleyhine: bu KORUNAN, üretim verisine dokunan bir yol — parça genişliğinin
+çalışma sırasında değişmesi `app/migrations_runner.py::_run_chunked`in basit "sabit boyutlu aralık"
+modelini karmaşıklaştırır, idempotency/devam ettirme mantığının (`WHERE id >= $1 AND id < $2 AND
+query_hash IS NULL`) her adaptif adımda hâlâ doğru olduğunu yeniden kanıtlamak gerekir ve bir sınır-hesabı
+hatası SESSİZCE satır atlayabilir — "kayıp satır 0" bu kod tabanının EN kritik değişmezi. Karar: şimdilik
+SABİT ama GERÇEK ÖLÇÜMLE (CI oranı dahil) kalibre edilmiş değer — daha düşük risk, aynı sorunu şimdilik
+çözüyor. Adaptif tasarım SORULAR.md'ye AÇIK İŞ olarak yazılmadı çünkü şu an gerekçesi yok (ölçülen pay
+yeterli); tekrar aynı sınıf hata görülürse yeniden değerlendirilmeli.
+
+**Test:** `test_the_identity_backfill_runs_as_20k_chunks_over_400k_rows` →
+`test_the_identity_backfill_runs_in_the_chunk_size_the_migration_file_declares` — beklenen parça SAYISI
+artık `app.migration_sql.split_statements`le dosyanın KENDİSİNDEN türüyor, elle `20_000` yazılmıyor (bu
+sabitin ikinci bir yerde tekrarlanmasının kendisi az önce düzeltilen sınıftan bir hataydı).
+
+### 2) PgBouncer artık CI'nin HER matris kolunda kuruluyor (yalnızca 16'da değil)
+
+**Gerçek neden:** `scripts/live_pg.py::up_pooler()` SABİT `PostgreSQL 16`ya bağlıydı; CI'nin `live-postgres`
+matrisi HER kolu TEK sürümle kurduğu için (`up --versions <sürüm>`) 15/17 kollarında 16 hiç VAR OLMUYORDU
+— pooler hiç kurulmuyor, `DBACE_TEST_PG_POOLER_DSN` hiç yazılmıyordu (yalnızca 16 kolunda teorik olarak
+kurulması gerekirdi; gerçek CI'da neden o kolda da başarısız olduğu doğrulanamadı — bu makineden erişim
+yok). Canlıda gerçekten devrede olan bir yol (Supabase'in Supavisor'ı) test edilmediği için "kaldırılamaz",
+kullanıcının istediği gibi ÖNCE gerçekten kurmak denendi.
+
+**Düzeltme:** `up_pooler()` artık `version: int` parametresi alıyor; `main()` onu HER ZAMAN
+`args.versions[0]`in (o çalıştırmada kurulan sürümlerin İLKİ) önünde kuruyor — koşullu `if POOLER_VERSION
+in args.versions` kaldırıldı. Yerelde (`up`, varsayılan 3 sürüm) artık pooler 15'in önünde (önceden 16'nın
+önündeydi — davranışsal fark yok, PgBouncer protokolü test ediliyor, sürüm önemli değil). CI'nin HER
+kolunda (15/16/17) artık kendi tek sürümünün önünde kuruluyor.
+
+`test_sampling_statement_cache_live.py`de İKİNCİ, bağımsız bir sabit vardı: `[d for d in LIVE_DSNS if
+":55434/" in d]` — PgBouncer'ın arkasındaki sunucuyu PORT NUMARASINDAN (16'nın sabit yerel portu) buluyordu.
+`up_pooler` artık her zaman `LIVE_DSNS[0]`ın önünde olduğu için bu ayrıştırma tamamen kaldırıldı,
+doğrudan `LIVE_DSNS[0]` kullanılıyor — port numarasına bağlı ikinci bir "gerçek nedenin koddan
+ayrışması" noktası ortadan kalktı. `assert POOLER_DSN, ...` da `pytest.skip`e çevrildi (kullanıcının
+"kurulamıyorsa doğru gerekçeli atlama olsun" isteği) — ama düzeltmeden sonra LIVE_DSNS tanımlıyken
+POOLER_DSN'in de tanımlı olması NORMALDE HER ZAMAN doğru, bu satır yalnızca `live_pg.py up`
+KULLANILMADAN elle DSN verildiği nadir durum için savunma; CI'da hiç tetiklenmemesi bekleniyor.
+
+**Doğrulama (yerelde, GERÇEK CI kolu şekliyle — tek DSN, MSSQL yok, PostgreSQL 17):** `dbace-pgbouncer`
+`dbace-pg17`nin önünde kuruldu, `DBACE_TEST_PG_POOLER_DSN` doğru yazıldı;
+`test_sampling_statement_cache_live.py` + `test_migration_scale_live_postgres.py` +
+`test_sampling_cadence_live.py` + `test_blocking_live_mssql.py` bu ortamda **16 passed, 1 skipped**
+(SQL Server testi doğru şekilde, izlenmeden atlandı).
+
+### 3) Aynı sınıftan (CI yavaşlığı) başka kırılgan test taraması
+
+Koddan tarandı (`assert ... < N` / `<= N` biçiminde MUTLAK saniye eşiği olan canlı testler). İKİ aday
+bulundu, HENÜZ KIRDIĞI GÖZLENMEDİ, dokunulmadı — SORULAR.md'ye yazıldı:
+`test_migration_scale_live_postgres.py::test_concurrent_index_build_does_not_block_writers_but_a_plain_build_does`
+(`conc_latency < 1.0`, AYNI 420 bin satırlık veri setinde) ve
+`test_plan_source_live_postgres.py::test_statement_timeout_cancels_a_long_analyze` (`elapsed < 5`, 0,7 sn
+yapılandırılan zaman aşımına göre 7× pay — daha güvenli ama yine mutlak). Diğer "süreye bağlı" görünen
+testler (`test_sampling_cadence_live.py`'nin `seconds * 0.9` gibi ORANSAL toleransları, kilit zaman
+aşımı testlerinin KENDİ yapılandırma sabitine göre göreceli assert'leri) zaten kendi ortamına göre
+ölçeklendiği ya da CI yavaşlığının assert'i KOLAYLAŞTIRDIĞI (alt sınır testleri) yönde — bu sınıfta değil.
+
+**Tam paket (bir kez, `-rs`, yerel geliştirme ortamı — 3 PostgreSQL + replikalar + PgBouncer + SQL Server
+standalone/AG hepsi tanımlı):** 2414 passed, 4 skipped, 0 failed.

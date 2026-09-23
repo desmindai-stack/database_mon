@@ -111,7 +111,7 @@ migration'lar" ve "Uzun süren migration'lar ve bakım penceresi" bölümlerine 
 | 50 | `20260917090000_instance_observation_status.sql` | **YENİ** — instances: izleme rolü paylaşımı (monitoring_role_checked_at/shared_at/shared_apps) ve plan yakalama durumu (auto_explain_loaded, plan_capture_checked_at/error/found). CONCURRENTLY YOK |
 | 51 | `20260917090100_index_advice_outcomes.sql` | **YENİ** — index_advice_outcomes: index önerisinin ölçülmüş etkisi (index kurulmadan önce ve sonra aynı sorgunun planlayıcı maliyeti). CONCURRENTLY YOK |
 | 52 | `20260917090200_instance_topology.sql` | **YENİ** — instances: ölçülen topoloji (tek sunucu / cluster sağlıklı-bozuk / ölçülemedi, rol, üyeler, gerekçe, gereken yetki, son cluster gözlemi). CONCURRENTLY YOK |
-| 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor. **İLK SÜRÜMÜ Supabase'de zaman aşımına uğrayıp tümüyle geri alındı** (tek UPDATE + düz CREATE INDEX); **Commit 10b: 20 bin kimlik aralığı başına ayrı işlemde backfill + index CONCURRENTLY** — ⚠️ **psql gerekir** (ya da migration çalıştırıcısı): işlem DIŞINDA çalışır ("Uzun süren migration'lar"). Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor |
+| 53 | `20260918090000_slow_query_sample_identity.sql` | **YENİ** — slow_query_samples: sorgu metninin parmak izi (query_hash) ve sistem sorgusu sınıfı (query_class). Yavaş sorgu seçimi artık gruplama/fark/sayımı METİNSİZ, SQL'de yapıyor (egress). Migration var olan satırların parmak izini SQL'de hesaplıyor. **İLK SÜRÜMÜ Supabase'de zaman aşımına uğrayıp tümüyle geri alındı** (tek UPDATE + düz CREATE INDEX); **Commit 10b: 20 bin (Commit 10c takip 4'te GERÇEK CI diski ölçülünce 8 bine indirildi — bkz. aşağı) kimlik aralığı başına ayrı işlemde backfill + index CONCURRENTLY** — ⚠️ **psql gerekir** (ya da migration çalıştırıcısı): işlem DIŞINDA çalışır ("Uzun süren migration'lar"). Sınıfı uygulama açılışta metin başına bir kez, toplu UPDATE ile dolduruyor |
 | 54 | `20260918090100_user_password_changed_at.sql` | **YENİ** — users: şifrenin en son değiştiği an. Şifre değişince (ve yönetici sıfırlamasında) o andan ÖNCE üretilmiş access/refresh jetonları reddediliyor; eskiden access 60 dk, refresh 7 gün daha geçerliydi. CONCURRENTLY YOK |
 | 55 | `20260920090000_active_session_max_gap.sql` | **YENİ** — active_session_minutes: dakika başına ÖLÇÜLEN en uzun örnekleme boşluğu (max_gap_ms, NULL = ölçülmedi). Veritabanı yükü ekranı bu değerden "örnekleme aralığı tutturulamadı" uyarısını üretiyor. Nullable kolon ekler, tabloyu yeniden yazmaz; CONCURRENTLY YOK |
 | 56 | `20260921090000_wait_stats_baselines.sql` | **YENİ** — wait_stats_baselines: SQL Server bekleme istatistiği (dm_os_wait_stats) kümülatif sayaç TABANI paylaşılan yerde (instance başına tek satır, en çok dakikada bir güncellenir). dbace yeniden başlayınca / çok süreçli çalışmada fark artık kaybolmuyor. Yeni tablo; CONCURRENTLY YOK |
@@ -496,12 +496,13 @@ Bu komut on-prem paketin uygulayıcısıyla AYNI koddur.
 ### Elle (çalıştırıcı olmadan): psql
 
 Çalıştırıcı kullanılamıyorsa: index'ler aşağıdaki gibi `psql -c` ile; parçalı backfill için tablonun kimlik aralığı elle
-20 bin adımla taranır (her `psql -c` kendi işlemidir):
+8 bin adımla taranır (her `psql -c` kendi işlemidir — boy dosyadaki `-- dbace:chunked` işaretiyle AYNI olmalı, Commit
+10c takip 4'te 20 binden 8 bine indirildi):
 
 ```bash
 read MIN MAX < <(psql "$DBACE_DB" -Atc "SELECT min(id), max(id) FROM slow_query_samples" | tr '|' ' ')
-for lo in $(seq "$MIN" 20000 "$MAX"); do
-  psql "$DBACE_DB" -c "UPDATE slow_query_samples SET query_hash = 'q:' || substr(encode(sha256(convert_to(lower(regexp_replace(btrim(query, E' \t\n\r\f\v'), E'[ \t\n\r\f\v]+', ' ', 'g')), 'UTF8')), 'hex'), 1, 24) WHERE id >= $lo AND id < $((lo + 20000)) AND query_hash IS NULL;"
+for lo in $(seq "$MIN" 8000 "$MAX"); do
+  psql "$DBACE_DB" -c "UPDATE slow_query_samples SET query_hash = 'q:' || substr(encode(sha256(convert_to(lower(regexp_replace(btrim(query, E' \t\n\r\f\v'), E'[ \t\n\r\f\v]+', ' ', 'g')), 'UTF8')), 'hex'), 1, 24) WHERE id >= $lo AND id < $((lo + 8000)) AND query_hash IS NULL;"
 done
 ```
 
@@ -584,8 +585,12 @@ dosyalardan HESAPLANAN "uzun sürebilen" kümeyle karşılaştırılır: buraya 
 
 Süreler **420 bin satırlık** tablolarla (canlı `slow_query_samples` 393 bin) gerçek PostgreSQL 15'te, `statement_timeout = 8s`
 ile (Supabase'in varsayılan ifade sınırı) ölçüldü (`tests/test_migration_scale_live_postgres.py`). Süre satır sayısıyla
-DOĞRUSAL büyür; yönetilen veritabanının diski yerelden yavaş olabilir — 3–5 katını varsayın (parça başına 0,8 sn → ~4 sn: hâlâ
-sınırın altında). Hiçbiri tabloyu yazmaya kapatmaz; ek yük WAL/disk (güncellenen satırlar, otovakum temizler) ve CPU'dur.
+DOĞRUSAL büyür. **Commit 10c takip 4'te "3–5 kat" varsayımı GERÇEK GitHub Actions CI'ında ölçüldü ve YETERSİZ çıktı:**
+gözlenen oran **~6,5×** (yerelde parça başına 0,77–0,96 sn iken CI'da 5,0 sn — o zamanki 20 bin'lik parça boyuyla 8 sn
+sınırına yalnızca ~1,6× pay bırakıyordu, GitHub Actions'ın diski beklenenden yavaş). Parça boyu 20 binden **8 bine**
+indirildi: yerelde ölçülen en uzun parça 0,37 sn, 6,5× ile CI'da ~2,4 sn — 8 sn sınırına **~3,3× pay**. Aşağıdaki
+sürelerde #53 GÜNCEL (8 bin) parça boyuyla; yönetilen veritabanının diskini hâlâ en az **6,5×** yerelden yavaş
+varsayın. Hiçbiri tabloyu yazmaya kapatmaz; ek yük WAL/disk (güncellenen satırlar, otovakum temizler) ve CPU'dur.
 
 | Migration | Büyük tablo | Ölçülen süre (420 bin satır) | Yöntem | Bakım penceresi |
 |---|---|---|---|---|
@@ -593,7 +598,7 @@ sınırın altında). Hiçbiri tabloyu yazmaya kapatmaz; ek yük WAL/disk (günc
 | `20260825130000_node_credentials_and_group_alerts.sql` | alert_events | 0,1 sn | FK NOT VALID + VALIDATE + CONCURRENTLY | bakım penceresi gerekmez |
 | `20260909090000_hot_table_composite_indexes.sql` | metric_samples, slow_query_samples | 0,3 sn | CONCURRENTLY | bakım penceresi gerekmez |
 | `20260916090800_real_value_cleanup.sql` | captured_plans, slow_query_samples, wait_query_signatures | 4,2 sn (60 bin imza + 20 bin plan) | parçalı (5 bin / 500 / 50 bin) | bakım penceresi gerekmez; plan başına özyinelemeli işlev CPU harcar, yoğun olmayan saat önerilir |
-| `20260918090000_slow_query_sample_identity.sql` | slow_query_samples | 16,6 sn (21 parça × ~0,8 sn; eski tek UPDATE 16,2 sn ve 8 sn sınırında zaman aşımı) | parçalı + CONCURRENTLY | bakım penceresi gerekmez; yoğun olmayan saat önerilir |
+| `20260918090000_slow_query_sample_identity.sql` | slow_query_samples | ~17,5 sn (53 parça × ~0,33 sn, 8 bin'lik parça boyuyla; eski tek UPDATE 16,2 sn ve 8 sn sınırında zaman aşımı) | parçalı + CONCURRENTLY | bakım penceresi gerekmez; yoğun olmayan saat önerilir |
 
 Bu dosyaların HEPSİ işlem DIŞINDA çalışır: SQL Editor ve `supabase db push` kullanılamaz — yukarıdaki "En kolay yol: migration
 çalıştırıcısı". Dosya başarısız olursa kayda geçmez; aynı komutu tekrar çalıştırmak güvenlidir. Uygulamadan sonra kontrol:

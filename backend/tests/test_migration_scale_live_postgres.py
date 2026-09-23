@@ -238,7 +238,17 @@ async def test_all_migrations_finish_within_the_managed_statement_timeout_on_400
     assert slowest_statement.seconds < 8.0
 
 
-async def test_the_identity_backfill_runs_as_20k_chunks_over_400k_rows():
+async def test_the_identity_backfill_runs_in_the_chunk_size_the_migration_file_declares():
+    """Beklenen parça SAYISI dosyadaki `-- dbace:chunked` işaretinden TÜRÜYOR — elle bir sayı (`20_000`) YAZILMIYOR.
+
+    Bu sabit sayı daha önce testin İÇİNDE tekrarlanıyordu: dosyadaki parça boyu CI'da yetersiz payla ölçülüp
+    düşürüldüğünde (Faz 31 Commit 10c takip 4 — GitHub Actions'ta en uzun parça 5,0 sn, 8 sn sınırına 1,6× pay,
+    istenen ≥3×) bu testin kendisi de elle güncellenmesi gereken, sessizce ayrışabilecek İKİNCİ bir yer olurdu.
+    """
+    from app.migration_sql import split_statements
+
+    chunk_size = next(st.chunk[1] for st in split_statements(Path(MIGRATIONS, IDENTITY).read_text(encoding="utf-8"))
+                      if st.chunked and st.chunk[0] == "slow_query_samples")
     run = await _upgraded()
     chunks = _chunks(run["stats"], IDENTITY)
     conn = await _connect(UPGRADED)
@@ -246,9 +256,9 @@ async def test_the_identity_backfill_runs_as_20k_chunks_over_400k_rows():
         lo, hi = await conn.fetchval("SELECT min(id) FROM slow_query_samples"), await conn.fetchval("SELECT max(id) FROM slow_query_samples")
     finally:
         await conn.close()
-    assert len(chunks) == (hi - lo) // 20_000 + 1 and len(chunks) >= 20
+    assert len(chunks) == (hi - lo) // chunk_size + 1 and len(chunks) >= 20
     assert sum(c.rows for c in chunks) >= ROWS, "her satır güncellenmeli"
-    log("#53 parçaları", (len(chunks), [round(c.seconds, 2) for c in chunks]))
+    log("#53 parçaları (dosyadaki boy: %d)" % chunk_size, (len(chunks), [round(c.seconds, 2) for c in chunks]))
 
 
 # --- 2. Sonuç doğru ------------------------------------------------------------------------------
