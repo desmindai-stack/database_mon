@@ -3,3 +3,9 @@
 -r requirements.txt
 pytest>=8.0.0
 pytest-asyncio>=0.24.0
+# `tests/test_onprem_package_drift.py` imports this directly. Currently ALSO pulled in transitively via
+# `uvicorn[standard]`'s "standard" extra (verified: uvicorn's own metadata lists `pyyaml>=5.1; extra ==
+# 'standard'') — but that coupling is accidental/non-obvious to a reader (Faz 31 Commit 10e audit, same
+# bug class as the greenlet regression this commit fixed). Pinned explicitly so it can't silently vanish
+# if `uvicorn[standard]` is ever changed to plain `uvicorn` for an unrelated reason.
+pyyaml>=6.0

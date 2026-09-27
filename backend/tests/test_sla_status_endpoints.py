@@ -7,6 +7,8 @@ gerçekten çağırıp JSON'a çeviren yol) hiç çağrılmamıştı.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.auth_helper import authed_client
 
 
@@ -27,8 +29,15 @@ async def test_sla_status_lists_evaluated_targets_and_single_status_matches_the_
 
         single = await client.get(f"/api/sla/status/{target_id}")
         assert single.status_code == 200, single.text
-        # Aynı hesaplama yolu: liste ve tekil uç FARKLI sonuç vermemeli (tek gerçeklik kaynağı).
-        assert single.json() == match
+        # Aynı hesaplama yolu: liste ve tekil uç FARKLI sonuç vermemeli (tek gerçeklik kaynağı). İki AYRI
+        # HTTP isteği arasında geçen gerçek zaman `elapsed_seconds`/`remaining_seconds`i (now() tabanlı)
+        # birkaç ondalıkla kaydırabiliyor — bu iki alan ayrı, GEVŞEK (yakınlık) karşılaştırılıyor; testin
+        # ARADIĞI şey saniyenin onda biri değil, iki yolun AYNI HEDEFİ hesapladığı.
+        drifting = {"elapsed_seconds", "remaining_seconds"}
+        assert {k: v for k, v in single.json().items() if k not in drifting} == \
+               {k: v for k, v in match.items() if k not in drifting}
+        for key in drifting:
+            assert single.json()[key] == pytest.approx(match[key], abs=1.0)
 
         duplicate = await client.post("/api/sla/targets", json={"scope_type": "customer", "scope_id": 123456,
                                                                  "target_pct": 95.0, "period": "monthly"})

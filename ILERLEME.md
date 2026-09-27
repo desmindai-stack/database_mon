@@ -9583,3 +9583,90 @@ ama API UCUNUN kendisi hiç çağrılmamış), `/api/admin/analysis-settings` GE
 **Tam paket (bir kez, `-rs`, yerel geliştirme ortamı — PostgreSQL 15/16/17/18 + replikalar + PgBouncer + SQL
 Server standalone/AG hepsi tanımlı):** 2521 passed, 4 skipped, 9 xfailed (PG18'in bilinen `/* dbace */` imza
 regresyonu, SORULAR.md), 0 beklenmeyen hata.
+
+## Faz 31 — Commit 10e: CI tamamen kırmızı — `greenlet` eksik, ama neden 10d DEĞİL
+
+**Semptom:** CI'daki HER iş (backend, live-postgres 15/16/17, live-mssql, tip üretimi, e2e) aynı hatayla
+düştü: `ModuleNotFoundError: No module named 'greenlet'` (`sqlalchemy.ext.asyncio` import anında).
+
+### 1) Kök neden — koddan kanıtlandı, tahmin edilmedi
+
+**Hipotez ("10d'nin sürüm sabitlemesi bozdu") YANLIŞ çıktı.** `git show da32aed -- backend/requirements.txt`
+diff'i `sqlalchemy>=2.0.36` satırına HİÇ dokunmuyor (yalnızca aioodbc/pyodbc eklendi). Kanıt: PRE-10d
+requirements.txt'i (`git show f4692bb:backend/requirements.txt`) GERÇEK bir temiz venv'de kurup denedim —
+**AYNI hatayla çöktü.** Bu, hatanın 10d'den ÇOK ÖNCE var olduğunu kanıtlıyor.
+
+**Gerçek neden:** `sqlalchemy>=2.0.36` üst sınırsız. SQLAlchemy'nin asyncio köprüsü (`sqlalchemy.ext.asyncio`)
+`greenlet`i ZORUNLU kullanıyor ama SQLAlchemy 2.1'de bu bağımlılık yalnızca `[asyncio]` ekstrası istenirse
+pip'e bildiriliyor (2.0.x'te çekirdek/koşulsuz bağımlıydı). Bu makinenin geliştirme venv'i SQLAlchemy 2.0.52'yi
+(greenlet'i hâlâ koşulsuz getiren sürüm) ÇOK ÖNCE kurmuştu; üst sınır olmadığı için pip bir daha YENİDEN
+ÇÖZMEDİ — yerelde "çalıştı" ama TESADÜFEN. CI/Railway/on-prem her defasında SIFIRDAN çözüyor: bir noktada
+PyPI'da SQLAlchemy 2.1 yayımlandı ve o andan sonra her fresh `pip install` sessizce 2.1'e atladı, greenlet'i
+kaybetti — **dbace'in hiçbir commit'i olmadan da patlardı.** Doğrulama: temiz venv'de `sqlalchemy>=2.0.36`
+kurulunca SQLAlchemy **2.1.1** geliyor (greenlet'siz); yerel venv'de kurulu olan **2.0.52** (greenlet'i
+zaten taşıyan) — sürüm farkı bu.
+
+### 2) Düzeltme
+
+`requirements.txt`: `sqlalchemy>=2.0.36` → `sqlalchemy[asyncio]==2.0.52` + açık `greenlet==3.5.5` satırı.
+Sürüm bilinçli olarak bu oturumda GERÇEKTEN sınanmış (2.0.52) olana sabitlendi — 2.1'e geçmek Faz 31'in
+TÜM canlı sunucu testlerini yeni, doğrulanmamış bir sürüme karşı yeniden açardı; kapsam dışı bırakıldı.
+
+### 3) On-prem/Railway etkisi — GERÇEKTEN koşulup gösterildi
+
+**Railway da etkileniyordu, yalnızca on-prem değil:** `deploy/onprem/.gitignore` `vendor/wheels` ve
+`vendor/requirements.lock`u DIŞLIYOR — git deposunda (Railway'in klonladığı) `vendor/` HER ZAMAN boş.
+Dockerfile.backend'in `else` dalı (`pip install -r requirements.txt`) hem Railway'de hem vendor'suz bir
+on-prem derlemesinde çalışıyor — TAM OLARAK bozuk yol. Kanıt: `deploy/onprem/Dockerfile.backend`'i BOŞ
+vendor'la (gerçek `docker build`, internetten) derleyip GERÇEKTEN çalıştırdım — konteyner ayağa kalktı,
+`/api/health` `{"status":"ok",...}` döndü (önceki hâliyle bu adım `ModuleNotFoundError`la çökerdi).
+
+`prepare-offline-artifacts.sh`'ın Python wheel/lock adımı da (gerçek `python:3.12-slim-bookworm`
+konteynerinde, internetten) ayrıca çalıştırıldı: `SQLAlchemy==2.0.52`, `greenlet==3.5.5` doğru çözüldü,
+import denetimi geçti — düzeltmeden ÖNCE bu makinedeki (gitignored, eski) `vendor/requirements.lock`
+`SQLAlchemy==2.0.54`/`greenlet==3.5.6` taşıyordu (SQLAlchemy 2.1 PyPI'ya çıkmadan ÖNCE üretilmiş bir
+anlık görüntü) — yani mevcut paket bugüne kadar TESADÜFEN sağlamdı, yarın yeniden üretilseydi o da kırılırdı.
+
+### 4) Yerelde neden yakalanmadı — kurulu ama sabit listede olmayan başka paket taraması
+
+`pip freeze` (51 paket) ↔ `requirements.txt`/`requirements-dev.txt` karşılaştırıldı, her fazlalık paketin
+GERÇEKTEN neyin bağımlılığı olduğu `pip show`/paket metadata'sıyla doğrulandı:
+
+- **`greenlet`** — yukarıda, düzeltildi.
+- **`pyyaml`** — `tests/test_onprem_package_drift.py` DOĞRUDAN `import yaml` ediyor ama `pyyaml` hiçbir
+  yerde listeli değildi. `pip show` "Required-by" boş gösteriyordu (yanıltıcı — bu pip sürümü ekstra
+  bağımlılıkları göstermiyor); gerçek kaynak bulundu: `uvicorn[standard]`'ın kendi paket metadata'sı
+  `pyyaml>=5.1; extra == 'standard'` taşıyor, `requirements.txt`'teki `uvicorn[standard]>=0.32.0` bunu
+  GÜVENİLİR şekilde getiriyor — şu an GERÇEKTEN bozuk değil ama greenlet'le AYNI sınıftan tesadüfi bir
+  bağlantı (biri `uvicorn[standard]`ı düz `uvicorn` yaparsa sessizce kaybolur). Savunma amaçlı
+  `requirements-dev.txt`'e açıkça eklendi.
+- **`pillow`** — `reportlab`'ın KENDİ (koşulsuz, ekstra gerektirmeyen) bağımlılığı — güvenli, dokunulmadı.
+- Kalan fazlalıklar (`annotated-doc`, `anyio`, `certifi`, `click`, `h11`, `httpcore`, `idna`, `pycparser`,
+  `pydantic_core`, `Pygments`, `starlette`, `typing-inspection`, vb.) tek tek `pip show`la zaten listeli
+  paketlerin (fastapi/httpx/pytest/cryptography/pydantic) koşulsuz bağımlılıkları olarak doğrulandı —
+  aynı risk sınıfında DEĞİL.
+
+### 5) Koruma — negatif kontrollü, iki katman
+
+`backend/tests/test_dependency_pins.py` (yeni): (a) HIZLI, statik metin denetimi —
+`sqlalchemy[asyncio]==` VE `greenlet==` satırlarının varlığını saniyeler içinde doğruluyor, biri
+kaldırılırsa negatif kontrol yakalıyor; her zaman açık. (b) GERÇEK, izole bir venv'de `pip install` +
+`sqlalchemy.ext.asyncio` import'u deneyen iki test — biri düzeltilmiş metnin ÇALIŞTIĞINI, diğeri (negatif
+kontrol) `[asyncio]`/`greenlet` satırları ELLE geri alınmış metnin GERÇEKTEN `ModuleNotFoundError: ...
+greenlet` ile çöktüğünü kanıtlıyor (`DBACE_TEST_CLEAN_INSTALL=1`, varsayılan KAPALI — yavaş/ağ ister).
+CI'ya yeni, `backend` işinden BAĞIMSIZ ve paralel `dependency-pins` işi eklendi: HER push/PR'da bu ikisini
+gerçek bir Ubuntu runner'da, gerçek bir izole venv'de koşuyor — `backend` işinin kendi (pip cache'li) venv'i
+her zaman aynı netlikte kanıtlamayabileceği için bilinçli olarak AYRI tutuldu.
+
+**Test:** `tests/test_dependency_pins.py` (4 test — 2 hızlı her zaman açık, 2 yavaş `DBACE_TEST_CLEAN_INSTALL=1`
+ile; hepsi gerçek çalıştırmada geçti, ikisi gerçek temiz venv'de).
+
+**Yan ürün (tam paket koşusunda bulundu):** Commit 10d'nin `test_sla_status_lists_evaluated_targets_and_single_status_matches_the_list`
+testi ARALIKLI kırılıyordu — liste ve tekil uca AYRI HTTP istekleri arasında geçen gerçek zaman
+`elapsed_seconds`/`remaining_seconds`i (`now()` tabanlı) birkaç ondalıkla kaydırıyor, testin sıkı `==`
+karşılaştırması bunu tolere etmiyordu. Bu iki alan artık gevşek (±1 sn) karşılaştırılıyor, kalanı hâlâ tam
+eşleşiyor; 5 art arda koşuda kırılmadı.
+
+**Tam paket (bir kez, `-rs`, `DBACE_TEST_CLEAN_INSTALL=1` dahil — yerel geliştirme ortamı: PostgreSQL
+15/16/17/18 + replikalar + PgBouncer + SQL Server standalone/AG hepsi tanımlı):** 2525 passed, 4 skipped,
+9 xfailed (PG18'in bilinen imza regresyonu), 0 hata.

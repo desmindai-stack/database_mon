@@ -100,6 +100,36 @@ jobs:
       - name: Testler
         run: python -m pytest tests/ -q
 
+  dependency-pins:
+    name: Bağımlılık sabitlemesi (temiz kurulum)
+    # Faz 31 Commit 10e: sqlalchemy>=2.0.36 (üst sınırsız) yıllardır böyleydi — SQLAlchemy 2.1 greenlet'i
+    # `[asyncio]` ekstrasına taşıyınca `sqlalchemy.ext.asyncio` import anında ModuleNotFoundError verdi ve
+    # HER iş (backend, live-postgres, live-mssql, tip üretimi, e2e) aynı hatayla düştü — yerelde hiç
+    # yakalanmadı çünkü geliştirme venv'i eski SQLAlchemy'yi (greenlet'i o zaman çekirdek bağımlılık sayan
+    # sürüm) yıllar önce kurmuştu ve bir daha yeniden çözülmedi. Bu iş `backend` işinden AYRI ve
+    # PARALEL: yalnızca requirements.txt'nin GERÇEKTEN izole bir venv'de kurulup import edilebildiğini
+    # kanıtlıyor, `backend` işinin kendi venv'i (setup-python'ın pip CACHE'i olabilir) her zaman aynı
+    # netlikte kanıtlamaz.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bağımlılıkları kur (yalnızca test çalıştırıcısı — asıl kurulum test İÇİNDE, izole venv'de)
+        run: pip install pytest pytest-asyncio
+
+      - name: Temiz kurulum + import denetimi
+        run: python -m pytest tests/test_dependency_pins.py -q -rs
+        env:
+          DBACE_TEST_CLEAN_INSTALL: "1"
+
   live-postgres:
     name: Canlı PostgreSQL ${{ matrix.pg }}
     # Faz 31 Commit 5: canlı testler CI'da da koşuyor. Kurulum YEREL İLE AYNI betikten

@@ -1,6 +1,16 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.32.0
-sqlalchemy>=2.0.36
+sqlalchemy[asyncio]==2.0.52
+# `greenlet` SQLAlchemy'nin asyncio köprüsü için ZORUNLU ama yalnızca `sqlalchemy[asyncio]` ekstrası
+# İSTENİRSE pip'in kurduğu bir bağımlılık (Faz 31 Commit 10e). SQLAlchemy 2.1'de bu ekstra OLMADAN
+# bare `sqlalchemy>=2.0.36` kurulumu greenlet'i HİÇ getirmiyor — `sqlalchemy.ext.asyncio` import anında
+# `ModuleNotFoundError: No module named 'greenlet'` ile çöküyor. Yerelde hiç yakalanmadı çünkü bu
+# makinenin venv'i SQLAlchemy 2.0.52'yi (greenlet'i hâlâ çekirdek bağımlılık sayan sürüm) ÇOK ÖNCE
+# kurmuştu ve `>=` üst sınırsız olduğu için hiç yeniden çözülmedi — CI/Railway/on-prem HER SEFERİNDE
+# SIFIRDAN çözüyor, SQLAlchemy'nin O ANKİ en yeni sürümünü (2.1+) çeker. `[asyncio]` ekstrası VE açık
+# sürüm — ikisi birden: ekstra NİYETİ belgeliyor (yarın biri extras'ı unutup tekrar `sqlalchemy>=...`
+# yazarsa `tests/test_dependency_pins.py` yakalar), sürüm bu oturumda kanıtlanmış davranışı SABİTLİYOR.
+greenlet==3.5.5
 asyncpg>=0.30.0
 psycopg2-binary>=2.9.10
 pydantic>=2.10.0
