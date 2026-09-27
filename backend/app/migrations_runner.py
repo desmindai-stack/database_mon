@@ -114,7 +114,39 @@ async def _drop_invalid_index(conn, quoted_name: str) -> bool:
     return True
 
 
-async def _run_chunked(conn, statement: Statement, file: str, stats: list[StatementStat] | None) -> int:
+#: Parça süresi ifade sınırının en çok 1/CHUNK_BUDGET_DIVISOR'u olsun (Faz 31 Commit 10d madde A3). Bir parça bunu aşarsa
+#: sunucu iptal eder, parça GERİ ALINIR (kendi işlemi) ve YARI genişlikle yeniden denenir.
+CHUNK_BUDGET_DIVISOR = 3
+#: Bu genişliğin altına inilmez: en dar parça bile bütçeyi aşıyorsa sorun parça boyu değil, sunucu — hata verilir.
+MIN_CHUNK_SIZE = 250
+#: İptalden sonra sunucuya (checkpoint/fsync birikimine) nefes aldırmak için bekleme.
+CHUNK_RETRY_PAUSE_SECONDS = 1.0
+
+_DURATION = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ms|s|min|h|d)?\s*$")
+_UNIT_SECONDS = {"ms": 0.001, "s": 1.0, "min": 60.0, "h": 3600.0, "d": 86400.0}
+
+
+def _timeout_seconds(setting: str | None) -> float | None:
+    """`SHOW statement_timeout` çıktısı ('8s', '2667ms', '0') → saniye; sınır yoksa/bilinmiyorsa None."""
+    match = _DURATION.match(setting or "")
+    if not match:
+        return None
+    seconds = float(match.group(1)) * _UNIT_SECONDS[match.group(2) or "ms"]
+    return seconds or None
+
+
+async def _run_chunked(conn, statement: Statement, file: str, stats: list[StatementStat] | None,
+                       chunk_budget_seconds: float | None = None) -> int:
+    """Parçalı ifade: `[lo, hi]` kimlik aralığını `size` genişliğinde parçalarla çalıştırır.
+
+    `size` bir ÜST SINIR: her parça `chunk_budget_seconds` (verilmezse oturumun `statement_timeout`unun 1/3'ü) ile
+    sınırlanıyor. Bütçeyi aşan parça iptal edilip GERİ ALINIR ve yarı genişlikle yeniden denenir — ifadeler
+    idempotent (`... IS NULL`) ve her parça kendi işleminde olduğu için sonuç değişmez, yalnızca tek seferlik bir
+    duraksama (checkpoint/fsync birikimi; gerçek CI diskinde 4–5 sn'lik tek parçalık sıçramalar ölçüldü) tüm işi
+    öldürmez ve hiçbir parça bütçenin üstünde BAŞARIYLA tamamlanmaz. Genişlik yalnızca küçülür (temkinli).
+    """
+    from asyncpg.exceptions import QueryCanceledError
+
     table, size = statement.chunk
     if not _TABLE_NAME.match(table):
         raise ValueError(f"{file}:{statement.line}: geçersiz tablo adı {table!r}")
@@ -123,28 +155,58 @@ async def _run_chunked(conn, statement: Statement, file: str, stats: list[Statem
         logger.info("%s:%s parçalı ifade: %s boş, atlandı", file, statement.line, table)
         return 0
     lo, hi = int(bounds["lo"]), int(bounds["hi"])
-    total_chunks = (hi - lo) // size + 1
-    total_rows = 0
-    for index, start in enumerate(range(lo, hi + 1, size), 1):
-        started = time.monotonic()
-        rows = _rows(await conn.execute(statement.sql, start, start + size))
-        elapsed = time.monotonic() - started
-        total_rows += rows
-        if stats is not None:
-            stats.append(StatementStat(file, statement.line, "chunk", elapsed, rows, statement.sql[:80]))
-        if index % PROGRESS_EVERY_CHUNKS == 0 or index == total_chunks:
-            logger.info("%s:%s %s parça %s/%s, %s satır güncellendi", file, statement.line, table, index, total_chunks,
-                        total_rows)
+
+    current = await conn.fetchrow("SELECT current_setting('statement_timeout') AS v")
+    current_setting = current["v"] if current is not None else None
+    limit = _timeout_seconds(current_setting)
+    budget = chunk_budget_seconds if chunk_budget_seconds is not None else (
+        limit / CHUNK_BUDGET_DIVISOR if limit else None)
+    if budget is not None:
+        await conn.execute(f"SET statement_timeout = '{max(int(budget * 1000), 1)}ms'")
+
+    total_rows, chunks_done, retries = 0, 0, 0
+    width, position = size, lo
+    try:
+        while position <= hi:
+            started = time.monotonic()
+            try:
+                rows = _rows(await conn.execute(statement.sql, position, position + width))
+            except QueryCanceledError:
+                if width <= MIN_CHUNK_SIZE:
+                    raise
+                retries += 1
+                logger.warning("%s:%s %s parça [%s, %s) bütçeyi (%s sn) aştı, iptal edildi; %s → %s genişlikle yeniden denenecek",
+                               file, statement.line, table, position, position + width,
+                               "?" if budget is None else round(budget, 2), width, max(width // 2, MIN_CHUNK_SIZE))
+                if stats is not None:
+                    stats.append(StatementStat(file, statement.line, "retry", time.monotonic() - started, 0, statement.sql[:80]))
+                width = max(width // 2, MIN_CHUNK_SIZE)
+                await asyncio.sleep(CHUNK_RETRY_PAUSE_SECONDS)
+                continue
+            elapsed = time.monotonic() - started
+            total_rows += rows
+            chunks_done += 1
+            if stats is not None:
+                stats.append(StatementStat(file, statement.line, "chunk", elapsed, rows, statement.sql[:80]))
+            position += width
+            if chunks_done % PROGRESS_EVERY_CHUNKS == 0 or position > hi:
+                logger.info("%s:%s %s parça %s (id %s/%s, genişlik %s, %s yeniden deneme), %s satır güncellendi", file,
+                            statement.line, table, chunks_done, min(position - 1, hi), hi, width, retries, total_rows)
+    finally:
+        if budget is not None:
+            restore = current_setting if current_setting not in (None, "") else "0"
+            await conn.execute(f"SET statement_timeout = '{restore}'")
     return total_rows
 
 
 async def _run_file_without_transaction(conn, path: Path, statements: list[Statement],
-                                        stats: list[StatementStat] | None) -> None:
+                                        stats: list[StatementStat] | None,
+                                        chunk_budget_seconds: float | None = None) -> None:
     for statement in statements:
         started = time.monotonic()
         rows = 0
         if statement.chunked:
-            rows = await _run_chunked(conn, statement, path.name, stats)
+            rows = await _run_chunked(conn, statement, path.name, stats, chunk_budget_seconds)
         else:
             index = _CONCURRENT_INDEX.search(statement.sql)
             if index:
@@ -164,12 +226,14 @@ async def apply_migrations(
     record: bool = True,
     statement_timeout: str | None = None,
     stats: list[StatementStat] | None = None,
+    chunk_budget_seconds: float | None = None,
 ) -> list[str]:
     """Uygulanmamış migration'ları uygular; uygulananların adlarını döner.
 
     `until`: bu addan ÖNCEKİ dosyalar (testte kademeli kurulum). `only`: yalnızca bu dosya. `record=False`: kayıt
     tablosuna dokunma (dosya her seferinde çalışır). `statement_timeout`: bağlantıya ifade süre sınırı ("8s") — ölçek
-    testinde yönetilen veritabanının sınırını taklit eder. `stats`: ifade/parça ölçümleri buraya eklenir."""
+    testinde yönetilen veritabanının sınırını taklit eder. `stats`: ifade/parça ölçümleri buraya eklenir. `chunk_budget_seconds`: parça başına süre bütçesi (varsayılan:
+    oturumun `statement_timeout`unun 1/3'ü; bkz. `_run_chunked`)."""
     if statement_timeout is not None:
         if not _STATEMENT_TIMEOUT.match(statement_timeout):
             raise ValueError(f"geçersiz statement_timeout: {statement_timeout!r}")
@@ -194,7 +258,7 @@ async def apply_migrations(
         statements = split_statements(sql)
         started = time.monotonic()
         if needs_autocommit(statements):
-            await _run_file_without_transaction(conn, path, statements, stats)
+            await _run_file_without_transaction(conn, path, statements, stats, chunk_budget_seconds)
             if record:
                 await conn.execute(f"INSERT INTO {META_TABLE} (version) VALUES ($1)", path.name)
         else:

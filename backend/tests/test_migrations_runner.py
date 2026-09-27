@@ -194,3 +194,108 @@ def test_command_line_options():
     defaults = parse_args_for_test([])
     assert defaults.directory == "/app/migrations" and defaults.only is None and defaults.no_record is False
     assert migrations_runner._rows("UPDATE 12345") == 12345 and migrations_runner._rows("CREATE INDEX") == 0
+
+
+# --- Parça süre bütçesi: iptal edilen parça YARI genişlikle yeniden denenir (Faz 31 Commit 10d madde A3) ------
+#
+# Gerçek CI diskini birebir taklit eden bir ortamda (cgroup yazma kısıtı + 0,35 CPU; #53 toplamı CI'da 49,7 sn,
+# taklitte 55,6 sn) 8 bin'lik parçaların çoğu 0,9 sn sürerken TEK parça 4,5–5,2 sn sürdü (checkpoint/fsync
+# birikimi) — parça boyunu düşürmek bu sıçramayı kaldırmıyor. Çözüm boyu değil DAVRANIŞ: bütçeyi aşan parça iptal
+# edilip yarı genişlikle yeniden deneniyor (idempotent), hiçbir parça bütçenin üstünde BAŞARIYLA bitmiyor.
+
+
+class BudgetConn(FakeConn):
+    """`max_width`ten geniş her parçayı sunucu iptal ediyormuş gibi davranır; `statement_timeout` oturum ayarı tutar."""
+
+    def __init__(self, *, max_width: int, timeout: str | None = "8s", **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.max_width = max_width
+        self.setting = timeout
+        self.timeouts_set: list[str] = []
+
+    async def fetchrow(self, sql: str, *args):
+        if "current_setting('statement_timeout')" in sql:
+            return {"v": self.setting} if self.setting is not None else None
+        return await super().fetchrow(sql, *args)
+
+    async def execute(self, sql: str, *args):
+        if sql.startswith("SET statement_timeout"):
+            value = sql.split("'")[1]
+            self.timeouts_set.append(value)
+            self.setting = value
+            return "SET"
+        if args and "$1" in sql and "$2" in sql and args[1] - args[0] > self.max_width:
+            from asyncpg.exceptions import QueryCanceledError
+
+            self.cancelled = getattr(self, "cancelled", []) + [(args[0], args[1])]
+            raise QueryCanceledError("canceling statement due to statement timeout")
+        return await super().execute(sql, *args)
+
+
+@pytest.fixture
+def no_pause(monkeypatch):
+    monkeypatch.setattr(migrations_runner, "CHUNK_RETRY_PAUSE_SECONDS", 0)
+
+
+def _updates(conn: FakeConn) -> list[tuple[int, int]]:
+    return [c["args"] for c in conn.calls if c["sql"].startswith("UPDATE big_t")]
+
+
+async def test_a_cancelled_chunk_is_halved_and_retried_and_every_id_is_still_covered_exactly_once(tmp_path, no_pause):
+    directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
+    conn = BudgetConn(max_width=12_500, bounds=(1, 120_001))
+    stats: list[StatementStat] = []
+    await apply_migrations(conn, directory, stats=stats)
+    ranges = _updates(conn)
+    # 50 000 → 25 000 → 12 500: yalnızca 12 500'lük parçalar BAŞARIYLA tamamlandı, aralıklar ardışık ve çakışmasız.
+    assert all(end - start <= 12_500 for start, end in ranges)
+    assert ranges[0][0] == 1 and all(a[1] == b[0] for a, b in zip(ranges, ranges[1:])), "boşluk/çakışma yok"
+    assert ranges[-1][1] > 120_001, "son id de kapsandı"
+    retries = [s for s in stats if s.kind == "retry"]
+    assert len(retries) == 2, "50 000→25 000→12 500: iki iptal"
+    assert len([s for s in stats if s.kind == "chunk"]) == len(ranges)
+    assert conn.recorded, "dosya başarıyla bitti ve kayda geçti"
+
+
+async def test_the_session_statement_timeout_gives_a_third_as_chunk_budget_and_is_restored(tmp_path, no_pause):
+    directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
+    conn = BudgetConn(max_width=10**9, timeout="8s", bounds=(1, 50_000))
+    await apply_migrations(conn, directory)
+    assert conn.timeouts_set == ["2666ms", "8s"], "parça bütçesi 8 sn'nin 1/3'ü; iş bitince özgün ayar geri konur"
+
+
+async def test_an_explicit_budget_overrides_and_no_known_limit_means_no_timeout_change(tmp_path, no_pause):
+    directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
+    explicit = BudgetConn(max_width=10**9, timeout="8s", bounds=(1, 50_000))
+    await apply_migrations(explicit, directory, chunk_budget_seconds=0.5)
+    assert explicit.timeouts_set[0] == "500ms"
+    unlimited = BudgetConn(max_width=10**9, timeout="0", bounds=(1, 50_000))
+    await apply_migrations(unlimited, directory)
+    assert unlimited.timeouts_set == [], "sınır yoksa oturum ayarına dokunulmaz (eski davranış)"
+    assert len(_updates(unlimited)) == 1
+
+
+async def test_negative_control_without_cancellations_the_width_never_shrinks(tmp_path, no_pause):
+    directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
+    conn = BudgetConn(max_width=10**9, bounds=(1, 120_001))
+    stats: list[StatementStat] = []
+    await apply_migrations(conn, directory, stats=stats)
+    assert _updates(conn) == [(1, 50_001), (50_001, 100_001), (100_001, 150_001)]
+    assert not [s for s in stats if s.kind == "retry"]
+
+
+async def test_negative_control_a_server_too_slow_for_the_narrowest_chunk_fails_loudly(tmp_path, no_pause):
+    from asyncpg.exceptions import QueryCanceledError
+
+    directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
+    conn = BudgetConn(max_width=migrations_runner.MIN_CHUNK_SIZE - 1, bounds=(1, 120_001))
+    with pytest.raises(QueryCanceledError):
+        await apply_migrations(conn, directory)
+    assert not conn.recorded, "başarısız dosya kayda GEÇMEZ"
+    assert conn.setting == "8s", "hata olsa da oturum ayarı geri konur"
+
+
+def test_timeout_setting_parser_reads_postgres_show_output():
+    parse = migrations_runner._timeout_seconds
+    assert parse("8s") == 8.0 and parse("2666ms") == pytest.approx(2.666) and parse("1min") == 60.0
+    assert parse("0") is None and parse(None) is None and parse("garip") is None

@@ -41,7 +41,7 @@ docker run --rm -v "$VENDOR:/vendor" "$PY_IMAGE" sh -euc '
   python -c "import urllib.request; urllib.request.urlretrieve(\"https://packages.microsoft.com/keys/microsoft.asc\", \"/usr/share/keyrings/microsoft.asc\")"
   echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.asc] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql.list
   apt-get update
-  apt-get install -y --no-install-recommends --download-only msodbcsql18 unixodbc libpq5
+  apt-get install -y --no-install-recommends --download-only msodbcsql18=18.7.1.1-1 unixodbc libpq5
   cp /var/cache/apt/archives/*.deb /vendor/debs/
 '
 # Ağ KAPALI, boş tabanda dpkg ile kurulum sınanıyor: eksik bağımlılık varsa burada kırılır, bankada değil.

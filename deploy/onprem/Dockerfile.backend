@@ -13,6 +13,7 @@ COPY deploy/onprem/vendor/ /vendor/
 COPY backend/requirements.txt .
 
 # ODBC Driver 18 (SQL Server toplayıcısı) + libpq. Çevrimdışı: yerel .deb'ler, dpkg ile tek seferde.
+# Sürüm SABİT (18.7.1.1-1; Faz 31 Commit 10d): aynı sürüm prepare-offline-artifacts.sh ve CI'da — tests/test_onprem_package_drift.py denetliyor.
 RUN set -eux; \
     if ls /vendor/debs/*.deb >/dev/null 2>&1; then \
         ACCEPT_EULA=Y dpkg -i /vendor/debs/*.deb; \
@@ -22,10 +23,11 @@ RUN set -eux; \
         curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft.gpg; \
         echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql.list; \
         apt-get update; \
-        ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 unixodbc; \
+        ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18=18.7.1.1-1 unixodbc; \
         rm -rf /var/lib/apt/lists/*; \
     fi; \
-    odbcinst -q -d -n "ODBC Driver 18 for SQL Server"
+    odbcinst -q -d -n "ODBC Driver 18 for SQL Server"; \
+    test "$(dpkg-query -W -f='${Version}' msodbcsql18)" = "18.7.1.1-1"
 
 # Python bağımlılıkları. Çevrimdışı: yalnızca yerel wheel'ler (--no-index), sürümler vendor/requirements.lock'tan
 # SABİT (requirements.txt alt sınır veriyor; paket hangi sürümle test edildiyse onunla kurulur).

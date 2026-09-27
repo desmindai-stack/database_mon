@@ -2793,3 +2793,59 @@ edilmiş bir eşik), ama bu ikisi şu an CI'da KIRDIĞI GÖZLENMEDİ; koddan tar
 (gerçek CI ölçümüyle payı doğrulayıp gerekirse eşiği ORANSAL bir şeye bağlamak) ele alınmalı. Şimdilik
 dokunulmadı: gerçek bir kırılma kanıtı yok, spekülatif değişiklik riski (özellikle CONCURRENTLY/kilit
 davranışını sınayan testlerde) faydasından fazla olurdu.
+
+**Parça süre bütçesi (Faz 31 Commit 10d madde A3) mutlak bir tavan DEĞİL.** `migrations_runner.py::_run_chunked`
+bütçeyi aşan parçayı iptal edip yarı genişlikle yeniden deniyor, ama PostgreSQL'in `statement_timeout`
+uygulaması İ/O açlığı altında (checkpoint/fsync birikimi) GECİKEBİLİYOR — gerçek sunucuda (yazma hızı
+kısıtlı + CPU kısıtlı) 0,405 sn'lik bir bütçeyle bir parçanın 2,50 sn sürdüğü ölçüldü (muhtemelen kesilemez
+bir disk beklemesi sırasında iptal sinyali işlenemedi). Mekanizma STEADY-STATE parça süresini düşürüyor ve
+BİRKAÇ nadir sıçramayı (checkpoint) tolere ediyor, ama her parça için mutlak bir üst sınır GARANTİ ETMİYOR.
+Asıl korunan sınır hâlâ geçerli: parça bütçesi aşılsa bile gözlenen en kötü durum (2,5 sn), 8 sn'lik
+`statement_timeout`'un çok altında kalıyor — amaç "tek UPDATE'in TÜMÜNÜN zaman aşımına uğraması"nı önlemekti,
+o sağlanıyor. Daha sıkı bir garanti isteniyorsa (`nice`/ioprio ile I/O önceliklendirme, ya da checkpoint
+sırasında parça başlatmayı erteleme) ayrı bir iş.
+
+**PostgreSQL 18'de `/* dbace */` imza mekanizması BOZUK — ölçüldü, düzeltilmedi (Faz 31 Commit 10d madde C).**
+Gerçek PostgreSQL 18.6'da `pg_stat_statements`, EXECUTE/fetch yoluyla çalışan sorgularda (parametreli VEYA
+parametresiz; `conn.prepare()` ile ya da doğrudan `conn.fetch/fetchval/execute`) artık BAŞTAKİ yorumu
+saklamıyor — yalnızca asyncpg'nin `PreparedStatement.explain()` için TAZE ürettiği metinde yorum kalıyor.
+Aynı kod 15.19/16.15/17.11'de doğru çalışıyor (doğrulandı). Doğrudan yeniden üretim (backend/ içinden):
+
+```python
+import asyncio
+from app.collectors.query_marker import connect_marked
+async def main():
+    conn = await connect_marked(dsn="postgresql://postgres:dbace@127.0.0.1:<PG18_PORT>/dbace")
+    await conn.fetchval("SELECT $1::int", 5)   # /* dbace */ SELECT $1::int gönderiliyor
+    # pg_stat_statements.query = 'SELECT $1::int' — İMZA YOK.
+asyncio.run(main())
+```
+
+**Etki:** `/* dbace */` imzasının TÜMÜ (`app/collectors/query_marker.py`) "pg_stat_statements yorumu korur"
+varsayımına dayanıyor — bu varsayım PG18'de YANLIŞ. Sonuç: dbace'in KENDİ toplama sorguları PG18'de
+uygulama sorgularından ayırt edilemiyor; yanlış negatif olarak "en yavaş sorgular" listesinde/index
+önerisinde müşteri sorgusu gibi görünebilirler (ya da tersi — az ihtimal ama incelenmedi). Etkilenen
+testler (`tests/test_query_marker_live_postgres.py`, `test_marker_origin_live_postgres.py`,
+`test_index_advice_live_postgres.py`, 8 test) PG18'de artık `pytest.xfail` ile işaretleniyor
+(`tests/live_pg.py::query_marker_broken`, gerçek `server_version_num`den — elle port listesi yok);
+CI'nin canlı-test-atlama denetimi `wasxfail` taşıyan raporu zaten hariç tutuyor.
+
+**Düzeltilmedi çünkü:** kök neden (PG18'in pg_stat_statements'ı normalize ederken TAM olarak NE yaptığı —
+comment'i mi atıyor, yoksa executed-statement metnini mi PREPARE'dan farklı bir kaynaktan mı türetiyor)
+tam karakterize edilmedi; olası bir düzeltme (ör. imzayı farklı bir yere/biçimde koymak, ya da
+`pg_stat_statements.userid` gibi alternatif bir sinyale geçmek — bu ikincisi zaten dosyanın kendi
+docstring'inde "rol paylaşılabilir" gerekçesiyle reddedilmişti) ayrı, önemli bir araştırma/tasarım işi.
+**Açık iş:** PG18 desteği bu sınırla birlikte "kısıtlı" sayılmalı; müşteriye PG18 önerilmeden önce bu
+çözülmeli ya da en azından bilinen sınır olarak iletilmeli.
+
+**SQL Server Always On (birincil) hiçbir zaman Query Store/bekleme istatistikleri/bloklama geçmişi/kimlik
+hatası ayrımıyla test edilmedi — yalnızca standalone (Faz 31 Commit 10d madde C).** `tests/live_mssql.py`nin
+AG konteyneri (`dbace-mssql-ag`) AYRI bir sunucu ve paketin login SQL'i (`prepare_monitor_login`) yalnızca
+standalone konteynerde çalıştırılıyor; `test_query_store_live_mssql.py`, `test_wait_stats_live_mssql.py`,
+`test_sampling_health_live_mssql.py`, `test_restricted_role_live_mssql.py` hep `standalone_target` kullanıyor.
+Bu turda AG hedefine `dbace_monitor` ile bağlanmayı denedim: `Login failed for user 'dbace_monitor'. (18456)`
+— rol AG konteynerinde hiç kurulu değil. Gerçek bankalar (özellikle private müşteriler) AG'yi standart
+topoloji olarak kullanıyor (CLAUDE.md: "SQL Server Always On 4 düğüm") — bu, Query Store/bekleme
+istatistikleri/bloklama'nın PRODÜKSİYONDA en yaygın kullanılacağı topoloji hiç ölçülmedi demek. **Açık iş:**
+AG konteynerine de paketin login SQL'ini kurup (`prepare_monitor_login`in AG'ye de uygulanan bir sürümü) bu
+dört test dosyasını AG hedefiyle de parametrelendirmek — orta boy bir iş, bu turda kapsam dışı bırakıldı.

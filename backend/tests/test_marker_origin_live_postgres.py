@@ -26,7 +26,7 @@ from app.services import collection as collection_module
 from app.services.credentials import encrypt_secret
 from app.services.index_advice_watch import current_calls
 from app.services.slow_query_selection import select_slow_queries
-from tests.live_pg import LIVE_DSNS, ROLE_PASSWORD, SKIP_REASON, dsn_id, prepare_live_database, target_for
+from tests.live_pg import LIVE_DSNS, ROLE_PASSWORD, SKIP_REASON, dsn_id, prepare_live_database, query_marker_broken, target_for
 
 asyncpg = pytest.importorskip("asyncpg")
 pytestmark = pytest.mark.skipif(not LIVE_DSNS, reason=SKIP_REASON)
@@ -104,7 +104,14 @@ async def _version(admin) -> str:
     return (await admin.fetchval("SHOW server_version")).split(" ")[0]
 
 
+async def _xfail_if_marker_broken(admin) -> None:
+    version = await admin.fetchval("SELECT current_setting('server_version_num')::int")
+    if query_marker_broken(version):
+        pytest.xfail("PostgreSQL 18: pg_stat_statements /* dbace */ imzasını korumuyor (gerçek sunucuda ölçüldü; SORULAR.md)")
+
+
 async def test_dbace_first_then_application_in_another_role_keeps_application_load_visible(admin, dsn):
+    await _xfail_if_marker_broken(admin)
     tag = f"ord_{uuid.uuid4().hex[:6]}"
     shape = f"SELECT count(*) AS {tag} FROM orders WHERE (SELECT pg_sleep(0.03)) IS NOT NULL AND status = "
     instance = await _instance(dsn)
@@ -142,6 +149,7 @@ async def test_dbace_first_then_application_in_another_role_keeps_application_lo
 
 
 async def test_marked_text_from_a_non_dbace_role_is_shown_flagged_and_advisable(admin, dsn):
+    await _xfail_if_marker_broken(admin)
     """İmzayı kopyalayan bir araç/uygulama: metin imzalı, userid dbace değil → gizlenmez."""
     from tests.auth_helper import authed_client
 
@@ -176,6 +184,7 @@ async def test_marked_text_from_a_non_dbace_role_is_shown_flagged_and_advisable(
 
 
 async def test_application_sharing_dbaces_role_is_indistinguishable_documented_limit(admin, dsn):
+    await _xfail_if_marker_broken(admin)
     """Bilinen sınır: aynı rolde çağrılar kaynakta tek satır. Test sınırı SABİTLİYOR — değişirse
     (ör. PostgreSQL ayrım sunarsa) kırılır ve SORULAR.md güncellenir."""
     tag = f"ord_{uuid.uuid4().hex[:6]}"

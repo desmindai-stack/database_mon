@@ -8,7 +8,7 @@ Bu betik her sürümü aynı ayarlarla kuruyor; test verisi ve roller ise
 
 Kullanım (backend/ içinden):
 
-    python scripts/live_pg.py up                 # 15, 16, 17 — varsa dokunmaz, eksiği tamamlar
+    python scripts/live_pg.py up                 # 15, 16, 17, 18 — varsa dokunmaz, eksiği tamamlar
     python scripts/live_pg.py up --recreate      # konteynerleri SİLİP sıfırdan kurar
     python scripts/live_pg.py dsn                # DBACE_TEST_PG_DSN değerini yazar
 
@@ -39,7 +39,7 @@ VERSIONS = {15: 55433, 16: 55434, 17: 55432, 18: 55435}
 REPLICA_PORTS = {15: 55443, 16: 55444, 17: 55442, 18: 55445}
 NETWORK = "dbace-live"
 REPLICA_APPLICATION_NAME = "dbace_replica"
-DEFAULT_VERSIONS = (15, 16, 17)
+DEFAULT_VERSIONS = (15, 16, 17, 18)
 SERVER_ARGS = [
     "-c", "shared_preload_libraries=pg_stat_statements",
     "-c", "track_activity_query_size=2048",

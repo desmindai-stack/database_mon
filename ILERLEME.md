@@ -9235,3 +9235,351 @@ aşımı testlerinin KENDİ yapılandırma sabitine göre göreceli assert'leri)
 
 **Tam paket (bir kez, `-rs`, yerel geliştirme ortamı — 3 PostgreSQL + replikalar + PgBouncer + SQL Server
 standalone/AG hepsi tanımlı):** 2414 passed, 4 skipped, 0 failed.
+
+## Faz 31 — Commit 10d: YARIDA (kullanıcı isteğiyle 2026-09-24 akşamı durduruldu; sabah devam) — COMMIT ATILMADI
+
+Çalışma ağacı kirli, hiçbir şey commit'lenmedi, tam paket bu iş için koşulmadı. Nerede kalındı:
+
+**A1 (CI kapısı) — kod yazıldı, doğrulanmadı:** `.github/workflows/ci.yml`: yeni `changes` işi (düz `git diff` ile auth/security/
+migration/deploy-onprem dosyaları değişti mi) + `onprem-package` işi `needs: changes` ve `if: schedule || workflow_dispatch ||
+needs.changes.outputs.onprem_sensitive == 'true'`. YAML ayrıştırması doğrulandı; gerçek Actions koşusu YOK.
+
+**A2 (sürüm sabitleme) — bitti, ölçüldü:** `requirements.txt` `aioodbc==0.5.0`, `pyodbc==5.3.0`; ODBC sürücüsü `msodbcsql18=18.7.1.1-1`
+(Dockerfile.backend + dpkg-query doğrulaması, prepare-offline-artifacts.sh, CI live-mssql). ÖNEMLİ BULGU: on-prem vendor'da 18.7.1.1
+duruyordu, geliştirme makinesinde (Windows) 18.6.2.1 — ikisi farklıydı. Sabitlenen imaj (Debian 12) içinde SQL Server canlı testleri
+koşuldu: 15/16 geçti (datetimeoffset/Query Store dahil), 1'i imajda `docker` CLI'ı olmadığı için (sürücüyle ilgisiz). Sürüm tutarlılığı
+`tests/test_onprem_package_drift.py` (+3 test, negatif kontrollü) ile denetleniyor.
+
+**A3 (süreye bağlı eşikler) — ölçüldü; ÖNCEKİ COMMIT'İN (f4692bb) İDDİASI DÜZELTİLİYOR:** cgroup yazma kısıtı (150 MB/s) + 0,35 CPU
+ile CI'yı taklit eden bir Postgres kalibre edildi (CI: #53 toplamı 49,7 sn / ort. parça 2,37 sn; taklit: 55,6 sn / 2,42 sn).
+- `conc_latency < 1.0`: taklitte 3 koşuda 0,08 sn (build 1,7 sn) → pay ~12×, eşik değişmedi (yorum eklendi).
+- `elapsed < 5` (plan_source): 0,73–0,75 sn (0,35 CPU'da bile; süre yapılandırılan 0,7 sn'nin kendisi) → pay ~6,7×, eşik değişmedi.
+- **f4692bb'nin "8 bin parça → ~3,3× pay" iddiası YANLIŞTI:** taklitte 8 bin'lik parçalar sürekli ~0,9 sn iken checkpoint/fsync birikimi yüzünden
+  TEK parça 3,2–5,2 sn sürüyor (20 bin'de 6,75 sn) — sıçrama parça boyundan bağımsız. Boyu küçültmek onu kaldırmıyor.
+- **Davranış düzeltmesi (yazıldı, kısmen doğrulandı):** `app/migrations_runner.py::_run_chunked` artık parça başına süre bütçesi uyguluyor
+  (varsayılan: oturumun `statement_timeout`unun 1/3'ü; `chunk_budget_seconds` ile ezilebilir): bütçeyi aşan parça sunucuca iptal edilir
+  (kendi işlemi, geri alınır), YARI genişlikle yeniden denenir (taban `MIN_CHUNK_SIZE=250`, arada 1 sn bekleme), sonuç idempotent; iş bitince
+  oturum ayarı geri konur. Testler: `tests/test_migrations_runner.py` (+6, sahte bağlantı: aralık kapsamı/çakışmasızlık, bütçe = 1/3, geri
+  koyma, negatif kontroller) hepsi geçti; `tests/test_migration_scale_live_postgres.py` (+2 gerçek sunucu testi) yerelde geçti.
+- **YAPILACAK (sabah):** `test_negative_control_without_a_budget_the_same_run_never_retries` CI-taklit ortamında KIRILIYOR (beklenen: gerçek
+  bir sıçrama olunca yeniden deneme TAM olarak istenen davranış) — testi "sağlıklı/kısıtsız sunucuda yeniden deneme yok" biçimine çevir ya da
+  kaldır. Taklit koşusundaki diğer 4 hata `ConnectionError` (benim koşu sırasında konteyneri silmemden; tekrar koşulmalı). Sonra DEPLOY.md'deki
+  parça boyu/"3–5 kat" paragrafını (f4692bb'de güncellenmişti) bu gerçek bulguyla yeniden düzelt (ölçülen sıçrama 5,2 sn; artık bütçe
+  mekanizması sınırı garanti ediyor, boy değil). `deploy/`e dokunuldu (Dockerfile.backend, prepare-offline-artifacts.sh) — kullanıcı "imajlarda
+  sabitle" dediği için.
+
+**B (test kapsam tablosu) — araç yazıldı, tablo henüz ILERLEME'ye yazılmadı:** `backend/scripts/coverage_matrix.py` (yeni, commit'siz): FastAPI
+rota tablosundan (tembel `_IncludedRouter`lar düzleştirilerek) 136 (fiil, yol) ucu, `App.tsx`ten 16 rota + `TABS`tan 11 sekmeyi çıkarıyor;
+testlerdeki `client.<fiil>("/api/…")` çağrılarını ve e2e `goto`larını tarıyor (STATİK — yardımcıyla URL kuran testleri kaçırabilir);
+öncelik AST'den (işleyici hedefe bağlanan modülü kullanıyor / SQL Server / on-prem sürücüsünün yolu / yazan uç). İlk statik sonuç: P1 22 boşluk
+(26 kapsanan), P2 27 (21), P3 20 (20); 69/136 uç statik olarak kapsanmıyor. Ekranlarda 11'i e2e'siz (predictions, alerts, alerts/new, admin,
+customers, …, groups/:id; sekmeler: overview, queries, activity, blocking, cluster, schema, alerts, predictions). Kesin (dinamik) ölçüm için
+`-p tests.api_coverage_plugin` YAZILMADI (planlanan: istek alan (fiil, rota) çiftlerini kaydeden pytest eklentisi; `--hits` zaten hazır).
+`scripts/coverage_matrix.py` çıktısını (`python scripts/coverage_matrix.py`) tabloya çevirip buraya yazmak kaldı.
+
+**C (sürüm matrisi) — yalnızca PG 18 kuruldu:** `scripts/live_pg.py` `VERSIONS`ta 18'i zaten tanıyordu; `DEFAULT_VERSIONS = (15,16,17,18)` ve CI
+matrisi `[15,16,17,18]` yapıldı. `up --versions 18` çalıştı: PG 18.6, hypopg 1.4.3, pg_stat_statements 1.12, replika akışta, PgBouncer 18'in
+önünde. **PG 18'e karşı canlı testler HENÜZ koşulmadı** (sonraki adım: `DBACE_TEST_PG_DSN=…55435…` ile `LIVE_DSNS` kullanan dosyalar; kırılanları
+düzelt ya da "sürümde yok"/"ölçülemedi" diye ayır). Özellik×sürüm tablosu: `app/domain/pg_capabilities.py::capability_matrix(sürüm)` (bildirilen) ↔
+gerçek sunucuda ölçülen karşılaştırması yazılacak; SQL Server tarafı (standalone/AG × Query Store açık/kapalı) yazılmadı.
+
+**D (boşluk testleri) — başlanmadı.** Öncelik: B'deki P1 uçlar (kısıtlı rolle gerçek PG/SQL Server'a karşı: `POST /instances/test`,
+`/instances/{id}/test|test-config|activity|cluster-logs`, `/queries/{id}/availability|plan-regressions`, `/groups/*`, `/sla/status`,
+`/dashboard/refresh`), sonra P2 (auth logout, admin reset-password, yazan uçlar), en son ekran e2e'leri.
+
+Yerel ortam notu: Docker Desktop her sabah kapalı geliyor (`Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe"`, sonra
+`python scripts/live_pg.py up` + `python scripts/live_mssql.py up`); PgBouncer şu an PG 18'in önünde.
+
+**Yukarıdaki "YAPILACAK (sabah)" tamamlandı, aşağıdaki bölümlerde devamı var:** negatif kontrol testi
+`test_negative_control_without_any_time_limit_the_runner_never_cancels_or_retries` olarak yeniden yazıldı
+(sınırSIZ koşuyla kontrol — sınırlı/sağlıklı koşuda da yeniden deneme olabileceği anlaşıldı, bkz. SORULAR.md).
+Gerçek sunucuda bir parça YİNE bütçenin (0,405 sn) çok üstünde (2,50 sn) sürdüğü ölçüldü — Postgres'in
+`statement_timeout`u İ/O açlığında GECİKİYOR; test buna göre gevşetildi (mutlak çarpan yerine asıl korunan
+8 sn sınırına göre), bulgu SORULAR.md'ye yazıldı. DEPLOY.md'nin parça boyu paragrafı bu bulguyla güncellendi:
+asıl koruma artık parça BOYUTUNDAN değil, çalıştırıcının süre bütçesi/yeniden deneme mekanizmasından geliyor.
+B/C/D'nin geri kalanı aşağıda tamamlandı.
+
+## Faz 31 — Commit 10d madde B: test kapsam tablosu (koddan, elle liste yok)
+
+Kaynak: `backend/scripts/coverage_matrix.py` (yeni betik). API uçları FastAPI'nin kendi rota tablosundan (tembel
+`_IncludedRouter`lar düzleştirilerek), ekranlar `frontend/src/App.tsx`teki `<Route>`lardan ve
+`InstanceDetailPage.tsx`teki `TABS` dizisinden çıkıyor. Kapsam STATİK: `backend/tests/*.py`deki
+`client.<fiil>("/api/...")` çağrılarını ve `frontend/e2e/*.spec.ts`teki `goto`/`?tab=` kullanımını tarıyor —
+yardımcı bir işlevle URL'yi PARÇA PARÇA kuran bir test yanlışlıkla "kapsanmıyor" görünebilir (ör.
+`onprem_driver.py`nin çağırdığı uçlar önceliklendirmede "on-prem kurulum testinin yolu" diye işaretleniyor ama
+KAPSAYAN TEST sütununda görünmüyor — `test_onprem_package_live.py` `DBACE_TEST_ONPREM=1` ile bunları GERÇEKTEN
+koşuyor, aracın kendisi bunu ayrı bir kanıt olarak SAYMIYOR, bu bilinen bir araç sınırı). Kesin (dinamik) ölçüm
+için istek alan (fiil, rota) çiftlerini kaydeden bir pytest eklentisi TASARLANDI ama YAZILMADI — `--hits`
+seçeneği zaten hazır, eklenti ayrı bir iş (SORULAR.md).
+
+Öncelik AST'den: **P1** işleyici hedef veritabanına bağlanan bir modülü (asyncpg/aioodbc/pyodbc/motor ya da
+`app.collectors`) kullanıyor (bankada kısıtlı rolle çalışacak yol) VEYA `onprem_driver.py`nin çağırdığı yol;
+SQL Server'a özgü olanlar ayrıca işaretli. **P2** kimlik/yönetici uçları ve tüm yazan (POST/PUT/PATCH/DELETE)
+uçlar (P1 değilse). **P3** kalanı.
+
+## Ekranlar (frontend rotaları ve örnek detay sekmeleri)
+
+| Tür | Ekran | Kapsayan e2e |
+|---|---|---|
+| rota | `/` | auth.spec.ts, dpa-dashboard.spec.ts, routing.spec.ts |
+| rota | `/instances` | auth.spec.ts, instances.spec.ts, routing.spec.ts |
+| rota | `/instances/:id` | dpa-dashboard.spec.ts, live-counts.spec.ts, routing.spec.ts, tuning-health-card.spec.ts |
+| rota | `/reports` | reports.spec.ts |
+| rota | `/predictions` | **YOK** |
+| rota | `/alerts` | **YOK** |
+| rota | `/alerts/new` | **YOK** |
+| rota | `/admin` | **YOK** |
+| rota | `/customers` | **YOK** |
+| rota | `/customers/:customerId/applications` | **YOK** |
+| rota | `/customers/:customerId/servers` | **YOK** |
+| rota | `/applications/:applicationId/groups` | **YOK** |
+| rota | `/applications/:applicationId/groups/wizard` | wizard.spec.ts |
+| rota | `/groups/:groupId` | **YOK** |
+| rota | `/groups/:groupId/wizard` | **YOK** |
+| rota | `*` | routing.spec.ts |
+| sekme | `overview` | **YOK** |
+| sekme | `metrics` | dpa-dashboard.spec.ts |
+| sekme | `load` | dpa-dashboard.spec.ts |
+| sekme | `queries` | **YOK** |
+| sekme | `activity` | **YOK** |
+| sekme | `blocking` | **YOK** |
+| sekme | `cluster` | **YOK** |
+| sekme | `schema` | **YOK** |
+| sekme | `tuning` | live-counts.spec.ts, tuning-health-card.spec.ts |
+| sekme | `alerts` | **YOK** |
+| sekme | `predictions` | **YOK** |
+
+## API uçları (statik kapsam: 67/136)
+
+| Öncelik | Fiil | Yol | Neden | Kapsayan test |
+|---|---|---|---|---|
+| P1 | GET | `/api/admin/analysis-settings` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | PATCH | `/api/alerts/rules/{rule_id}` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | GET | `/api/applications` | on-prem kurulum testinin yolu | **YOK** |
+| P1 | POST | `/api/dashboard/refresh` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | GET | `/api/groups` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | GET | `/api/groups/{group_id}` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | GET | `/api/groups/{group_id}/alwayson` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | GET | `/api/groups/{group_id}/config-comparison` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | POST | `/api/groups/{group_id}/convert-to-cluster` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | **YOK** |
+| P1 | GET | `/api/groups/{group_id}/health` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/groups/{group_id}/parameters` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/instances/collection-health` | hedef veritabanına bağlanan modülü kullanıyor; on-prem kurulum testinin yolu | **YOK** |
+| P1 | GET | `/api/instances/summary` | on-prem kurulum testinin yolu | **YOK** |
+| P1 | POST | `/api/instances/test` | hedef veritabanına bağlanan modülü kullanıyor; on-prem kurulum testinin yolu | **YOK** |
+| P1 | GET | `/api/instances/{instance_id}/activity` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/instances/{instance_id}/cluster-logs` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | POST | `/api/instances/{instance_id}/test` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | POST | `/api/instances/{instance_id}/test-config` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/queries/{instance_id}/availability` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/queries/{instance_id}/plan-regressions` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/sla/status` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | GET | `/api/sla/status/{target_id}` | hedef veritabanına bağlanan modülü kullanıyor | **YOK** |
+| P1 | PUT | `/api/admin/analysis-settings` | hedef veritabanına bağlanan modülü kullanıyor | test_index_advice_live_postgres.py, test_plan_source_live_postgres.py |
+| P1 | POST | `/api/alerts/rules` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | test_instance_delete.py |
+| P1 | POST | `/api/alerts/rules/test-query` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | test_alert_rule_query_test.py |
+| P1 | POST | `/api/applications` | on-prem kurulum testinin yolu | onprem_driver.py, test_alert_rule_query_test.py, test_count_contracts_live_postgres.py (+10) |
+| P1 | POST | `/api/auth/change-password` | on-prem kurulum testinin yolu | onprem_driver.py, test_auth.py, test_secret_policy.py |
+| P1 | POST | `/api/auth/login` | on-prem kurulum testinin yolu | auth_helper.py, onprem_driver.py, test_auth.py (+1) |
+| P1 | GET | `/api/customers` | on-prem kurulum testinin yolu | test_auth.py |
+| P1 | POST | `/api/customers` | on-prem kurulum testinin yolu | onprem_driver.py, test_alert_rule_query_test.py, test_auth.py (+11) |
+| P1 | GET | `/api/health` | on-prem kurulum testinin yolu | onprem_driver.py, test_auth.py, test_onprem_package_drift.py |
+| P1 | DELETE | `/api/instances/{instance_id}` | on-prem kurulum testinin yolu | test_delete_dependencies.py, test_instance_delete.py |
+| P1 | GET | `/api/instances/{instance_id}` | on-prem kurulum testinin yolu | onprem_driver.py, test_endpoint_status_codes.py, test_restricted_role_live_mssql.py (+1) |
+| P1 | PATCH | `/api/instances/{instance_id}` | on-prem kurulum testinin yolu | onprem_driver.py |
+| P1 | GET | `/api/instances/{instance_id}/blocking` | hedef veritabanına bağlanan modülü kullanıyor | test_restricted_role_live_mssql.py |
+| P1 | GET | `/api/instances/{instance_id}/blocking-history` | on-prem kurulum testinin yolu | onprem_driver.py, test_blocking_history_api.py, test_restricted_role_live_mssql.py (+2) |
+| P1 | GET | `/api/instances/{instance_id}/cluster-health` | hedef veritabanına bağlanan modülü kullanıyor; on-prem kurulum testinin yolu | onprem_driver.py, test_restricted_role_live_mssql.py, test_restricted_role_live_postgres.py (+2) |
+| P1 | GET | `/api/instances/{instance_id}/prerequisites` | hedef veritabanına bağlanan modülü kullanıyor; SQL Server | test_restricted_role_live_mssql.py, test_restricted_role_live_postgres.py |
+| P1 | GET | `/api/instances/{instance_id}/schema-health` | hedef veritabanına bağlanan modülü kullanıyor | test_restricted_role_live_postgres.py, test_sqlserver_dpa_surface.py |
+| P1 | GET | `/api/instances/{instance_id}/wait-stats` | hedef veritabanına bağlanan modülü kullanıyor | test_wait_stats_live_mssql.py |
+| P1 | GET | `/api/queries/{instance_id}/advice-outcomes` | hedef veritabanına bağlanan modülü kullanıyor | test_index_advice_outcome_live_postgres.py |
+| P1 | GET | `/api/queries/{instance_id}/advice-watches` | hedef veritabanına bağlanan modülü kullanıyor | test_index_advice_live_postgres.py |
+| P1 | POST | `/api/queries/{instance_id}/advice/batch` | hedef veritabanına bağlanan modülü kullanıyor | test_index_advice_live_postgres.py |
+| P1 | GET | `/api/queries/{instance_id}/captured-plans` | hedef veritabanına bağlanan modülü kullanıyor | test_plan_capture_status_live_postgres.py, test_restricted_role_live_postgres.py |
+| P1 | GET | `/api/queries/{instance_id}/captured-plans/{plan_id}` | hedef veritabanına bağlanan modülü kullanıyor | test_plan_source_live_postgres.py |
+| P1 | POST | `/api/queries/{instance_id}/explain` | hedef veritabanına bağlanan modülü kullanıyor | test_plan_source_live_postgres.py, test_restricted_role_live_postgres.py |
+| P1 | GET | `/api/queries/{instance_id}/plan-sources` | hedef veritabanına bağlanan modülü kullanıyor | test_plan_capture_status_live_postgres.py, test_plan_source_live_postgres.py |
+| P1 | POST | `/api/wizard/database-groups` | on-prem kurulum testinin yolu | onprem_driver.py, test_alert_rule_query_test.py, test_count_contracts_live_postgres.py (+10) |
+| P2 | POST | `/api/admin/users/{user_id}/reset-password` | kimlik/yönetici | **YOK** |
+| P2 | POST | `/api/alerts/events/{event_id}/resolve` | yazan uç | **YOK** |
+| P2 | DELETE | `/api/alerts/rules/{rule_id}` | yazan uç | **YOK** |
+| P2 | DELETE | `/api/applications/{application_id}` | yazan uç | **YOK** |
+| P2 | PATCH | `/api/applications/{application_id}` | yazan uç | **YOK** |
+| P2 | POST | `/api/auth/logout` | kimlik/yönetici | **YOK** |
+| P2 | PATCH | `/api/customers/{customer_id}` | yazan uç | **YOK** |
+| P2 | PUT | `/api/dashboard/refresh-interval` | yazan uç | **YOK** |
+| P2 | POST | `/api/groups` | yazan uç | **YOK** |
+| P2 | PATCH | `/api/groups/{group_id}` | yazan uç | **YOK** |
+| P2 | PUT | `/api/instances/{instance_id}/prerequisites/ignored` | yazan uç | **YOK** |
+| P2 | POST | `/api/maintenance-windows` | yazan uç | **YOK** |
+| P2 | DELETE | `/api/maintenance-windows/{window_id}` | yazan uç | **YOK** |
+| P2 | PATCH | `/api/maintenance-windows/{window_id}` | yazan uç | **YOK** |
+| P2 | POST | `/api/nodes` | yazan uç | **YOK** |
+| P2 | DELETE | `/api/nodes/{node_id}` | yazan uç | **YOK** |
+| P2 | PATCH | `/api/nodes/{node_id}` | yazan uç | **YOK** |
+| P2 | POST | `/api/predictions/{prediction_id}/ack` | yazan uç | **YOK** |
+| P2 | POST | `/api/servers` | yazan uç | **YOK** |
+| P2 | POST | `/api/servers/test-agent` | yazan uç | **YOK** |
+| P2 | DELETE | `/api/servers/{server_id}` | yazan uç | **YOK** |
+| P2 | PATCH | `/api/servers/{server_id}` | yazan uç | **YOK** |
+| P2 | POST | `/api/servers/{server_id}/test-agent` | yazan uç | **YOK** |
+| P2 | POST | `/api/sla/targets` | yazan uç | **YOK** |
+| P2 | DELETE | `/api/sla/targets/{target_id}` | yazan uç | **YOK** |
+| P2 | PATCH | `/api/sla/targets/{target_id}` | yazan uç | **YOK** |
+| P2 | POST | `/api/wizard/groups/{group_id}/nodes` | yazan uç | **YOK** |
+| P2 | GET | `/api/admin/noise-settings` | kimlik/yönetici | test_noise_settings.py |
+| P2 | PUT | `/api/admin/noise-settings` | kimlik/yönetici | test_noise_settings.py |
+| P2 | GET | `/api/admin/retention` | kimlik/yönetici | test_admin.py |
+| P2 | PUT | `/api/admin/retention` | kimlik/yönetici | test_admin.py |
+| P2 | POST | `/api/admin/retention/run` | kimlik/yönetici | test_admin.py |
+| P2 | GET | `/api/admin/users` | kimlik/yönetici | test_admin.py |
+| P2 | POST | `/api/admin/users` | kimlik/yönetici | test_admin.py, test_secret_policy.py |
+| P2 | DELETE | `/api/admin/users/{user_id}` | kimlik/yönetici | test_admin.py |
+| P2 | PATCH | `/api/admin/users/{user_id}` | kimlik/yönetici | test_admin.py |
+| P2 | GET | `/api/auth/me` | kimlik/yönetici | test_admin.py, test_auth.py, test_secret_policy.py |
+| P2 | POST | `/api/auth/refresh` | kimlik/yönetici | test_auth.py, test_secret_policy.py |
+| P2 | DELETE | `/api/customers/{customer_id}` | yazan uç | test_delete_dependencies.py |
+| P2 | DELETE | `/api/groups/{group_id}` | yazan uç | test_delete_dependencies.py |
+| P2 | POST | `/api/instances` | yazan uç | test_endpoint_status_codes.py, test_instance_delete.py, test_metrics_custom_range.py (+4) |
+| P2 | POST | `/api/queries/{instance_id}/advice` | yazan uç | test_index_advice_live_postgres.py, test_index_advice_outcome_live_postgres.py, test_marker_origin_live_postgres.py (+1) |
+| P2 | POST | `/api/reports/acknowledgements` | yazan uç | test_health_report_api.py |
+| P2 | DELETE | `/api/reports/acknowledgements/{ack_id}` | yazan uç | test_health_report_api.py |
+| P2 | POST | `/api/reports/findings/status` | yazan uç | test_finding_status.py |
+| P2 | POST | `/api/reports/run` | yazan uç | test_count_contracts_live_postgres.py, test_health_report_api.py |
+| P2 | PUT | `/api/reports/schedule` | yazan uç | test_health_report_api.py |
+| P2 | DELETE | `/api/reports/{report_id}` | yazan uç | test_health_report_api.py |
+| P3 | GET | `/` | — | **YOK** |
+| P3 | GET | `/api/alerts/events` | — | **YOK** |
+| P3 | GET | `/api/alerts/rules` | — | **YOK** |
+| P3 | GET | `/api/applications/{application_id}` | — | **YOK** |
+| P3 | GET | `/api/config` | — | **YOK** |
+| P3 | GET | `/api/customers/{customer_id}` | — | **YOK** |
+| P3 | GET | `/api/dashboard/refresh-interval` | — | **YOK** |
+| P3 | GET | `/api/groups/{group_id}/nodes` | — | **YOK** |
+| P3 | GET | `/api/instances` | — | **YOK** |
+| P3 | GET | `/api/instances/catalog/metrics` | — | **YOK** |
+| P3 | GET | `/api/maintenance-windows` | — | **YOK** |
+| P3 | GET | `/api/maintenance-windows/upcoming` | — | **YOK** |
+| P3 | GET | `/api/metrics/{instance_id}` | — | **YOK** |
+| P3 | GET | `/api/nodes/{node_id}` | — | **YOK** |
+| P3 | GET | `/api/queries/{instance_id}/history` | — | **YOK** |
+| P3 | GET | `/api/reports/acknowledgements` | — | **YOK** |
+| P3 | GET | `/api/servers` | — | **YOK** |
+| P3 | GET | `/api/servers/{server_id}` | — | **YOK** |
+| P3 | GET | `/api/servers/{server_id}/node-count` | — | **YOK** |
+| P3 | GET | `/api/sla/targets` | — | **YOK** |
+| P3 | GET | `/api/dashboard/summary` | — | test_count_contracts_live_postgres.py, test_dashboard_summary.py |
+| P3 | GET | `/api/instances/{instance_id}/database-load` | — | test_database_load.py, test_sampling_cadence.py, test_sampling_cadence_live.py (+1) |
+| P3 | GET | `/api/instances/{instance_id}/dependencies` | — | test_delete_dependencies.py, test_instance_delete.py |
+| P3 | GET | `/api/instances/{instance_id}/insights` | — | test_count_contracts_live_postgres.py, test_restricted_role_live_postgres.py |
+| P3 | GET | `/api/instances/{instance_id}/prediction-readiness` | — | test_prediction_capacity.py |
+| P3 | GET | `/api/metrics/{instance_id}/latest` | — | test_endpoint_status_codes.py |
+| P3 | GET | `/api/predictions` | — | test_prediction_accuracy.py, test_prediction_advice.py |
+| P3 | GET | `/api/predictions/accuracy` | — | test_prediction_accuracy.py |
+| P3 | GET | `/api/queries/metric-dictionary` | — | test_route_order.py |
+| P3 | GET | `/api/queries/{instance_id}` | — | test_count_contracts_live_postgres.py, test_marker_origin_live_postgres.py, test_monitoring_role_live_postgres.py (+4) |
+| P3 | GET | `/api/queries/{instance_id}/diagnostics` | — | test_count_contracts_live_postgres.py |
+| P3 | GET | `/api/queries/{instance_id}/history/{queryid}` | — | test_endpoint_status_codes.py |
+| P3 | GET | `/api/reports` | — | test_health_report_api.py |
+| P3 | GET | `/api/reports/findings/{fingerprint}/history` | — | test_finding_status.py |
+| P3 | GET | `/api/reports/latest` | — | test_health_report_api.py |
+| P3 | GET | `/api/reports/schedule` | — | test_health_report_api.py |
+| P3 | GET | `/api/reports/{report_id}` | — | test_count_contracts_live_postgres.py, test_health_report_api.py, test_report_finding_payload.py |
+| P3 | GET | `/api/reports/{report_id}/executive` | — | test_health_report_api.py |
+| P3 | GET | `/api/reports/{report_id}/export` | — | test_report_export.py |
+| P3 | GET | `/api/reports/{report_id}/export-sections` | — | test_report_export.py |
+
+## Faz 31 — Commit 10d madde C: sürüm matrisi (PostgreSQL 15-18, SQL Server standalone/AG)
+
+**PostgreSQL:** `scripts/live_pg.py`'ye 18 eklendi (`DEFAULT_VERSIONS`, `VERSIONS`/`REPLICA_PORTS` zaten tanıyordu),
+CI matrisi `[15, 16, 17, 18]` oldu. Gerçek 4 sunucuya (15.19, 16.15, 17.11, 18.6 — hepsi replikalı + PgBouncer
+arkasında) karşı `LIVE_DSNS` kullanan TÜM canlı test dosyaları (migration ölçeği ve bekleme örnekleyicisi hariç,
+onlar ayrı ölçüldü) bir kerede koşuldu: **411 passed, 1 skipped (sürüm koşulu, PG16 altı), 9 xfailed — beklenmeyen
+SIFIR hata.**
+
+### Özellik × sürüm (koddan, `app/domain/pg_capabilities.py::CAPABILITIES` — TEK kaynak, gerçek sunucularda
+### `information_schema.columns` ile çapraz doğrulandı: kod neyi "kaynak" diyorsa o kolonlar GERÇEKTEN o sürümde var/yok)
+
+| Metrik | 15.19 | 16.15 | 17.11 | 18.6 |
+|---|---|---|---|---|
+| checkpoints_timed | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_checkpointer | pg_stat_checkpointer |
+| checkpoints_req | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_checkpointer | pg_stat_checkpointer |
+| checkpoint_write_time_ms | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_checkpointer | pg_stat_checkpointer |
+| checkpoint_sync_time_ms | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_checkpointer | pg_stat_checkpointer |
+| buffers_checkpoint_per_sec | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_checkpointer | pg_stat_checkpointer |
+| buffers_clean_per_sec | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_bgwriter |
+| buffers_alloc_per_sec | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_bgwriter |
+| buffers_backend_per_sec | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_io | pg_stat_io |
+| buffers_backend_fsync_per_sec | pg_stat_bgwriter | pg_stat_bgwriter | pg_stat_io | pg_stat_io |
+| io_reads_per_sec | YOK | pg_stat_io | pg_stat_io | pg_stat_io |
+| io_writes_per_sec | YOK | pg_stat_io | pg_stat_io | pg_stat_io |
+| io_extends_per_sec | YOK | pg_stat_io | pg_stat_io | pg_stat_io |
+| io_op_bytes | YOK | pg_stat_io | pg_stat_io | YOK |
+| io_read_bytes_per_sec | YOK | YOK | YOK | pg_stat_io |
+| io_write_bytes_per_sec | YOK | YOK | YOK | pg_stat_io |
+
+`YOK` = metrik o sürümde hiçbir kaynaktan alınamıyor (kod bunu biliyor, ekranda gerekçeli "ölçülemedi" gösteriyor —
+"sürümde yok" durumu, gizli bir eksiklik değil). PG 18'in `pg_stat_io.op_bytes`ı kaldırıp yerine
+`read_bytes`/`write_bytes`/`extend_bytes` koyması ÖNCEDEN kodlanmıştı (Faz 27); bu turda gerçek sunucuda
+doğrulandı, düzeltme GEREKMEDİ.
+
+### PostgreSQL 18'de BOZUK bulunan tek şey: `/* dbace */` imza mekanizması
+
+Yukarıdaki "beklenmeyen sıfır hata" ifadesi imza testlerini XFAIL olarak SAYIYOR — gerçek durum "sürümde yok"
+değil, "ölçüldü ve BOZUK": `pg_stat_statements` artık EXECUTE/fetch yoluyla (parametreli/parametresiz, hazırlanmış
+ya da tek seferlik) çalışan sorgularda baştaki yorumu saklamıyor (bkz. SORULAR.md'deki tam yeniden üretim). 15/16/17
+etkilenmiyor. Düzeltilmedi; 8 test dosyası PG18'de `pytest.xfail` ile işaretlendi (`tests/live_pg.py::query_marker_broken`,
+gerçek `server_version_num`den — elle sürüm listesi yok), `tests/conftest.py`nin canlı-test-atlama denetimi
+`wasxfail` taşıyan raporu zaten hariç tutuyor.
+
+### SQL Server: standalone / Always On × Query Store
+
+| Özellik | Standalone | Always On (birincil) |
+|---|---|---|
+| Topoloji tespiti (sağlıklı) | ✅ ölçüldü (`test_standalone_sql_server_has_no_cluster_alarm`) | ✅ ölçüldü (kopuk replika alarmı, `test_availability_group_with_disconnected_replica_raises_the_alarm`) |
+| VIEW SERVER STATE eksik → "ölçülemedi" + GRANT komutu | ✅ ölçüldü | ✅ ölçüldü (`test_login_without_view_server_state_is_unmeasured_with_the_grant[ag]`) |
+| Bloklama geçmişi (gerçek kilit çatışması) | ✅ ölçüldü (`test_blocking_live_mssql.py`) | **ölçülemedi** — test yalnızca standalone hedefi kullanıyor |
+| Bekleme istatistikleri (`dm_os_wait_stats`, restart/sıfırlanma) | ✅ ölçüldü (Commit 9f) | **ölçülemedi** |
+| Query Store (plan geçmişi, regresyon, açık/kapalı/yetkisiz) | ✅ ölçüldü (Commit 9e; datetimeoffset düzeltmesi Commit 10c'de) | **ölçülemedi** |
+| Kimlik doğrulama hatası → "Ölçülemedi" ayrımı (Commit 10c-B) | ✅ ölçüldü | **ölçülemedi** |
+| Kısıtlı rol / önkoşul denetimi | ✅ ölçüldü (`test_restricted_role_live_mssql.py`) | **ölçülemedi** |
+
+**Neden AG sütunu bu kadar boş:** `tests/live_mssql.py`'nin `dbace-mssql-ag` konteyneri AYRI bir sunucu — paketin
+login SQL'i (`prepare_monitor_login`) yalnızca `dbace-mssql` (standalone) konteynerinde çalıştırılıyor. AG hedefine
+`dbace_monitor` ile bağlanmayı denedim (bu turda): `Login failed for user 'dbace_monitor'. (18456)` — kısıtlı rol
+AG konteynerinde HİÇ KURULU DEĞİL. Query Store/bekleme istatistikleri/bloklama testlerinin AG'ye karşı koşması
+için önce bu kurulum eklenmeli — kapsamlı bir iş, bu turda YAPILMADI (SORULAR.md).
+
+## Faz 31 — Commit 10d madde D: boşluk testleri (öncelik sırasıyla, gerçek sunucuya karşı, negatif kontrollü)
+
+Kapsam taraması B'de 136 uçtan 69'unun (statik) hiç testi olmadığını gösterdi. Zaman kısıtı nedeniyle TÜMÜ değil,
+en yüksek öncelikli (P1: hedef veritabanına bağlanan / on-prem yolu) 5'i kapatıldı — bankaya en yakın yollar:
+
+1. **`POST /api/instances/test`** — sihirbazın kaydetmeden ÖNCE çağırdığı bağlantı testi. Gerçek kısıtlı PostgreSQL
+   rolüyle: doğru kimlikle `ok: true`, yanlış şifreyle `ok: false` + okunabilir gerekçe (negatif kontrol).
+2. **`POST /api/instances/{id}/test`** — kayıtlı bir instance'ın KENDİ (şifresi çözülmüş) kimliğiyle test.
+   Olmayan instance → 404 (negatif kontrol).
+3. **`POST /api/instances/{id}/test-config`** — düzenleme formunun düğmesi: şifre BOŞ bırakılırsa kayıtlıyı
+   dener (Faz 16-B İŞ 2'nin düzelttiği hatanın ta kendisi — daha önce hiç canlı sunucuya karşı doğrulanmamıştı),
+   verilirse YENİ şifreyi dener (yanlış şifre → `ok: false`, negatif kontrol).
+4. **`GET /api/sla/status`** ve **`GET /api/sla/status/{target_id}`** — hiç çağrılmamıştı. Yazarken gerçek bir
+   şema boşluğu bulundu: `SlaStatus.to_dict()` bir `id`/`target_id` alanı TAŞIMIYOR — liste öğeleri yalnızca
+   `(scope_type, scope_id)` çiftiyle eşleştirilebiliyor (bu da `create_target`'ın tekillik kısıtıyla tutarlı,
+   ama frontend tarafında bu eşleştirmeyi elle yapan bir kod varsa kırılgan olabilir — ayrı bir inceleme
+   gerektirir, bu turda yalnızca NOT edildi). Liste ↔ tekil uç aynı sonucu veriyor (tek gerçeklik kaynağı,
+   doğrulandı); aynı kapsama ikinci hedef 409 (negatif kontrol).
+
+Yeni dosyalar: `tests/test_connection_test_endpoints_live_postgres.py` (3), `tests/test_sla_status_endpoints.py` (2).
+Statik kapsam 67/136 → 73/136 (+6, bir kısmı yardımcı `POST /api/sla/targets` çağrısının da yeniden sayılmasından).
+
+**Kapanmayan 64 P1/P2 boşluk** (öncelik sırasıyla, en yüksekten): SQL Server'a özgü grup uçları
+(`/api/groups*`, `/api/dashboard/refresh`, `/api/alerts/rules/{id}` PATCH), `/api/instances/{id}/activity`,
+`/api/instances/{id}/cluster-logs`, `/api/queries/{id}/availability`, `/api/queries/{id}/plan-regressions`
+(servis düzeyinde `test_query_store_live_mssql.py`/`test_plan_source_live_postgres.py` ile dolaylı kapsanıyor
+ama API UCUNUN kendisi hiç çağrılmamış), `/api/admin/analysis-settings` GET, ardından P2'deki tüm yazan uçlar
+(nodes/servers/maintenance-windows/sla targets CRUD'ının DELETE/PATCH kolu). Tam liste B'nin tablosunda.
+
+**Tam paket (bir kez, `-rs`, yerel geliştirme ortamı — PostgreSQL 15/16/17/18 + replikalar + PgBouncer + SQL
+Server standalone/AG hepsi tanımlı):** 2521 passed, 4 skipped, 9 xfailed (PG18'in bilinen `/* dbace */` imza
+regresyonu, SORULAR.md), 0 beklenmeyen hata.

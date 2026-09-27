@@ -204,3 +204,74 @@ def test_negative_control_matrix_drift_and_missing_grant_are_detected(inventory_
     assert "kod kullanıyor, matriste yok: postgresql:pg_stat_new_view" in problems
     assert "kod kullanıyor, matriste yok: postgresql:pg_stat_statements" in problems
     assert "matris 'pg_monitor' gerektiğini ölçtü, rol SQL'i vermiyor" in problems
+
+
+# --- 5. SQL Server bağlantı yığını sürümleri (Faz 31 Commit 10d madde A2) ----------------------------------
+#
+# pyodbc 5.x'te `datetimeoffset` kendiliğinden çözülmüyor ve sürücü sürümü bu davranışı etkiliyor (Commit 10c
+# takip: bu makinede 18.6.2.1'de bulundu, on-prem vendor'da 18.7.1.1 duruyordu — ikisi FARKLIYDI, kimse
+# bilmiyordu). Üç yerde AYNI sürücü sürümü, requirements'ta pyodbc/aioodbc TAM sürüm — TEK kaynak Dockerfile.
+
+ODBC_PIN = re.compile(r"msodbcsql18=([0-9][0-9.]*-[0-9]+)")
+
+
+def odbc_pin_problems(dockerfile: str, prepare_script: str, ci: str, requirements: str) -> list[str]:
+    problems = []
+    pins = {}
+    for name, text in (("Dockerfile.backend", dockerfile), ("prepare-offline-artifacts.sh", prepare_script),
+                       ("ci.yml", ci)):
+        found = set(ODBC_PIN.findall(text))
+        if not found:
+            problems.append(f"{name}: msodbcsql18 sürümü sabitlenmemiş (msodbcsql18=<sürüm>)")
+        elif len(found) > 1:
+            problems.append(f"{name}: birden çok farklı sürüm: {sorted(found)}")
+        else:
+            pins[name] = next(iter(found))
+    if len(set(pins.values())) > 1:
+        problems.append(f"ODBC sürücü sürümü yerler arasında ayrışmış: {pins}")
+    # vendor .deb yolu da aynı sürümü doğrulamalı (eski/yeni bir vendor sessizce farklı sürücü kurmasın).
+    check = re.search(r"dpkg-query -W -f='\$\{Version\}' msodbcsql18\)\" = \"([^\"]+)\"", dockerfile)
+    if not check:
+        problems.append("Dockerfile.backend kurulan sürücü sürümünü doğrulamıyor (dpkg-query)")
+    elif pins.get("Dockerfile.backend") and check.group(1) != pins["Dockerfile.backend"]:
+        problems.append(f"Dockerfile doğrulama sürümü ({check.group(1)}) kurulum sürümünden ({pins['Dockerfile.backend']}) farklı")
+    for package in ("pyodbc", "aioodbc"):
+        if not re.search(rf"^{package}==\d[\w.]*\s*$", requirements, re.M | re.I):
+            problems.append(f"requirements.txt: {package} TAM sürüme sabitlenmemiş ({package}==<sürüm>)")
+    return problems
+
+
+def _pin_inputs():
+    return (_read("Dockerfile.backend"), _read("scripts/prepare-offline-artifacts.sh"),
+            (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+            (ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8"))
+
+
+def test_odbc_driver_and_python_odbc_stack_are_pinned_consistently():
+    assert odbc_pin_problems(*_pin_inputs()) == []
+
+
+def test_negative_control_unpinned_or_diverged_odbc_versions_are_detected():
+    dockerfile, prepare, ci, requirements = _pin_inputs()
+    problems = odbc_pin_problems(dockerfile, prepare.replace("msodbcsql18=18.7.1.1-1", "msodbcsql18"), ci, requirements)
+    assert any("prepare-offline-artifacts.sh: msodbcsql18 sürümü sabitlenmemiş" in p for p in problems)
+    diverged = odbc_pin_problems(dockerfile, prepare, ci.replace("msodbcsql18=18.7.1.1-1", "msodbcsql18=18.6.2.1-1"),
+                                 requirements)
+    assert any("ayrışmış" in p for p in diverged)
+    loose = odbc_pin_problems(dockerfile, prepare, ci, requirements.replace("pyodbc==5.3.0", "pyodbc>=5.0"))
+    assert any("pyodbc TAM sürüme sabitlenmemiş" in p for p in loose)
+    no_check = odbc_pin_problems(dockerfile.replace("dpkg-query", "true"), prepare, ci, requirements)
+    assert any("dpkg-query" in p for p in no_check)
+
+
+def test_installed_pyodbc_and_aioodbc_match_the_pins():
+    from importlib import metadata
+
+    requirements = (ROOT / "backend" / "requirements.txt").read_text(encoding="utf-8")
+    for package in ("pyodbc", "aioodbc"):
+        pinned = re.search(rf"^{package}==(\S+)\s*$", requirements, re.M | re.I).group(1)
+        try:
+            installed = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            pytest.skip(f"{package} kurulu değil")
+        assert installed == pinned, f"{package}: kurulu {installed} ≠ sabit {pinned}"

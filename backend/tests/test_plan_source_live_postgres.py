@@ -432,6 +432,8 @@ async def test_statement_timeout_cancels_a_long_analyze(admin, client, dsn, monk
     response = await _explain_sample(client, instance.id, row)
     elapsed = time.monotonic() - started
     log(await _version(admin), f"pg_sleep(10) → {response.status_code} {elapsed:.2f} sn {response.json()['detail'][:80]!r}")
+    # Faz 31 Commit 10d madde A3: `< 5` GERÇEK CI oranında ölçüldü (sunucu 0,35 CPU'ya kısıtlı): 0,73–0,75 sn — süre
+    # yapılandırılan 0,7 sn zaman aşımı + ~30 ms, makine hızından neredeyse bağımsız. Pay ~6,7×; eşik değişmedi.
     assert response.status_code == 400 and elapsed < 5
     detail = response.json()["detail"]
     # ANALYZE yolunda zaman aşımı ÇALIŞTIRMA sınırı — "planlama uzun sürdü" demek yanıltıcıydı.

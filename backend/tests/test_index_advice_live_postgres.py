@@ -35,6 +35,7 @@ from tests.live_pg import (
     NO_HYPOPG_DATABASE,
     SKIP_REASON,
     prepare_live_database,
+    query_marker_broken,
     target_for,
     with_database,
 )
@@ -73,6 +74,12 @@ async def _advise(dsn, query, role="super", calls=1000):
 
 async def _version(admin) -> str:
     return await admin.fetchval("SELECT current_setting('server_version')")
+
+
+async def _xfail_if_marker_broken(admin) -> None:
+    version = await admin.fetchval("SELECT current_setting('server_version_num')::int")
+    if query_marker_broken(version):
+        pytest.xfail("PostgreSQL 18: pg_stat_statements /* dbace */ imzasını korumuyor (gerçek sunucuda ölçüldü; SORULAR.md)")
 
 
 def _preds(result):
@@ -425,6 +432,7 @@ async def test_threshold_setting_changes_the_outcome_through_the_api(admin, dsn)
 async def test_slow_query_list_filters_dbaces_own_marked_queries(admin, dsn):
     """Commit 1'in imzası burada tüketiliyor: gerçek toplama döngüsünden sonra liste dbace'in
     kendi sorgularını göstermiyor, `show_system_queries` açıkken gösteriyor."""
+    await _xfail_if_marker_broken(admin)
     instance = await _instance(dsn)
     await admin.execute("SELECT pg_stat_statements_reset()")
     await admin.fetchval("SELECT count(*) FROM orders WHERE status = 'paid'")  # uygulama sorgusu

@@ -29,6 +29,45 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Değişen dosyalar
+    # Faz 31 Commit 10d madde A1: `onprem-package` yalnızca gecelik/elle tetiklemede koşuyordu — Commit 8'in
+    # şifre değişimi sonrası oturum düşmesi (auth.py) hatası bu yüzden ÜÇ TUR fark edilmeden canlıya gitti
+    # (10c takip 2'de yakalandı). Bu iş, auth/security/migration/on-prem paketleme dosyalarından biri
+    # değişirse `onprem-package`in PUSH/PR'da da koşması için hangi dosyaların değiştiğini ölçüyor —
+    # üçüncü taraf bir action yerine (tedarik zinciri yüzeyini büyütmemek için) düz `git diff`.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      onprem_sensitive: ${{ steps.filter.outputs.match }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Hassas dosyalar değişti mi (auth/security/migration/deploy/onprem)
+        id: filter
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -n "$base" ] && git rev-parse --verify "${base}^{commit}" >/dev/null 2>&1; then
+            changed=$(git diff --name-only "$base" "${{ github.sha }}")
+          else
+            # İlk push (base yok/geçersiz — ör. yeni dal): son commit'in kendisine bak.
+            changed=$(git show --name-only --pretty=format: "${{ github.sha }}")
+          fi
+          echo "değişen dosyalar:"
+          echo "$changed"
+          if echo "$changed" | grep -qE '^(backend/app/routers/auth\.py|backend/app/services/security\.py|backend/app/services/auth_deps\.py|backend/app/migrations_runner\.py|backend/app/migration_sql\.py|supabase/migrations/|deploy/onprem/)'; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          fi
+
   backend:
     name: Backend (Python 3.12)
     runs-on: ubuntu-latest
@@ -74,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [15, 16, 17]
+        pg: [15, 16, 17, 18]
     defaults:
       run:
         working-directory: backend
@@ -139,7 +178,7 @@ jobs:
           sudo dpkg -i packages-microsoft-prod.deb
           rm packages-microsoft-prod.deb
           sudo apt-get update
-          ACCEPT_EULA=Y sudo apt-get install -y msodbcsql18 unixodbc-dev
+          ACCEPT_EULA=Y sudo apt-get install -y msodbcsql18=18.7.1.1-1 unixodbc-dev
 
       - name: Bağımlılıkları kur
         run: pip install -r requirements-dev.txt
@@ -158,9 +197,11 @@ jobs:
     # Faz 31 Commit 8. Bankaya giden paketin kendisi: sürüm arşivi üretiliyor, ağı KAPALI bir
     # docker:dind konteynerinde sıfırdan kuruluyor, kısıtlı rolle bir toplama turu koşuyor ve eski
     # paketle kurulmuş veri dolu bir kurulum yükseltiliyor (satır kaybı 0, şema farkı 0).
-    # Uzun sürdüğü için her push'ta değil: gecelik ve elle tetiklemede. Paket ↔ uygulama AYRIŞMASI
-    # her push'ta backend işindeki tests/test_onprem_package_drift.py ile denetleniyor.
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    # Uzun sürdüğü için her push'ta koşmuyor: gecelik, elle tetiklemede VE (Faz 31 Commit 10d madde A1)
+    # auth/security/migration/on-prem paketleme dosyalarından biri değiştiğinde push/PR'da da. Paket ↔
+    # uygulama AYRIŞMASI her push'ta backend işindeki tests/test_onprem_package_drift.py ile denetleniyor.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.onprem_sensitive == 'true'
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 60
     defaults:

@@ -51,6 +51,20 @@ def skip_below_version(server_version_num: int, minimum: int, feature: str) -> N
         pytest.skip(f"sürüm koşulu: sunucu {int(server_version_num)} < {int(minimum)} — {feature}")
 
 
+#: Faz 31 Commit 10d madde C: gerçek PostgreSQL 18.6'da ölçüldü — `pg_stat_statements` artık EXECUTE/fetch
+#: yoluyla çalışan sorgularda (parametreli VEYA parametresiz, `conn.prepare()` ile ya da doğrudan) BAŞTAKİ
+#: yorumu SAKLAMIYOR; yalnızca asyncpg'nin `PreparedStatement.explain()` için TAZE ürettiği metin korunuyor.
+#: 15/16/17'de bu davranış YOK (aynı kodla doğrulandı). `/* dbace */` imza mekanizmasının (query_marker.py)
+#: TÜMÜ "pg_stat_statements yorumu korur" varsayımına dayanıyor — bu yüzden PG 18'de dbace'in KENDİ sorguları
+#: uygulama sorgularından ayırt edilemiyor (yanlış negatif: dbace'in toplama sorguları "en yavaş sorgular"
+#: listesinde/index önerisinde müşteri sorgusu gibi görünebilir). Düzeltme AYRI bir iş — SORULAR.md.
+QUERY_MARKER_BROKEN_SINCE = 180_000
+
+
+def query_marker_broken(server_version_num: int) -> bool:
+    return int(server_version_num) >= QUERY_MARKER_BROKEN_SINCE
+
+
 def disallowed_live_skip(reason: str) -> bool:
     """Canlı testin atlanma gerekçesi bir sürüm koşulu DEĞİLSE True."""
     match = VERSION_SKIP_PATTERN.search(reason or "")

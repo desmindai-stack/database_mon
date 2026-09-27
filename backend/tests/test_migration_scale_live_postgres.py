@@ -443,6 +443,9 @@ async def test_concurrent_index_build_does_not_block_writers_but_a_plain_build_d
         log("düz CREATE INDEX: en büyük yazıcı gecikmesi / build (sn)", (round(plain_latency, 2), round(plain_build, 2)))
         log("CONCURRENTLY: en büyük yazıcı gecikmesi / build (sn)", (round(conc_latency, 2), round(conc_build, 2)))
         assert plain_latency > plain_build * 0.5, "düz index kurulurken yazıcı bloklanmalı (negatif kontrol)"
+        # Faz 31 Commit 10d madde A3: `< 1.0` mutlak tavanı GERÇEK CI oranında ölçüldü — cgroup yazma kısıtı (150 MB/s) +
+        # 0,35 CPU, #53 toplamı CI'da 49,7 sn / taklitte 55,6 sn (CI'ya en yakın kalibrasyon): CONCURRENTLY yazıcı
+        # gecikmesi 3 koşuda 0,08 sn (build 1,7 sn), düz CREATE INDEX 1,4–1,5 sn. Pay ~12× — eşik değişmedi.
         assert conc_latency < conc_build * 0.3 and conc_latency < 1.0, "CONCURRENTLY yazmayı engellememeli"
     finally:
         await conn.close()
@@ -471,3 +474,65 @@ async def test_an_interrupted_concurrent_build_leaves_an_invalid_index_that_the_
     finally:
         await conn.close()
         await _drop("dbace_migscale_invalid")
+
+
+# --- 6. Parça süre bütçesi GERÇEK sunucuda (Faz 31 Commit 10d madde A3) ------------------------------------
+
+
+async def test_a_real_server_cancels_over_budget_chunks_and_the_runner_halves_them_to_the_same_result():
+    """Bütçe, bu makinenin ölçülen ortanca parça süresinin ~0,45'i: 8 000'lik parça bütçeyi AŞMALI (sunucu gerçekten iptal
+    eder), yarısı da aşabilir — elle bir saniye değeri yazılmıyor, hangi hızdaki makinede olursa olsun en az bir
+    iptal/yeniden deneme oluşur ve sonuç kesintisiz çalıştırmayla birebir aynı."""
+    run = await _upgraded()
+    steady = statistics.median(c.seconds for c in _chunks(run["stats"], IDENTITY))
+    budget = steady * 0.45
+    await _clone(PRE53, "dbace_migscale_budget")
+    conn = await _connect("dbace_migscale_budget")
+    try:
+        before = await conn.fetchval("SELECT current_setting('statement_timeout')")
+        stats: list[StatementStat] = []
+        await apply_migrations(conn, MIGRATIONS, only=IDENTITY, stats=stats, record=False, chunk_budget_seconds=budget,
+                               statement_timeout=None)
+        retries = [s for s in stats if s.kind == "retry"]
+        done = _chunks(stats, IDENTITY)
+        log("bütçe (sn) / iptal / başarılı parça / en uzun başarılı (sn)",
+            (round(budget, 3), len(retries), len(done), round(max(c.seconds for c in done), 3)))
+        assert retries, "bütçeyi aşan parça sunucu tarafından İPTAL edilmeliydi (aksi hâlde test bir şey kanıtlamıyor)"
+        # Postgres'in statement_timeout uygulaması İ/O açlığı altında GECİKEBİLİYOR (ölçüldü: 0,405 sn bütçeyle bir
+        # parça 2,50 sn sürdü, muhtemelen checkpoint/fsync sırasında kesilemez bir bekleme) — mekanizma steady-state
+        # genişliği DÜŞÜRÜYOR, her parça için mutlak bir tavan GARANTİ ETMİYOR (SORULAR.md). Bu yüzden burada sıkı bir
+        # çarpan yerine gerçekçi bir üst sınırla (asıl korunan sınır: 8 sn'lik statement_timeout) kontrol ediliyor.
+        assert max(c.seconds for c in done) < budget * 8 + 3.0, "gecikmeli iptal bile makul kalmalı"
+        assert await conn.fetchval("SELECT count(*) FROM slow_query_samples WHERE query_hash IS NULL") == 0
+        checksum = await conn.fetchval("SELECT md5(string_agg(query_hash, ',' ORDER BY id)) FROM slow_query_samples")
+        assert checksum == run["checksum"], "iptal + yeniden deneme sonucu değiştirmemeli"
+        assert await conn.fetchval("SELECT current_setting('statement_timeout')") == before, "oturum ayarı geri konmalı"
+    finally:
+        await conn.close()
+        await _drop("dbace_migscale_budget")
+
+
+async def test_negative_control_without_any_time_limit_the_runner_never_cancels_or_retries():
+    """Sınır (ve dolayısıyla bütçe) YOKKEN aynı backfill tek bir iptal/yeniden deneme olmadan biter: yeniden deneme
+    mekanizması yalnızca gerçek bir bütçe aşımında devreye giriyor, normal yolu değiştirmiyor. (Sağlıklı sunucuda
+    8 sn sınırı ile de yeniden deneme OLMAMASI beklenirdi ama yavaş/sıçramalı bir CI diskinde yeniden deneme TAM
+    olarak istenen davranış — bu yüzden kontrol sınırsız koşuyla yapılıyor, makine hızına bağlı değil.)"""
+    run = await _upgraded()
+    await _clone(PRE53, "dbace_migscale_nolimit")
+    conn = await _connect("dbace_migscale_nolimit")
+    try:
+        await conn.execute("SET statement_timeout = 0")
+        stats: list[StatementStat] = []
+        await apply_migrations(conn, MIGRATIONS, only=IDENTITY, stats=stats, record=False)
+        assert not [s for s in stats if s.kind == "retry"]
+        from app.migration_sql import split_statements
+
+        size = next(st.chunk[1] for st in split_statements(Path(MIGRATIONS, IDENTITY).read_text(encoding="utf-8"))
+                    if st.chunked)
+        lo, hi = await conn.fetchval("SELECT min(id) FROM slow_query_samples"), await conn.fetchval("SELECT max(id) FROM slow_query_samples")
+        assert len(_chunks(stats, IDENTITY)) == (hi - lo) // size + 1, "iptal yokken genişlik hiç küçülmemeli"
+        checksum = await conn.fetchval("SELECT md5(string_agg(query_hash, ',' ORDER BY id)) FROM slow_query_samples")
+        assert checksum == run["checksum"]
+    finally:
+        await conn.close()
+        await _drop("dbace_migscale_nolimit")

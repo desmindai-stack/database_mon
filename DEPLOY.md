@@ -586,11 +586,17 @@ dosyalardan HESAPLANAN "uzun sürebilen" kümeyle karşılaştırılır: buraya 
 Süreler **420 bin satırlık** tablolarla (canlı `slow_query_samples` 393 bin) gerçek PostgreSQL 15'te, `statement_timeout = 8s`
 ile (Supabase'in varsayılan ifade sınırı) ölçüldü (`tests/test_migration_scale_live_postgres.py`). Süre satır sayısıyla
 DOĞRUSAL büyür. **Commit 10c takip 4'te "3–5 kat" varsayımı GERÇEK GitHub Actions CI'ında ölçüldü ve YETERSİZ çıktı:**
-gözlenen oran **~6,5×** (yerelde parça başına 0,77–0,96 sn iken CI'da 5,0 sn — o zamanki 20 bin'lik parça boyuyla 8 sn
-sınırına yalnızca ~1,6× pay bırakıyordu, GitHub Actions'ın diski beklenenden yavaş). Parça boyu 20 binden **8 bine**
-indirildi: yerelde ölçülen en uzun parça 0,37 sn, 6,5× ile CI'da ~2,4 sn — 8 sn sınırına **~3,3× pay**. Aşağıdaki
-sürelerde #53 GÜNCEL (8 bin) parça boyuyla; yönetilen veritabanının diskini hâlâ en az **6,5×** yerelden yavaş
-varsayın. Hiçbiri tabloyu yazmaya kapatmaz; ek yük WAL/disk (güncellenen satırlar, otovakum temizler) ve CPU'dur.
+gözlenen oran **~6,5×** (yerelde parça başına 0,77–0,96 sn iken CI'da 5,0 sn). Parça boyu 20 binden **8 bine**
+indirildi (yerelde ölçülen en uzun parça 0,37 sn) — ama **Commit 10d'de bu da yetersiz çıktı**: CI diskini daha
+gerçekçi taklit eden bir ortamda (yazma hızı kısıtlı + CPU kısıtlı) TEK bir parça, boyundan bağımsız olarak
+checkpoint/fsync birikimi yüzünden 3–5 saniyeye sıçrayabiliyor — **parça boyu küçültmek bu sıçramayı kaldırmıyor**,
+çünkü sorun disk THROUGHPUT'u değil disk LATENCY sıçraması. Asıl koruma artık boyuttan gelmiyor: **çalıştırıcı
+(`app/migrations_runner.py::_run_chunked`, Commit 10d) parça başına bir süre BÜTÇESİ uyguluyor** (oturumun
+`statement_timeout`unun 1/3'ü — 8 sn sınırda 2,67 sn), bütçeyi aşan parçayı sunucu iptal ettiğinde YARI genişlikle
+yeniden dener (idempotent, veri kaybı yok). Bu da mutlak bir tavan GARANTİ ETMİYOR (Postgres'in kendi zaman aşımı
+uygulaması İ/O açlığında gecikebiliyor — ölçülen en kötü durum 2,50 sn, yine de 8 sn'nin altında; SORULAR.md) ama
+tek bir parçanın 8 sn sınırının TAMAMINI tüketip tüm işi geri aldırmasını önlüyor. Hiçbiri tabloyu yazmaya
+kapatmaz; ek yük WAL/disk (güncellenen satırlar, otovakum temizler) ve CPU'dur.
 
 | Migration | Büyük tablo | Ölçülen süre (420 bin satır) | Yöntem | Bakım penceresi |
 |---|---|---|---|---|
