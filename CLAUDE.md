@@ -26,6 +26,7 @@ Hedef kitle **iki ayrı**: DBA (derin, eyleme dönük, komutlu) ve müşteri yö
 | Çözülmemiş/bilerek yapılmamış işler, açık varsayımlar | **SORULAR.md** |
 | auto_explain kurulumu, yönetilen servisler | **docs/AUTO_EXPLAIN.md** |
 | Cluster sağlık değerlendirmesi | **docs/CLUSTER_HEALTH.md** |
+| Docker'sız (native) on-prem kurulum tasarımı | **docs/ONPREM_NATIVE.md** |
 
 ## Mevcut durum
 

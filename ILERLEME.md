@@ -9762,3 +9762,58 @@ bu üç maddenin dışında YENİ bir davranış farkı bulunamadı.
 **Test:** `tests/test_topology_live_postgres.py` (3, gerçek PG15/16/17/18), `tests/test_migrations_runner.py`
 (19, çevrimdışı — 2 güncellendi), `tests/test_migration_scale_live_postgres.py` (10, gerçek PG18, 420 bin
 satır).
+
+## Faz 32 — Commit 11a: Docker'sız (native) on-prem kurulum — TASARIM (kod yok)
+
+**İstek:** banka sunucusunda Docker yok; dbace ayrı bir Linux sunucusuna/VM'e doğrudan kurulacak. Bu
+commit yalnızca tasarım üretiyor — `docs/ONPREM_NATIVE.md` (11 karar alanı: Python, meta PostgreSQL, SQL
+Server sürücüsü, systemd servisleri, frontend, güvenlik, kurulum/yükseltme/geri alma/kaldırma, önkoşul
+denetimi, test stratejisi, mevcut Docker paketinin geleceği, ağ gereksinimleri) + Docker paketinin her
+parçasının native karşılığını gösteren envanter tablosu. **Hiçbir kod yazılmadı, `deploy/`/`railway.toml`
+dosyalarına dokunulmadı.**
+
+### Araştırma — mevcut Docker on-prem paketi baştan sona okundu
+
+Tasarımın her kararı KODDAN çıktı, varsayımdan değil: `docker-compose.yml`, `Dockerfile.backend`,
+`entrypoint.sh`, `nginx.conf`, `Dockerfile.web.offline`, `KURULUM.md`, `.env.example`, `install-offline.sh`,
+`prepare-offline-artifacts.sh`, `sql/*.sql`, `app/main.py`'nin `RUN_MODE`/zamanlayıcı akışı,
+`app/services/secret_policy.py::enforce_secret_policy`, `agents/host-agent/README.md`, ve Commit 10a'nın
+ölçtüğü yazım hacmi (instance başına ≈360 MB/30 gün, ağır senaryo — disk boyutlandırma önerisinin kaynağı).
+
+### Ana kararlar (gerekçeleriyle doküman içinde)
+
+- **Python:** taşınabilir `python-build-standalone` 3.12 (vendor edilmiş tar.gz) + bugünkü
+  `vendor/wheels/*.whl` — sistem Python'una (RHEL9: 3.9, Ubuntu 22.04: 3.10) bağımlı kalınmıyor, ek depo
+  gerekmiyor.
+- **Meta PostgreSQL:** PGDG'nin resmi RPM/DEB'i, sürüm **16** (bugünkü `postgres:16-alpine` ile birebir —
+  sıfır yeni şema/migration riski), yalnızca `127.0.0.1`, `scram-sha-256`, dağıtımın kendi veri dizini
+  yolu. Yedekleme bugünkü "elle `pg_dump` örneği"nden gerçek bir `systemd .timer`'a yükseltildi.
+- **SQL Server sürücüsü:** msodbcsql18 + unixODBC, RHEL9 ve Ubuntu 22.04 için Microsoft'un AYRI resmi
+  depolarından vendor edilmiş RPM/DEB (bookworm `.deb`'i çapraz kullanmak ABI riski taşırdı).
+- **Servisler:** TEK `dbace.service` (bugünkü `RUN_MODE=all`'ın birebir karşılığı — API + zamanlayıcı aynı
+  süreçte); bölünmüş api/worker topolojisi opsiyonel, dokümante ama varsayılan değil.
+- **Frontend:** nginx KALIYOR (FastAPI `StaticFiles` mount'a geçmek yeni kod isterdi — bu commit'in
+  kapsamı dışı; nginx zaten test edilmiş TLS/proxy davranışını sıfır değişiklikle taşıyor).
+- **Kurulum:** `releases/<sürüm>/` + `current` sembolik bağı (Capistrano deseni) — bugünkü Docker
+  yaklaşımının AKSİNE gerçek, hızlı bir `rollback.sh` sağlıyor; migration BAŞARISIZ olursa symlink hiç
+  çevrilmiyor, eski sürüm çalışmaya devam ediyor (bugünkünden İYİLEŞME: orada başarısız migration'lı yeni
+  konteyner unhealthy kalıp site o sırada aşağıda kalabiliyordu).
+- **SELinux:** özel policy modülü YOK (düşük risk/bakım) — yalnızca dosya/port bağlamı ayarları.
+- **Test:** bugünkü dind (`--network none`) deseni sürdürülüyor ama systemd'yi PID 1 çalıştıran
+  `rockylinux:9`/`ubuntu:22.04` konteynerlerinde; 4 senaryo (kurulum, yükseltme, **geri alma** [yeni],
+  kaldırma) × 2 dağıtım.
+- **Mevcut Docker paketi:** HİÇBİR ŞEY SİLİNMİYOR — Railway'in build yolu ve pilot/demo kullanımı olarak
+  kalıyor; native paket EK bir yol.
+
+### Açık kararlar (kullanıcıdan yanıt bekliyor — `docs/ONPREM_NATIVE.md` sonunda, 8 madde)
+
+host-agent bu tasarımın kapsamında mı (literal "hedef sunuculara ajan yok" kısıtı onu dışarıda bırakıyor);
+meta PostgreSQL sürümü 16'da mı kalsın; nginx mi tek-süreç mi; TLS'i kim sonlandırıyor; yedek hedefi
+yerel disk mi bankanın merkezi altyapısı mı; bölünmüş topoloji ilk sürümde birinci sınıf mı; SELinux'ta
+yalnızca bağlam ayarı yeterli mi; disk boyutlandırma örneğinde hangi saklama süresi kullanılsın.
+
+**Sıradaki iş** (bu commit'te YAPILMADI, tasarım onaylandıktan sonra): vendoring script'lerinin
+genişletilmesi, `install.sh`/`rollback.sh`/`uninstall.sh`/`prereq-check.sh`, systemd birim dosyaları,
+`logging_setup.py`'ye dosya log handler'ı, native-paket CI işi.
+
+**Değişen dosyalar:** `docs/ONPREM_NATIVE.md` (yeni), `CLAUDE.md` (yönlendirme tablosuna satır).
