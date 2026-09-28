@@ -2849,3 +2849,21 @@ topoloji olarak kullanıyor (CLAUDE.md: "SQL Server Always On 4 düğüm") — b
 istatistikleri/bloklama'nın PRODÜKSİYONDA en yaygın kullanılacağı topoloji hiç ölçülmedi demek. **Açık iş:**
 AG konteynerine de paketin login SQL'ini kurup (`prepare_monitor_login`in AG'ye de uygulanan bir sürümü) bu
 dört test dosyasını AG hedefiyle de parametrelendirmek — orta boy bir iş, bu turda kapsam dışı bırakıldı.
+
+**PG18'de CI'da replika teardown'ının neden 30 sn'yi aştığı YEREL'de üretilemedi (Faz 31 Commit 10f).**
+`test_topology_live_postgres.py::replica` fixture'ının teardown'u (kopar → geri bağla → akışa dön) CI'da
+yalnızca PG18 kolunda 30 sn sınırını aşıyordu; ürün davranışı DOĞRU (replika gerçekten "BAĞLI DEĞİL"
+diyor), sorun test bekleyişinin payı. Aynı döngüyü GERÇEK PG16 ve PG18 birincil/replika çiftlerine karşı,
+hem boşta hem `docker update --cpus=0.5` ile kısıtlanmış makinede tekrar tekrar denedim — HER seferinde
+~1 sn'de tamamlandı, CI'daki gecikmeyi üretemedim. En olası açıklama (kanıtlanamadı): izole denemem
+kopukluğu ANINDA geri kapatıyor (WAL birikmeden), gerçek testler kopardıktan sonra wizard + iki toplama
+turu kadar GERÇEK süre geçiriyor ve PG18'in `SHOW primary_conninfo`sunun önceki sürümlerden belirgin
+şekilde daha geniş parametre kümesi (sslnegotiation/gssencmode/target_session_attrs/load_balance_hosts vb.)
+her yeniden bağlanışta CI ağında yerelden daha uzun negotiation'a yol açıyor olabilir — ama bu mekanizma
+BU MAKİNEDE hiçbir koşulda ölçülebilir bir yavaşlama göstermedi. **Uygulanan önlem** (kök nedenden bağımsız
+olarak sağlam): teardown beklemesi 180 sn'ye çıkarıldı (Commit 10d'de ölçülen ~6,5× CI/yerel oranıyla
+uyumlu) ve fixture setup'ı artık `assert original` yerine gerçek akış durumunu kontrol ediyor — önceki
+testin teardown'u pes ettiyse bir sonraki test KURULUMDA anlaşılır gerekçeyle düşüyor, teardown'da değil.
+**Açık iş:** bir sonraki CI koşusu 180 sn'nin yeterli olup olmadığını gösterecek; yetmezse CI Actions
+loglarına (`docker logs`, ağ gecikmesi) doğrudan erişim gerekecek — bu makinede Docker Desktop'ın GitHub
+Actions runner'ının ağ/disk özelliklerini birebir taklit etmediği kabul edilmeli.

@@ -63,6 +63,20 @@ async def admin(dsn):
         await conn.close()
 
 
+#: Teardown'ın "geri bağlan ve akışa dön" beklemesi (Faz 31 Commit 10f). 30 sn PG18'de CI'da yetersiz kaldı:
+#: `scripts/live_pg.py up` replikanın akışta olduğunu KURULUMDA doğruluyor (sys.exit ile sertçe), yani testler
+#: başladığında replika kesin akıştaydı — kırılan, testin KENDİSİNİN kopardığı bağlantıyı teardown'ın geri
+#: toplaması. Bunun CI'da uzaması iki nedenle mantıklı: (1) PG18 `SHOW primary_conninfo` çıktısı önceki
+#: sürümlerden ÇOK daha geniş (sslnegotiation/gssencmode/target_session_attrs/load_balance_hosts gibi onlarca
+#: açık parametre) — her yeniden bağlanışta bu negotiation'ın CI ağında yerelden daha uzun sürmesi beklenir;
+#: (2) test gövdesi (wizard + iki toplama turu) kopukken gerçek süre geçiriyor, birincilde biriken WAL'in
+#: yeniden oynatılması gerekiyor — yerel NVMe'de bu birkaç saniyeyi geçmiyor ama Commit 10d'de CI diskinin
+#: yereleden ölçülebilir şekilde (~6,5×) yavaş olduğu ayrıca kanıtlanmıştı. Mekanizmanın kendisi YEREL'de hem
+#: boşta hem CPU kısıtlı (0,5 çekirdek) koşullarda 1 sn'de tamamlandı (kanıt: ILERLEME.md) — bu yüzden burada
+#: mantık değişmiyor, yalnızca CI'nın gerçekçi payına göre bekleme büyütülüyor.
+_REPLICA_RECONNECT_TIMEOUT = 180.0
+
+
 @pytest.fixture
 async def replica(dsn):
     """Replikanın süper kullanıcı bağlantısı — yalnızca TEST ALTYAPISI koparıp bağlamak için; dbace
@@ -70,12 +84,22 @@ async def replica(dsn):
     conn = await asyncpg.connect(replica_for(dsn), statement_cache_size=0)
     original = await conn.fetchval("SHOW primary_conninfo")
     assert original, "replika primary_conninfo boş — `python scripts/live_pg.py up` geri bağlar"
+    # Yalnızca conninfo'nun dolu olması yetmez: ÖNCEKİ bir testin teardown'u geri yazıp akışa dönmeyi
+    # BEKLEYEMEDEN (bkz. _REPLICA_RECONNECT_TIMEOUT) pes etmiş olabilir — bu durumda conninfo doğru değeri
+    # taşır ama wal receiver henüz akışta değildir. Bunu burada, KURULUMDA, açık bir gerekçeyle yakala; aksi
+    # hâlde bir sonraki test kendi gövdesinde ilgisiz bir asserte çarpıp neden başarısız olduğunu gizler.
+    status = await conn.fetchval("SELECT status FROM pg_stat_wal_receiver")
+    assert status == "streaming", (
+        f"replika akışta değil (wal receiver: {status or 'yok'}) — önceki testin teardown'u geri bağlanmayı "
+        "bekleyemeden pes etmiş olabilir; `python scripts/live_pg.py up` ile elle onarın"
+    )
     try:
         yield conn
     finally:
         await conn.execute(await conn.fetchval("SELECT format('ALTER SYSTEM SET primary_conninfo = %L', $1::text)", original))
         await conn.execute("SELECT pg_reload_conf()")
-        await _wait(lambda: conn.fetchval("SELECT status FROM pg_stat_wal_receiver"), "streaming")
+        await _wait(lambda: conn.fetchval("SELECT status FROM pg_stat_wal_receiver"), "streaming",
+                   timeout=_REPLICA_RECONNECT_TIMEOUT)
         await conn.close()
 
 

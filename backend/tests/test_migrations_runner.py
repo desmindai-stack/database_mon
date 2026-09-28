@@ -261,7 +261,10 @@ async def test_the_session_statement_timeout_gives_a_third_as_chunk_budget_and_i
     directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
     conn = BudgetConn(max_width=10**9, timeout="8s", bounds=(1, 50_000))
     await apply_migrations(conn, directory)
-    assert conn.timeouts_set == ["2666ms", "8s"], "parça bütçesi 8 sn'nin 1/3'ü; iş bitince özgün ayar geri konur"
+    # CHUNKED dosyası hem parçalı UPDATE hem CONCURRENTLY index içeriyor (#53'ün ta kendisi): parça bütçesi
+    # 8 sn'nin 1/3'ü ile başlayıp özgün ayara döner, SONRA CONCURRENTLY kendi payını sınırsız (Faz 31 Commit
+    # 10f) çalıştırıp AYNI özgün ayara döner — ikisi de kendi bölümünü geri bırakıyor.
+    assert conn.timeouts_set == ["2666ms", "8s", "0", "8s"], "parça bütçesi VE CONCURRENTLY'nin sınırsız payı ayrı ayrı geri konur"
 
 
 async def test_an_explicit_budget_overrides_and_no_known_limit_means_no_timeout_change(tmp_path, no_pause):
@@ -271,7 +274,9 @@ async def test_an_explicit_budget_overrides_and_no_known_limit_means_no_timeout_
     assert explicit.timeouts_set[0] == "500ms"
     unlimited = BudgetConn(max_width=10**9, timeout="0", bounds=(1, 50_000))
     await apply_migrations(unlimited, directory)
-    assert unlimited.timeouts_set == [], "sınır yoksa oturum ayarına dokunulmaz (eski davranış)"
+    # Parçalı UPDATE için sınır yoksa oturum ayarına dokunulmaz (eski davranış) — ama CONCURRENTLY kendi payını
+    # HER ZAMAN sınırsız çalıştırır (Faz 31 Commit 10f), oturumun zaten sınırsız olmasından bağımsız.
+    assert unlimited.timeouts_set == ["0", "0"], "CONCURRENTLY kendi sınırsız payını sınır zaten yokken de set eder"
     assert len(_updates(unlimited)) == 1
 
 

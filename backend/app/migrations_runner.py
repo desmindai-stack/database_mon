@@ -23,6 +23,10 @@ migration'ları elle uygulamak kurulum yapanın hafızasına kalıyordu.
 - **Geçersiz index kurtarma:** `CREATE INDEX CONCURRENTLY` yarıda kesilirse PostgreSQL `INVALID` bir index bırakır ve
   `IF NOT EXISTS` onu "var" sanıp atlar — index sessizce hiç işe yaramaz. Çalıştırıcı, ifadeyi çalıştırmadan önce aynı
   adlı geçersiz index'i `DROP INDEX CONCURRENTLY` ile temizler.
+- **CONCURRENTLY sınırsız çalışır** (Faz 31 Commit 10f): oturuma set'lenmiş `statement_timeout` (yönetilen
+  veritabanının sınırı) yalnızca bu tek ifade için `0`'a çekilir, sonra geri yazılır — index parçalanamıyor ve
+  tabloyu kilitlemiyor, ama bölünemediği için tek bir sınır aşımı bütün ifadeyi iptal ederdi. Diğer (chunked/düz)
+  ifadeler sınırı aynen korur.
 - Kayıt tablosu olmayan eski bir kurulumda bütün dosyalar sırayla uygulanıyor; migration'lar
   `IF NOT EXISTS` ile yazılı, yükseltme testi (`test_onprem_package_live.py`) bunu gerçek veriyle sınıyor.
 
@@ -199,6 +203,26 @@ async def _run_chunked(conn, statement: Statement, file: str, stats: list[Statem
     return total_rows
 
 
+async def _run_unbounded(conn, run) -> int:
+    """`run` çalışırken oturumun `statement_timeout`unu geçici olarak kaldırır (Faz 31 Commit 10f).
+
+    `CREATE INDEX CONCURRENTLY` parçalanamaz ve tabloyu kilitlemez — ama önceden `-- dbace:chunked`
+    bir UPDATE'in ardından geldiğinde, oturumun yönetilen-veritabanı sınırını (Supabase 8 sn) taklit
+    eden `statement_timeout` HÂLÂ set'liydi ve tek, bölünemeyen bu ifadeye de uygulanıyordu — 420 bin
+    satırda index kurulumu bu sınırı aşıp `QueryCanceledError` ile iptal ediliyordu (#53'ün İLK sürümü
+    bu sınıf hatayla değil ama YENİ sürümün CONCURRENTLY adımı da aynı sınıfa girdi — canlıda #53'ü elle
+    kurarken zaten sınırı yükseltmiştik, aynı ihtiyaç). Diğer ifadeler (chunked ya da düz) sınırı korur.
+    """
+    current = await conn.fetchrow("SELECT current_setting('statement_timeout') AS v")
+    original = current["v"] if current is not None else None
+    restore = original if original not in (None, "") else "0"
+    await conn.execute("SET statement_timeout = '0'")
+    try:
+        return await run()
+    finally:
+        await conn.execute(f"SET statement_timeout = '{restore}'")
+
+
 async def _run_file_without_transaction(conn, path: Path, statements: list[Statement],
                                         stats: list[StatementStat] | None,
                                         chunk_budget_seconds: float | None = None) -> None:
@@ -210,8 +234,12 @@ async def _run_file_without_transaction(conn, path: Path, statements: list[State
         else:
             index = _CONCURRENT_INDEX.search(statement.sql)
             if index:
-                await _drop_invalid_index(conn, index.group(1))
-            rows = _rows(await conn.execute(statement.sql))
+                async def _build(statement=statement, index=index) -> int:
+                    await _drop_invalid_index(conn, index.group(1))
+                    return _rows(await conn.execute(statement.sql))
+                rows = await _run_unbounded(conn, _build)
+            else:
+                rows = _rows(await conn.execute(statement.sql))
         if stats is not None and not statement.chunked:
             stats.append(StatementStat(path.name, statement.line, "statement", time.monotonic() - started, rows,
                                        statement.sql[:80]))

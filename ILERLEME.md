@@ -9670,3 +9670,95 @@ eşleşiyor; 5 art arda koşuda kırılmadı.
 **Tam paket (bir kez, `-rs`, `DBACE_TEST_CLEAN_INSTALL=1` dahil — yerel geliştirme ortamı: PostgreSQL
 15/16/17/18 + replikalar + PgBouncer + SQL Server standalone/AG hepsi tanımlı):** 2525 passed, 4 skipped,
 9 xfailed (PG18'in bilinen imza regresyonu), 0 hata.
+
+## Faz 31 — Commit 10f: CI'da yalnızca PG18 kolu kırmızıydı — iki AYRI, gerçek ürün hatası
+
+**Semptom:** `live-postgres` matrisinde 15/16/17/mssql/diğer işler yeşil, yalnızca PG18 kolu kırmızı:
+`test_topology_live_postgres.py` (3 failed + 3 teardown error) ve
+`test_migration_scale_live_postgres.py::test_the_original_single_update_exceeds_the_limit_that_the_chunked_version_meets`.
+
+### 1) Replika teardown'ı 30 sn'de akışa dönemiyor — ürün doğru, test payı yetersiz
+
+**Kök neden akışı:** `scripts/live_pg.py::up_replica()` replikanın akışta olduğunu KURULUMDA sertçe
+doğruluyor (`sys.exit` ile) — yani CI'daki "PostgreSQL 18 konteynerini kur" adımı yeşilse testler
+BAŞLARKEN replika kesinlikle akıştaydı. Kırılan, `test_topology_live_postgres.py::replica` fixture'ının
+TEARDOWN'daki "kopar → geri bağla → akışa dön" bekleyişi (`ALTER SYSTEM SET primary_conninfo = ''` sonrası
+30 sn sabit bekleme). Bu üç test AYNI dosyada sırayla çalışıyor ve HEPSİ `replica` fixture'ını kullanıyor;
+ilk testin teardown'u 30 sn'de akışa dönemezse (conninfo doğru yazılmış ama wal receiver henüz
+'streaming' değilken pes eder) bir SONRAKİ testin `assert original` kontrolü (yalnızca conninfo'nun BOŞ
+OLMADIĞINI, akışta olduğunu DEĞİL doğruluyordu) yanlışlıkla geçiyor, test kendi gövdesinde "cluster
+healthy" beklerken ilgisiz bir assertle çakılıyor — bu da SIRADAKİ testin teardown'unu aynı şekilde
+zehirliyor. "3 failed + 3 teardown error" deseni bununla tam örtüşüyor.
+
+**Yerelde tahmin ETMEDEN doğrulanan/doğrulanamayan noktalar:**
+- `postgres:18` imajının `PGDATA` yolu gerçekten sürüm-ad alanlı (`/var/lib/postgresql/18/docker`,
+  `docker inspect`le doğrulandı) AMA `live_pg.py` bu yolu zaten `$PGDATA` ile DİNAMİK okuyor — hardcode yok.
+  Bu tek başına neden değil.
+- Kopar→geri-bağla döngüsünü izole bir betikle (gerçek PG16 VE PG18 birincil/replika çiftlerine karşı,
+  hem boşta hem `docker update --cpus=0.5` ile kısıtlanmış) tekrar tekrar denedim: HER seferinde ~1 sn'de
+  tamamlandı — CI'daki 30 sn+ gecikmeyi burada üretemedim. Bunun nedeni muhtemelen benim izole betiğimin
+  kopukluğu ANINDA geri kapatması (WAL birikmeden); gerçek testler kopardıktan sonra wizard + iki toplama
+  turu kadar GERÇEK süre geçiriyor, birincilde biriken WAL'in teardown'da yeniden oynatılması gerekiyor.
+  PG18'in `SHOW primary_conninfo` çıktısı önceki sürümlerden BELİRGİN şekilde daha geniş (sslnegotiation,
+  gssencmode, target_session_attrs, load_balance_hosts gibi onlarca açık parametre) — her yeniden
+  bağlanışta bu negotiation'ın CI ağında yerelden daha uzun sürmesi mantıklı ama BU MAKİNEDE ayrıca
+  kanıtlanamadı.
+- Dürüst sonuç: mekanizma YEREL'de (hem boşta hem CPU kısıtlı) hızlı ve doğru; CI'a özgü yavaşlamayı bu
+  ortamda üretemedim. SORULAR.md'ye açık madde olarak yazıldı.
+
+**Düzeltme (`tests/test_topology_live_postgres.py`):**
+1. Fixture SETUP'ta artık yalnızca conninfo'nun dolu olması değil, `pg_stat_wal_receiver.status ==
+   'streaming'` DOĞRUDAN kontrol ediliyor — önceki testin teardown'u geri bağlanmayı bekleyemeden pes
+   ettiyse test kendi ilgisiz assertine çarpmadan, KURULUMDA, "replika akışta değil — önceki testin
+   teardown'u pes etmiş olabilir" gerekçesiyle anlaşılır biçimde düşüyor (istenen davranış).
+   2. Teardown'ın akışa-dönüş beklemesi 30 sn → 180 sn (Commit 10d'de ölçülen ~6,5× CI/yerel oranıyla
+   uyumlu, keyfi değil): mekanizma zaten doğru ve hızlı, yalnızca CI'nın gerçekçi payı büyütüldü.
+
+Yerelde PG18'e karşı üç test de (yeni fixture'la) 8,2 sn'de geçti — mekanizmanın kendisini bozmadığını
+doğruluyor; CI'daki gerçek payın yeterli olup olmadığı ancak bir sonraki CI koşusunda kesinleşecek.
+
+### 2) `CREATE INDEX CONCURRENTLY`, bölünemeyen tek ifade olduğu hâlde oturumun `statement_timeout`'unu miras alıyordu
+
+**Kanıt (önce, düzeltmeden):** #53 migration'ı (`20260918090000_slow_query_sample_identity.sql`) hem
+`-- dbace:chunked` bir UPDATE hem `CREATE INDEX CONCURRENTLY IF NOT EXISTS` içeriyor.
+`migrations_runner.py::_run_file_without_transaction`, chunked ifadeler için oturumun `statement_timeout`'unu
+KENDİ payına göre geçici değiştirip geri yazıyordu ama CONCURRENTLY DÜZ bir ifade sayıldığından bu korumayı
+hiç görmüyor, oturuma `apply_migrations`'ın en başında set'lenen sınırla (test senaryosunda Supabase'in
+8 sn'lik varsayılanını taklit eden `statement_timeout`) çalışıyordu. 420 bin satırda index kurulumu bu
+sınırı aşınca `QueryCanceledError` ile iptal ediliyordu — TAM OLARAK #53'ün ilk sürümünün düştüğü tuzağın
+YENİ sürümde farklı bir ifadede tekrarı (canlıda #53'ü elle kurarken zaten sınırı yükseltmiştik; bu commit
+aynı korumayı çalıştırıcıya kalıcı olarak ekliyor).
+
+**Düzeltme (`app/migrations_runner.py`):** yeni `_run_unbounded()` yardımcı işlevi — yalnızca CONCURRENTLY
+ifadesi (ve önündeki geçersiz-index temizliği) çalışırken oturumun `statement_timeout`'unu `0`'a çeker,
+ifade bitince ÖZGÜN değeri geri yazar. İndex parçalanamıyor ve tabloyu kilitlemiyor (CONCURRENTLY'nin
+kendi anlamı) — bölünemeyen bir ifadeye bölünmüş-parça bütçesi uygulamak yanlıştı. Diğer TÜM ifadeler
+(chunked ya da düz) sınırı aynen koruyor.
+
+**Doğrulama (gerçek PG18, 420 bin satır):** `test_the_original_single_update_exceeds_the_limit_that_the_chunked_version_meets`
+(53 parçanın hepsi 6,8 sn sınırın altında, index kurulumu ÖNCEDEN bu sınıra takılıyordu) artık geçiyor —
+CONCURRENTLY adımı 3,76-4,03 sn sürüyor (sınırın altına DEĞİL, sınırsız çalıştığı için tamamlanıyor).
+`test_migration_scale_live_postgres.py`'nin TAMAMI (10 test, CONCURRENTLY'nin yazıcıları bloklamadığını ve
+yarıda kesilen index'in kurtarıldığını doğrulayanlar dahil) gerçek PG18'e karşı yeniden koşuldu, hepsi geçti.
+
+**Kendi hatam, aynı iş içinde bulunup düzeltildi:** `_run_unbounded` ilk hâliyle `SET statement_timeout = 0`
+(tırnaksız) yazıyordu; modülün geri kalanı HER ZAMAN tırnaklı yazıyor (`'8s'` gibi). PG18-taramalı tam paket
+koşusunda `tests/test_migrations_runner.py`nin sahte bağlantısı (`BudgetConn`, SQL'i tırnak ayrıştırarak
+okuyor) bunu `IndexError`la yakaladı — 4 test kırıldı. Tırnaklama modülün geri kalanıyla tutarlı hâle
+getirildi; CHUNKED test sabiti (#53'ün ta kendisi — hem chunked UPDATE hem CONCURRENTLY içeriyor) artık
+CONCURRENTLY'nin KENDİ sınırsız payını da ayrıca set/restore ettiğini doğrulayacak şekilde güncellendi.
+
+### 3) PG18'de CI'da ilk kez koşan başka ne var — yerelde aynı sonuç mu
+
+PG18, Commit 10d'de `live-postgres` matrisine eklendiğinde `dsn`/`LIVE_DSNS` fixture'ını kullanan TÜM
+`test_*_live_postgres.py` dosyaları (17 dosya, 138 canlı test) PG18'e karşı CI'da İLK KEZ koşmaya başladı —
+yalnızca yukarıdaki iki dosya değil. CI'nın PG18 kolunun GERÇEK komutunu (`pytest tests/ -q -rs`, yalnızca
+`DBACE_TEST_PG_DSN`/`_REPLICA_DSN`/`_POOLER_DSN` PG18'e set'li — MSSQL DSN'i TANIMSIZ, tıpkı CI'daki gibi)
+birebir yerelde çalıştırdım: yukarıdaki iki dosyanın (o an henüz düzeltilmemiş) hatası + kendi hatam olan
+4 `test_migrations_runner.py` başarısızlığı dışında **hiçbir başka test kırılmadı** (2204 passed, 21
+skipped — hepsi MSSQL/on-prem/dependency-pins gibi bilinçli kapalı testler, 9 xfailed). Yani PG18'e özgü,
+bu üç maddenin dışında YENİ bir davranış farkı bulunamadı.
+
+**Test:** `tests/test_topology_live_postgres.py` (3, gerçek PG15/16/17/18), `tests/test_migrations_runner.py`
+(19, çevrimdışı — 2 güncellendi), `tests/test_migration_scale_live_postgres.py` (10, gerçek PG18, 420 bin
+satır).
