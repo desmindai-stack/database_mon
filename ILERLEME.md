@@ -9888,3 +9888,30 @@ olsun; log saklama varsayılanı (önerilen 14 gün) ve hedef başına boyut tav
 
 **Değişen dosyalar:** `docs/ONPREM_NATIVE.md` (§2/§4/§5/§6 güncellendi, yeni §11 "Ajansız uzak log
 toplama", §12 olarak yeniden numaralanan ağ sayfası, envanter ve açık kararlar listesi yenilendi).
+
+## Faz 32 — Commit 11a-ek-2: §11'in 4 açık kararı yanıtlandı — tasarım artık kapalı, uygulama sırası belli
+
+Kod yazılmadı. `docs/ONPREM_NATIVE.md` güncellendi:
+
+- **Get-ClusterLog**: v1'de KALICI olarak yok (geçici eksik değil) — olay kanalı okuma yeterli kabul
+  edildi; gerçek bir WSFC test ortamı edinilirse ayrı bir işte değerlendirilecek.
+- **Doğrulama VM'leri**: kaynağı (kim sağlayacak) ayrıca kararlaştırılacak, ama SELinux (§6) ve Windows
+  (§11.h) elle doğrulama kontrol listeleri bunu BEKLEMİYOR — 11b/11e'nin kendi teslim edilebilirleri
+  olarak, çalıştıracak taraftan bağımsız yazılıp hazır tutulacak.
+- **Windows hesabı**: varsayılan domain hesabı (Kerberos, banka AD'sine uygun); yerel hesap da
+  destekleniyor (`-ExistingAccount`/`-CreateLocalUser`).
+- **Log saklama**: 14 gün / hedef başına 500 MB tavan, hangisi önce dolarsa. Tavan dolunca en eskiler
+  silinir AMA sessiz değil — ekranda "tavan doldu, şu an X günlük log tutulabiliyor" (X, o hedefin GERÇEK
+  yazım hızından hesaplanan güncel değer) — ürünün "ölçülemedi ≠ sorun yok" dürüstlük ilkesinin uzantısı.
+- **Linux sarmalayıcı betiğinin "yazılım değil" netliği**: güvenlik ekibi dokümanına, `/usr/local/bin/
+  dbace-log-reader.sh`'ın çalışan bir süreç/daemon değil, root'a ait salt-okunur statik bir dosya olduğu
+  (sshd onu yalnızca gelen bir oturumda çağırır, kendisi bağlantı açmaz/port dinlemez) açıkça yazıldı (§11.f,
+  §12).
+
+**Sonuç: dokümanda artık açık karar yok.** Uygulama sırası netleşti: **11b** (yerel kurulum: vendoring,
+prereq-check, install.sh, dbace.service, nginx TLS, yedek timer'ı) → **11c** (yükseltme/geri alma/kaldırma +
+native-paket CI) → **11d** (Linux ajansız log toplama) → **11e** (Windows ajansız log toplama), her biri
+ayrı commit, push yok.
+
+**Değişen dosyalar:** `docs/ONPREM_NATIVE.md` (§11.b/e/f, §12 güncellendi; "Açık kararlar" kapatıldı,
+"Bir sonraki adım" yerine "Uygulama sırası (11b-11e)" yazıldı).

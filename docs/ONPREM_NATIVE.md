@@ -1,10 +1,14 @@
-# Docker'sız on-prem kurulum — tasarım (Faz 32 Commit 11a + 11a-ek)
+# Docker'sız on-prem kurulum — tasarım (Faz 32 Commit 11a + 11a-ek + 11a-ek-2)
 
 Bu doküman bankada **Docker olmadan**, doğrudan bir Linux sunucuya/VM'e kurulacak dbace paketinin
-tasarımıdır. **Bu turda (ikisinde de) kod yazılmadı** — burada yazılanlar bir sonraki commit'lerin
-uygulayacağı plan. **11a-ek**: Commit 11a onaylandı (§1–§10 ve §12 — o zamanki §11 "Ağ gereksinimleri",
-bu güncellemede §12'ye kaydı; eski 1-8 açık kararı çözüldü, aşağıda işaretli) ve host-agent kararı
-DEĞİŞTİ — onun yerine yeni bir **ajansız uzak log toplama** tasarımı geldi, YENİ §11 olarak.
+tasarımıdır. **Üç turda da (11a, 11a-ek, 11a-ek-2) kod yazılmadı** — burada yazılanlar 11b'den başlayan
+uygulama commit'lerinin planı. **11a-ek**: Commit 11a onaylandı (§1–§10 ve §12 — o zamanki §11 "Ağ
+gereksinimleri", bu güncellemede §12'ye kaydı; eski 1-8 açık kararı çözüldü, aşağıda işaretli) ve
+host-agent kararı DEĞİŞTİ — onun yerine yeni bir **ajansız uzak log toplama** tasarımı geldi, YENİ §11
+olarak. **11a-ek-2**: §11'in kendi 4 açık kararı da yanıtlandı (Get-ClusterLog v1 kapsamı dışı KALICI,
+doğrulama VM kaynağı ayrı kararlaştırılacak ama kontrol listesi buna bakmaksızın hazır, Windows hesabı
+varsayılan domain, log saklama 14 gün/500 MB tavan + sessiz-olmayan budama uyarısı) — **artık açık bir
+karar yok**, uygulama sırası (11b-11e) belirlendi.
 
 ## Değişmeyen kararlar
 
@@ -405,8 +409,14 @@ kullandığı uç); `restapi.authentication` açıksa aynı şifreli kimlik bilg
 ### b) Windows — WinRM + Event Log Readers + JEA
 
 **Seçim:** WinRM **HTTPS (5986)** — 5985 (HTTP, düz metin) yalnızca lab/geliştirme, bankaya ÖNERİLMEZ.
-Hesap: yerel `dbace_logreader` (varsayılan, domain'e bağımlı değil) YA DA banka tercih ederse bir domain
-hesabı — betik ikisini de destekler (`-CreateLocalUser` / `-ExistingAccount <ad>`), varsayılan yerel hesap.
+**Hesap (11a-ek-2 madde 3 — teyit edildi): VARSAYILAN domain hesabı** — bankaların çoğu WSFC/SQL Server
+düğümlerini zaten AD'ye bağlı çalıştırıyor; domain hesabı + Kerberos, WinRM oturumunda parola taşımadan
+çalışır ve bankanın kendi hesap yaşam döngüsü (parola rotasyonu, devre dışı bırakma) politikasına tabi
+olur. **Yerel hesap da desteklenir** (domain'siz/izole ortamlar için) — betik ikisini de destekler
+(`-ExistingAccount <domain\ad>` varsayılan yol, `-CreateLocalUser` alternatif). Kimlik bilgisi (domain
+hesabıysa Kerberos, yerel hesapsa Basic-over-HTTPS) §11.d'deki AYNI şifreli depoda saklanır — dbace
+sunucusunun domain'e katılıp katılmayacağı, bankanın Kerberos topolojisine bağlı bir uygulama detayı,
+11b/11e'de netleştirilecek.
 
 **İzin listesi mekanizması — iki katman (Linux'un SSH forced-command'ıyla AYNI felsefe):**
 1. Hesap **Event Log Readers** yerleşik grubuna eklenir — admin GEREKMEDEN Windows Olay Günlüklerini
@@ -418,15 +428,15 @@ hesabı — betik ikisini de destekler (`-CreateLocalUser` / `-ExistingAccount <
    teorik olarak neye yetkisi olduğundan BAĞIMSIZ olarak `Stop-Service`, `Remove-Item`, `New-LocalUser` gibi
    hiçbir şey çalıştırılamaz. Bu, Linux tarafındaki sarmalayıcı script'in DOĞRUDAN Windows karşılığı.
 
-**Get-ClusterLog — DOĞRULANAMADI, güvenli varsayılanla ERTELENDİ:** `Get-ClusterLog`'un gerektirdiği asgari
-yetkiyi bu ortamda GERÇEK bir Windows Failover Cluster olmadan ölçemedim — Microsoft'un belgelerinde
+**Get-ClusterLog — KARAR: v1'de YOK (11a-ek-2 madde 1'de teyit edildi).** `Get-ClusterLog`'un gerektirdiği
+asgari yetkiyi bu ortamda GERÇEK bir Windows Failover Cluster olmadan ölçemedim — Microsoft'un belgelerinde
 cluster log üretimi genelde küme yönetim işlemleriyle birlikte anılıyor ve WSFC'nin "Salt Okunur" küme
 erişim düzeyinin (Full Control'ün altındaki, GERÇEK ve belgeli bir ACL katmanı) bunun için yeterli olup
-olmadığını KANITLAYAMADIM — tahmin etmedim. **v1'de KULLANILMIYOR.** Bunun yerine güvenli, doğrulanabilir
-alternatif: `Microsoft-Windows-FailoverClustering/Operational` olay kanalı AYNI Event Log Readers + JEA
-mekanizmasıyla okunuyor — cluster sağlığı için anlamlı görünürlük veriyor, ekstra/doğrulanmamış bir yetki
-istemiyor. `Get-ClusterLog` desteği gerçek bir WSFC test ortamı bulunursa İLERİDE eklenebilir (Açık
-kararlar).
+olmadığını KANITLAYAMADIM — tahmin etmedim. Bunun yerine güvenli, doğrulanabilir alternatif:
+`Microsoft-Windows-FailoverClustering/Operational` olay kanalı AYNI Event Log Readers + JEA mekanizmasıyla
+okunuyor — cluster sağlığı için anlamlı görünürlük veriyor, ekstra/doğrulanmamış bir yetki istemiyor. Bu
+v1'in KALICI kapsamı, geçici bir eksik değil. `Get-ClusterLog` desteği yalnızca GERÇEK bir WSFC test ortamı
+edinilirse (bkz. §11.h'nin doğrulama kontrol listesi) ayrı bir işte değerlendirilir.
 
 ### c) SQL Server ERRORLOG — T-SQL DEĞİL, dosya olarak
 
@@ -472,9 +482,16 @@ NTFS salt-okunur ACL (Event Log Readers üyeliğinden BAĞIMSIZ, dosya sistemi d
 
 **Depolama:** meta PostgreSQL'de yeni bir tablo (dosya sistemi DEĞİL) — ürünün geri kalanıyla AYNI
 gerçeklik kaynağı ilkesi. Sayısal metrik değil METİN olduğu için Commit 10c'nin saatlik toplulaştırma
-kalıbı buraya UYGULANMAZ (log satırları toplulaştırılamaz); düz saklama + budama: varsayılan **14 gün**
-(operatör ayarlanabilir, `LOG_RETENTION_DAYS`), hedef başına boyut TAVANI (`LOG_MAX_BYTES_PER_TARGET`) —
-gürültülü tek bir hedefin diski sınırsız tüketmesini önler.
+kalıbı buraya UYGULANMAZ (log satırları toplulaştırılamaz); düz saklama + budama.
+
+**Saklama/tavan (11a-ek-2 madde 4 — teyit edildi):** varsayılan **14 gün** (`LOG_RETENTION_DAYS`, operatör
+ayarlanabilir), hedef başına **500 MB** boyut TAVANI (`LOG_MAX_BYTES_PER_TARGET`). Tavan dolduğunda EN ESKİ
+satırlar silinir (FIFO) — ama bu **SESSİZCE** olmaz: hedefin log görünümünde açık bir uyarı çıkar, *"tavan
+doldu (500 MB), şu an yalnızca son X günlük log tutulabiliyor"* (X, o hedefin GERÇEK yazım hızından
+hesaplanan GÜNCEL değer — sabit bir sayı değil, tavan/güncel-yazım-hızı). Bu, ürünün her yerdeki "ölçülemedi
+≠ sorun yok" dürüstlük ilkesinin doğal uzantısı: "14 gün istendi ama aslında X gün tutulabiliyor" farkı
+gizlenmez. Hem gün hem boyut sınırından ÖNCE ulaşılana göre budama tetiklenir (`LEAST` mantığı — ikisi de
+AYNI budama işinde denetlenir, iki ayrı zamanlanmış iş değil).
 
 **Gösterim:** DPA'nın cluster-health/topoloji sekmesine yeni bir "Loglar" alt görünümü — DBA-ONLY (ham log
 metni doğası gereği teknik detay, yönetici raporunda hiç görünmez). Bu, host-agent'ın eski `/v1/logs`
@@ -496,7 +513,12 @@ genişletilmesi.
 3. SSH anahtar çiftini dbace ÜRETİR; betik yalnızca verilen PUBLIC anahtarı `authorized_keys`'e
    `command="..."` kısıtıyla ekler.
 4. `/usr/local/bin/dbace-log-reader.sh` sarmalayıcıyı kurar (`root:root`, `0755` — `dbace_logreader`
-   tarafından YAZILAMAZ).
+   tarafından YAZILAMAZ). **Güvenlik ekibine yazılacak dokümanda açıkça belirtilecek nokta**
+   (11a-ek-2 — "yazılım değil" netliği): bu, hedefte ÇALIŞAN, ARKA PLANDA bekleyen bir SÜREÇ/DAEMON/AJAN
+   DEĞİL — root'a ait, salt okunur (`0755`, yazılabilir değil), her satırı denetlenebilir, TEK bir bash
+   dosyası. Bir SSH oturumu geldiğinde sshd (hedefin ZATEN çalışan, bankanın kendi kurduğu servisi) onu
+   çalıştırır; dosyanın kendisi hiçbir bağlantı açmaz, hiçbir portu dinlemez, hiçbir arka plan görevi
+   yoktur. Güvenlik ekibinin incelemesi gereken TEK yüzey: bu birkaç satırlık, statik, hiç değişmeyen script.
 5. Sonunda TAM OLARAK ne değiştirdiğini yazdırır + bir GERİ ALMA snippet'i (kullanıcıyı sil,
    `authorized_keys` girdisini kaldır, sarmalayıcıyı sil).
 6. PostgreSQL log dizini ACL'i (setfacl) **AYRI, açıkça etiketli bir adım** — PostgreSQL'in kendi
@@ -540,6 +562,13 @@ REDDEDİLİYOR, ERRORLOG/Olay Günlüğü/WSFC kanalı doğru okunuyor) — bu l
 CLAUDE.md'nin "PostgreSQL sürüm matrisi gerçek sunucularda doğrulanmadı" dürüstlük kalıbının Windows
 tarafındaki karşılığı — CI-otomatikleştirilmiş olmadığını GİZLEMİYORUZ.
 
+**Doğrulama VM'leri (11a-ek-2 madde 2 — teyit edildi):** hangi ortamın (RHEL 9 + Windows Server) bu
+kontrol listelerini çalıştıracağı AYRICA kararlaştırılacak — ama kontrol listesinin KENDİSİ bunu bekleme
+KOŞULU DEĞİL: §6'nın SELinux listesi ve bu bölümün Windows listesi, KİMİN çalıştıracağından BAĞIMSIZ olarak
+11e'nin (Windows ajansız log toplama) ve 11b'nin (SELinux bağlamı) teslim edilebilirleri olarak yazılıp
+hazır tutulur. Sürüm öncesi kapı budur — çalıştıran taraf (dbace ekibi ya da bankanın kendi kabul testi)
+sonradan belirlenebilir.
+
 ### i) Bağımlılıklar — çevrimdışı wheel, sabit sürüm
 
 - **Linux SSH: `asyncssh`** (paramiko yerine) — saf Python, ASYNC-NATİF; codebase'in her yerinde
@@ -572,6 +601,9 @@ tarafındaki karşılığı — CI-otomatikleştirilmiş olmadığını GİZLEM�
    üzerinden bağlanır; log toplama için de aynı ilke geçerli — kurulan tek şey, hedefte ZATEN VAR olan
    SSH/WinRM sunucusuna bağlanan, işletim sisteminin kendi araçlarıyla (kullanıcı + grup + ACL/JEA)
    KISITLANMIŞ bir hesap/oturumdur (§11) — dbace'in kendi kodundan hiçbir parça hedefe kopyalanmaz.
+   **Linux tarafında "kurulan" tek dosya** (`/usr/local/bin/dbace-log-reader.sh`) çalışan bir süreç/daemon
+   DEĞİL — root'a ait, salt okunur, denetlenebilir statik bir betik; sshd onu YALNIZCA gelen bir SSH
+   oturumunda çağırır, kendisi hiçbir bağlantı açmaz/port dinlemez (ayrıntı: §11.f).
 2. **Veritabanı bağlantı kimliği yalnızca okuma yetkilidir** (`sql/postgresql-monitor-role.sql`,
    `sql/sqlserver-monitor-login.sql` — süper kullanıcı/sysadmin/db_owner YOK, yazma yetkisi YOK; bu dosyalar
    deployment yönteminden bağımsız, DEĞİŞMEDİ).
@@ -609,43 +641,27 @@ tarafındaki karşılığı — CI-otomatikleştirilmiş olmadığını GİZLEM�
 
 ---
 
-## Açık kararlar (kullanıcının vermesi gereken)
+## Açık kararlar
 
-Commit 11a'nın 8 maddesi 11a-ek'te YANITLANDI (yukarıda her ilgili bölümde "11a-ek madde N — teyit edildi"
-notuyla işaretli). Kalan, genuinely açık olanlar — hepsi §11'in (ajansız log toplama) getirdiği yeni
-sorular:
-
-1. **`Get-ClusterLog`'un asgari yetkisi doğrulanamadı** (§11.b) — gerçek bir WSFC olmadan ölçülemedi. v1
-   güvenli varsayılanla (olay kanalı okuma) gönderiliyor. Bankanın GERÇEK bir WSFC test ortamı sağlaması
-   durumunda bu doğrulanıp `Get-ClusterLog` desteği İLERİDE eklenebilir mi, yoksa olay-kanalı yeterli mi
-   kabul edilsin?
-2. **Windows tarafının elle doğrulama VM'i nereden gelecek?** §11.h ve §6'nın SELinux doğrulaması GERÇEK
-   bir Windows Server 2019/2022 VM (ve ideal olarak bir RHEL 9 VM) gerektiriyor — bu ortamda YOK. Banka bu
-   ortamları (ya da bunlara erişimi) sağlayacak mı, yoksa bu doğrulama adımı BANKANIN KENDİ kabul testine
-   mi bırakılsın (dbace tarafı yalnızca kontrol listesini teslim eder)?
-3. **Windows hesabı: yerel mi, domain mi varsayılan?** Betik ikisini de destekliyor (§11.f); banka
-   ortamı genelde AD'ye bağlıysa domain hesabı + Kerberos tercih edilebilir (WinRM oturumunda parola
-   taşımadan) ama bu dbace sunucusunun da domain'e katılmasını gerektirebilir — ek bir bağımlılık. Hangi
-   mod VARSAYILAN (betiğin ilk çalıştırmada önereceği) olsun?
-4. **Log saklama varsayılanı 14 gün mü kalsın, boyut tavanı ne olsun?** (§11.e) — bir başlangıç değeri
-   önerildi (`LOG_RETENTION_DAYS=14`); bankanın kendi log-saklama politikası (ör. denetim gereksinimleri
-   nedeniyle daha uzun) varsa bu sayı ve `LOG_MAX_BYTES_PER_TARGET` şimdiden belirlenebilir.
+Commit 11a'nın 8 maddesi 11a-ek'te, 11a-ek'in kendi 4 maddesi de bu güncellemede (11a-ek-2) YANITLANDI —
+hepsi ilgili bölümde "11a-ek madde N" / "11a-ek-2 madde N — teyit edildi" notuyla işaretli. **Şu anda
+kullanıcıdan yanıt bekleyen açık bir karar YOK.** Uygulama (11b-11e) sırasında ortaya çıkabilecek yeni
+sorular (ör. Windows Kerberos/domain-katılım ayrıntısı, §11.b) ilgili commit'in kendi ILERLEME.md
+girdisinde ele alınacak.
 
 ---
 
-## Bir sonraki adım
+## Uygulama sırası (11b-11e, her biri ayrı commit, push YOK)
 
-Bu doküman (11a + 11a-ek) onaylandıktan sonra 11b ve sonrası kod yazacak. İki bağımsız iş kolu (paralel
-başlatılabilir, birbirine bağımlı değil):
+Tasarım onaylandı; kod bu sıra ile yazılıyor — sonraki her commit bir öncekinin üstüne kurulur:
 
-**Kurulum paketi:** taşınabilir Python vendoring, PGDG/nginx/msodbcsql RPM+DEB vendoring, `install.sh`/
-`rollback.sh`/`uninstall.sh`/`prereq-check.sh`, systemd birim dosyaları (`dbace.service`,
-`dbace-backup.service`+`.timer`), `logging_setup.py`'ye dosya log handler'ı, native-paket CI işi. Sıra:
-önce vendoring + prereq-check (test edilebilir, bağımsız), sonra install/rollback (üstüne kurulur), en son
-CI matrisine bağlama.
+- **11b — yerel kurulum:** vendoring genişletmesi (taşınabilir Python 3.12, PGDG PostgreSQL 16 + nginx +
+  msodbcsql18/unixODBC RHEL9+Ubuntu22.04 paketleri), `prereq-check.sh`, `install.sh`, `dbace.service`,
+  nginx yapılandırması (TLS + `TLS_MODE=backend`), gece yedek zamanlayıcısı.
+- **11c — yükseltme/geri alma/kaldırma + CI:** `rollback.sh`, `uninstall.sh`, native-paket CI işi
+  (§9'daki systemd'li rockylinux9/ubuntu22.04 matrisi, 4 senaryo).
+- **11d — Linux ajansız log toplama:** §11.a/c/d/e/f (Linux kısmı), CI'da gerçek negatif kontrollü test.
+- **11e — Windows ajansız log toplama:** §11.b/c/d/e/f (Windows kısmı), JEA statik CI testi + elle
+  doğrulama kontrol listesi.
 
-**Ajansız uzak log toplama:** `asyncssh`/`pypsrp` vendoring, `LogSource` sabit komut şablonları + doğrulama,
-`remote_log_audit` migration'ı, `scripts/target-setup/*.sh`/`*.ps1`, DPA'ya "Loglar" alt görünümü,
-Linux tarafının CI testleri (negatif kontrol dahil) + Windows tarafının elle doğrulama kontrol listesi. Sıra:
-önce Linux (CI'da tam doğrulanabilir), sonra Windows (JEA statik denetimi CI'da, işlevsel doğrulama elle —
-Açık karar §2 netleşince programlanır).
+`logging_setup.py`'ye dosya log handler'ı 11b'nin bir parçası (dbace.service'in log gereksinimi).
