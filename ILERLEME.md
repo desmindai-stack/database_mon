@@ -9817,3 +9817,74 @@ genişletilmesi, `install.sh`/`rollback.sh`/`uninstall.sh`/`prereq-check.sh`, sy
 `logging_setup.py`'ye dosya log handler'ı, native-paket CI işi.
 
 **Değişen dosyalar:** `docs/ONPREM_NATIVE.md` (yeni), `CLAUDE.md` (yönlendirme tablosuna satır).
+
+## Faz 32 — Commit 11a-ek: 8 açık karar çözüldü + host-agent yerine ajansız uzak log toplama tasarımı
+
+**İstek:** Commit 11a onaylandı; eski 8 açık kararın yanıtları geldi ve host-agent kararı DEĞİŞTİ — hedef
+sunuculara hiçbir yazılım kurulmayacak, bunun yerine kısıtlı işletim sistemi kullanıcılarıyla **ajansız
+uzak log toplama** tasarlanacak (Linux: Patroni/etcd/keepalived/HAProxy/PostgreSQL logları; Windows: WSFC
+logları, SQL Server ERRORLOG, olay günlükleri). Bu commit de kod YAZMADI — yalnızca `docs/ONPREM_NATIVE.md`
+güncellendi.
+
+### Eski 8 açık karar — hepsi teyit edildi, dokümanda işaretli
+
+Meta PostgreSQL ve dbace aynı sunucuda (zaten tasarımdaydı, teyit); PostgreSQL 16 kalıyor ama kod 15-17
+arası çalışabilir kalmalı (yeni kısıt, §2); nginx kalıyor, TLS varsayılan nginx'te, `TLS_MODE=backend` ile
+tek ayarla düz-HTTP arka uç moduna geçiliyor (§5); yedek her gece yerel diske, dizin/saklama süresi
+ayarlanabilir (`BACKUP_DIR`/`BACKUP_RETENTION_DAYS`, §2); api/worker ayrımı yalnızca dokümante, ilk sürüm
+tek `dbace.service` (§4); SELinux yalnızca bağlam ayarı, doğrulama gerçek RHEL 9 VM'de ELLE yapılacak —
+CI'nin systemd konteyneri SELinux'u güvenilir simüle edemiyor (§6); disk boyutlandırma tablosu 10/20/50
+instance × mevcut koddaki saklama süreleriyle (7 gün ham+rollup bekleme verisi, 30 gün genel varsayılan)
+yeniden hesaplandı: 10 instance ≥15 GB, 20 instance ≥25 GB, 50 instance ≥50 GB öneri (Commit 10a'nın
+ölçülen ≈360 MB/instance/30 gün oranından, güvenlik payıyla).
+
+### Yeni: ajansız uzak log toplama (`docs/ONPREM_NATIVE.md` §11)
+
+**İki bağımsız katmanlı izin listesi** — biri kırılsa/atlansa bile diğeri tutuyor:
+- **Linux:** `dbace_logreader` sistem kullanıcısı, yalnızca SSH anahtarı (parola yok), `/usr/sbin/nologin`.
+  `authorized_keys`'te `command="/usr/local/bin/dbace-log-reader.sh"` (forced-command) — SSH oturumu HANGİ
+  komut gönderilirse gönderilsin yalnızca bu sarmalayıcıyı çalıştırır; sarmalayıcı `$SSH_ORIGINAL_COMMAND`'ı
+  KENDİ (root sahipli, kullanıcı tarafından yazılamaz) sabit izin listesiyle AYRICA doğrular. dbace tarafı
+  da yalnızca sabit komut şablonları üretir (`migrations_runner.py::_TABLE_NAME` regex doğrulamasıyla aynı
+  disiplin). `systemd-journal`/`adm` grup üyeliği (sudo'suz journalctl/log dosyası okuma); PostgreSQL'in
+  kendi log'u için ayrı bir `setfacl` adımı.
+- **Windows:** WinRM HTTPS (5986) + **Event Log Readers** yerleşik grubu + **JEA** (Just Enough
+  Administration) ile kısıtlı bir PSRP uç noktası — yalnızca izinli cmdlet'leri (`Get-WinEvent`,
+  `Get-Content` belirli yol desenleriyle) listeleyen bir role-capability dosyası; oturum bu listeye
+  HAPSEDİLİR, hesabın teorik yetkisinden bağımsız olarak `Stop-Service`/`Remove-Item`/`New-LocalUser`
+  çalıştırılamaz.
+
+**Araştırılan ve DOĞRULANAN iki karar:**
+- `xp_readerrorlog`/`sp_readerrorlog` varsayılan olarak `securityadmin` (ayrıcalıklı, kendine yetki
+  verebilen bir rol) ister — TEMEL KISITI dolaylı ihlal eder. **Karar:** SQL Server ERRORLOG T-SQL ile
+  DEĞİL, işletim sistemi üzerinden (AYNI JEA uç noktasıyla) dosya olarak okunuyor.
+- `Get-ClusterLog`'un asgari yetkisi bu ortamda GERÇEK bir Windows Failover Cluster olmadan ÖLÇÜLEMEDİ —
+  tahmin edilmedi. v1'de KULLANILMIYOR; güvenli, doğrulanabilir alternatif (`Microsoft-Windows-
+  FailoverClustering/Operational` olay kanalı, aynı JEA mekanizmasıyla) kullanılıyor. Gerçek bir WSFC test
+  ortamı bulunursa ileride eklenebilir — Açık kararlar'a yazıldı.
+
+**dbace tarafı güvenlik:** sabit komut şablonları (enum, kullanıcı girdisi asla ham komuta karışmaz), sabit
+zaman aşımı, hız sınırı + artımlı okuma (Commit 10a'nın "yalnızca yeni" felsefesiyle aynı), **her uzak
+komutun denetim kaydı** (yeni `remote_log_audit` tablosu), kimlik bilgileri mevcut
+`credentials.py::encrypt_secret` ile şifreleniyor (SSH anahtar çiftini dbace ÜRETİYOR, özel anahtar hiç
+dışarı çıkmıyor), log içeriği desen tabanlı redaksiyondan geçiyor (kusursuz DEĞİL, aynı dürüstlük notuyla).
+
+**Test stratejisi — dürüst ayrım:** Linux CI'da GERÇEKTEN test edilir (sshd konteyneri, gerçek SSH
+istemcisi, forced-command'ın `rm`/`sudo`/komut enjeksiyonunu REDDETTİĞİ negatif kontrol ZORUNLU). Windows
+CI'da test EDİLEMEZ (gerçek Windows Server/WSFC yok, `windows-latest` runner'ları bile domain/JEA/WSFC testi
+için yetersiz) — bu AÇIKÇA yazıldı, gizlenmedi: CI'da yalnızca JEA role-capability dosyasının tehlikeli
+cmdlet İÇERMEDİĞİ statik denetimi var; işlevsel doğrulama gerçek bir Windows Server VM'de ELLE yapılacak
+bir kontrol listesiyle, sürüm öncesi geçilmesi gereken bir kapı olarak tanımlandı.
+
+**Envanter güncellendi:** `docker-compose.host-agent.yml` (ve `/v1/services`, `/v1/logs`, `/v1/keepalived`)
+KALDIRILDI; yerine `scripts/target-setup/linux-log-reader-setup.sh` + `windows-log-reader-setup.ps1`
+(hedefte kısıtlı hesap/JEA kuran, bankanın sistem ekibinin çalıştıracağı, idempotent, her değişikliği
+yazdıran betikler) ve `remote_log_audit` tablosu eklendi. Ağ sayfası (§12) SSH 22 ve WinRM 5985/5986 ile
+güncellendi.
+
+**Kalan açık kararlar (4 madde, dokümanın sonunda):** `Get-ClusterLog` desteği ileride mi eklensin;
+Windows/RHEL9 elle doğrulama VM'lerini banka mı sağlayacak; Windows hesabı yerel mi domain mi varsayılan
+olsun; log saklama varsayılanı (önerilen 14 gün) ve hedef başına boyut tavanı onaylanıyor mu.
+
+**Değişen dosyalar:** `docs/ONPREM_NATIVE.md` (§2/§4/§5/§6 güncellendi, yeni §11 "Ajansız uzak log
+toplama", §12 olarak yeniden numaralanan ağ sayfası, envanter ve açık kararlar listesi yenilendi).
