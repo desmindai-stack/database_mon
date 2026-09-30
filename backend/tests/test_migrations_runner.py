@@ -77,6 +77,21 @@ async def test_file_with_concurrently_or_chunks_runs_outside_a_transaction_and_i
     assert conn.calls[-1]["sql"].startswith("INSERT INTO dbace_meta.applied_migrations"), "kayıt EN SON"
 
 
+async def test_chunk_progress_log_line_matches_the_shared_regex_other_tests_import(tmp_path, caplog):
+    """Log satırı ve onu okuyan testler (`test_onprem_package_live.py`) AYNI `CHUNK_PROGRESS_LOG_RE`'den
+    besleniyor (Faz 31 Commit 10g) — biri log metnini değiştirip diğerini unutursa bu test HIZLI ve HER
+    ZAMAN AÇIK olduğu için sessizce ayrışamaz; canlı on-prem testinin (yavaş, DBACE_TEST_ONPREM=1 gerektirir)
+    çok daha geç yakalayacağı bir hatayı burada, saniyeler içinde yakalar."""
+    directory = write(tmp_path, "20260101000000_a.sql", CHUNKED)
+    conn = FakeConn()
+    with caplog.at_level("INFO", logger="app.migrations_runner"):
+        await apply_migrations(conn, directory)
+    progress_lines = [r.message for r in caplog.records if "parça" in r.message]
+    assert progress_lines, "en az bir ilerleme satırı loglanmalı (son parça her zaman loglanır)"
+    for line in progress_lines:
+        assert migrations_runner.CHUNK_PROGRESS_LOG_RE.search(line), f"biçimle eşleşmedi: {line!r}"
+
+
 async def test_plain_file_still_runs_whole_in_one_transaction(tmp_path):
     directory = write(tmp_path, "20260101000000_a.sql", "CREATE TABLE IF NOT EXISTS t (id int);\nCREATE INDEX ix ON t (id);\n")
     conn = FakeConn()

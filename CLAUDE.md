@@ -70,6 +70,13 @@ denetim testleriyle korunuyor (`test_navigation_integrity.py`,
   UPDATE/index #53'ü Supabase'de zaman aşımıyla tümüyle geri aldırdı. UPDATE/DELETE
   `-- dbace:chunked <tablo> <boy>` ile kimlik aralıklarına bölünür, index `CONCURRENTLY`
   kurulur; CI denetler (`test_migration_safety.py`). Süre/bakım penceresi: DEPLOY.md.
+- **Migration çalıştırıcısını, log biçimini ya da `deploy/` altını değiştiren her commit'te
+  ilgili on-prem ve native-paket testleri YERELDE de koşulur** (`DBACE_TEST_ONPREM=1
+  pytest tests/test_onprem_package_live.py`, native-paket testleri) — CI'da bunlar ya
+  gecelik ya da dosya filtresiyle koşuyor, "yerelde yeşil ama gerçek on-prem senaryosu
+  hiç denenmedi" commit'ler bu yüzden fark edilmeden ilerleyebiliyordu (Faz 31 Commit 10g:
+  migration log biçimi değişti, onu okuyan on-prem testi güncellenmemiş hâlde CI'a kadar
+  kırmızı kalmıştı).
 - **Yerel Python 3.14, canlı 3.12.** 3.14 (PEP 649) annotation'ları ertelemeli
   değerlendirir, 3.12 hemen. Bu yüzden `schemas.py`'de bir tip, kendisini KULLANAN
   modelden önce tanımlı olmalı — yoksa yerelde sessizce geçer, canlıda import anında

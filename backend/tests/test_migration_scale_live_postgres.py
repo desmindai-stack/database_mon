@@ -221,7 +221,14 @@ async def test_all_migrations_finish_within_the_managed_statement_timeout_on_400
     run = await _upgraded()
     per_file = sorted(run["per_file"].items(), key=lambda kv: -kv[1])
     chunks = _chunks(run["stats"])
-    slowest_statement = max((s for s in run["stats"] if s.kind == "statement"), key=lambda s: s.seconds)
+    all_statements = [s for s in run["stats"] if s.kind == "statement"]
+    # CREATE INDEX CONCURRENTLY bilinçli olarak statement_timeout DIŞINDA çalışıyor (Faz 31 Commit 10f) —
+    # bölünemiyor ve tabloyu kilitlemiyor, bu yüzden yönetilen sınırın (8 sn) İÇİNDE bitmesi beklenmez ve
+    # bu kontrolden AYRI tutuluyor (Faz 31 Commit 10g — önceki hâli bu kararla çelişiyordu: 13,99 sn ölçülüp
+    # "< 8.0" ile düşüyordu).
+    concurrently_statements = [s for s in all_statements if "CONCURRENTLY" in s.text]
+    bounded_statements = [s for s in all_statements if "CONCURRENTLY" not in s.text]
+    slowest_bounded = max(bounded_statements, key=lambda s: s.seconds)
     log("ölçek verisi", run["base"])
     log("toplam yükseltme süresi (sn)", round(run["total"], 1))
     log("en uzun 6 dosya (sn)", [(n, round(t, 1)) for n, t in per_file[:6]])
@@ -232,33 +239,54 @@ async def test_all_migrations_finish_within_the_managed_statement_timeout_on_400
     long_files = {p.name: sorted(long_running_tables(p.read_text(encoding="utf-8"), large_tables()))
                   for p in sorted(MIGRATIONS.glob("*.sql")) if long_running_tables(p.read_text(encoding="utf-8"), large_tables())}
     log("UZUN SÜREN dosyalar (sn, %d satırlık tablolarla)" % ROWS, {n: (round(run["per_file"].get(n, 0), 1), t) for n, t in long_files.items()})
-    log("en uzun tek ifade", (slowest_statement.file, slowest_statement.text[:60], round(slowest_statement.seconds, 2)))
+    log("en uzun sınırlı ifade", (slowest_bounded.file, slowest_bounded.text[:60], round(slowest_bounded.seconds, 2)))
+    log("CONCURRENTLY (sınırsız) ifadeler (sn)", [(s.file, round(s.seconds, 2)) for s in concurrently_statements])
     # 8 sn sınırıyla bitti (aksi hâlde yukarıda QueryCanceledError). Parça başına pay: sınırın yarısından az.
     assert max(c.seconds for c in chunks) < 4.0
-    assert slowest_statement.seconds < 8.0
+    assert slowest_bounded.seconds < 8.0, "CONCURRENTLY DIŞINDAKİ hiçbir ifade yönetilen sınırı aşmamalı"
+    # Sınırsız çalışan TEK ifade türünün CONCURRENTLY index kurulumu olduğunu doğrula — bir migration
+    # sessizce BAŞKA bir ifadeyi de sınır dışına kaçırırsa (kod hatası) burada yakalanır.
+    assert concurrently_statements, "bu ölçekte en az bir CONCURRENTLY index kurulumu beklenir (kontrol anlamsız kalmasın)"
+    assert all("CONCURRENTLY" in s.text for s in all_statements if s.seconds >= 8.0), \
+        "8 sn'yi aşan tek ifade türü CONCURRENTLY index kurulumu olmalı"
 
 
 async def test_the_identity_backfill_runs_in_the_chunk_size_the_migration_file_declares():
-    """Beklenen parça SAYISI dosyadaki `-- dbace:chunked` işaretinden TÜRÜYOR — elle bir sayı (`20_000`) YAZILMIYOR.
+    """Beklenen parça SAYISI değil, DEĞİŞMEZLER doğrulanıyor (Faz 31 Commit 10g).
 
-    Bu sabit sayı daha önce testin İÇİNDE tekrarlanıyordu: dosyadaki parça boyu CI'da yetersiz payla ölçülüp
-    düşürüldüğünde (Faz 31 Commit 10c takip 4 — GitHub Actions'ta en uzun parça 5,0 sn, 8 sn sınırına 1,6× pay,
-    istenen ≥3×) bu testin kendisi de elle güncellenmesi gereken, sessizce ayrışabilecek İKİNCİ bir yer olurdu.
+    Önceki hâli `len(chunks) == (hi - lo) // chunk_size + 1` bekliyordu — parça SAYISININ dosyadaki boydan
+    (8000) BİREBİR türediğini varsayıyordu. Ama bütçe mekanizması (Faz 31 Commit 10d madde A3) yavaş bir
+    parçayı YARI genişlikle yeniden dener (`_run_chunked`) — bu, TOPLAM parça sayısını (`kind="chunk"` +
+    `kind="retry"` girdileri) dosyadaki boydan bağımsız, makine/CI yüküne göre DEĞİŞKEN yapar (gerçekte
+    ölçülen: 53 yerine 86 — yarısı bölünmüş parçalardan). Parça SAYISI bu yüzden anlamlı bir kontrol DEĞİL;
+    aşağıdaki değişmezler kontrol ediliyor:
+    1. id aralığı boşluksuz kapsandı (satır sayısı TAM eşleşiyor — eksik ya da fazla yok).
+    2. Hiçbir satır iki kez güncellenmedi — `WHERE ... AND query_hash IS NULL` koşulu bunu YAPISAL olarak
+       garanti eder (bir satır set edilince sonraki hiçbir parçanın WHERE'i onu bir daha SEÇMEZ); (1)'deki
+       TAM eşleşme bunun ihlal EDİLMEDİĞİNİN kanıtı (ihlal olsaydı toplam ROWS'u AŞARDI).
+    3. Başarıyla biten (kind="chunk") her parça oturumun `statement_timeout`'unun (8 sn) altında kaldı —
+       aksi hâlde `QueryCanceledError` ile iptal edilip "chunk" değil "retry" olarak kaydedilirdi.
+    4. Bölünen parçalar varsa (bu makinede/yükte GENELDE var) `kind="retry"` girdileriyle İZLENEBİLİR —
+       zorunlu değil (makine hızına bağlı), ama olduğunda görünür olmalı.
     """
-    from app.migration_sql import split_statements
-
-    chunk_size = next(st.chunk[1] for st in split_statements(Path(MIGRATIONS, IDENTITY).read_text(encoding="utf-8"))
-                      if st.chunked and st.chunk[0] == "slow_query_samples")
     run = await _upgraded()
     chunks = _chunks(run["stats"], IDENTITY)
+    retries = [s for s in run["stats"] if s.kind == "retry" and s.file == IDENTITY]
     conn = await _connect(UPGRADED)
     try:
         lo, hi = await conn.fetchval("SELECT min(id) FROM slow_query_samples"), await conn.fetchval("SELECT max(id) FROM slow_query_samples")
+        remaining_null = await conn.fetchval("SELECT count(*) FROM slow_query_samples WHERE query_hash IS NULL")
     finally:
         await conn.close()
-    assert len(chunks) == (hi - lo) // chunk_size + 1 and len(chunks) >= 20
-    assert sum(c.rows for c in chunks) >= ROWS, "her satır güncellenmeli"
-    log("#53 parçaları (dosyadaki boy: %d)" % chunk_size, (len(chunks), [round(c.seconds, 2) for c in chunks]))
+    total_rows = hi - lo + 1
+    log("#53 parçaları (kind=chunk/retry, dosyadaki boy: 8000)", (len(chunks), len(retries), [round(c.seconds, 2) for c in chunks]))
+
+    assert remaining_null == 0, "id aralığında boşluk kaldı — bazı satırlar hiç güncellenmedi"
+    assert sum(c.rows for c in chunks) == total_rows, \
+        "her satır TAM BİR KEZ güncellenmeli (toplam ROWS'u aşması iki kez güncellemeyi, altında kalması boşluğu gösterir)"
+    assert all(c.seconds < 8.0 for c in chunks), "başarıyla biten her parça oturumun statement_timeout'unun altında kalmalı"
+    if retries:
+        log("bölünen parçalar (bu koşuda gerçekten oldu)", [(r.line, round(r.seconds, 2)) for r in retries])
 
 
 # --- 2. Sonuç doğru ------------------------------------------------------------------------------
@@ -380,10 +408,14 @@ async def test_the_original_single_update_exceeds_the_limit_that_the_chunked_ver
         await conn.execute(f"SET statement_timeout = '{int(limit * 1000)}ms'")
         with pytest.raises(asyncpg.exceptions.QueryCanceledError):
             await conn.execute(OLD_SINGLE_UPDATE)  # ESKİ davranış: zaman aşımı
+        # statement_timeout HÂLÂ `limit`de (SET oturum düzeyinde, iptal edilen ifadeyle birlikte geri
+        # ALINMAZ) — kontrol sorgusu 420 bin satırda tam tablo taraması, `limit` küçükse (~5 sn) O DA
+        # zaman aşımına uğrar ve bu assert'in kendisi QueryCanceledError fırlatırdı (test hatası, ürün
+        # hatası değil — Faz 31 Commit 10g). Kontrolden ÖNCE sınırsıza döndür.
+        await conn.execute("SET statement_timeout = 0")
         assert await conn.fetchval("SELECT count(*) FROM slow_query_samples WHERE query_hash IS NOT NULL") == 0, \
             "zaman aşımı TÜM işi geri aldı (canlıda yaşanan)"
 
-        await conn.execute("SET statement_timeout = 0")
         await conn.execute("ALTER TABLE slow_query_samples DROP COLUMN query_hash")
         stats: list[StatementStat] = []
         await apply_migrations(conn, MIGRATIONS, only=IDENTITY, statement_timeout=f"{int(limit * 1000)}ms", stats=stats)

@@ -62,6 +62,16 @@ META_TABLE = f"{META_SCHEMA}.applied_migrations"
 
 _CONCURRENT_INDEX = re.compile(r'CREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+(?:IF\s+NOT\s+EXISTS\s+)?("?[\w.]+"?)', re.IGNORECASE)
 _TABLE_NAME = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+#: Parçalı ifade ilerleme log'unun BİÇİMİ — `_run_chunked`'ın `logger.info` çağrısı VE onu okuyan testler
+#: (`test_migrations_runner.py`, `test_onprem_package_live.py`) AYNI bu sabitten besleniyor (Faz 31 Commit 10g):
+#: biri log metnini değiştirip diğerini güncellemeyi unutursa sessizce ayrışmasınlar diye tek kaynak.
+CHUNK_PROGRESS_LOG_FORMAT = "%s:%s %s parça %s (id %s/%s, genişlik %s, %s yeniden deneme), %s satır güncellendi"
+CHUNK_PROGRESS_LOG_RE = re.compile(
+    r"(?P<file>[\w.]+):(?P<line>\d+) (?P<table>\w+) parça (?P<chunk_no>\d+) "
+    r"\(id (?P<progress>\d+)/(?P<hi>\d+), genişlik (?P<width>\d+), (?P<retries>\d+) yeniden deneme\), "
+    r"(?P<rows>\d+) satır güncellendi"
+)
 _STATEMENT_TIMEOUT = re.compile(r"^\d+(?:ms|s|min)?$")
 
 #: Parçalı ifade ilerleme günlüğü: bu kadar parçada bir.
@@ -194,8 +204,8 @@ async def _run_chunked(conn, statement: Statement, file: str, stats: list[Statem
                 stats.append(StatementStat(file, statement.line, "chunk", elapsed, rows, statement.sql[:80]))
             position += width
             if chunks_done % PROGRESS_EVERY_CHUNKS == 0 or position > hi:
-                logger.info("%s:%s %s parça %s (id %s/%s, genişlik %s, %s yeniden deneme), %s satır güncellendi", file,
-                            statement.line, table, chunks_done, min(position - 1, hi), hi, width, retries, total_rows)
+                logger.info(CHUNK_PROGRESS_LOG_FORMAT, file, statement.line, table, chunks_done,
+                            min(position - 1, hi), hi, width, retries, total_rows)
     finally:
         if budget is not None:
             restore = current_setting if current_setting not in (None, "") else "0"

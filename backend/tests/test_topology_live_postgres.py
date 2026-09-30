@@ -63,18 +63,23 @@ async def admin(dsn):
         await conn.close()
 
 
-#: Teardown'ın "geri bağlan ve akışa dön" beklemesi (Faz 31 Commit 10f). 30 sn PG18'de CI'da yetersiz kaldı:
-#: `scripts/live_pg.py up` replikanın akışta olduğunu KURULUMDA doğruluyor (sys.exit ile sertçe), yani testler
-#: başladığında replika kesin akıştaydı — kırılan, testin KENDİSİNİN kopardığı bağlantıyı teardown'ın geri
-#: toplaması. Bunun CI'da uzaması iki nedenle mantıklı: (1) PG18 `SHOW primary_conninfo` çıktısı önceki
-#: sürümlerden ÇOK daha geniş (sslnegotiation/gssencmode/target_session_attrs/load_balance_hosts gibi onlarca
-#: açık parametre) — her yeniden bağlanışta bu negotiation'ın CI ağında yerelden daha uzun sürmesi beklenir;
-#: (2) test gövdesi (wizard + iki toplama turu) kopukken gerçek süre geçiriyor, birincilde biriken WAL'in
-#: yeniden oynatılması gerekiyor — yerel NVMe'de bu birkaç saniyeyi geçmiyor ama Commit 10d'de CI diskinin
-#: yereleden ölçülebilir şekilde (~6,5×) yavaş olduğu ayrıca kanıtlanmıştı. Mekanizmanın kendisi YEREL'de hem
-#: boşta hem CPU kısıtlı (0,5 çekirdek) koşullarda 1 sn'de tamamlandı (kanıt: ILERLEME.md) — bu yüzden burada
-#: mantık değişmiyor, yalnızca CI'nın gerçekçi payına göre bekleme büyütülüyor.
+#: Teardown'ın "geri bağlan ve akışa dön" beklemesi (Faz 31 Commit 10f). 30 sn PG18'de CI'da yetersiz kaldı.
 _REPLICA_RECONNECT_TIMEOUT = 180.0
+
+#: Setup'ın "hâlâ akışta mı" denetimi (Faz 31 Commit 10g — 10f'in "PG18 conninfo daha geniş, negotiation
+#: uzun sürüyor" teşhisi YANLIŞTI, tahmindi; gerçek neden burada ÖLÇÜLDÜ). `pg_stat_wal_receiver` HER
+#: sürümde, GERÇEKTEN ve TEKRARLANABİLİR biçimde geçici olarak BOŞ dönüyor — ağır bir yazma yükü
+#: (`test_migration_scale_live_postgres.py`'nin 420 bin satırlık backfill'i + CONCURRENTLY index kurulumu,
+#: dosya adı sırasıyla bu dosyadan HEMEN ÖNCE koşuyor) sürerken birincildeki checkpoint/fsync baskısı
+#: replikanın wal receiver'ını kısa süreliğine KOPARIP YENİDEN BAĞLIYOR — PostgreSQL'in normal davranışı,
+#: bir kurulum hatası değil. Yerelde, replikayı 1 sn aralıklarla izleyip AYNI anda migration-scale testini
+#: koşturarak DOĞRUDAN yakalandı: `pg_stat_wal_receiver` art arda birkaç ölçümde (~1-4 sn) BOŞ döndü, sonra
+#: kendiliğinden 'streaming'e döndü — hiçbir müdahale olmadan. CI'nın PG18 kolunda bunun DAHA UZUN sürmesi
+#: (Commit 10d'de ölçülen ~6,5× CI/yerel disk yavaşlığıyla tutarlı) tek bir sabit sorgunun bu pencereye
+#: rastlama ihtimalini yükseltiyor — teşhis "replika hiç akışa geçmiyor" değil, "denetim TEK ÖLÇÜMLÜK, kısa
+#: bir dalgalanmayı da kalıcı arıza sanıyor". Bu yüzden setup denetimi de (teardown'ınki gibi) sabırlı
+#: BEKLESİN — ama GENUINE arızayı hızlı yakalamak için teardown'dan (180 sn) çok daha kısa bir bütçeyle.
+_REPLICA_SETUP_TIMEOUT = 20.0
 
 
 @pytest.fixture
@@ -88,11 +93,16 @@ async def replica(dsn):
     # BEKLEYEMEDEN (bkz. _REPLICA_RECONNECT_TIMEOUT) pes etmiş olabilir — bu durumda conninfo doğru değeri
     # taşır ama wal receiver henüz akışta değildir. Bunu burada, KURULUMDA, açık bir gerekçeyle yakala; aksi
     # hâlde bir sonraki test kendi gövdesinde ilgisiz bir asserte çarpıp neden başarısız olduğunu gizler.
-    status = await conn.fetchval("SELECT status FROM pg_stat_wal_receiver")
-    assert status == "streaming", (
-        f"replika akışta değil (wal receiver: {status or 'yok'}) — önceki testin teardown'u geri bağlanmayı "
-        "bekleyemeden pes etmiş olabilir; `python scripts/live_pg.py up` ile elle onarın"
-    )
+    # Sabırlı (bkz. _REPLICA_SETUP_TIMEOUT) — tek ölçümlü assert, ağır yük altındaki GEÇİCİ boş pencereyi
+    # (ölçüldü, yukarıdaki not) kalıcı arızayla karıştırırdı.
+    try:
+        await _wait(lambda: conn.fetchval("SELECT status FROM pg_stat_wal_receiver"), "streaming",
+                   timeout=_REPLICA_SETUP_TIMEOUT)
+    except AssertionError as exc:
+        raise AssertionError(
+            f"replika akışta değil ({exc}) — önceki testin teardown'u geri bağlanmayı bekleyemeden pes "
+            "etmiş olabilir (kalıcı arıza); `python scripts/live_pg.py up` ile elle onarın"
+        ) from None
     try:
         yield conn
     finally:

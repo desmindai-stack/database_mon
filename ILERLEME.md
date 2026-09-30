@@ -10044,3 +10044,101 @@ satırı bu yüzden bir ŞABLON (`dbace.service.tmpl`, `__PG_SERVICE__` yer tutu
 
 **Tam paket (bir kez, `-rs`, bu commit backend/app'e HİÇBİR dokunuş yapmadı — beklenen: sıfır regresyon):**
 2523 passed, 6 skipped, 9 xfailed, 0 hata.
+
+## Faz 31 — Commit 10g: CI'da on-prem ve PG18 kırmızıydı — 7 madde, iki grup
+
+**İstek:** iki grup hata. GRUP 1 — daha önce (Commit 10f'te) istenmiş ama yapılmamış düzeltmeler (migration
+parça sayısı testi, on-prem log regex'i, gerçekleşmeyecek bir senaryoyu sınayan yükseltme testi, CLAUDE.md
+kuralı). GRUP 2 — PG18'e özgü: replika testinin "wal receiver: yok" hatası (Commit 10f'in teşhisi
+YANLIŞTI), CONCURRENTLY index'in 8 sn sınırını aşması (10f'in kendi kararıyla çelişen eski test), kontrol
+sorgusunun kendisinin zaman aşımına uğraması.
+
+### GRUP 2 madde 5 — kök neden GERÇEKTEN bulundu (Commit 10f'in tahmini çürütüldü)
+
+**Commit 10f'in teşhisi:** "PG18'in daha geniş `primary_conninfo`'su teardown'daki yeniden bağlanmayı
+yavaşlatıyor" — bu bir TAHMİNDİ, kanıtlanmamıştı. CI'nın bu turda gösterdiği gerçek hata ("setup kontrolü
+BAŞTAN 'wal receiver: yok' diyor") bu teşhisi zaten geçersiz kılıyordu: sorun teardown'ın yeniden bağlanması
+değil, fixture'ın KURULUM anındaki tek seferlik sorgusuydu.
+
+**Gerçek kök neden, YEREL'de doğrudan ölçüldü:** PG18 replikasını 1 saniye aralıklarla izleyen bir döngü
+başlatıp AYNI ANDA `test_migration_scale_live_postgres.py`'nin 420 bin satırlık backfill + CONCURRENTLY
+index yükünü koşturdum. Sonuç: `pg_stat_wal_receiver` art arda birkaç ölçümde (~1-4 sn) GERÇEKTEN boş
+döndü, sonra hiçbir müdahale olmadan kendiliğinden 'streaming'e döndü. Bu, PostgreSQL'in NORMAL davranışı
+— ağır yazma yükü altında checkpoint/fsync baskısı wal receiver'ı kısa süreliğine koparıp yeniden bağlıyor.
+PG18'e özgü bir kurulum arızası DEĞİL (postgres:18 imajının PGDATA yolu değişikliği de AYRICA denendi ve
+mekanizmayla hiçbir ilgisi olmadığı doğrulandı — kırmızı ringa balığı çıktı).
+
+**Neden PG18'de görünüyor, 15/16/17'de görünmüyor (muhtemel, kanıtlanamadı ama tutarlı):**
+`test_migration_scale_live_postgres.py`, dosya adı sırasıyla (`m` < `t`) `test_topology_live_postgres.py`
+HEMEN önce koşuyor — HER sürümde. Ama fixture'ın TEK ÖLÇÜMLÜ (yeniden denemesiz) setup denetimi bu birkaç
+saniyelik dalgalanma penceresine rastlamak ZORUNDA — CI'nın yerelden ~6,5× yavaş diski (Commit 10d) bu
+pencereyi uzatıp rastlama ihtimalini yükseltiyor; PG18'in kendine özgü bir yavaşlığı olmasa bile, matris
+kollarının HANGİSİNİN bu şans faktörünü yakaladığı gözlemsel olarak değişebilir.
+
+**Düzeltme (`tests/test_topology_live_postgres.py`):** fixture'ın setup denetimi artık (teardown'ınki gibi)
+`_wait()` ile SABIRLA bekliyor — ama kalıcı arızayı hızlı yakalamak için KISA bir bütçeyle (20 sn — ölçülen
+1-4 sn'lik pencerelere cömert pay, teardown'ın 180 sn'sinden BİLİNÇLİ olarak çok daha kısa, çünkü burada
+beklenen kalıcı arıza değil geçici dalgalanma). Genuine arıza (önceki testin teardown'u gerçekten pes
+ettiyse) hâlâ KURULUMDA, anlaşılır gerekçeyle yakalanıyor — yalnızca 20 sn'lik sabır payıyla.
+
+**Doğrulama:** ağır yük + art arda test_migration_scale (420 bin satır) → test_topology sırasıyla 13 canlı
+teste karşı GERÇEK PG18'de İKİ KEZ koşuldu, hiç kırılmadı.
+
+### GRUP 2 madde 6 — CONCURRENTLY, 10f'in kendi kararıyla çelişen eski testten ayrıldı
+
+`test_all_migrations_finish_within_the_managed_statement_timeout_on_400k_rows`: Commit 10f CONCURRENTLY
+index kurulumunu BİLEREK `statement_timeout` dışına aldı (bölünemiyor, tabloyu kilitlemiyor) — ama bu test
+HÂLÂ "en uzun tek ifade < 8 sn" diyordu, 10f'in kendi kararıyla ÇELİŞİYORDU (gerçekte ölçülen: 13,99 sn).
+**Düzeltme:** CONCURRENTLY ifadeleri (`"CONCURRENTLY" in s.text`) ayrı tutuluyor, YALNIZCA CONCURRENTLY
+OLMAYAN ifadeler 8 sn sınırıyla kontrol ediliyor. YENİ bir doğrulama eklendi: 8 sn'yi aşan TEK ifade
+türünün CONCURRENTLY index kurulumu olduğu — bir migration sessizce BAŞKA bir ifadeyi sınır dışına
+kaçırırsa (kod hatası) burada yakalanır.
+
+### GRUP 2 madde 7 — kontrol sorgusunun kendisi zaman aşımına uğruyordu
+
+`test_the_original_single_update_exceeds_the_limit_that_the_chunked_version_meets`: `QueryCanceledError`
+sonrası `statement_timeout` HÂLÂ küçük `limit` değerindeydi (SET oturum düzeyinde, iptal edilen ifadeyle
+birlikte geri ALINMAZ) — hemen ardından gelen `SELECT count(*)` (420 bin satır tam tarama) da zaman
+aşımına uğrayıp assert'in KENDİSİ `QueryCanceledError` fırlatıyordu (test hatası, ürün hatası değil).
+**Düzeltme:** kontrol sorgusundan ÖNCE `SET statement_timeout = 0`.
+
+### GRUP 1 madde 1 — parça sayısı değil, değişmezler
+
+`test_the_identity_backfill_runs_in_the_chunk_size_the_migration_file_declares`: `len(chunks) == (hi-lo)
+// chunk_size + 1` bekliyordu — bütçe mekanizmasının yavaş parçaları YARI genişlikle böldüğünü (Commit
+10d madde A3) hesaba katmıyordu (gerçekte ölçülen: 53 yerine 86). **Düzeltme:** parça SAYISI yerine
+değişmezler: id aralığı boşluksuz kapsandı (`query_hash IS NULL` kalan satır sayısı 0), hiçbir satır iki
+kez güncellenmedi (`sum(chunk.rows) == total_rows` TAM eşitlik — YAPISAL garanti `WHERE ... IS NULL`
+koşulundan geliyor, test bunu TAM sayı eşitliğiyle doğruluyor), başarıyla biten her parça sınırın altında
+(aksi hâlde "retry" olurdu), bölünen parçalar varsa `kind="retry"` ile görünür (zorunlu değil — bu
+makinede/yükte bu turda hiç bölünme OLMADI, 53/53 — test bunu da doğru ele alıyor).
+
+### GRUP 1 madde 2 — log biçimi ve testi AYNI kaynaktan besleniyor
+
+`app/migrations_runner.py`'ye `CHUNK_PROGRESS_LOG_FORMAT` (gerçek `logger.info` çağrısının kullandığı) ve
+`CHUNK_PROGRESS_LOG_RE` (adlandırılmış gruplu regex) eklendi — TEK kaynak. `tests/test_migrations_runner.py`
+YENİ bir hızlı, her zaman açık test (`test_chunk_progress_log_line_matches_the_shared_regex_other_tests_import`)
+ile bu ikisinin GERÇEKTEN eşleştiğini (FakeConn üzerinden gerçek bir log satırı üretip regex'le eşleştirerek)
+doğruluyor — log biçimi değişirse bu test SANİYELER içinde kırılır, yavaş on-prem testini (DBACE_TEST_ONPREM=1
+gerektirir) beklemeye gerek kalmaz. `tests/test_onprem_package_live.py`'nin elle yazılmış, eski biçimle
+(`parça \d+/\d+`) eşleşmeyen regex'i (gerçek biçim: `parça N (id X/Y, ...)`) kaldırılıp `CHUNK_PROGRESS_LOG_RE`
+import edilip kullanıldı.
+
+### GRUP 1 madde 3 — gerçekleşmeyecek senaryoyu sınayan test kaldırıldı
+
+`test_upgrade_from_old_package_keeps_every_row_and_schema_matches` (+ `old_package` fixture,
+`row_snapshot`/`lost_rows`/`changed_rows`, `start_target_for_old`) kaldırıldı — "bankada ESKİ bir Docker
+on-prem kurulumu var" senaryosu Faz 32'nin Docker'sız (native) kurulum kararıyla (Commit 11a) artık HİÇ
+gerçekleşmeyecek. Gerekçe ve kaybedilen kapsam SORULAR.md'ye yazıldı. Docker paketinin YENİ kurulum testi
+(`test_offline_install_...`) DEĞİŞMEDİ — Railway'in build yolu hâlâ bu paketi kullanıyor.
+
+### GRUP 1 madde 4 — CLAUDE.md kuralı
+
+"Migration çalıştırıcısını, log biçimini ya da `deploy/` altını değiştiren her commit'te ilgili on-prem ve
+native-paket testleri YERELDE de koşulur" eklendi — tam olarak BU turun kendisinin nedeni: Commit 10f
+migration log biçimini değiştirdi ama onu okuyan on-prem testini güncellemedi, CI'nın gecelik/dosya-filtreli
+on-prem işi bunu ancak GÜNLER sonra yakaladı.
+
+**Test:** `tests/test_topology_live_postgres.py` (13, gerçek PG18, ağır yük altında 2 kez), `tests/
+test_migration_scale_live_postgres.py` (10, gerçek PG18, 420 bin satır), `tests/test_migrations_runner.py`
+(21, çevrimdışı — 1 yeni), `tests/test_onprem_package_live.py` (`DBACE_TEST_ONPREM=1`, gerçek dind).

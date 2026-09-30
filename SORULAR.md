@@ -2850,20 +2850,36 @@ istatistikleri/bloklama'nın PRODÜKSİYONDA en yaygın kullanılacağı topoloj
 AG konteynerine de paketin login SQL'ini kurup (`prepare_monitor_login`in AG'ye de uygulanan bir sürümü) bu
 dört test dosyasını AG hedefiyle de parametrelendirmek — orta boy bir iş, bu turda kapsam dışı bırakıldı.
 
-**PG18'de CI'da replika teardown'ının neden 30 sn'yi aştığı YEREL'de üretilemedi (Faz 31 Commit 10f).**
-`test_topology_live_postgres.py::replica` fixture'ının teardown'u (kopar → geri bağla → akışa dön) CI'da
-yalnızca PG18 kolunda 30 sn sınırını aşıyordu; ürün davranışı DOĞRU (replika gerçekten "BAĞLI DEĞİL"
-diyor), sorun test bekleyişinin payı. Aynı döngüyü GERÇEK PG16 ve PG18 birincil/replika çiftlerine karşı,
-hem boşta hem `docker update --cpus=0.5` ile kısıtlanmış makinede tekrar tekrar denedim — HER seferinde
-~1 sn'de tamamlandı, CI'daki gecikmeyi üretemedim. En olası açıklama (kanıtlanamadı): izole denemem
-kopukluğu ANINDA geri kapatıyor (WAL birikmeden), gerçek testler kopardıktan sonra wizard + iki toplama
-turu kadar GERÇEK süre geçiriyor ve PG18'in `SHOW primary_conninfo`sunun önceki sürümlerden belirgin
-şekilde daha geniş parametre kümesi (sslnegotiation/gssencmode/target_session_attrs/load_balance_hosts vb.)
-her yeniden bağlanışta CI ağında yerelden daha uzun negotiation'a yol açıyor olabilir — ama bu mekanizma
-BU MAKİNEDE hiçbir koşulda ölçülebilir bir yavaşlama göstermedi. **Uygulanan önlem** (kök nedenden bağımsız
-olarak sağlam): teardown beklemesi 180 sn'ye çıkarıldı (Commit 10d'de ölçülen ~6,5× CI/yerel oranıyla
-uyumlu) ve fixture setup'ı artık `assert original` yerine gerçek akış durumunu kontrol ediyor — önceki
-testin teardown'u pes ettiyse bir sonraki test KURULUMDA anlaşılır gerekçeyle düşüyor, teardown'da değil.
-**Açık iş:** bir sonraki CI koşusu 180 sn'nin yeterli olup olmadığını gösterecek; yetmezse CI Actions
-loglarına (`docker logs`, ağ gecikmesi) doğrudan erişim gerekecek — bu makinede Docker Desktop'ın GitHub
-Actions runner'ının ağ/disk özelliklerini birebir taklit etmediği kabul edilmeli.
+**ÇÖZÜLDÜ (Faz 31 Commit 10g) — PG18'de replika testinin "wal receiver: yok" hatasının kök nedeni.**
+Commit 10f'in tahmini ("PG18'in daha geniş `primary_conninfo`'su teardown'daki YENİDEN bağlanmayı
+yavaşlatıyor") YANLIŞ çıktı — Commit 10g'de CI, "setup kontrolü BAŞTAN 'wal receiver: yok' diyor" dedi,
+yani sorun teardown'ın yeniden bağlanması değil, herhangi bir anda tek seferlik sorgunun REPLİKASYONUN
+KENDİSİNDEKİ normal bir dalgalanmaya rastlamasıydı. Kök neden YEREL'de doğrudan ÖLÇÜLDÜ: PG18 replikasını
+1 sn aralıklarla izlerken AYNI ANDA `test_migration_scale_live_postgres.py`nin 420 bin satırlık backfill +
+CONCURRENTLY index yükünü koşturdum — `pg_stat_wal_receiver` art arda birkaç ölçümde (~1-4 sn) GERÇEKTEN
+BOŞ döndü, sonra kendiliğinden 'streaming'e döndü, hiçbir müdahale olmadan. Bu, PostgreSQL'in NORMAL
+davranışı: ağır yazma yükü altında checkpoint/fsync baskısı wal receiver'ı kısa süreliğine koparıp yeniden
+bağlıyor — PG18'e özgü bir kurulum arızası DEĞİL. `test_migration_scale_live_postgres.py`, dosya adı
+sırasıyla `test_topology_live_postgres.py`den HEMEN ÖNCE koştuğu için (m < t) bu dalgalanma pencerelerinden
+biri, fixture'ın TEK ÖLÇÜMLÜ (yeniden denemesiz) setup denetiminin tam üstüne denk gelebiliyordu — CI'nın
+daha yavaş diskinde (Commit 10d: ~6,5× oranı) bu pencere daha uzun sürüp rastlama ihtimalini yükseltiyor,
+PG18'de daha sık/güvenilir görünmesinin muhtemel sebebi de bu (kanıtlanmadı ama tutarlı). **Düzeltme:**
+setup denetimi de artık (teardown'ınki gibi) `_wait()` ile SABIRLA bekliyor — ama genuine arızayı hızlı
+yakalamak için kısa bir bütçeyle (20 sn, ölçülen 1-4 sn'lik yerel pencerelere cömert pay; teardown'ın 180
+sn'sinden bilinçli olarak çok daha kısa, çünkü burada beklenen kalıcı bir arıza değil geçici bir dalgalanma).
+Yerelde ağır yük + art arda 13 test koşusunda hiç kırılmadı (kanıt: ILERLEME.md Commit 10g).
+
+**Eski Docker paketinden yükseltme testi KALDIRILDI (Faz 31 Commit 10g).**
+`test_onprem_package_live.py::test_upgrade_from_old_package_keeps_every_row_and_schema_matches` (ve onun
+`old_package` fixture'ı, `row_snapshot`/`lost_rows`/`changed_rows` yardımcıları, `start_target_for_old`)
+kaldırıldı. Gerekçe: bu test "bankada ESKİ bir Docker on-prem kurulumu var, ONU yeni pakete yükseltiyoruz"
+senaryosunu sınıyordu — ama Faz 32'de on-prem kurulum yolu Docker'sız (native) kurulum olarak tasarlandı
+(`docs/ONPREM_NATIVE.md`, Commit 11a-11b): bir bankanın hiçbir zaman Docker tabanlı bir on-prem kurulumu
+OLMAYACAK ki ondan yükseltilsin. Test gerçekleşmeyecek bir geçmişi doğruluyordu. **Kaybedilen kapsam:**
+"eski şema büyük ölçüde eksik kurulmuş bir sürümden yükseltmede satır/şema bütünlüğü" senaryosu artık HİÇ
+sınanmıyor — Docker paketi hâlâ var (Railway'in build yolu + pilot/demo, KALDIRILMADI) ama onun "eski
+sürümden yükseltme" senaryosu test edilmiyor. **Bilinçli kabul edilen risk:** Docker paketinin YENİ kurulum
+yolu (`test_offline_install_runs_api_worker_and_collects_with_the_restricted_role`) hâlâ tam kapsamlı test
+ediliyor; "yükseltme" ihtiyacı native paket tarafına taşındı, o da KENDİ yükseltme testini (11c'de,
+`docs/ONPREM_NATIVE.md` §9'daki 4 senaryodan biri — releases+symlink, gerçek eski/yeni sürüm çifti) ayrıca
+alacak. Docker paketinin yükseltme testi bu yüzden bir daha eklenmeyecek — o yol kapanıyor.
