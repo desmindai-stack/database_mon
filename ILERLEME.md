@@ -9915,3 +9915,132 @@ ayrı commit, push yok.
 
 **Değişen dosyalar:** `docs/ONPREM_NATIVE.md` (§11.b/e/f, §12 güncellendi; "Açık kararlar" kapatıldı,
 "Bir sonraki adım" yerine "Uygulama sırası (11b-11e)" yazıldı).
+
+## Faz 32 — Commit 11b: yerel kurulum — gerçek RHEL9/Ubuntu22.04 systemd konteynerinde uçtan uca doğrulandı
+
+`docs/ONPREM_NATIVE.md`'nin tasarımını uygulayan İLK kod commit'i: vendoring genişletmesi (taşınabilir
+Python 3.12, PGDG PostgreSQL 16 + nginx + msodbcsql18/unixODBC — RHEL9 ve Ubuntu 22.04 için ayrı ayrı),
+`prereq-check.sh`, `install.sh`, `dbace.service`, nginx yapılandırması (TLS + `TLS_MODE=backend`), gece
+yedek zamanlayıcısı (systemd timer). Push YOK. Railway'in kullandığı Docker dosyalarına (`Dockerfile.backend`,
+`docker-compose.yml`, `railway.toml`) dokunulmuyor — yalnızca EKLEME (yeni dosyalar) + `prepare-offline-
+artifacts.sh`'e yeni adımlar.
+
+### Kabul kriterleri (kodlamadan önce)
+
+1. `prereq-check.sh` eksik bir önkoşulda (desteklenmeyen dağıtım/mimari, port çakışması, eksik araç) en az
+   bir FAIL verir; `install.sh` bu durumda BAŞLAMAZ (negatif kontrol).
+2. Sıfırdan kurulum GERÇEK, systemd PID1 çalışan, `--network none` rockylinux:9 VE ubuntu:22.04
+   konteynerinde: `install.sh` başarıyla biter, `dbace.service` `active`, `/api/health` 200 döner, nginx
+   üzerinden arayüz (statik dosyalar) açılır.
+3. Yalnızca okuma yetkili bir rolle eklenen GERÇEK bir PostgreSQL hedefi VE GERÇEK bir SQL Server hedefi
+   (aynı test ağında, ayrı konteynerler) bir toplama turundan sonra meta veritabanında veri üretir (kanıt:
+   satır sayısı > 0).
+4. `JWT_SECRET`/`CREDENTIALS_MASTER_KEY`/`ADMIN_PASSWORD` placeholder bırakılırsa OTOMATİK üretilir;
+   `/etc/dbace/dbace.env` dosya izni `600`.
+5. `dbace.service` ROOT DIŞI (`dbace`) kullanıcıyla çalışır — `systemctl show`/`ps` ile doğrulanır (negatif
+   kontrol: root ile çalışmadığı KANITLANIR, varsayılmaz).
+6. Meta PostgreSQL yalnızca `127.0.0.1`'de dinler — konteynerin KENDİ ağ arayüzü üzerinden (loopback
+   dışından) 5432'ye bağlantı denemesi REDDEDİLİR/ULAŞILMAZ (negatif kontrol).
+7. `dbace-backup.timer` elle tetiklendiğinde (`systemctl start dbace-backup.service`) `BACKUP_DIR` altında
+   GERÇEK, açılabilir bir `pg_dump -Fc` dosyası üretir.
+8. nginx `TLS_MODE=nginx` (varsayılan) modunda test sertifikasıyla HTTPS sunar; `TLS_MODE=backend`
+   modunda düz HTTP'de `HTTP_PORT`'ta dinler — `install.sh` TEK `.env` değişkenine göre doğru `nginx.conf`'u
+   üretir (iki modu da ayrı ayrı doğrula).
+9. `install.sh` aynı sürüm üstüne TEKRAR çalıştırıldığında idempotent — hata vermez, `releases/` yapısı
+   bozulmaz (negatif kontrol: ikinci çalıştırma sonrası servis hâlâ ayakta, veri kaybı yok).
+10. `git diff` ile `deploy/onprem/Dockerfile.backend`, `deploy/onprem/docker-compose.yml`, `railway.toml`,
+    `deploy/onprem/entrypoint.sh`, `deploy/onprem/nginx.conf` dosyalarına DOKUNULMADIĞI doğrulanır.
+
+**Yerleşim:** yeni dosyalar `deploy/onprem/native/` altında (script'ler, systemd birimleri, nginx şablonu);
+`deploy/onprem/scripts/prepare-offline-artifacts.sh` GENİŞLETİLİYOR (var olan çıktılara dokunmadan yeni
+adımlar ekleniyor) — `docs/ONPREM_NATIVE.md`'de tasarlandığı gibi.
+
+**Süre kuralı:** ara adımlarda yalnızca ilgili testler; tam paket en sonda BİR KEZ, `-rs` çıktısıyla.
+
+### Doğrulama düzeneği
+
+`rockylinux:9` ve `ubuntu:22.04` tabanında, systemd'yi GERÇEKTEN PID 1 olarak çalıştıran özel imajlar
+(`--privileged --cgroupns=host -v /sys/fs/cgroup:/sys/fs/cgroup:rw ... /sbin/init` — docs/ONPREM_NATIVE.md
+§9'da tasarlanan AYNI desen) elle inşa edildi (bu commit'in KALICI bir parçası değil — CI'ya bağlama 11c'nin
+işi). Her iki dağıtımda da `install.sh` **`--network none`** ile, SIFIRDAN çalıştırıldı (repo salt-okunur
+bağlandı, hiçbir paket/indirme adımı ağa çıkmadı — genuine air-gap kanıtı). Kurulumdan SONRA, ayrı bir
+docker ağında gerçek `postgres:16-alpine` (pg_stat_statements + kısıtlı `dbace_monitor` rolü, yalnızca
+`pg_monitor`) ve gerçek `mcr.microsoft.com/mssql/server:2022-latest` (kısıtlı `dbace_monitor` login'i,
+yalnızca `VIEW SERVER/DATABASE STATE`) hedefleri eklenip API üzerinden gerçek bir toplama turu koşturuldu.
+
+### Kabul kriterleri — sonuç (10/10, ikisi de dağıtımda)
+
+1. **✓** `debian:12-slim` (desteklenmeyen dağıtım) üzerinde `install.sh` çalıştırıldı: `prereq-check.sh`
+   4 FAIL verdi (dağıtım, systemd, openssl, systemctl), `install.sh` "HATA: önkoşul denetimi FAIL verdi"
+   ile DURDU, hiçbir kurulum adımına geçmedi.
+2. **✓** RHEL9 ve Ubuntu 22.04'te, `--network none`, sıfırdan: `install.sh` başarıyla bitti, `dbace.service`
+   `active`, `/api/health` 200, nginx üzerinden arayüz (TLS, kendinden imzalı test sertifikasıyla) açıldı.
+3. **✓** Her iki dağıtımda GERÇEK PostgreSQL + GERÇEK SQL Server hedefi kısıtlı rollerle eklendi; ikisi de
+   `last_sample_ok_at` ile başarılı toplama gösterdi (RHEL9: `metric_samples` de doğrudan sayıldı — 2 satır;
+   Ubuntu: `last_sample_ok_at` her iki instance için de doldu — msodbcsql18'in Ubuntu paketlemesinin de
+   gerçekten çalıştığının kanıtı).
+4. **✓** İki dağıtımda da sırlar boş bırakılınca üretildi (`DBACE_DB_PASSWORD`, `CREDENTIALS_MASTER_KEY`,
+   `JWT_SECRET`, `ADMIN_PASSWORD` — sonuncusu kurulum sonunda BİR KEZ ekrana yazıldı), `/etc/dbace/dbace.env`
+   `600 dbace:dbace`.
+5. **✓** `ps -o user,cmd -C uvicorn` her iki dağıtımda da `dbace` kullanıcısını gösterdi (root DEĞİL).
+6. **✓** Konteynerin kendi IP'sinden 5432'ye bağlantı denemesi REDDEDİLDİ (RHEL9: `Connection refused`;
+   Ubuntu: ağ zaten `--network none` olduğu için hiç arayüz yok — ikisi de "dışarıdan ulaşılamaz" kanıtı).
+7. **✓** `systemctl start dbace-backup.service` her iki dağıtımda da GERÇEK, `pg_restore --list` ile
+   açılabilir bir `.dump` dosyası üretti (RHEL9: 379 TOC girdisi; Ubuntu: 287 KB).
+8. **✓** `TLS_MODE=nginx`: HTTPS 200. `TLS_MODE=backend`: aynı `install.sh` çalıştırması TEK `.env`
+   değişikliğiyle nginx.conf'u düz HTTP'ye çevirdi (443 artık hiç dinlemiyor), HTTP 8080 200 döndü.
+9. **✓** `install.sh` AYNI sürüm üstüne 3 kez çalıştırıldı (RHEL9'da) — her seferinde "zaten kurulu/hazır,
+   atlanıyor" ile idempotent geçti, migration "0 yeni uygulandı" dedi, servis kesintisiz ayakta kaldı.
+10. **✓** `git diff --stat` ile Railway'in Docker dosyalarının (`Dockerfile.backend`, `docker-compose.yml`,
+    `entrypoint.sh`, `nginx.conf`, `railway.toml`, `install-offline.sh`, `build-images-offline.sh`,
+    `make-release-package.sh`, `start.sh`) HİÇBİRİNE dokunulmadığı doğrulandı — boş diff.
+
+### Doğrulama sırasında bulunan ve düzeltilen gerçek hatalar (5)
+
+- **`. /etc/os-release` kendi `VERSION` değişkenini tanımlıyor** — `install.sh`'in kendi sürüm değişkeniyle
+  ÇAKIŞIYORDU (`DBACE_VERSION` olarak yeniden adlandırıldı). Klasik bir `. /etc/os-release` tuzağı.
+- **`DATABASE_URL` dosyaya yazıldıktan sonra o ANKİ kabuğa `export` EDİLMEMİŞTİ** — migration adımı
+  `unbound variable` ile çöküyordu; düzeltme: yazdıktan hemen sonra `export`.
+- **Migration adımında `PYTHONPATH` verilmemişti** — `sudo -u dbace ... python -m app.migrations_runner`
+  release dizinine `cd` etmediği için `ModuleNotFoundError: app` veriyordu; `PYTHONPATH="$RELEASE_DIR"`
+  eklendi.
+- **`backup.sh`'te `${PG_BINDIR:?mesaj}` içinde bir Türkçe kesme işareti (`.env'de`) bash'in `${...}`
+  ayrıştırıcısını bozuyordu** (çift tırnak İÇİNDE bile — bilinen bir bash tuzağı: `${VAR:?mesaj}` içindeki
+  tek tırnak sayısı dengesiz olamaz) — `unexpected EOF` ile servis hiç başlamıyordu; mesajdan kesme işareti
+  kaldırıldı.
+- **`dbace.service.tmpl`'de `StartLimitIntervalSec`/`StartLimitBurst` yanlışlıkla `[Service]` bölümündeydi**
+  — systemd bunları SESSİZCE yok sayıyordu ("Unknown key name ... ignoring"), yani art arda çökme
+  sınırlaması HİÇ ÇALIŞMIYORDU; doğru yer olan `[Unit]`'e taşındı.
+
+Bu beş hatanın hiçbiri statik inceleme ya da `bash -n` ile YAKALANAMAZDI (hepsi ya çalışma zamanı davranışı
+ya da systemd'nin sessiz yoksayması) — gerçek systemd konteynerinde uçtan uca koşturmanın somut karşılığı.
+
+### Vendor boyutları (ölçüldü, `prepare-offline-artifacts.sh` çalıştırılarak)
+
+Taşınabilir Python 3.12.14 (python-build-standalone, sha256 doğrulanmış, `.tar.zst` bu makinede `.tar.gz`'ye
+çevrildi — hedefte `zstd` gerekmesin diye): 144 MB. RHEL9: 103 RPM (PostgreSQL 16 + nginx + msodbcsql18/
+unixODBC), ~50 MB. Ubuntu 22.04: 87 DEB, ~89 MB. `msodbcsql18` HER ÜÇ yerde (bookworm Docker, RHEL9, Ubuntu)
+AYNI sürüm: `18.7.1.1-1`. PostgreSQL 16.15 her iki native dağıtımda da (PGDG'nin kendi paketi).
+
+### Dağıtım farkları — koddan ölçüldü, tahmin edilmedi
+
+| | RHEL9 ailesi | Ubuntu 22.04 |
+|---|---|---|
+| PG systemd birimi | `postgresql-16.service` | `postgresql.service` (→ `postgresql@16-main.service`) |
+| PG binary yolu | `/usr/pgsql-16/bin` | `/usr/lib/postgresql/16/bin` |
+| PG veri dizini | `/var/lib/pgsql/16/data` (elle `postgresql-16-setup initdb`) | `/var/lib/postgresql/16/main` (paketin kendi postinst'i OTOMATİK ilklendiriyor) |
+| Her ikisinde de | `listen_addresses` ve `auth-host` varsayılanı zaten `localhost`/`scram-sha-256` — install.sh yine de AÇIKÇA ayarlıyor (savunma amaçlı, dokümanda vaat edilen "yalnızca varsayılana güvenilmez" ilkesi) | |
+
+`install.sh` bu farkları TEK bir `DISTRO_FAMILY` dallanmasında topluyor; `dbace.service`'in `Requires=`
+satırı bu yüzden bir ŞABLON (`dbace.service.tmpl`, `__PG_SERVICE__` yer tutucusu) — sabit dosya değil.
+
+### Değişen/eklenen dosyalar
+
+`deploy/onprem/scripts/prepare-offline-artifacts.sh` (genişletildi — var olan çıktılara dokunulmadı);
+`deploy/onprem/native/` (yeni): `install.sh`, `prereq-check.sh`, `dbace.env.example`,
+`bin/{start.sh,backup.sh}`, `systemd/{dbace.service.tmpl,dbace-backup.service,dbace-backup.timer}`,
+`nginx/{nginx-tls.conf.tmpl,nginx-backend.conf.tmpl}`. `rollback.sh`/`uninstall.sh` ve CI'ya bağlama
+**11c'nin** işi (bu commit'in kapsamı dışı, tasarımda böyle sıralanmıştı).
+
+**Tam paket (bir kez, `-rs`, bu commit backend/app'e HİÇBİR dokunuş yapmadı — beklenen: sıfır regresyon):**
+2523 passed, 6 skipped, 9 xfailed, 0 hata.

@@ -1,0 +1,32 @@
+# TLS_MODE=backend — bankanın önünde zaten TLS sonlandıran bir LB/WAF var; nginx düz HTTP'de dinler.
+# install.sh __HTTP_PORT__ / __API_PORT__ / __WEB_ROOT__ yer tutucularını doldurur.
+server {
+    listen __HTTP_PORT__;
+    server_name _;
+    root __WEB_ROOT__;
+    index index.html;
+
+    client_max_body_size 10m;
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:__API_PORT__/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /docs {
+        proxy_pass http://127.0.0.1:__API_PORT__/docs;
+        proxy_set_header Host $host;
+    }
+
+    location /openapi.json {
+        proxy_pass http://127.0.0.1:__API_PORT__/openapi.json;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

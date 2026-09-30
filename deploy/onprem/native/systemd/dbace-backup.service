@@ -1,0 +1,10 @@
+[Unit]
+Description=dbace — meta veritabanı yedeği (pg_dump -Fc, docs/ONPREM_NATIVE.md §2)
+After=network.target
+
+[Service]
+Type=oneshot
+User=dbace
+Group=dbace
+EnvironmentFile=/etc/dbace/dbace.env
+ExecStart=/opt/dbace/current/bin/backup.sh

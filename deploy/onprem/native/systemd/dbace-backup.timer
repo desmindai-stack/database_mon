@@ -1,0 +1,10 @@
+[Unit]
+Description=dbace — her gece meta veritabanı yedeği (docs/ONPREM_NATIVE.md §2)
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

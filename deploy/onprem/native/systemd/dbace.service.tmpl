@@ -1,0 +1,24 @@
+[Unit]
+Description=dbace — API + toplayıcı (Faz 32 Commit 11b, docs/ONPREM_NATIVE.md §4)
+After=network-online.target __PG_SERVICE__
+Wants=network-online.target
+Requires=__PG_SERVICE__
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=dbace
+Group=dbace
+WorkingDirectory=/opt/dbace/current
+EnvironmentFile=/etc/dbace/dbace.env
+ExecStart=/opt/dbace/current/bin/start.sh
+Restart=always
+RestartSec=2
+LimitNOFILE=65536
+MemoryMax=2G
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
