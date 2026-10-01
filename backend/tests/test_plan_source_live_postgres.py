@@ -434,6 +434,8 @@ async def test_statement_timeout_cancels_a_long_analyze(admin, client, dsn, monk
     log(await _version(admin), f"pg_sleep(10) → {response.status_code} {elapsed:.2f} sn {response.json()['detail'][:80]!r}")
     # Faz 31 Commit 10d madde A3: `< 5` GERÇEK CI oranında ölçüldü (sunucu 0,35 CPU'ya kısıtlı): 0,73–0,75 sn — süre
     # yapılandırılan 0,7 sn zaman aşımı + ~30 ms, makine hızından neredeyse bağımsız. Pay ~6,7×; eşik değişmedi.
+    # Faz 32 Commit 12b taraması: SÜRE burada ürün gereksinimi (yapılandırılabilir ANALYZE_STATEMENT_TIMEOUT_MS'in
+    # GERÇEKTEN kesip kesmediği test ediliyor) — mekanizmaya çevrilmedi, BIRAKILDI.
     assert response.status_code == 400 and elapsed < 5
     detail = response.json()["detail"]
     # ANALYZE yolunda zaman aşımı ÇALIŞTIRMA sınırı — "planlama uzun sürdü" demek yanıltıcıydı.
@@ -460,6 +462,9 @@ async def test_lock_timeout_gives_up_quickly_behind_an_access_exclusive_lock(adm
         await locker.close()
     detail = response.json().get("detail", "")
     log(await _version(admin), f"ACCESS EXCLUSIVE tutuluyor={held == 1} → {response.status_code} {elapsed:.2f} sn {detail[:90]!r}")
+    # Faz 32 Commit 12b taraması: `held == 1` (üstte) zaten MEKANİZMA — kilidin GERÇEKTEN tutulduğunu
+    # pg_locks'tan doğruluyor. Alttaki süre kontrolleri ürün gereksinimi (lock_timeout'un statement_timeout'u
+    # BEKLEMEDEN düşmesi, saniye cinsinden yapılandırılmış bir değer) — mekanizmaya çevrilmedi, BIRAKILDI.
     assert held == 1, "kilit gerçekten tutulmuyordu — test bir şey kanıtlamıyor"
     assert response.status_code == 400
     assert elapsed < explain_module.ANALYZE_STATEMENT_TIMEOUT_MS / 1000 / 2, "statement_timeout'a kadar beklendi"

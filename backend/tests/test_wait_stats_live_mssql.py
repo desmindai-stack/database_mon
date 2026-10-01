@@ -178,6 +178,9 @@ async def test_a_real_user_lock_wait_survives_the_filter_and_shows_up_in_the_del
 
     lock_waits = [e for e in report.delta if e.wait_type.startswith("LCK_")]
     assert lock_waits, "gerçek kullanıcı kilit beklemesi farkta görünmeliydi"
+    # Faz 32 Commit 12b taraması: bu zaten MEKANİZMA — `wait_ms` SQL Server'ın KENDİ
+    # `sys.dm_exec_session_wait_stats` sayacı, test sürecinin duvar saati değil. 1000 ms eşiği,
+    # `_produce_user_lock_wait`'in BİLEREK tuttuğu 3 sn'lik kilide geniş bir pay (3×) bırakıyor.
     assert lock_waits[0].wait_ms >= 1000, lock_waits[0].wait_ms
     # Kullanıcı beklemesi arka plan sayılmıyor (ölçülen filtre doğru tarafta).
     assert not lock_waits[0].is_background

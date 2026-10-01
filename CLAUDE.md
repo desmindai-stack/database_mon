@@ -77,6 +77,14 @@ denetim testleriyle korunuyor (`test_navigation_integrity.py`,
   hiç denenmedi" commit'ler bu yüzden fark edilmeden ilerleyebiliyordu (Faz 31 Commit 10g:
   migration log biçimi değişti, onu okuyan on-prem testi güncellenmemiş hâlde CI'a kadar
   kırmızı kalmıştı).
+- **Canlı testlerde süre eşiği yerine mekanizma doğrulanır** (bekleme türü, kilit, durum,
+  sayaç) — mümkün olduğu her yerde. CI'nın disk/I-O hızı makineden makineye, yükten yüke
+  değişir; "yazıcı X saniye gecikti" gibi bir süre eşiği gerçek bir kilitlenmeyle gerçek bir
+  disk yarışını AYIRT EDEMEZ (Faz 32 Commit 12b: PG16/PG18 CI kollarında CONCURRENTLY testi
+  tam bu yüzden düştü — yazıcı gecikmesi disk yarışındandı, kilitten değil; düzeltme
+  `pg_stat_activity.wait_event_type`i doğrudan ölçmeye geçti). Süre assert'i yalnızca süre
+  GERÇEKTEN bir ürün gereksinimiyse (ör. Supabase'in yönetilen 8 sn `statement_timeout`'u,
+  yapılandırılmış bir `lock_timeout` değeri) ve gerekçesi yorumda yazılıysa kalır.
 - **Yerel Python 3.14, canlı 3.12.** 3.14 (PEP 649) annotation'ları ertelemeli
   değerlendirir, 3.12 hemen. Bu yüzden `schemas.py`'de bir tip, kendisini KULLANAN
   modelden önce tanımlı olmalı — yoksa yerelde sessizce geçer, canlıda import anında

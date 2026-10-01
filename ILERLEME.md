@@ -10250,3 +10250,71 @@ istisnası — hiçbiri eksik altyapı değil. (Ara bir koşuda `test_database_l
 geçici "F" görüldü — hem dosya tek başına hem bu tam, temiz koşunun tamamı sıfır hatayla geçti;
 tekrarlanamadı, gerçek bir regresyon değil, muhtemelen konteynerler yeni ayağa kalkarken bir
 bağlantı zamanlamasıydı.)
+
+## Faz 32 — Commit 12b: CI'da PG16/PG18 kolu düşüyordu — süre eşiği yerine mekanizma
+
+**İstek:** CI'da `test_concurrent_index_build_does_not_block_writers_but_a_plain_build_does` PG16 ve
+PG18 kollarında düşüyordu: CONCURRENTLY sırasında yazıcı gecikmesi 1,05–1,25 sn (build 2,2–2,4 sn),
+PG16'da düz index 0,62 sn'de bitip yazıcıyı yalnızca 0,62 sn geciktirdi — eski test `conc_latency <
+conc_build * 0.3` oranına bakıyordu, bu oranı disk/I-O yarışı da bozabiliyordu (kilitlenme ile hiç
+ilgisi olmadan). Teşhis doğru: CONCURRENTLY yazıcıları KİLİTLEMEZ, test SÜRE ölçerek dolaylı olarak
+kilitlenmeyi anlamaya çalışıyordu — CI'nın değişken disk hızı bu dolaylı ölçümü güvenilmez kıldı.
+
+### Madde 1 — test mekanizma ölçümüne çevrildi
+
+`tests/test_migration_scale_live_postgres.py`: `_measure_writers_during` (yazıcı INSERT gecikmesinin
+en büyüğünü ölçüyordu) kaldırıldı, yerine `_observe_writer_during` geldi — build() çalışırken:
+- Yazıcının backend PID'i (`SELECT pg_backend_pid()`) alınıp ayrı bir bağlantıdan 20 ms'de bir
+  `pg_stat_activity.wait_event_type`/`wait_event` örnekleniyor (`_sample_writer_waits`).
+- Yazıcının tamamladığı her INSERT'in build() başlangıcına göre göreli zamanı kaydediliyor.
+
+Yeni assert'ler: düz `CREATE INDEX` sırasında yazıcı en az bir örnekte `wait_event_type = 'Lock'`
+görmeli (negatif kontrol); CONCURRENTLY sırasında HİÇBİR örnekte `'Lock'` görmemeli (`ShareUpdate
+ExclusiveLock` normal INSERT'in `RowExclusiveLock`'uyla çakışmaz). Nokta örneklemesinin kısa bir
+donmayı kaçırma ihtimaline karşı bağımsız bir ikinci sinyal: `_progress_in_every_quarter` — CONCURRENTLY
+sırasında tamamlanan INSERT'lerin build'in HER çeyreğinde en az bir kez görünmesi (yazıcının gerçekten
+kesintisiz ilerlediğinin satır-sayısı kanıtı). Süre değerleri yalnızca `log()` ile yazdırılıyor,
+hiçbir assert'te kullanılmıyor.
+
+**Doğrulama:** gerçek PG15/16/17/18'e karşı tek tek ve 3 kez art arda koşuldu — hepsi geçti, gözlenen
+bekleme türleri her seferinde beklenen (`düz: ['Lock']`, `CONCURRENTLY: ['IO']`/`['Client', 'IO']`).
+PG18 kolunda bir koşuda düz build 1,65 sn'ye kadar yavaşladı (tam da eski testi düşürecek türden bir
+disk yavaşlaması) — yeni test yine de doğru ayırt etti, çünkü SÜRE DEĞİL mekanizma bakıyor.
+
+### Madde 2 — aynı sınıftaki diğer canlı testler tarandı
+
+`backend/tests/*_live*.py` (28 dosya) + `test_database_load.py` süre/gecikme eşiğiyle assert eden
+testler için tarandı. Sonuç — her biri dosyasında kısa bir "Faz 32 Commit 12b taraması" yorumuyla
+işaretlendi:
+
+- **Mekanizmaya çevrilen:** yalnızca madde 1 (yukarıda) — CI'da gerçekten düşen tek test buydu.
+- **Süre BIRAKILDI, gerekçesi var (gerçek ürün gereksinimi):**
+  - `test_migration_scale_live_postgres.py` — Supabase'in yönetilen 8 sn `statement_timeout`'u
+    (3 ayrı assert: tüm migration'ların sınır içinde bitmesi, her parçanın sınır altında kalması,
+    gecikmeli-iptal testinin makul üst sınırı) — zaten mekanizmayla (QueryCanceledError/retry kaydı)
+    da korunuyor, süre assert'i ek bir doğrulama katmanı.
+  - `test_plan_source_live_postgres.py` — `ANALYZE_STATEMENT_TIMEOUT_MS`/`ANALYZE_LOCK_TIMEOUT_MS`in
+    GERÇEKTEN kestiğini test ediyor (2 test) — süre burada ÜRÜNÜN KENDİ yapılandırılmış zaman aşımı
+    değeri, ikinci testte zaten `pg_locks`'tan kilidin gerçekten tutulduğu da (mekanizma) doğrulanıyor.
+  - `test_sampling_statement_cache_live.py` — süre, BİLEREK enjekte edilen sabit 300 ms vekil
+    gecikmesine dayanıyor (organik CI/disk hızına değil) — gidiş-dönüş SAYISININ doğrudan sonucu.
+  - `test_wait_stats_live_mssql.py` — zaten mekanizma: `wait_ms`, test sürecinin duvar saati değil,
+    SQL Server'ın KENDİ `sys.dm_exec_session_wait_stats` sayacı; eşik (1000 ms), bilerek tutulan
+    3 sn'lik kilide geniş pay bırakıyor.
+- **Yalnızca poll-deadline (assert edilmiyor):** `test_topology_live_postgres.py`,
+  `test_onprem_package_live.py`, `test_wait_stats_live_mssql.py::_wait_until_ready` — `time.monotonic()`
+  bir "ne zamana kadar dene" tavanı için kullanılıyor, ölçülen süre hiçbir yerde assert edilmiyor.
+- **`test_database_load.py` (önceki turda bir kez görülen geçici "F"):** bu dosya tamamen ÇEVRİMDIŞI/
+  sentetik — sabit kurgulanmış zaman damgaları kullanıyor, gerçek duvar-saati ölçümü YOK, canlı bir
+  kaynağa karşı süre ölçen hiçbir assert içermiyor. Dolayısıyla madde 1'deki hata sınıfıyla İLGİSİZ;
+  flake tekrarlanamadı (hem dosya tek başına hem tam paket koşusunda sıfır hatayla geçti), kök nedeni
+  bulunamadı — muhtemelen o turdaki paylaşılan test durumuyla ilgili, bu iş kapsamında araştırılmadı.
+
+### Madde 3 — CLAUDE.md kuralı
+
+"Canlı testlerde süre eşiği yerine mekanizma doğrulanır" eklendi: bekleme türü/kilit/durum/sayaç
+mümkün olan her yerde ölçülür; süre assert'i yalnızca süre GERÇEKTEN bir ürün gereksinimiyse (Supabase
+8 sn `statement_timeout`, yapılandırılmış `lock_timeout` gibi) ve gerekçesi yorumda yazılıysa kalır.
+
+**Test:** `tests/test_migration_scale_live_postgres.py` (10, gerçek PG15/16/17/18'e karşı tek tek +
+tekrarlı koşuldu).

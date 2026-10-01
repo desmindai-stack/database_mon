@@ -66,6 +66,10 @@ async def test_statement_cache_halves_the_round_trips_of_a_sample_on_a_delayed_l
     rtt = RTT_MS / 1000
     log("önbellekli örnek süreleri (sn)", [round(d, 3) for d in with_cache])
     log("önbelleksiz örnek süreleri (sn)", [round(d, 3) for d in without_cache])
+    # Faz 32 Commit 12b taraması: SÜRE burada CI/disk hızına değil, modül docstring'inde açıklandığı gibi
+    # BİLEREK enjekte edilen sabit 300 ms vekil gecikmesine (`Proxy(RTT_MS, ...)`) dayanıyor — gidiş-dönüş
+    # SAYISININ doğrudan sonucu, organik bir gecikme ölçümü değil. Gerçek sistem gürültüsü (sub-ms) bu sabit
+    # 300 ms'in yanında ihmal edilebilir; mekanizmaya çevrilmedi, BIRAKILDI.
     assert max(with_cache) < rtt * 1.5, "önbellekli örnek tek gidiş-dönüş (≈ 1 RTT) sürmeli"
     assert min(without_cache) > rtt * 1.8, "önbelleksiz örnek iki gidiş-dönüş (≈ 2 RTT) sürer (negatif kontrol)"
     assert sum(without_cache) / sum(with_cache) > 1.6

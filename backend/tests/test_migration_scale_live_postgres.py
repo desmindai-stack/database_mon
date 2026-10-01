@@ -16,6 +16,12 @@ veritabanının ifade sınırı taklit edilir (`statement_timeout = 8s`, Supabas
 4. NEGATİF KONTROL: #53'ün ilk sürümü (tek UPDATE) aynı sınırla aynı veride zaman aşımına uğruyor, yeni sürüm uğramıyor.
 5. CONCURRENTLY: index kurulurken yazıcılar bloklanmıyor; düz CREATE INDEX'te bloklanıyor. Yarıda kesilen
    CONCURRENTLY'nin bıraktığı GEÇERSİZ index'i `IF NOT EXISTS` atlıyor — uygulayıcı bunu temizleyip yeniden kuruyor.
+
+Faz 32 Commit 12b: madde 5'in testi SÜRE değil MEKANİZMA ölçer (`pg_stat_activity.wait_event_type` + yazıcının
+tamamlanan satır sayısı) — CI'da disk/I-O yarışı eski süre-tabanlı eşiği (PG16/PG18 kollarında) gerçek bir
+kilitlenmeyle aynı gösterebiliyordu; build süresi CONCURRENTLY'nin KİLİT TUTMADIĞININ kanıtı değildi, yalnızca
+disk hızının kanıtıydı. Bu dosyadaki DİĞER süre assert'leri (statement_timeout 8 sn) GERÇEK bir ürün sınırı —
+bilerek bırakıldı, her birinde gerekçe var.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ import asyncio
 import statistics
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -242,6 +249,9 @@ async def test_all_migrations_finish_within_the_managed_statement_timeout_on_400
     log("en uzun sınırlı ifade", (slowest_bounded.file, slowest_bounded.text[:60], round(slowest_bounded.seconds, 2)))
     log("CONCURRENTLY (sınırsız) ifadeler (sn)", [(s.file, round(s.seconds, 2)) for s in concurrently_statements])
     # 8 sn sınırıyla bitti (aksi hâlde yukarıda QueryCanceledError). Parça başına pay: sınırın yarısından az.
+    # Faz 32 Commit 12b taraması: SÜRE burada ürün gereksinimi (Supabase'in yönetilen 8 sn statement_timeout'u,
+    # modül docstring'inde açıklanan #53 olayının asıl nedeni) ve zaten mekanizma tarafından KORUNUYOR (aşılsaydı
+    # QueryCanceledError fırlardı, bu satır çalışmazdı) — mekanizmaya çevrilmedi, BIRAKILDI.
     assert max(c.seconds for c in chunks) < 4.0
     assert slowest_bounded.seconds < 8.0, "CONCURRENTLY DIŞINDAKİ hiçbir ifade yönetilen sınırı aşmamalı"
     # Sınırsız çalışan TEK ifade türünün CONCURRENTLY index kurulumu olduğunu doğrula — bir migration
@@ -284,6 +294,8 @@ async def test_the_identity_backfill_runs_in_the_chunk_size_the_migration_file_d
     assert remaining_null == 0, "id aralığında boşluk kaldı — bazı satırlar hiç güncellenmedi"
     assert sum(c.rows for c in chunks) == total_rows, \
         "her satır TAM BİR KEZ güncellenmeli (toplam ROWS'u aşması iki kez güncellemeyi, altında kalması boşluğu gösterir)"
+    # Faz 32 Commit 12b taraması: SÜRE burada da ürün gereksinimi (aynı 8 sn statement_timeout) ve zaten
+    # mekanizmayla KORUNUYOR — aşan parça "chunk" değil "retry" olarak kaydedilirdi; BIRAKILDI.
     assert all(c.seconds < 8.0 for c in chunks), "başarıyla biten her parça oturumun statement_timeout'unun altında kalmalı"
     if retries:
         log("bölünen parçalar (bu koşuda gerçekten oldu)", [(r.line, round(r.seconds, 2)) for r in retries])
@@ -428,30 +440,81 @@ async def test_the_original_single_update_exceeds_the_limit_that_the_chunked_ver
 # --- 5. CONCURRENTLY: yazıcılar bloklanmıyor; geçersiz index kurtarılıyor ---------------------------
 
 
-async def _writer(database: str, stop: asyncio.Event, latencies: list[float]) -> None:
+async def _writer(database: str, stop: asyncio.Event, completions: list[float],
+                   pid_future: "asyncio.Future[int]") -> None:
     conn = await _connect(database)
     try:
+        pid_future.set_result(await conn.fetchval("SELECT pg_backend_pid()"))
         while not stop.is_set():
-            started = time.monotonic()
             await conn.execute("INSERT INTO slow_query_samples (instance_id, query, queryid) VALUES (1, 'SELECT writer', 'w')")
-            latencies.append(time.monotonic() - started)
+            completions.append(time.monotonic())
             await asyncio.sleep(0.01)
     finally:
         await conn.close()
 
 
-async def _measure_writers_during(database: str, build) -> tuple[float, float]:
-    """`build` çalışırken yazıcı gecikmesinin en büyüğü ve build süresi."""
-    stop, latencies = asyncio.Event(), []
-    writer = asyncio.create_task(_writer(database, stop, latencies))
+async def _sample_writer_waits(pid: int, stop: asyncio.Event,
+                                samples: list[tuple[float, str | None, str | None]]) -> None:
+    """Yazıcının `pg_stat_activity.wait_event_type`/`wait_event`'ini sık (20 ms) örnekler — SÜRE değil
+    MEKANİZMA (Faz 32 Commit 12b): CI'da disk/I-O yarışı build süresini gerçek bir kilitlenmeyle aynı
+    gösterebiliyordu (PG16/PG18 kollarında gözlendi), bu yüzden kilitlenme doğrudan ölçülüyor."""
+    admin = await _admin()
+    try:
+        while not stop.is_set():
+            row = await admin.fetchrow("SELECT wait_event_type, wait_event FROM pg_stat_activity WHERE pid = $1", pid)
+            if row is not None:
+                samples.append((time.monotonic(), row["wait_event_type"], row["wait_event"]))
+            await asyncio.sleep(0.02)
+    finally:
+        await admin.close()
+
+
+class WriterObservation(NamedTuple):
+    wait_types: set[str]  #: build() PENCERESİNDE gözlenen wait_event_type kümesi (süre DEĞİL)
+    completion_offsets: list[float]  #: build() başlangıcına göre, tamamlanan her INSERT'in göreli zamanı (sn)
+    build_seconds: float  #: yalnızca LOGLAMA için — hiçbir assert bu değere bakmaz
+
+
+def _progress_in_every_quarter(completion_offsets: list[float], build_seconds: float, buckets: int = 4) -> bool:
+    """`completion_offsets` build'in HER diliminde en az bir tamamlanmış INSERT içeriyor mu.
+
+    Nokta örneklemesi (`wait_event_type`) kısa bir donmayı kaçırabilir; bu, yazıcının build boyunca
+    GERÇEKTEN kesintisiz ilerlediğini bağımsız bir sinyalle (tamamlanan satır sayısı) doğruluyor —
+    süre DEĞİL, yalnızca "ilerleme var mı yok mu".
+    """
+    if build_seconds <= 0:
+        return True
+    width = build_seconds / buckets
+    seen = [False] * buckets
+    for offset in completion_offsets:
+        idx = min(buckets - 1, max(0, int(offset // width)))
+        seen[idx] = True
+    return all(seen)
+
+
+async def _observe_writer_during(database: str, build) -> WriterObservation:
+    """`build` çalışırken yazıcının bekleme TÜRÜNÜ (kilit mi, I/O mu) ve ilerlemesini (satır sayısı)
+    gözler — build/yazıcı SÜRESİNİ değil. Disk hızı makineden makineye, CI yükünden CI yüküne
+    değişir; kilitlenip kilitlenmediği değişmez (Faz 32 Commit 12b)."""
+    stop = asyncio.Event()
+    completions: list[float] = []
+    waits: list[tuple[float, str | None, str | None]] = []
+    pid_future: "asyncio.Future[int]" = asyncio.get_running_loop().create_future()
+    writer = asyncio.create_task(_writer(database, stop, completions, pid_future))
+    pid = await pid_future
+    sampler = asyncio.create_task(_sample_writer_waits(pid, stop, waits))
     await asyncio.sleep(0.3)
+    before = len(completions)
     started = time.monotonic()
     await build()
     elapsed = time.monotonic() - started
+    completion_offsets = [t - started for t in completions[before:]]
     await asyncio.sleep(0.2)
     stop.set()
     await writer
-    return max(latencies), elapsed
+    await sampler
+    during_waits = {t for ts, t, _ in waits if t is not None and started <= ts <= started + elapsed}
+    return WriterObservation(during_waits, completion_offsets, elapsed)
 
 
 async def test_concurrent_index_build_does_not_block_writers_but_a_plain_build_does():
@@ -465,20 +528,33 @@ async def test_concurrent_index_build_does_not_block_writers_but_a_plain_build_d
         async def plain():
             await conn.execute("CREATE INDEX ix_plain ON slow_query_samples (instance_id, query_hash)")
 
-        plain_latency, plain_build = await _measure_writers_during("dbace_migscale_lock", plain)
+        plain_obs = await _observe_writer_during("dbace_migscale_lock", plain)
         await conn.execute("DROP INDEX ix_plain")
 
         async def concurrent():
             await conn.execute("CREATE INDEX CONCURRENTLY ix_conc ON slow_query_samples (instance_id, query_hash)")
 
-        conc_latency, conc_build = await _measure_writers_during("dbace_migscale_lock", concurrent)
-        log("düz CREATE INDEX: en büyük yazıcı gecikmesi / build (sn)", (round(plain_latency, 2), round(plain_build, 2)))
-        log("CONCURRENTLY: en büyük yazıcı gecikmesi / build (sn)", (round(conc_latency, 2), round(conc_build, 2)))
-        assert plain_latency > plain_build * 0.5, "düz index kurulurken yazıcı bloklanmalı (negatif kontrol)"
-        # Faz 31 Commit 10d madde A3: `< 1.0` mutlak tavanı GERÇEK CI oranında ölçüldü — cgroup yazma kısıtı (150 MB/s) +
-        # 0,35 CPU, #53 toplamı CI'da 49,7 sn / taklitte 55,6 sn (CI'ya en yakın kalibrasyon): CONCURRENTLY yazıcı
-        # gecikmesi 3 koşuda 0,08 sn (build 1,7 sn), düz CREATE INDEX 1,4–1,5 sn. Pay ~12× — eşik değişmedi.
-        assert conc_latency < conc_build * 0.3 and conc_latency < 1.0, "CONCURRENTLY yazmayı engellememeli"
+        conc_obs = await _observe_writer_during("dbace_migscale_lock", concurrent)
+        # Süre yalnızca LOGLANIYOR — assert edilmiyor (Faz 32 Commit 12b): CI'da disk/I-O yarışı build
+        # süresini (ve eski sürümün süre-eşiğini) gerçek bir kilitlenmeyle AYNI gösterebiliyordu, PG16
+        # ve PG18 CI kollarında gözlendi. Mekanizma (pg_stat_activity.wait_event_type) doğrudan ölçülüyor.
+        log("düz CREATE INDEX: build (sn, bilgi amaçlı) / gözlenen bekleme türleri",
+            (round(plain_obs.build_seconds, 2), sorted(plain_obs.wait_types)))
+        log("CONCURRENTLY: build (sn, bilgi amaçlı) / gözlenen bekleme türleri",
+            (round(conc_obs.build_seconds, 2), sorted(conc_obs.wait_types)))
+        assert "Lock" in plain_obs.wait_types, (
+            "düz CREATE INDEX kurulurken yazıcı en az bir kez relation kilidi beklemesinde görünmeliydi "
+            f"(negatif kontrol) — gözlenen bekleme türleri: {sorted(plain_obs.wait_types)!r}"
+        )
+        assert "Lock" not in conc_obs.wait_types, (
+            "CONCURRENTLY yazıcıyı HİÇBİR örnekte kilit beklemesine sokmamalı (ShareUpdateExclusiveLock "
+            f"normal INSERT'in RowExclusiveLock'uyla çakışmaz) — gözlenen bekleme türleri: {sorted(conc_obs.wait_types)!r}"
+        )
+        assert _progress_in_every_quarter(conc_obs.completion_offsets, conc_obs.build_seconds), (
+            "CONCURRENTLY sırasında yazıcı build'in HER çeyreğinde ilerlemeye devam etmeliydi — nokta "
+            "örneklemesi kısa bir donmayı kaçırmış olabilir, bu satır sayısıyla bağımsızca doğruluyor "
+            f"(yalnızca {len(conc_obs.completion_offsets)} INSERT tamamlandı, build {conc_obs.build_seconds:.2f} sn)"
+        )
     finally:
         await conn.close()
         await _drop("dbace_migscale_lock")
@@ -534,6 +610,8 @@ async def test_a_real_server_cancels_over_budget_chunks_and_the_runner_halves_th
         # parça 2,50 sn sürdü, muhtemelen checkpoint/fsync sırasında kesilemez bir bekleme) — mekanizma steady-state
         # genişliği DÜŞÜRÜYOR, her parça için mutlak bir tavan GARANTİ ETMİYOR (SORULAR.md). Bu yüzden burada sıkı bir
         # çarpan yerine gerçekçi bir üst sınırla (asıl korunan sınır: 8 sn'lik statement_timeout) kontrol ediliyor.
+        # Faz 32 Commit 12b taraması: SÜRE burada ürün gereksinimi (Supabase'in yönetilen statement_timeout'u) —
+        # `retries` (üstte) zaten mekanizma kanıtı (sunucu GERÇEKTEN iptal etti); mekanizmaya çevrilmedi, BIRAKILDI.
         assert max(c.seconds for c in done) < budget * 8 + 3.0, "gecikmeli iptal bile makul kalmalı"
         assert await conn.fetchval("SELECT count(*) FROM slow_query_samples WHERE query_hash IS NULL") == 0
         checksum = await conn.fetchval("SELECT md5(string_agg(query_hash, ',' ORDER BY id)) FROM slow_query_samples")
