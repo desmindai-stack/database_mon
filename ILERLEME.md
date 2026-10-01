@@ -10234,12 +10234,19 @@ Davranış değişmedi — yalnızca dil ve karakter seti.
 `deploy/onprem/native/` altındaki 10 dosya (yukarıda listelendi), `backend/tests/
 test_deploy_ascii_and_shell_safety.py` (yeni), `docs/SOZLUK.md` (yeni).
 
-**Tam paket (bir kez, `-rs`, `DBACE_TEST_ONPREM=1` ile — deploy/ ve native-paket testleri bu commit'te
-DEĞİŞTİ, CLAUDE.md'nin "migration çalıştırıcısını/log biçimini/deploy/ altını değiştiren her commit'te
-on-prem testleri YERELDE de koşulur" kuralı gereği): **2100 passed, 157 skipped, 0 hata** (196 sn).
-Skip'lerin tamamı gerçek PG/MSSQL matrisi gerektiren `*_live_postgres.py`/`*_live_mssql.py` testleri —
-bu commit migration/collector koduna dokunmadığı için o matrisi ayrıca ayağa kaldırmaya gerek
-görülmedi (10g'deki PG18 soruşturmasının aksine, burada migration çalıştırıcısı DEĞİŞMEDİ).
-`test_onprem_package_live.py` GERÇEK bir dind konteynerine karşı koştu ve geçti (1/1) —
-CLAUDE.md'nin bu commit için şart koştuğu asıl kanıt bu. `test_deploy_ascii_and_shell_safety.py`
-19/19 geçti.
+**Tam paket, 1. koşu** (yalnızca çevrimdışı + `DBACE_TEST_ONPREM=1`, canlı PG/MSSQL matrisi ayrı
+kurulmadan — bu commit migration/collector koduna dokunmadığı için gerekli görülmemişti): 2100
+passed, 157 skipped, 0 hata (196 sn). `test_onprem_package_live.py` GERÇEK bir dind konteynerine
+karşı koştu ve geçti (1/1) — CLAUDE.md'nin bu commit için şart koştuğu asıl kanıt bu.
+`test_deploy_ascii_and_shell_safety.py` 19/19 geçti.
+
+**Tam paket, 2. koşu** (talep üzerine tekrar — `scripts/live_pg.py up` ile gerçek PostgreSQL
+15.19/16.15/17.11/18.6 + her birine streaming replika + pgbouncer, `scripts/live_mssql.py up` ile
+gerçek SQL Server standalone + Always On AG; `-rs` ile `DBACE_TEST_ONPREM=1` + tüm DSN'ler birlikte):
+**2544 passed, 4 skipped, 9 xfailed, 0 hata** (1490 sn / 24 dk 50 sn). Kalan 4 skip: 2× yavaş/ağ
+isteyen `test_dependency_pins.py` (varsayılanda kapalı, CI'nin ayrı işi hep açık), 1× PG16 öncesi
+sürüm koşulu (`GENERIC_PLAN` PG16 ile geldi, bu kolda sunucu 15.19), 1× "daha göster" kullanan sayfa
+istisnası — hiçbiri eksik altyapı değil. (Ara bir koşuda `test_database_load.py` içinde TEK bir
+geçici "F" görüldü — hem dosya tek başına hem bu tam, temiz koşunun tamamı sıfır hatayla geçti;
+tekrarlanamadı, gerçek bir regresyon değil, muhtemelen konteynerler yeni ayağa kalkarken bir
+bağlantı zamanlamasıydı.)
