@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Kurulumdan ÖNCE (ve install.sh'in kendi içinde de) sunucuyu tarar — Faz 32 Commit 11b
-# (docs/ONPREM_NATIVE.md §8). Her kalemi PASS/WARN/FAIL olarak raporlar; herhangi bir FAIL varsa
-# 1 ile çıkar ve install.sh BAŞLAMAZ. Yalnızca OKUR — hiçbir şeyi değiştirmez.
+# shellcheck disable=SC1091
+# Scans the server BEFORE install (and from inside install.sh itself) - Phase 32 Commit 11b
+# (docs/ONPREM_NATIVE.md section 8). Reports each item as PASS/WARN/FAIL; exits 1 and blocks
+# install.sh if any FAIL is found. READ-ONLY - never changes anything.
 set -uo pipefail
 
 STATUS=0
@@ -10,13 +11,13 @@ DISTRO_FAMILY=""
 pass() { printf '  [PASS] %s\n' "$1"; }
 warn() { printf '  [WARN] %s\n' "$1"; }
 fail() { printf '  [FAIL] %s\n' "$1"; STATUS=1; }
-info() { printf '  [BİLGİ] %s\n' "$1"; }
+info() { printf '  [INFO] %s\n' "$1"; }
 
-echo "== dbace on-prem önkoşul denetimi =="
+echo "== dbace on-prem prerequisite check =="
 
-# --- Dağıtım + sürüm -----------------------------------------------------------------------------
+# --- Distribution + version -------------------------------------------------------------------
 if [ ! -r /etc/os-release ]; then
-  fail "/etc/os-release okunamadı — dağıtım tespit edilemedi (RHEL9 ailesi / Ubuntu 22.04 bekleniyor)"
+  fail "cannot read /etc/os-release - distribution could not be detected (RHEL9 family / Ubuntu 22.04 expected)"
 else
   . /etc/os-release
   case "${ID:-}" in
@@ -24,74 +25,74 @@ else
       major="${VERSION_ID%%.*}"
       if [ "$major" = "9" ]; then
         DISTRO_FAMILY="rhel9"
-        pass "dağıtım: $PRETTY_NAME (RHEL9 ailesi)"
+        pass "distribution: $PRETTY_NAME (RHEL9 family)"
       else
-        fail "dağıtım: $PRETTY_NAME — desteklenen RHEL/Rocky/Alma yalnızca sürüm 9; kurulum için RHEL9 ailesi gerekir"
+        fail "distribution: $PRETTY_NAME - only RHEL/Rocky/Alma version 9 is supported; install requires the RHEL9 family"
       fi
       ;;
     ubuntu)
       if [ "${VERSION_ID:-}" = "22.04" ]; then
         DISTRO_FAMILY="ubuntu2204"
-        pass "dağıtım: $PRETTY_NAME"
+        pass "distribution: $PRETTY_NAME"
       else
-        fail "dağıtım: $PRETTY_NAME — desteklenen Ubuntu yalnızca 22.04 LTS; kurulum için Ubuntu 22.04 gerekir"
+        fail "distribution: $PRETTY_NAME - only Ubuntu 22.04 LTS is supported; install requires Ubuntu 22.04"
       fi
       ;;
     *)
-      fail "dağıtım: ${PRETTY_NAME:-bilinmiyor} — desteklenmiyor (RHEL9 ailesi ya da Ubuntu 22.04 gerekir)"
+      fail "distribution: ${PRETTY_NAME:-unknown} - not supported (RHEL9 family or Ubuntu 22.04 required)"
       ;;
   esac
 fi
 
-# --- Mimari ----------------------------------------------------------------------------------------
+# --- Architecture ----------------------------------------------------------------------------
 arch="$(uname -m)"
 if [ "$arch" = "x86_64" ]; then
-  pass "mimari: x86_64"
+  pass "architecture: x86_64"
 else
-  fail "mimari: $arch — vendor paketleri yalnızca x86_64; ARM/diğer mimarilerde kurulamaz"
+  fail "architecture: $arch - vendor packages are x86_64 only; cannot install on ARM/other architectures"
 fi
 
 # --- systemd PID 1 -----------------------------------------------------------------------------
 if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
-  pass "systemd PID 1 olarak çalışıyor"
+  pass "systemd is running as PID 1"
 else
-  fail "systemd çalışmıyor (ya da /run/systemd/system yok) — dbace.service kurulamaz, systemd gerekir"
+  fail "systemd is not running (or /run/systemd/system is missing) - dbace.service cannot be installed, systemd is required"
 fi
 
-# --- Gerekli araçlar -------------------------------------------------------------------------------
+# --- Required tools --------------------------------------------------------------------------
 for tool in tar useradd openssl systemctl awk sha256sum; do
   if command -v "$tool" >/dev/null 2>&1; then
-    pass "gerekli araç var: $tool"
+    pass "required tool present: $tool"
   else
-    fail "eksik: $tool — kurulum için gerekli (paket: coreutils/shadow-utils/openssl/systemd, dağıtıma göre değişir)"
+    fail "missing: $tool - required for install (package: coreutils/shadow-utils/openssl/systemd, varies by distro)"
   fi
 done
 
-# --- Disk boş alan (bilgilendirici — docs/ONPREM_NATIVE.md §2'deki tabana göre) -------------------
+# --- Free disk space (informational - see the baseline table in docs/ONPREM_NATIVE.md section 2) ----
 if command -v df >/dev/null 2>&1; then
   avail_kb="$(df -Pk /opt 2>/dev/null | awk 'NR==2 {print $4}')"
   if [ -n "${avail_kb:-}" ]; then
     avail_gb=$((avail_kb / 1024 / 1024))
     if [ "$avail_gb" -lt 15 ]; then
-      warn "/opt altında ${avail_gb} GB boş alan — 10 instance için önerilen taban 15 GB (docs/ONPREM_NATIVE.md §2)"
+      warn "${avail_gb} GB free under /opt - recommended baseline for 10 instances is 15 GB (docs/ONPREM_NATIVE.md section 2)"
     else
-      pass "/opt altında ${avail_gb} GB boş alan"
+      pass "${avail_gb} GB free under /opt"
     fi
   fi
 fi
 
-# --- RAM (bilgilendirici) ---------------------------------------------------------------------------
+# --- RAM (informational) -----------------------------------------------------------------------
 if [ -r /proc/meminfo ]; then
   mem_kb="$(awk '/MemTotal/ {print $2}' /proc/meminfo)"
   mem_gb=$((mem_kb / 1024 / 1024))
   if [ "$mem_gb" -lt 4 ]; then
-    warn "RAM ${mem_gb} GB — KURULUM.md'deki minimum 4 GB'nin altında"
+    warn "RAM ${mem_gb} GB - below the 4 GB minimum documented in KURULUM.md"
   else
     pass "RAM ${mem_gb} GB"
   fi
 fi
 
-# --- Port çakışması ----------------------------------------------------------------------------------
+# --- Port conflicts ----------------------------------------------------------------------------
 HTTP_PORT="${HTTP_PORT:-8080}"
 HTTPS_PORT="${HTTPS_PORT:-443}"
 ALREADY_INSTALLED=0
@@ -102,56 +103,56 @@ check_port_free() {
   port="$1"
   label="$2"
   if [ "$ALREADY_INSTALLED" = "1" ]; then
-    info "port $port ($label) denetlenmedi — dbace zaten kurulu (yükseltmede kendi servisi zaten dinliyor olabilir)"
+    info "port $port ($label) not checked - dbace is already installed (its own service may already be listening on an upgrade)"
     return
   fi
   if command -v ss >/dev/null 2>&1; then
     if ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$port\$"; then
-      fail "port $port ($label) zaten dinleniyor — HTTP_PORT/HTTPS_PORT .env'de değiştirin ya da o servisi durdurun"
+      fail "port $port ($label) is already in use - change HTTP_PORT/HTTPS_PORT in .env or stop that service"
     else
-      pass "port $port ($label) boş"
+      pass "port $port ($label) is free"
     fi
   else
-    info "port $port ($label) denetlenemedi (ss yok) — install.sh kendi bağlanma denemesiyle ayrıca denetleyecek"
+    info "port $port ($label) not checked (ss unavailable) - install.sh will also check this via its own bind attempt"
   fi
 }
 check_port_free "$HTTP_PORT" "HTTP_PORT"
 if [ "${TLS_MODE:-nginx}" = "nginx" ]; then
   check_port_free "$HTTPS_PORT" "HTTPS_PORT"
 fi
-check_port_free 5432 "meta PostgreSQL, yalnızca localhost"
+check_port_free 5432 "meta PostgreSQL, localhost only"
 
-# --- SELinux modu (bilgilendirici) --------------------------------------------------------------------
+# --- SELinux mode (informational) ---------------------------------------------------------------
 if command -v getenforce >/dev/null 2>&1; then
-  info "SELinux modu: $(getenforce)"
+  info "SELinux mode: $(getenforce)"
 elif [ "$DISTRO_FAMILY" = "rhel9" ]; then
-  info "SELinux modu tespit edilemedi (getenforce yok — libselinux-utils kurulu olmayabilir)"
+  info "SELinux mode could not be detected (getenforce missing - libselinux-utils may not be installed)"
 fi
 
-# --- glibc sürümü (savunma amaçlı — taşınabilir Python'un tabanı) ------------------------------------
+# --- glibc version (defensive - the portable Python's baseline) ---------------------------------
 if command -v ldd >/dev/null 2>&1; then
   glibc_ver="$(ldd --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+$' || true)"
   if [ -n "$glibc_ver" ]; then
     major="${glibc_ver%%.*}"; minor="${glibc_ver##*.}"
     if [ "$major" -gt 2 ] || { [ "$major" -eq 2 ] && [ "$minor" -ge 17 ]; }; then
-      pass "glibc $glibc_ver (taşınabilir Python'un tabanı 2.17+)"
+      pass "glibc $glibc_ver (the portable Python's baseline is 2.17+)"
     else
-      warn "glibc $glibc_ver — taşınabilir Python 2.17+ hedefliyor, bu sürüm daha eski olabilir"
+      warn "glibc $glibc_ver - the portable Python targets 2.17+, this version may be older"
     fi
   fi
 fi
 
-# --- Zaten kurulu mu (bilgilendirici — kurulum mu yükseltme mi yolunu belirler) ------------------------
+# --- Already installed? (informational - determines fresh install vs. upgrade) ------------------
 if [ -L /opt/dbace/current ] || [ -d /opt/dbace/releases ]; then
-  info "dbace zaten kurulu görünüyor (/opt/dbace) — install.sh YÜKSELTME yolunu izleyecek"
+  info "dbace already appears to be installed (/opt/dbace) - install.sh will take the UPGRADE path"
 else
-  info "dbace kurulu değil — install.sh YENİ KURULUM yolunu izleyecek"
+  info "dbace is not installed - install.sh will take the FRESH INSTALL path"
 fi
 
 echo "===================================="
 if [ "$STATUS" -ne 0 ]; then
-  echo "SONUÇ: en az bir FAIL var — kurulum BAŞLAMAYACAK. Yukarıdaki [FAIL] satırlarını düzeltip tekrar çalıştırın."
+  echo "RESULT: at least one FAIL - install will NOT start. Fix the [FAIL] lines above and run again."
 else
-  echo "SONUÇ: kritik önkoşul eksiği yok."
+  echo "RESULT: no critical prerequisites missing."
 fi
 exit "$STATUS"

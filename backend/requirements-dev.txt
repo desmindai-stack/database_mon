@@ -9,3 +9,8 @@ pytest-asyncio>=0.24.0
 # bug class as the greenlet regression this commit fixed). Pinned explicitly so it can't silently vanish
 # if `uvicorn[standard]` is ever changed to plain `uvicorn` for an unrelated reason.
 pyyaml>=6.0
+# `tests/test_deploy_ascii_and_shell_safety.py` çalıştırıyor — bir Python wheel içinde gerçek `shellcheck`
+# ikili dosyasını taşıyor (Faz 32 Commit 11c), bu yüzden CI/yerelde ayrı bir sistem paketi kurulumu
+# (apt-get/choco) gerekmiyor. 11b'deki backup.sh "unexpected EOF" hatası (Türkçe kesme işareti
+# ${VAR:?mesaj} içinde bash'i bozmuştu) deploy/ betiklerinde statik denetim eksikliğinin kanıtıydı.
+shellcheck-py>=0.10.0

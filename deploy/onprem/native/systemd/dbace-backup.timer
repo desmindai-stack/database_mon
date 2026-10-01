@@ -1,5 +1,5 @@
 [Unit]
-Description=dbace — her gece meta veritabanı yedeği (docs/ONPREM_NATIVE.md §2)
+Description=dbace nightly meta database backup (docs/ONPREM_NATIVE.md section 2)
 
 [Timer]
 OnCalendar=*-*-* 02:30:00

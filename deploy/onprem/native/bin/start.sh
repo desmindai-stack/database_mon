@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# dbace.service'in ExecStart'ı — Docker paketindeki entrypoint.sh'in native karşılığı
-# (docs/ONPREM_NATIVE.md §4): HER başlangıçta (yalnızca kurulumda değil) migration'ları uygular,
-# sonra API + toplayıcıyı (RUN_MODE=all) ya da worker'ı başlatır. install.sh bu dosyayı
-# releases/<sürüm>/bin/start.sh olarak kopyalar; kendi release dizinini $0'dan bulur.
+# ExecStart for dbace.service - the native counterpart of the Docker package's entrypoint.sh
+# (docs/ONPREM_NATIVE.md section 4): applies migrations on EVERY start (not just install), then
+# starts the API + collector (RUN_MODE=all) or the worker. install.sh copies this file to
+# releases/<version>/bin/start.sh; it locates its own release directory from $0.
 set -euo pipefail
 
 RELEASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -10,7 +10,7 @@ cd "$RELEASE_DIR"
 PY="$RELEASE_DIR/venv/bin/python"
 
 if [ -n "${PG_BINDIR:-}" ] && [ -x "$PG_BINDIR/pg_isready" ]; then
-  echo "PostgreSQL bekleniyor..."
+  echo "Waiting for PostgreSQL..."
   for _ in $(seq 1 30); do
     "$PG_BINDIR/pg_isready" -h 127.0.0.1 -p 5432 >/dev/null 2>&1 && break
     sleep 1

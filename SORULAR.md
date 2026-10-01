@@ -3,6 +3,16 @@
 Karar veremediğim veya kapsam belirsizliği olan noktalar burada; her biri için
 makul bir varsayımla devam ettim.
 
+## Faz 32 — Commit 12a: Türkçe arayüz sözlüğünde 8 "karar gerekli" madde
+
+`docs/SOZLUK.md` §E — Türkçe arayüz temizliği ADIM 1 taramasında, iki yönde de savunulabilir
+8 terim/çeviri kararı kullanıcı onayına bırakıldı: "Host" (Sunucu ile çakışıyor mu), "Agent"
+(Ajan'a çevrilsin mi), "Private"/"Public" (DEPLOYMENT_MODE'daki değerle karışır mı), "Prod"/
+"Preprod"/"Test"/"Dev" (DBA jargonunda zaten yaygın mı), "Freeze age", "Log queue"/"Redo queue"
+(SQL Server Always On terimi mi), "Transaction/sn" (yarı çevrili), rol adı (`admin`/`viewer`)
+görünür metninin tutarlı biçimlendirmesi. Varsayımla ilerlemedim — ADIM 2 (gerçek çeviri) bu
+kararlar netleşmeden başlamıyor; tam gerekçeler ve dosya:satır referansları `docs/SOZLUK.md`'de.
+
 ## Faz 18 — İŞ 5: Şema bölümü günlük fotoğrafa dayanıyor, canlı sekmeyle ayrışabilir
 
 Rapordaki Şema sağlığı bölümü `SchemaObjectDailySample` (günde bir kez

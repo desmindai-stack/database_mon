@@ -1,5 +1,5 @@
-# TLS_MODE=nginx (varsayılan) — nginx bankanın sertifikasıyla HTTPS'i kendisi sonlandırır.
-# install.sh __HTTP_PORT__ / __HTTPS_PORT__ / __API_PORT__ / __WEB_ROOT__ yer tutucularını doldurur.
+# TLS_MODE=nginx (default) - nginx terminates HTTPS itself using the bank's certificate.
+# install.sh fills in the __HTTP_PORT__ / __HTTPS_PORT__ / __API_PORT__ / __WEB_ROOT__ placeholders.
 server {
     listen __HTTP_PORT__;
     server_name _;

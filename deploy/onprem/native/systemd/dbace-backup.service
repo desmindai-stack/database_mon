@@ -1,5 +1,5 @@
 [Unit]
-Description=dbace — meta veritabanı yedeği (pg_dump -Fc, docs/ONPREM_NATIVE.md §2)
+Description=dbace meta database backup (pg_dump -Fc, docs/ONPREM_NATIVE.md section 2)
 After=network.target
 
 [Service]

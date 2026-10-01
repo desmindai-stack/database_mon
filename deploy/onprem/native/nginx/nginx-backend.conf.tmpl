@@ -1,5 +1,5 @@
-# TLS_MODE=backend — bankanın önünde zaten TLS sonlandıran bir LB/WAF var; nginx düz HTTP'de dinler.
-# install.sh __HTTP_PORT__ / __API_PORT__ / __WEB_ROOT__ yer tutucularını doldurur.
+# TLS_MODE=backend - an LB/WAF in front of the bank's network already terminates TLS; nginx listens plain HTTP.
+# install.sh fills in the __HTTP_PORT__ / __API_PORT__ / __WEB_ROOT__ placeholders.
 server {
     listen __HTTP_PORT__;
     server_name _;

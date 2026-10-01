@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
-# dbace — Docker'sız (native) kurulum VE yükseltme, TEK komut, idempotent (Faz 32 Commit 11b,
-# docs/ONPREM_NATIVE.md §7). Çalıştırma dizini önemli değil — kendi konumundan (repo/paket köküne
-# göre deploy/onprem/native/install.sh) yolları bulur. root gerekir (sistem kullanıcısı/paket kurulumu).
+# shellcheck disable=SC1090,SC1091
+# dbace - Docker-less (native) install AND upgrade, ONE command, idempotent (Phase 32 Commit 11b,
+# docs/ONPREM_NATIVE.md section 7). Working directory does not matter - it finds paths relative to
+# its own location (deploy/onprem/native/install.sh under the repo/package root). Requires root
+# (system user creation, package install).
 #
 #   sudo deploy/onprem/native/install.sh
 #
-# 1. prereq-check.sh — kritik eksik varsa DURUR.
-# 2. dbace sistem kullanıcısı/dizinleri, /etc/dbace/dbace.env (eksik zorunlu değerler üretilir).
-# 3. Native PostgreSQL 16 + nginx + msodbcsql18/unixODBC (vendor'dan, dağıtıma göre rpm/deb).
-# 4. Yeni sürümü releases/<sürüm>/ altına kurar (taşınabilir Python venv + wheel'ler).
-# 5. Migration'ları YENİ sürümün venv'iyle, symlink ÇEVRİLMEDEN önce uygular — başarısızsa eski sürüm
-#    çalışmaya devam eder.
-# 6. `current` symlink'i çevirir, nginx + dbace.service + yedek timer'ını kurar/başlatır.
-# 7. /api/health 200 olana kadar bekler.
+# 1. prereq-check.sh - STOPS if anything critical is missing.
+# 2. dbace system user/directories, /etc/dbace/dbace.env (missing required values are generated).
+# 3. Native PostgreSQL 16 + nginx + msodbcsql18/unixODBC (from vendor, rpm/deb per distro).
+# 4. Installs the new version under releases/<version>/ (portable Python venv + wheels).
+# 5. Applies migrations with the NEW version's venv, before the symlink is flipped - if it fails,
+#    the old version keeps running.
+# 6. Flips the `current` symlink, installs/starts nginx + dbace.service + the backup timer.
+# 7. Waits until /api/health returns 200.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -31,30 +33,31 @@ SVC_USER="dbace"
 SVC_GROUP="dbace"
 
 log() { printf '==> %s\n' "$1"; }
-die() { printf 'HATA: %s\n' "$1" >&2; exit 1; }
+die() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
 
-[ "$(id -u)" = "0" ] || die "root ile çalıştırın (sudo $0) — sistem kullanıcısı/paket kurulumu gerekir"
+[ "$(id -u)" = "0" ] || die "run as root (sudo $0) - system user creation and package install require it"
 
 DBACE_VERSION="$(cat "$ROOT/VERSION" 2>/dev/null || (cd "$ROOT" && git rev-parse --short HEAD 2>/dev/null) || date -u +%Y%m%d%H%M%S)"
 RELEASE_DIR="$RELEASES_DIR/$DBACE_VERSION"
 
-# --- 1) Önkoşul denetimi ---------------------------------------------------------------------------
-log "Önkoşul denetimi"
-# .env henüz yoksa (ilk kurulum) prereq-check varsayılan portlarla çalışır; varsa mevcut değerlerle.
+# --- 1) Prerequisite check -------------------------------------------------------------------------
+log "Prerequisite check"
+# If .env does not exist yet (fresh install), prereq-check runs with default ports; otherwise with
+# the existing values.
 if [ -r "$ENV_FILE" ]; then
   set -a; . "$ENV_FILE"; set +a
 fi
 if ! "$SCRIPT_DIR/prereq-check.sh"; then
-  die "önkoşul denetimi FAIL verdi — yukarıdaki [FAIL] satırlarını düzeltip tekrar çalıştırın"
+  die "prerequisite check reported FAIL - fix the [FAIL] lines above and run again"
 fi
 
 . /etc/os-release
 case "${ID:-}" in
   rhel|rocky|almalinux) DISTRO_FAMILY="rhel9" ;;
   ubuntu) DISTRO_FAMILY="ubuntu2204" ;;
-  *) die "desteklenmeyen dağıtım: ${PRETTY_NAME:-$ID}" ;;
+  *) die "unsupported distribution: ${PRETTY_NAME:-$ID}" ;;
 esac
-log "Dağıtım ailesi: $DISTRO_FAMILY"
+log "Distribution family: $DISTRO_FAMILY"
 
 if [ "$DISTRO_FAMILY" = "rhel9" ]; then
   PG_SERVICE="postgresql-16.service"
@@ -70,10 +73,10 @@ else
   NATIVE_DIR="$VENDOR/native/ubuntu2204"
 fi
 
-[ -d "$NATIVE_DIR" ] || die "$NATIVE_DIR yok — önce scripts/prepare-offline-artifacts.sh ile vendor doldurulmalı"
+[ -d "$NATIVE_DIR" ] || die "$NATIVE_DIR is missing - run scripts/prepare-offline-artifacts.sh first to populate vendor"
 
-# --- 2) Sistem kullanıcısı + dizinler -----------------------------------------------------------------
-log "Sistem kullanıcısı ve dizinler"
+# --- 2) System user + directories -----------------------------------------------------------------
+log "System user and directories"
 getent group "$SVC_GROUP" >/dev/null || groupadd --system "$SVC_GROUP"
 id "$SVC_USER" >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin -g "$SVC_GROUP" "$SVC_USER"
 
@@ -83,9 +86,10 @@ chmod 750 "$DBACE_HOME" "$RELEASES_DIR"
 chown -R "$SVC_USER":"$SVC_GROUP" "$LOG_DIR"
 chmod 750 "$LOG_DIR"
 
-# --- 3) /etc/dbace/dbace.env: yoksa örnekten kopyala, eksik zorunlu değerleri üret -----------------------
+# --- 3) /etc/dbace/dbace.env: copy from the example if missing, generate missing required values ----
 set_if_empty() {
-  # $1=anahtar $2=üretilen değer — dosyada anahtar YOKSA ya da değeri BOŞSA doldurur; DOLUYSA dokunmaz.
+  # $1=key $2=generated value - fills in if the key is MISSING or its value is EMPTY; leaves it
+  # alone if it is already set.
   key="$1"; value="$2"
   if grep -qE "^${key}=" "$ENV_FILE" 2>/dev/null; then
     current="$(grep -E "^${key}=" "$ENV_FILE" | head -1 | cut -d= -f2-)"
@@ -107,10 +111,10 @@ set_or_replace() {
 
 ADMIN_PASSWORD_GENERATED=""
 if [ ! -f "$ENV_FILE" ]; then
-  log "İlk kurulum: $ENV_FILE oluşturuluyor"
+  log "Fresh install: creating $ENV_FILE"
   cp "$SCRIPT_DIR/dbace.env.example" "$ENV_FILE"
 else
-  log "Var olan $ENV_FILE korunuyor (yükseltme — yalnızca eksik zorunlu değerler tamamlanır)"
+  log "Keeping existing $ENV_FILE (upgrade - only missing required values are filled in)"
 fi
 chown "$SVC_USER":"$SVC_GROUP" "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -138,7 +142,7 @@ DATABASE_URL="postgresql+asyncpg://dbace:${DBACE_DB_PASSWORD}@127.0.0.1:5432/dba
 set_or_replace "DATABASE_URL" "$DATABASE_URL"
 export DATABASE_URL
 
-# --- 4) Native PostgreSQL 16 ---------------------------------------------------------------------------
+# --- 4) Native PostgreSQL 16 -----------------------------------------------------------------------
 log "PostgreSQL 16 ($DISTRO_FAMILY)"
 if [ ! -x "$PG_BINDIR/postgres" ]; then
   if [ "$DISTRO_FAMILY" = "rhel9" ]; then
@@ -148,15 +152,15 @@ if [ ! -x "$PG_BINDIR/postgres" ]; then
       DEBIAN_FRONTEND=noninteractive apt-get install -y -f
   fi
 else
-  log "PostgreSQL 16 zaten kurulu, atlanıyor"
+  log "PostgreSQL 16 is already installed, skipping"
 fi
 
 if [ ! -s "$PG_DATADIR/PG_VERSION" ]; then
-  log "PostgreSQL veri dizini ilklendiriliyor: $PG_DATADIR"
+  log "Initializing the PostgreSQL data directory: $PG_DATADIR"
   if [ "$DISTRO_FAMILY" = "rhel9" ]; then
     PGSETUP_INITDB_OPTIONS="--auth-local=peer --auth-host=scram-sha-256" "$PG_BINDIR/postgresql-16-setup" initdb
   fi
-  # Ubuntu: postgresql-16 paketinin postinst'i "16/main" kümesini otomatik ilklendiriyor (scram-sha-256 ile).
+  # Ubuntu: the postgresql-16 package's postinst auto-initializes the "16/main" cluster (with scram-sha-256).
 fi
 
 grep -qE "^\s*listen_addresses\s*=\s*'localhost'" "$PG_CONF" 2>/dev/null || {
@@ -167,13 +171,13 @@ grep -qE "^\s*listen_addresses\s*=\s*'localhost'" "$PG_CONF" 2>/dev/null || {
 systemctl enable --now "$PG_SERVICE"
 for _ in $(seq 1 30); do "$PG_BINDIR/pg_isready" -h 127.0.0.1 >/dev/null 2>&1 && break; sleep 1; done
 
-log "dbace rolü/veritabanı"
+log "dbace role/database"
 sudo -u postgres "$PG_BINDIR/psql" -tAc "SELECT 1 FROM pg_roles WHERE rolname='dbace'" | grep -q 1 || \
   sudo -u postgres "$PG_BINDIR/psql" -c "CREATE ROLE dbace LOGIN PASSWORD '${DBACE_DB_PASSWORD}'"
 sudo -u postgres "$PG_BINDIR/psql" -tAc "SELECT 1 FROM pg_database WHERE datname='dbace'" | grep -q 1 || \
   sudo -u postgres "$PG_BINDIR/psql" -c "CREATE DATABASE dbace OWNER dbace"
 
-# --- 5) nginx --------------------------------------------------------------------------------------------
+# --- 5) nginx ----------------------------------------------------------------------------------------
 log "nginx"
 if ! command -v nginx >/dev/null 2>&1; then
   if [ "$DISTRO_FAMILY" = "rhel9" ]; then
@@ -183,10 +187,10 @@ if ! command -v nginx >/dev/null 2>&1; then
       DEBIAN_FRONTEND=noninteractive apt-get install -y -f
   fi
 else
-  log "nginx zaten kurulu, atlanıyor"
+  log "nginx is already installed, skipping"
 fi
 
-# --- 6) msodbcsql18 + unixODBC (SQL Server toplayıcısı için) ---------------------------------------------
+# --- 6) msodbcsql18 + unixODBC (for the SQL Server collector) ---------------------------------------
 log "msodbcsql18 + unixODBC"
 if ! odbcinst -q -d -n "ODBC Driver 18 for SQL Server" >/dev/null 2>&1; then
   if [ "$DISTRO_FAMILY" = "rhel9" ]; then
@@ -196,23 +200,23 @@ if ! odbcinst -q -d -n "ODBC Driver 18 for SQL Server" >/dev/null 2>&1; then
       DEBIAN_FRONTEND=noninteractive ACCEPT_EULA=Y apt-get install -y -f
   fi
 else
-  log "msodbcsql18 zaten kurulu, atlanıyor"
+  log "msodbcsql18 is already installed, skipping"
 fi
 
-# --- 7) Taşınabilir Python (paylaşımlı runtime) ------------------------------------------------------------
+# --- 7) Portable Python (shared runtime) -------------------------------------------------------------
 PY_VERSION="$(cat "$VENDOR/native/python/VERSION")"
 PY_RUNTIME="$RUNTIME_DIR/python-$PY_VERSION"
 if [ ! -x "$PY_RUNTIME/python/install/bin/python3.12" ]; then
-  log "Taşınabilir Python $PY_VERSION açılıyor: $PY_RUNTIME"
+  log "Extracting portable Python $PY_VERSION: $PY_RUNTIME"
   mkdir -p "$PY_RUNTIME"
   tar -xzf "$VENDOR/native/python/cpython-3.12.tar.gz" -C "$PY_RUNTIME"
 else
-  log "Taşınabilir Python $PY_VERSION zaten hazır, atlanıyor"
+  log "Portable Python $PY_VERSION is already present, skipping"
 fi
 PY_BIN="$PY_RUNTIME/python/install/bin/python3.12"
 
-# --- 8) Yeni sürümü kur (releases/<sürüm>/) -----------------------------------------------------------------
-log "Sürüm $DBACE_VERSION -> $RELEASE_DIR"
+# --- 8) Install the new version (releases/<version>/) -------------------------------------------------
+log "Version $DBACE_VERSION -> $RELEASE_DIR"
 mkdir -p "$RELEASE_DIR/bin"
 rm -rf "$RELEASE_DIR/app" "$RELEASE_DIR/migrations" "$RELEASE_DIR/web-dist"
 cp -r "$ROOT/backend/app" "$RELEASE_DIR/app"
@@ -220,36 +224,36 @@ cp -r "$ROOT/supabase/migrations" "$RELEASE_DIR/migrations"
 if [ -d "$VENDOR/web-dist" ] && [ -f "$VENDOR/web-dist/index.html" ]; then
   cp -r "$VENDOR/web-dist" "$RELEASE_DIR/web-dist"
 else
-  die "$VENDOR/web-dist boş — önce scripts/prepare-offline-artifacts.sh çalıştırılmalı (frontend derlemesi)"
+  die "$VENDOR/web-dist is empty - run scripts/prepare-offline-artifacts.sh first (frontend build)"
 fi
 cp "$SCRIPT_DIR/bin/start.sh" "$SCRIPT_DIR/bin/backup.sh" "$RELEASE_DIR/bin/"
 chmod +x "$RELEASE_DIR/bin/start.sh" "$RELEASE_DIR/bin/backup.sh"
 
 if [ ! -x "$RELEASE_DIR/venv/bin/python" ]; then
-  log "venv kuruluyor + wheel'ler (--no-index)"
+  log "Creating venv + installing wheels (--no-index)"
   "$PY_BIN" -m venv "$RELEASE_DIR/venv"
   "$RELEASE_DIR/venv/bin/pip" install --no-cache-dir --no-index --find-links "$VENDOR/wheels" -r "$VENDOR/requirements.lock" -q
 fi
 chown -R "$SVC_USER":"$SVC_GROUP" "$RELEASE_DIR"
 
-# --- 9) Migration'lar — symlink ÇEVRİLMEDEN önce ------------------------------------------------------------
-log "Migration'lar uygulanıyor (symlink henüz çevrilmedi — başarısızsa eski sürüm çalışmaya devam eder)"
+# --- 9) Migrations - before the symlink is flipped ----------------------------------------------------
+log "Applying migrations (symlink not flipped yet - if this fails, the old version keeps running)"
 sudo -u "$SVC_USER" env DATABASE_URL="$DATABASE_URL" PYTHONPATH="$RELEASE_DIR" "$RELEASE_DIR/venv/bin/python" -m app.migrations_runner "$RELEASE_DIR/migrations"
 
-# --- 10) current symlink'i çevir -----------------------------------------------------------------------------
+# --- 10) Flip the current symlink ---------------------------------------------------------------------
 ln -sfn "$RELEASE_DIR" "$CURRENT_LINK"
 chown -h "$SVC_USER":"$SVC_GROUP" "$CURRENT_LINK"
 log "current -> $RELEASE_DIR"
 
-# --- 11) nginx yapılandırması (TLS_MODE'a göre) ---------------------------------------------------------------
-log "nginx yapılandırması (TLS_MODE=$TLS_MODE)"
+# --- 11) nginx configuration (by TLS_MODE) -------------------------------------------------------------
+log "nginx configuration (TLS_MODE=$TLS_MODE)"
 NGINX_CONF_DIR="/etc/nginx/conf.d"
 mkdir -p "$NGINX_CONF_DIR"
 rm -f "$NGINX_CONF_DIR/default.conf"
 if [ "$TLS_MODE" = "nginx" ]; then
   if [ ! -f "$TLS_DIR/fullchain.pem" ] || [ ! -f "$TLS_DIR/privkey.pem" ]; then
-    log "UYARI: $TLS_DIR altında sertifika yok — İLK BOOT için kendinden imzalı, TEST sertifikası üretiliyor."
-    log "       Bankanın kendi sertifikasını $TLS_DIR/{fullchain.pem,privkey.pem} olarak koyup nginx'i yeniden başlatın."
+    log "WARNING: no certificate under $TLS_DIR - generating a self-signed TEST certificate for FIRST BOOT."
+    log "         Put the bank's own certificate at $TLS_DIR/{fullchain.pem,privkey.pem} and restart nginx."
     openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
       -keyout "$TLS_DIR/privkey.pem" -out "$TLS_DIR/fullchain.pem" \
       -subj "/CN=dbace-onprem" >/dev/null 2>&1
@@ -267,16 +271,16 @@ nginx -t
 systemctl enable --now nginx
 systemctl reload nginx 2>/dev/null || systemctl restart nginx
 
-# --- 12) dbace.service + yedek timer'ı -------------------------------------------------------------------------
-log "systemd birimleri"
+# --- 12) dbace.service + backup timer --------------------------------------------------------------------
+log "systemd units"
 sed "s#__PG_SERVICE__#$PG_SERVICE#g" "$SCRIPT_DIR/systemd/dbace.service.tmpl" > /etc/systemd/system/dbace.service
 cp "$SCRIPT_DIR/systemd/dbace-backup.service" "$SCRIPT_DIR/systemd/dbace-backup.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now dbace.service
 systemctl enable --now dbace-backup.timer
 
-# --- 13) Sağlık denetimi ----------------------------------------------------------------------------------------
-log "/api/health bekleniyor"
+# --- 13) Health check ----------------------------------------------------------------------------------
+log "Waiting for /api/health"
 OK=0
 for _ in $(seq 1 60); do
   if "$PY_BIN" -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://${API_HOST}:${API_PORT}/api/health', timeout=3).status == 200 else 1)" 2>/dev/null; then
@@ -284,15 +288,15 @@ for _ in $(seq 1 60); do
   fi
   sleep 2
 done
-[ "$OK" = "1" ] || { systemctl status dbace.service --no-pager -l || true; journalctl -u dbace.service --no-pager -n 80 || true; die "/api/health 200 olmadı"; }
+[ "$OK" = "1" ] || { systemctl status dbace.service --no-pager -l || true; journalctl -u dbace.service --no-pager -n 80 || true; die "/api/health did not return 200"; }
 
 echo ""
-echo "dbace kuruldu: sürüm $DBACE_VERSION"
+echo "dbace installed: version $DBACE_VERSION"
 if [ "$TLS_MODE" = "nginx" ]; then
-  echo "Arayüz: https://<SUNUCU_IP>:${HTTPS_PORT}"
+  echo "UI: https://<SERVER_IP>:${HTTPS_PORT}"
 else
-  echo "Arayüz: http://<SUNUCU_IP>:${HTTP_PORT}"
+  echo "UI: http://<SERVER_IP>:${HTTP_PORT}"
 fi
 if [ -n "$ADMIN_PASSWORD_GENERATED" ]; then
-  echo "Yönetici ilk şifresi (BİR KEZ gösteriliyor, ADMIN_USERNAME=admin): $ADMIN_PASSWORD_GENERATED"
+  echo "Initial admin password (shown ONCE, ADMIN_USERNAME=admin): $ADMIN_PASSWORD_GENERATED"
 fi

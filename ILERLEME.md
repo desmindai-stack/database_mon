@@ -10142,3 +10142,104 @@ on-prem işi bunu ancak GÜNLER sonra yakaladı.
 **Test:** `tests/test_topology_live_postgres.py` (13, gerçek PG18, ağır yük altında 2 kez), `tests/
 test_migration_scale_live_postgres.py` (10, gerçek PG18, 420 bin satır), `tests/test_migrations_runner.py`
 (21, çevrimdışı — 1 yeni), `tests/test_onprem_package_live.py` (`DBACE_TEST_ONPREM=1`, gerçek dind).
+
+## Faz 32 — Commit 12a: Türkçe arayüz temizliği ADIM 1 (tarama, metin DEĞİŞMEDİ) + deploy/onprem/native/ ASCII güvenliği
+
+**İstek:** iki ayrı parça, TEK commit. Parça A — arayüzde/backend'de kullanıcıya görünen İngilizce
+metinleri tara ve `docs/SOZLUK.md`'ye dökümle (hiçbir metni DEĞİŞTİRMEDEN — çeviri ADIM 2'de, bu
+tablo onaylandıktan sonra). Parça B — `deploy/onprem/native/`'i (Commit 11b'nin yeni dosyaları)
+İngilizce + yalnızca ASCII'ye çevir, koruma testi ekle (çeviri değil, hata önleme: Commit 11b'de
+`backup.sh`'teki bir Türkçe kesme işareti bash'i bozmuştu).
+
+### Parça A — `docs/SOZLUK.md`
+
+Tarama iki paralel geçişle yapıldı: frontend (`src/pages/`, `src/components/`, `src/hooks/`,
+`App.tsx`, `auth.tsx`, `main.tsx`, `formFields.ts` — 53 dosyanın TAMAMI okundu) ve backend
+(`app/routers/*.py` `HTTPException(detail=...)`, `app/services/performance_insights.py`,
+`app/services/health_report.py`, `app/services/index_advisor.py`, `app/schemas.py`,
+`app/services/report_*.py`). `api-types.ts` (üretilen tip) ve kod yorumları kapsam dışı.
+
+**Başlıca bulgular** (tam liste ve dosya:satır referansları `docs/SOZLUK.md`'de):
+
+- Marka alanı (`App.tsx:340`, HER sayfada) ve giriş ekranı "DBA monitoring platform"; sol menüde
+  "Dashboard"/"Predictions"/"Alerts" hiç çevrilmemiş; `DashboardPage.tsx:252`'nin kendi başlığı
+  "DBA Overview".
+- **Sistemik #1 — ham İngilizce enum değeri doğrudan ekrana basılıyor** (13+ nokta):
+  `{g.environment}`, `{card.severity}`, `{data.overall}`, `{group.topology}`, `{node.role_hint}` vb.
+  `statusLabel()`/bir etiket sözlüğü ÇAĞIRMADAN backend'in ham string'ini JSX'e basıyor —
+  `terminology.ts`'nin kendi var olma nedenini (bu tam hatayı önlemek) ihlal ediyor.
+  - **Sistemik #2** — `STATUS_TR` 3 yerde (`ClusterHealthPanel.tsx`, `GroupDetailPage.tsx` birebir
+    kopya; `ReportsPage.tsx` farklı değerlerle) bağımsız tanımlı; `ReportsPage.tsx`'inki
+    `terminology.ts`'nin `STATUS_LABELS`'ıyla ÇAKIŞIYOR (`warning`→"Dikkat" vs "Uyarı").
+- **Backend: 163 `detail=` ifadesinden ~52'si İngilizce** (`Instance not found` ×15, `Database group
+  not found` ×11, vb.) — frontend'e HAM METİN olarak dönüyor. `instances.py` KENDİ İÇİNDE hem
+  İngilizce (14×) hem Türkçe (4×, satır 673/804/905/963) "bulunamadı" mesajı taşıyor; `metrics.py`'de
+  9× "Instance bulunamadi" (ı harfi eksik) ayrı bir yazım tutarsızlığı.
+- **İki ham istisna sızıntısı:** `health_report.py:695` (`report.error = str(exc)[:2000]`) →
+  `ReportsPage.tsx:582`'de doğrudan basılıyor; `sql_predicates.py:108` → `index_advisor.py:204`
+  (`what_to_do=parse_error`) → `IndexAdvicePanel.tsx:106`'da doğrudan basılıyor.
+- **`performance_insights.py` (Tuning paneli) karma dil:** "Buffer cache hit ratio düşük", "Cache hit
+  ratio iyileştirilebilir" gibi başlıklar Türkçe cümle İÇİNE gömülü İngilizce terim — aynı metrikler
+  `report_sections.py`'nin PDF/CSV raporunda muhtemelen tam Türkçe: CLAUDE.md'nin "aynı veriyi
+  gösteren yerler tek gerçeklik kaynağından beslensin" kuralına ETİKET düzeyinde bir istisna.
+- **13 ayrı tutarsızlık** kataloglandı (aynı kavram farklı Türkçe/İngilizce karşılıkla) — ör.
+  "Blocking zinciri" / "Bloklama zinciri", "standalone" topolojisinin 3 farklı gösterimi,
+  "primary"/"disaster" site'ın 2 farklı gösterimi, Özet-sekmesi Türkçe / Metrikler-sekmesi İngilizce
+  aynı grafik başlığı.
+- **8 madde "KARAR GEREKLİ"** olarak işaretlendi (Host, Agent, Private/Public, Prod/Preprod, Freeze
+  age, Log queue/Redo queue, Transaction/sn, rol adı biçimlendirmesi) — kullanıcı onayı bekliyor.
+
+Bu adımda **hiçbir metin değiştirilmedi** — `docs/SOZLUK.md` yalnızca tarama çıktısı. ADIM 2
+(çeviri + `terminology.ts` genişlemesi + "izin listesi dışında İngilizce arayüz metni varsa kırmızı"
+koruma testi) §E'deki kararlar netleştikten sonra ayrı bir iş.
+
+### Parça B — `deploy/onprem/native/` İngilizce + ASCII
+
+**Gerekçe:** Commit 11b'de `backup.sh`'teki `${PG_BINDIR:?mesaj}` ifadesinin mesajında bir Türkçe
+kesme işareti (`.env'de`) — ÇİFT TIRNAK İÇİNDE bile — bash'in `${...}` ayrıştırıcısını bozup servisi
+"unexpected EOF" ile hiç başlatamadan düşürmüştü. Bu dizin internete kapalı, locale'i garanti
+edilemeyen banka sunucularında root olarak çalışıyor — non-ASCII bir karakterin NEREDE bir
+ayrıştırıcıyı (bash, systemd unit okuyucu, nginx config ayrıştırıcı) bozacağı önceden kestirilemez.
+
+**Kapsam kararı (kullanıcı onayıyla):** yalnızca `deploy/onprem/native/` (Commit 11b'nin yeni
+dosyaları) — Railway'in canlı build yolundaki Docker dosyaları (`entrypoint.sh`,
+`install-offline.sh`, `build-images-offline.sh`, `make-release-package.sh`, Docker-yolu `start.sh`,
+`nginx.conf`, `Dockerfile.backend`, `docker-compose.yml`, `railway.toml`) CLAUDE.md'nin "deploy/
+dokunma" kuralı gereği DOKUNULMADI.
+
+**Çevrilen dosyalar (10, mantık/komut sırası DEĞİŞMEDİ, yalnızca dil + karakter seti):**
+`install.sh`, `prereq-check.sh`, `bin/start.sh`, `bin/backup.sh`, `dbace.env.example`,
+`systemd/dbace.service.tmpl`, `systemd/dbace-backup.service`, `systemd/dbace-backup.timer`,
+`nginx/nginx-tls.conf.tmpl`, `nginx/nginx-backend.conf.tmpl`. `shellcheck` uyarıları dosya-düzeyi
+direktiflerle (`# shellcheck disable=SC1090,SC1091` — ikinci satır, shebang'dan hemen sonra)
+bastırıldı; satır-düzeyi direktifin SC1090'ı bastırmadığı gözlemlendi, kök nedeni araştırılmadı
+(zaman kısıtlı), dosya-düzeyi çözüm güvenilir çalıştı.
+
+**Yeni koruma testi:** `backend/tests/test_deploy_ascii_and_shell_safety.py` (19 test) —
+`deploy/onprem/native/` altındaki HER dosyada ASCII-dışı bayt varsa kırmızı (negatif kontrollü:
+denetim fonksiyonunun kendisi önce Türkçe kesme işareti + em-dash içeren örnekle test ediliyor),
+her `.sh` için `bash -n` sözdizim denetimi, her `.sh` için gerçek `shellcheck` (binary'si
+`shellcheck-py` paketinden — `requirements-dev.txt`'ye eklendi, sistem paket yöneticisi
+gerektirmiyor; `shutil.which` bulamazsa `Path(sys.executable).parent` altına da bakan bir geri
+düşüş var, çünkü venv'in `Scripts/` dizini her zaman PATH'te olmayabiliyor).
+
+**Uçtan uca doğrulama:** `rockylinux:9` tabanlı, systemd'yi gerçek PID 1 olarak çalıştıran test
+imajı yeniden inşa edildi; çevrilmiş `install.sh` sıfır konteynerde çalıştırıldı — 58 migration,
+nginx, systemd birimleri, `/api/health`, ilk admin parolası, yedekleme zamanlayıcısı hepsi
+ÖNCEKİYLE (Türkçe sürümle) AYNI, yalnızca İngilizce çıktıyla çalıştı. Negatif kontrol
+(`prereq-check.sh`'in desteklenmeyen dağıtımda FAIL verip kurulumu durdurması) da doğrulandı.
+Davranış değişmedi — yalnızca dil ve karakter seti.
+
+**Değişen/eklenen dosyalar:** `backend/requirements-dev.txt` (+`shellcheck-py`),
+`deploy/onprem/native/` altındaki 10 dosya (yukarıda listelendi), `backend/tests/
+test_deploy_ascii_and_shell_safety.py` (yeni), `docs/SOZLUK.md` (yeni).
+
+**Tam paket (bir kez, `-rs`, `DBACE_TEST_ONPREM=1` ile — deploy/ ve native-paket testleri bu commit'te
+DEĞİŞTİ, CLAUDE.md'nin "migration çalıştırıcısını/log biçimini/deploy/ altını değiştiren her commit'te
+on-prem testleri YERELDE de koşulur" kuralı gereği): **2100 passed, 157 skipped, 0 hata** (196 sn).
+Skip'lerin tamamı gerçek PG/MSSQL matrisi gerektiren `*_live_postgres.py`/`*_live_mssql.py` testleri —
+bu commit migration/collector koduna dokunmadığı için o matrisi ayrıca ayağa kaldırmaya gerek
+görülmedi (10g'deki PG18 soruşturmasının aksine, burada migration çalıştırıcısı DEĞİŞMEDİ).
+`test_onprem_package_live.py` GERÇEK bir dind konteynerine karşı koştu ve geçti (1/1) —
+CLAUDE.md'nin bu commit için şart koştuğu asıl kanıt bu. `test_deploy_ascii_and_shell_safety.py`
+19/19 geçti.
