@@ -348,6 +348,12 @@ async def migrate_schema() -> None:
         # Faz 31 Commit 4 — yavaş sorgu satırının kaynağı (20260916090900).
         await _sqlite_add_column_if_missing(conn, "slow_query_samples", "from_monitoring_role", "from_monitoring_role BOOLEAN")
         await _sqlite_add_column_if_missing(conn, "slow_query_samples", "toplevel", "toplevel BOOLEAN")
+        # Faz 32 Commit 12c — 20261002090000_topology_degraded_hysteresis.sql
+        await _sqlite_add_column_if_missing(conn, "instances", "topology_degraded_since", "topology_degraded_since DATETIME")
+        await _sqlite_add_column_if_missing(
+            conn, "instances", "topology_transient_disconnect_count",
+            "topology_transient_disconnect_count INTEGER NOT NULL DEFAULT 0",
+        )
         # Eski "acknowledged" bayrağını yeni durum modeline taşı — yoksa yükseltmeden sonra
         # daha önce susturulmuş bulgular topluca kritik olarak geri döner.
         await conn.execute(

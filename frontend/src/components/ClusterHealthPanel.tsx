@@ -42,6 +42,12 @@ function TopologyCard({ topology }: { topology: NonNullable<ClusterHealth["topol
         </span>
       </h3>
       <p className="muted-note">{topology.reason}</p>
+      {topology.transient_disconnect_count > 0 && (
+        <p className="muted-note">
+          Son dönemde {topology.transient_disconnect_count} geçici kopma görüldü (alarm üretmedi — her biri eşiğe
+          ulaşmadan kendiliğinden düzeldi).
+        </p>
+      )}
       {topology.required_grant && (
         <pre className="rec-action-code"><code>{topology.required_grant}</code></pre>
       )}

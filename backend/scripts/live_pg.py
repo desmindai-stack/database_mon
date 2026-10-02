@@ -11,6 +11,7 @@ Kullanım (backend/ içinden):
     python scripts/live_pg.py up                 # 15, 16, 17, 18 — varsa dokunmaz, eksiği tamamlar
     python scripts/live_pg.py up --recreate      # konteynerleri SİLİP sıfırdan kurar
     python scripts/live_pg.py dsn                # DBACE_TEST_PG_DSN değerini yazar
+    python scripts/live_pg.py rebuild --port 55442   # o portun replikasını SIFIRDAN yeniden kurar
 
 Kurulan her şey:
 - `postgres:<sürüm>` resmî imajı, `shared_preload_libraries=pg_stat_statements`,
@@ -25,6 +26,14 @@ Kurulan her şey:
   `dbace-live` ağında, `pg_basebackup -R` ile. Topoloji tespiti testi replikayı SQL'le koparıp
   (`ALTER SYSTEM SET primary_conninfo = ''`) geri bağlıyor — docker CLI gerekmiyor. `up`
   replikanın akışta olduğunu doğruluyor, kopuk kalmışsa bağlantıyı geri yazıyor.
+- Faz 32 Commit 12c: replika FİZİKSEL REPLİKASYON SLOTU ile kuruluyor (`pg_basebackup -C -S`).
+  Slotsuzken birincil, kopuk replikanın HENÜZ OKUMADIĞI WAL segmentini bir checkpoint'te
+  SİLEBİLİYORDU ("requested WAL segment ... has already been removed") — CI'da gerçek bir çöküşle
+  doğrulandı (PG17 kolu: ağır migration testi replikayı geçici kopardı, AYNI anda tetiklenen bir
+  checkpoint o segmenti sildi, replika bir daha ASLA kendiliğinden katılamadı). Slot, birincile
+  "replika OKUYANA kadar bu WAL'ı TUT" der; `max_slot_wal_keep_size` disk taşmasına karşı üst sınır.
+  `rebuild --port <replika portu>`: slotla bile kurtarılamayan bir replikayı SIFIRDAN yeniden kurar
+  (testin `replica` fixture'ı setup'ta akışa geçemezse bunu kendi başına çağırır).
 """
 
 from __future__ import annotations
@@ -40,6 +49,8 @@ REPLICA_PORTS = {15: 55443, 16: 55444, 17: 55442, 18: 55445}
 NETWORK = "dbace-live"
 REPLICA_APPLICATION_NAME = "dbace_replica"
 DEFAULT_VERSIONS = (15, 16, 17, 18)
+#: Faz 32 Commit 12c: tek slot adı yeter — her birincilin yalnızca BİR replikası var.
+REPLICATION_SLOT_NAME = "dbace_replica_slot"
 SERVER_ARGS = [
     "-c", "shared_preload_libraries=pg_stat_statements",
     "-c", "track_activity_query_size=2048",
@@ -47,6 +58,11 @@ SERVER_ARGS = [
     # Faz 31 Commit 5: deadlock testi sunucu log'unu SQL'le okuyor (pg_read_file). Deadlock'taki
     # sorgu metni istemciye gönderilmiyor, yalnızca log'a yazılıyor.
     "-c", "logging_collector=on",
+    # Faz 32 Commit 12c: slot replikayı SONSUZA kadar bekler — replika gerçekten kalıcı biçimde
+    # ölürse (ör. konteyner silinip script çalıştırılmazsa) birincilin diskini ŞİŞİRMESİN diye üst
+    # sınır (2 GB — bu test verisi ölçeğinde normal bir koşunun ÇOK üstünde, aşılırsa slot yine de
+    # devre dışı kalır ama disk güvende).
+    "-c", "max_slot_wal_keep_size=2048",
 ]
 #: Var olan konteynerde de doğrulanan ayarlar: (ayar, beklenen, yalnızca yeniden başlatmayla mı).
 REQUIRED_SETTINGS = [
@@ -54,6 +70,7 @@ REQUIRED_SETTINGS = [
     ("track_activity_query_size", "2048", True),
     ("compute_query_id", "on", False),
     ("logging_collector", "on", True),
+    ("max_slot_wal_keep_size", "2048", False),
 ]
 
 
@@ -150,8 +167,15 @@ def replica_psql(version: int, sql: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _ensure_slot_exists(version: int) -> None:
+    if psql(version, f"SELECT 1 FROM pg_replication_slots WHERE slot_name = '{REPLICATION_SLOT_NAME}'") != "1":
+        psql(version, f"SELECT pg_create_physical_replication_slot('{REPLICATION_SLOT_NAME}')")
+
+
 def up_replica(version: int, recreate: bool) -> None:
-    """Birincile streaming replika. Testler replikayı SQL'le koparıp geri bağlıyor."""
+    """Birincile streaming replika, FİZİKSEL REPLİKASYON SLOTUYLA (Faz 32 Commit 12c — bkz. modül
+    docstring'i). Testler replikayı SQL'le koparıp geri bağlıyor; slot bu döngüde korunur çünkü
+    `ALTER SYSTEM SET primary_conninfo = ...` `primary_slot_name`'e DOKUNMUYOR."""
     container = replica_name(version)
     if run("docker", "network", "inspect", NETWORK, check=False, quiet=True).returncode != 0:
         run("docker", "network", "create", NETWORK, quiet=True)
@@ -169,12 +193,22 @@ def up_replica(version: int, recreate: bool) -> None:
         run("docker", "rm", "-f", container, quiet=True)
         replica_exists = False
     if not replica_exists:
-        print(f"[{container}] oluşturuluyor (port {REPLICA_PORTS[version]}, pg_basebackup)")
+        # Taze kurulum: önceki bir denemeden (ör. `--recreate` konteyneri sildi ama birincildeki slot
+        # kataloğu HÂLÂ duruyor) kalmış aynı adlı slotu önce temizle — `pg_basebackup -C` var olan bir
+        # slotla HATA verir.
+        if psql(version, f"SELECT 1 FROM pg_replication_slots WHERE slot_name = '{REPLICATION_SLOT_NAME}'") == "1":
+            psql(version, f"SELECT pg_drop_replication_slot('{REPLICATION_SLOT_NAME}')")
+        print(f"[{container}] oluşturuluyor (port {REPLICA_PORTS[version]}, pg_basebackup, slot={REPLICATION_SLOT_NAME})")
+        # Faz 32 Commit 12c: `--checkpoint=fast` ZORUNLU — ölçüldü, YOKKEN pg_basebackup varsayılan
+        # "spread" checkpoint'i bekliyor (`wait_event=CheckpointDone`), bu da ağır yazma geçmişi olan
+        # (dirty buffer dolu) bir birincilde DAKİKALARCA sürebiliyor — `rebuild`'in tam da en çok
+        # gerektiği an (ağır yük SIRASINDA/SONRASINDA replika kurtarma) bu yüzden asılı kalırdı.
         boot = (
             'if [ ! -s "$PGDATA/PG_VERSION" ]; then '
             'mkdir -p "$PGDATA" && chown postgres:postgres "$PGDATA" && chmod 700 "$PGDATA" && '
             f'gosu postgres env PGPASSWORD={PASSWORD} pg_basebackup -h {name(version)} -U postgres '
-            f'-D "$PGDATA" -X stream -R -d "application_name={REPLICA_APPLICATION_NAME}"; fi; '
+            f'-D "$PGDATA" -X stream -R -C -S {REPLICATION_SLOT_NAME} --checkpoint=fast '
+            f'-d "application_name={REPLICA_APPLICATION_NAME}"; fi; '
             'exec docker-entrypoint.sh postgres ' + " ".join(SERVER_ARGS)
         )
         run("docker", "run", "-d", "--name", container, "--network", NETWORK, "-e", f"POSTGRES_PASSWORD={PASSWORD}",
@@ -187,6 +221,14 @@ def up_replica(version: int, recreate: bool) -> None:
         time.sleep(1)
     if replica_psql(version, "SELECT pg_is_in_recovery()") != "t":
         sys.exit(f"{container} replika olarak açılmadı")
+    # RETROFİT (Faz 32 Commit 12c): bu script'in slot'suz bir sürümüyle önceden kurulmuş, HÂLÂ ÇALIŞAN
+    # bir replika — slot birincilde yoksa oluştur, replikaya `primary_slot_name` YAZ. Zaten akıştaysa bu
+    # değişiklik walreceiver'ı KOPARMAZ (yalnızca BİR SONRAKİ bağlantıda devreye girer) — `--recreate`
+    # gerektirmeden eski konteynerleri de korur altına alır.
+    _ensure_slot_exists(version)
+    if replica_psql(version, "SHOW primary_slot_name") != REPLICATION_SLOT_NAME:
+        replica_psql(version, f"ALTER SYSTEM SET primary_slot_name = '{REPLICATION_SLOT_NAME}'")
+        replica_psql(version, "SELECT pg_reload_conf()")
     # Önceki bir test koparıp geri bağlayamadıysa: bağlantıyı geri yaz.
     if replica_psql(version, "SELECT current_setting('primary_conninfo') <> ''") != "t":
         replica_psql(version, f"ALTER SYSTEM SET primary_conninfo = '{primary_conninfo(version)}'")
@@ -198,6 +240,20 @@ def up_replica(version: int, recreate: bool) -> None:
     if status != "streaming":
         sys.exit(f"{container} akışta değil (wal receiver: {status or 'yok'})")
     print(f"[{container}] {replica_psql(version, 'SHOW server_version')} | recovery=t | wal receiver: {status}")
+
+
+def rebuild_replica(version: int) -> None:
+    """Replikayı SIFIRDAN yeniden kurar — slotla bile kurtarılamamış (ör. slot elle/yanlışlıkla
+    silinmiş) bir replika için son çare. `up_replica(recreate=True)`'nin AYNISI; testin `replica`
+    fixture'ı setup'ta akışa geçemezse bunu kendi başına çağırır (Faz 32 Commit 12c)."""
+    up_replica(version, recreate=True)
+
+
+def version_for_replica_port(port: int) -> int:
+    for version, p in REPLICA_PORTS.items():
+        if p == port:
+            return version
+    sys.exit(f"{port} hiçbir replika sürümüne ait değil (bilinenler: {REPLICA_PORTS})")
 
 
 def dsn(versions) -> str:
@@ -239,15 +295,21 @@ def replica_dsn(versions) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["up", "dsn"])
+    parser.add_argument("command", choices=["up", "dsn", "rebuild"])
     parser.add_argument("--versions", type=int, nargs="+", default=list(DEFAULT_VERSIONS), choices=sorted(VERSIONS))
     parser.add_argument("--recreate", action="store_true", help="konteynerleri silip sıfırdan kur")
+    parser.add_argument("--port", type=int, help="rebuild: replikanın portu (ör. 55442) — hangi sürüm olduğunu bulur")
     args = parser.parse_args()
     if args.command == "up":
         for version in args.versions:
             up(version, args.recreate)
             up_replica(version, args.recreate)
         up_pooler(args.versions[0])
+    elif args.command == "rebuild":
+        if args.port is None:
+            sys.exit("rebuild: --port gerekli (replikanın portu, ör. 55442)")
+        rebuild_replica(version_for_replica_port(args.port))
+        return
     # Üç satır da GITHUB_ENV'e yazılıyor (ci.yml) — sıra birincil DSN'lerle aynı. POOLER_DSN her zaman
     # `args.versions[0]`in arkasında — `DBACE_TEST_PG_DSN`deki İLK adresle aynı sürüm (bkz. up_pooler).
     print(f"DBACE_TEST_PG_DSN={dsn(args.versions)}")

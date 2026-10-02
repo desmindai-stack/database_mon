@@ -10318,3 +10318,134 @@ mümkün olan her yerde ölçülür; süre assert'i yalnızca süre GERÇEKTEN b
 
 **Test:** `tests/test_migration_scale_live_postgres.py` (10, gerçek PG15/16/17/18'e karşı tek tek +
 tekrarlı koşuldu).
+
+## Faz 32 — Commit 12c: CI'da PG17 kolu düşüyordu (replika 20 sn hiç akışa geçmedi) — kök neden kanıtlandı, slot + hysteresis + deterministik kesinti testi
+
+**İstek:** iki sorun. (1) Önceki "replika 1-4 sn geçici boş kalıyor" teşhisi (10f/10g) bu CI koşusuyla
+çürüdü — replika setup'ın TAMAMI (20 sn) boyunca hiç akışa geçmedi. Kök nedeni kanıtla (tahmin etme),
+test altyapısını düzelt (replika slot'la kurulsun, fixture kendi kendini onarsın). (2) Ürün tarafı: aynı
+mekanizma bankada da olabilir — gerçek sunucuda doğrulanmalı; tek ölçümle alarm olmamalı, ardışık N
+ölçüm/X saniye sonra alarm; geçici kopma sayılsın ama alarm üretmesin; alarm metni sebebi göstersin
+(geçici kopma / WAL silinmiş — ayrı); negatif kontroller. (3) `test_an_interrupted_concurrent_build_
+leaves_an_invalid_index_that_the_runner_replaces` süreye (`statement_timeout=30ms`) bağlıydı — mekanizmaya
+çevir.
+
+### Madde 1 — kök neden GERÇEKTEN kanıtlandı (10f/10g'nin teşhisi bu sınıf için YETERSİZ çıktı)
+
+Hipotez (görevde verilen): replika slot'suz, birincil kopuk replikanın henüz okumadığı WAL'ı bir
+checkpoint'te siliyor olabilir ("requested WAL segment ... already removed"). **Doğrudan yerelde
+üretilip kanıtlandı** (tahmin EDİLMEDİ): PG17 replikası SQL'le koparıldı, birincilde 3 milyon satırlık
+bir INSERT + `CHECKPOINT` ile ağır WAL churn üretildi (`scripts/live_pg.py`'nin önceki hâli slot
+KURMUYORDU, `max_wal_size=1024MB`, `wal_keep_size=0`), replika geri bağlandı. Replikanın log'unda
+BİREBİR: `FATAL: could not receive data from WAL stream: ERROR: requested WAL segment
+00000001000000060000002B has already been removed` — ve bu noktadan sonra replika SONSUZA KADAR
+yeniden bağlanmayı dener, her seferinde AYNI hatayla düşer (gerçek CI'daki "20 sn boyunca hiç akışa
+geçmedi" DAVRANIŞIYLA birebir aynı). 10f/10g'nin "1-4 sn'lik geçici boşalma" bulgusu YANLIŞ değildi —
+AYRI bir olay sınıfıydı (walreceiver'ın kendiliğinden yeniden bağlanan NORMAL kısa kopması); bu YENİ
+sınıf, o kısa kopmanın tam da BİR checkpoint'in WAL'ı sildiği ana denk geldiği ender ama GERÇEK bir
+durum — o zaman kopma KALICI oluyor, ne kadar beklenirse beklensin.
+
+### Madde 1 çözüm A — `scripts/live_pg.py`: fiziksel replikasyon slotu
+
+Replika artık `pg_basebackup -C -S dbace_replica_slot --checkpoint=fast` ile kuruluyor (slot: birincil,
+replika OKUYANA kadar WAL'ı TUTAR — ne kadar kopuk kalırsa kalsın; `--checkpoint=fast` AYRICA gerekli
+olduğu ölçülerek bulundu: yoksa `pg_basebackup` varsayılan "spread" checkpoint'i bekliyor, ağır yazma
+geçmişi olan bir birincilde DAKİKALARCA sürebiliyordu). `max_slot_wal_keep_size=2048` (2 GB) disk
+taşmasına karşı üst sınır — aşılırsa slot yine devre dışı kalır ama bu normal test ölçeğinin ÇOK
+üstünde. Mevcut (önceden kurulmuş) replikalar RETROFIT ediliyor: `up_replica()` artık her çalıştığında
+slotun var olduğunu ve replikanın `primary_slot_name`'inin doğru olduğunu doğruluyor — `--recreate`
+gerekmiyor. **Doğrulama (aynı deney, slotLA):** disconnect + AYNI 3M satır + checkpoint + reconnect →
+replika TEMİZ şekilde yeniden akışa geçti, hiç "removed" hatası YOK. Slotun kendi 2 GB sınırını
+BİLEREK aşan ikinci bir deney (slot DÜŞÜRÜLÜP tekrarlandı) → beklendiği gibi `wal_status=lost` ile
+YİNE kırıldı — bu, aşağıdaki madde 1 çözüm B'nin test zeminini oluşturdu.
+
+### Madde 1 çözüm B — `test_topology_live_postgres.py`: fixture kendi kendini onarır
+
+Yeni `scripts/live_pg.py rebuild --port <replika portu>` komutu (`up_replica(recreate=True)`'nin
+sarmalayıcısı). `replica` fixture'ının setup denetimi artık 20 sn'lik sabırlı bekleme BAŞARISIZ olursa
+"elle onarın" demek yerine bu komutu ÇAĞIRIYOR (replikayı sıfırdan yeniden kurup tekrar bekliyor) —
+yalnızca GERÇEK BAŞARISIZLIK durumunda ÇALIŞIYOR, normal koşuda hiç tetiklenmiyor. **Uçtan uca
+doğrulandı:** slot DÜŞÜRÜLÜP aynı WAL-silme deneyi tekrarlanarak replika GERÇEKTEN kalıcı bozuldu,
+sonra GERÇEK bir pytest testi (`test_standalone_with_real_host_agent_has_no_cluster_alarm`) bu bozuk
+replikaya karşı koşuldu — fixture durumu tespit edip rebuild'i çağırdı, replika sıfırdan kuruldu, test
+NORMAL şekilde PASSED.
+
+### Madde 2 — ürün tarafı: tek ölçümle alarm YOK, hysteresis + ayrışmış gerekçe
+
+`server_topology.py`: `DEGRADED_CONFIRM_AFTER = 60 sn` (gerekçe kod içinde — Commit 10g'nin ölçtüğü
+1-4 sn'lik pencerenin CI'nın ~6,5× yavaş diskiyle büyümüş hâlini (~26 sn) cömertçe kapsıyor, varsayılan
+60 sn'lik toplama aralığının üstünde kalıyor). `record_topology()` artık `instance.topology_degraded_
+since`'i izliyor; eşik aşılmadan TEK ölçümle `topology_cluster_degraded` metriği HİÇ 1.0 olmuyor —
+`TopologyObservation.alert_flags()` KALDIRILDI (iç API, gerekçesi: alarm kararı artık SÜRE geçmişine
+bakıyor, tek bir gözlemden hesaplanamaz), yerine `record_topology()` bayrağı DÖNDÜRÜYOR. Eşiğe
+ulaşmadan kendiliğinden iyileşen bozulma alarm ÜRETMİYOR ama `Instance.topology_transient_disconnect_
+count`'a SAYILIYOR (yeni migration #59) — `GET /api/instances/{id}/cluster-health`'in `topology`
+gövdesinde görünür, `ClusterHealthPanel.tsx`'te tek satır ("Son dönemde N geçici kopma görüldü").
+
+**Ayrışmış gerekçe (görev 2c):** `pg_replication_slots.wal_status` ölçüldü — **pg_monitor GEREKMEDEN**
+kısıtlı rolde de tam görünüyor (gerçek PG17'de `dbace_it_app` ile doğrulandı). Birincil `wal_status=
+'lost'` görürse (WAL KESİN silinmiş, replika kendiliğinden ASLA katılamaz) `confirmed_immediately=True`
+ile grace period ATLANIYOR — hemen alarm, AYRI bir gerekçe metniyle ("...SİLİNMİŞ... pg_basebackup ile
+SIFIRDAN..."). Belirsiz "bağlı değil" durumu hâlâ grace period bekliyor. SQL Server tarafında eşdeğer
+bir "kesin kanıt" sinyali ARAŞTIRILMADI (kanıt yok, uydurulmadı) — SORULAR.md'ye yazıldı; hysteresis'in
+KENDİSİ `record_topology()` ortak olduğu için SQL Server'da da otomatik geçerli.
+
+**Görev 2a — gerçek sunucuda doğrulandı:** "geçici bir kopmada alarm veriyor mu?" sorusunun yanıtı
+HAYIR — `test_breaking_the_real_replica_raises_the_alarm_on_primary_and_replica` artık İKİ aşamalı
+(eşik teste hızlı olsun diye 2 sn'ye küçültüldü, `test_statement_timeout_cancels_a_long_analyze`'deki
+AYNI monkeypatch deseniyle): ilk ölçümde `events == []` + gerekçede "Geçici bir kopma olabilir — N sn
+içinde...", eşik aşılınca `events == [topology_cluster_degraded]`. Yeni negatif kontrol testi
+(`test_negative_control_a_transient_disconnect_that_heals_before_confirmation_never_alarms`) GERÇEK
+sunucuda: kopma eşiğe ulaşmadan iyileşince `events == []` VE `transient_disconnect_count == 1`.
+Çevrimdışı (`test_server_topology.py`, 5 yeni test, senkronize `now` ile — gerçek 60 sn beklemeden)
+görev 2d'nin üç negatif kontrolünün TAMAMI ayrıca doğrulandı: gerçekten kopan alarm üretir, geçici
+kopma asla üretmez ama sayılır, WAL silinmiş replika AYRI gerekçeyle hemen alarm üretir.
+
+### Madde 3 — deterministik kesinti testi
+
+`test_an_interrupted_concurrent_build_leaves_an_invalid_index_that_the_runner_replaces` artık
+`statement_timeout='30ms'` yarışı DEĞİL: ayrı bir oturumda bilerek açık bırakılan bir YAZMA işlemi
+CONCURRENTLY'yi `wait_event_type='Lock'`/`wait_event='virtualxid'` beklemesine zorluyor (PostgreSQL'in
+kendi eşzamanlılık kuralı — ölçüldü, gerçek PG17'de doğrudan gözlendi: açık bir yazma işlemi varken
+CONCURRENTLY SÜREKLİ bu durumda kalıyor, rastgele bir an değil). Bu GÖRÜLÜNCE `pg_cancel_backend` ile
+iptal ediliyor — hangi makinede/yükte olursa olsun AYNI, deterministik nokta; süre hiç assert
+edilmiyor.
+
+### Doğrulama
+
+CI'nın test SIRASIYLA (`test_migration_scale_live_postgres.py` önce, `test_topology_live_postgres.py`
+sonra — alfabetik, aynı CI koşusu) gerçek PG17'ye karşı **ART ARDA 3 KEZ** koşuldu: 14/14 geçti, her
+seferinde ~166 sn, SIFIR flake. `test_server_topology.py` çevrimdışı: 32/32 (5 yeni).
+
+**Tam paket ilk koşusunda 6 GERÇEK hata yakalandı** (hepsi bu commit'in kendi değişikliğinden, yarış
+değil — bu yüzden tek tek düzeltilip doğrulandı):
+1. `test_count_contracts.py`: `TopologyOut.transient_disconnect_count` kaynağını bildirmiyordu —
+   `not_a_count: ...` eklendi (bu alan `members` listesinden TÜREMİYOR, kalıcı bir sayaç).
+2. `test_migration_order.py` + `test_schema_parity_live_postgres.py`: yeni iki kolon `app/database.py::
+   migrate_schema()`'ya (SQLite yerel kurulum) hiç EKLENMEMİŞTİ — CLAUDE.md'nin tam da uyardığı hata
+   sınıfı ("migration yazmak yetmez, migrate_schema'ya da eklenmeli"). İki `_sqlite_add_column_if_missing`
+   çağrısı eklendi.
+3. `test_real_value_cleanup_migration_live.py` (2 test): `topology_transient_disconnect_count`'ta
+   `NotNullViolationError` — `models.py`'de yalnızca Python-tarafı `default=0` vardı, `server_default`
+   YOKTU; bu testin fixture'ı (`Base.metadata.create_all`, ham SQL INSERT) ORM'u atlıyor, DB-düzeyi
+   varsayılan şart. `server_default="0"` eklendi. **Ek bulgu:** düzeltme sonrası bile ESKİ test
+   veritabanları (`dbace_meta_it` vb., `create_all` yalnızca YOK olan tabloları oluşturuyor, var olanı
+   GÜNCELLEMİYOR) hâlâ eski tanımı taşıyordu — tüm sürümlerde elle DROP edilip yeniden kurulmaları
+   sağlandı (otomatik yeniden oluşuyorlar, kalıcı veri değil).
+4. `test_topology_live_mssql.py::test_availability_group_with_disconnected_replica_raises_the_alarm`:
+   AYNI hysteresis hatasını PostgreSQL testinde düzeltirken SQL Server eşdeğerini GÖZDEN KAÇIRMIŞTIM —
+   tek ölçümle alarm bekliyordu. PG testindeki AYNI iki-aşamalı + monkeypatch deseniyle düzeltildi.
+
+Tüm düzeltmeler sonrası tam paket (gerçek PG15.19/16.15/17.11/18.6 + SQL Server standalone+AG açıkken,
+`-rs`, 25 dk 17 sn): **2553 passed, 4 skipped, 9 xfailed, 0 hata.**
+
+**Değişen/eklenen dosyalar:** `backend/scripts/live_pg.py` (slot + rebuild komutu), `backend/tests/
+test_topology_live_postgres.py` (fixture self-heal, hysteresis testleri), `backend/tests/
+test_topology_live_mssql.py` (hysteresis düzeltmesi), `backend/tests/
+test_migration_scale_live_postgres.py` (deterministik kesinti testi), `backend/tests/
+test_server_topology.py` (5 yeni çevrimdışı test), `backend/app/services/server_topology.py`
+(hysteresis + slot tabanlı ayrışmış gerekçe), `backend/app/services/collection.py`,
+`backend/app/collectors/postgresql.py` (slots sorgusu), `backend/app/database.py` (migrate_schema),
+`backend/app/models.py` + `backend/app/schemas.py` + `supabase/migrations/
+20261002090000_topology_degraded_hysteresis.sql` (yeni migration #59, DEPLOY.md işlendi),
+`frontend/src/components/ClusterHealthPanel.tsx` (+ `npm run gen:types`).

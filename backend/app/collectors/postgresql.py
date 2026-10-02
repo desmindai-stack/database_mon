@@ -127,8 +127,10 @@ class PostgreSQLCollector(BaseCollector):
 
     @staticmethod
     async def _topology_facts(conn) -> dict[str, Any]:
-        """Salt okunur: pg_is_in_recovery, pg_stat_replication, pg_stat_wal_receiver. Durum kolonları
-        pg_read_all_stats olmadan NULL geliyor (ölçüldü) — ayrım sınıflandırmada."""
+        """Salt okunur: pg_is_in_recovery, pg_stat_replication, pg_stat_wal_receiver, pg_replication_slots.
+        Durum kolonları pg_read_all_stats olmadan NULL geliyor (ölçüldü) — ayrım sınıflandırmada.
+        `pg_replication_slots` İSTİSNA: ölçüldü, pg_monitor/pg_read_all_stats GEREKMİYOR — kısıtlı
+        izleme rolü de `wal_status` dahil tam görüyor (Faz 32 Commit 12c)."""
         try:
             in_recovery = bool(await conn.fetchval("SELECT pg_is_in_recovery()"))
             replication = [
@@ -139,9 +141,17 @@ class PostgreSQLCollector(BaseCollector):
             wal_receiver = [
                 dict(r) for r in await conn.fetch("SELECT status, sender_host FROM pg_stat_wal_receiver")
             ] if in_recovery else []
+            # Faz 32 Commit 12c: slot_name + wal_status — birincilin bir replikanın WAL'ını kalıcı
+            # olarak SİLİP SİLMEDİĞİNİ ('lost') gösterir; bu, "kısa süreli kopma" ile "replika sıfırdan
+            # kurulmalı" ayrımının KESİN kanıtı (services/server_topology.py::classify_postgresql).
+            slots = [
+                dict(r) for r in await conn.fetch(
+                    "SELECT slot_name, active, wal_status FROM pg_replication_slots WHERE slot_type = 'physical'"
+                )
+            ]
         except Exception as exc:  # noqa: BLE001 — ölçüm yok, toplama sürmeli
             return {"error": str(exc)}
-        return {"in_recovery": in_recovery, "replication": replication, "wal_receiver": wal_receiver}
+        return {"in_recovery": in_recovery, "replication": replication, "wal_receiver": wal_receiver, "slots": slots}
 
     @staticmethod
     async def _auto_explain_loaded(conn) -> bool | None:

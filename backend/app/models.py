@@ -244,6 +244,16 @@ class Instance(Base):
     topology_members: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     topology_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     topology_cluster_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Faz 32 Commit 12c: tek ölçümle alarm YOK — ardışık bozulma DEGRADED_CONFIRM_AFTER'ı aşana kadar
+    # bekleniyor (server_topology.py::record_topology). degraded_since: mevcut bozulma serisinin
+    # BAŞLADIĞI an (iyileşince NULL'a döner); transient_disconnect_count: eşiğe ULAŞMADAN kendiliğinden
+    # iyileşen (hiç alarm üretmeyen) bozulma serilerinin SAYISI — DBA'ya görünür, kalıcı.
+    topology_degraded_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # server_default ZORUNLU (yalnızca default= değil): bazı canlı testler ORM'u atlayıp ham SQL
+    # INSERT kullanıyor (ör. test_real_value_cleanup_migration_live.py) — Python-tarafı default o yolda
+    # HİÇ uygulanmıyor, migration'daki DB-düzeyi DEFAULT 0 ile eşleşmesi gerekiyor (ölçüldü: eşleşmeyince
+    # NotNullViolationError).
+    topology_transient_disconnect_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

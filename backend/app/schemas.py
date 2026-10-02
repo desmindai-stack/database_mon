@@ -1832,6 +1832,11 @@ class TopologyOut(BaseModel):
     checked_at: datetime | None = None
     # Ölçülemediyse gereken yetki (tam GRANT komutu).
     required_grant: str | None = None
+    # Faz 32 Commit 12c: eşiğe ulaşmadan kendiliğinden iyileşen (alarm üretmeyen) bozulma sayısı —
+    # `members` listesinden TÜREMİYOR, geçmiş olayların kalıcı sayacı.
+    transient_disconnect_count: int = Field(
+        default=0, json_schema_extra={"counted_from": "not_a_count: eşiğe ulaşmadan kendiliğinden iyileşen bozulma serilerinin kalıcı sayacı, listelenen kalem değil"}
+    )
 
 
 class ClusterHealthOut(BaseModel):

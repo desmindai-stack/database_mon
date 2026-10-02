@@ -6072,6 +6072,11 @@ export interface components {
             role?: string | null;
             /** State */
             state?: string | null;
+            /**
+             * Transient Disconnect Count
+             * @default 0
+             */
+            transient_disconnect_count: number;
         };
         /** TuningChecklistOut */
         TuningChecklistOut: {

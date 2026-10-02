@@ -268,14 +268,15 @@ async def collect_instance(instance: Instance, session: AsyncSession) -> None:
         )
 
     # Faz 31 Commit 6: ÖLÇÜLEN topoloji. Alarm metriği yalnızca cluster iken üretiliyor; tek sunucu
-    # ya da ölçülemedi durumunda metrik yok, kural değerlendirilmiyor.
+    # ya da ölçülemedi durumunda metrik yok, kural değerlendirilmiyor. Faz 32 Commit 12c: bayrak artık
+    # record_topology()'den geliyor — tek ölçüme değil, ardışık bozulmaya bakıyor (hysteresis).
     if topology_facts is not None:
         group_topology = await _group_topology(session, instance)
         observation = classify(instance.engine, topology_facts,
                                expected=expected_cluster(instance, group_topology, now=now))
-        record_topology(instance, observation, now=now)
+        flags = record_topology(instance, observation, now=now)
         if observation.kind == KIND_CLUSTER:
-            sample.metrics_json = {**(sample.metrics_json or {}), **observation.alert_flags()}
+            sample.metrics_json = {**(sample.metrics_json or {}), **flags}
             await ensure_topology_alert_rules(session, instance.id)
 
     # Cluster/Patroni stack health snapshot (probe + optional host agent)

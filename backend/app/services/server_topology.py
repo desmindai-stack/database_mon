@@ -61,6 +61,18 @@ TOPOLOGY_STALE_AFTER = timedelta(hours=1)
 #: metrik hiç yok; alarm motoru değeri olmayan kuralı değerlendirmiyor.
 DEGRADED_METRIC = "topology_cluster_degraded"
 
+#: Faz 32 Commit 12c: TEK ölçümle alarm YOK — bir bağlantı ardışık bu kadar süre bozuk kalırsa alarm.
+#: Gerçek bir PostgreSQL sunucusunda doğrudan ölçüldü (Commit 10g): ağır yazma yükü altında
+#: `pg_stat_wal_receiver` NORMAL biçimde, kendiliğinden-iyileşen 1-4 sn'lik pencerelerde boşalıyor —
+#: bu YANLIŞLIKLA alarm üretmemeli. CI'nın yereldeki ölçümden ~6,5× yavaş diski (Commit 10d) bu
+#: pencereyi büyütebilir (kötümser tahmin: 4 sn × 6,5 ≈ 26 sn); varsayılan toplama aralığı (60 sn,
+#: `models.py::Instance.collect_interval_seconds`) bu eşiğin ÜZERİNDE kalacak şekilde seçildi — yani
+#: eşik en az bir toplama turunu, genelde ikisini kapsıyor ("ardışık N ölçüm" burada "X saniye" ile
+#: aynı şey). Bu pencerenin ALTINDA kalan kopmalar alarm ÜRETMEZ ama "geçici kopma" olarak SAYILIR
+#: (`Instance.topology_transient_disconnect_count`) — DBA sık sık kısa kopan bir bağlantıyı görebilsin.
+#: Eşik burada, TEK yerde, gerekçesiyle AYARLANABİLİR.
+DEGRADED_CONFIRM_AFTER = timedelta(seconds=60)
+
 PG_GRANT = "GRANT pg_monitor TO <izleme_kullanıcısı>;  -- pg_read_all_stats: replikasyon durum kolonları"
 MSSQL_GRANT = "GRANT VIEW SERVER STATE TO [<izleme_login>];  -- sys.dm_hadr_* DMV'leri"
 
@@ -73,11 +85,10 @@ class TopologyObservation:
     role: str | None = None
     members: list[dict[str, Any]] = field(default_factory=list)
     required_grant: str | None = None
-
-    def alert_flags(self) -> dict[str, float]:
-        if self.kind != KIND_CLUSTER:
-            return {}
-        return {DEGRADED_METRIC: 1.0 if self.state == STATE_DEGRADED else 0.0}
+    #: Faz 32 Commit 12c: grace period (DEGRADED_CONFIRM_AFTER) BEKLENMEDEN hemen alarm — yalnızca
+    #: belirsiz olmayan, KESİN kanıtlı bozulmalar için (ör. birincilin slot'u wal_status=lost diyor:
+    #: bu replika kendiliğinden ASLA katılamaz, ne kadar beklenirse beklensin sonuç değişmez).
+    confirmed_immediately: bool = False
 
 
 def _permission_error(text: str) -> bool:
@@ -148,10 +159,24 @@ def classify_postgresql(facts: dict[str, Any], *, expected: bool) -> TopologyObs
         return TopologyObservation(KIND_CLUSTER, f"{len(members)} replika akışta.",
                                    state=STATE_HEALTHY, role="primary", members=members)
     if expected:
+        # Faz 32 Commit 12c: `pg_replication_slots.wal_status` — KISITLI rolde de (pg_monitor
+        # GEREKMEZ, ölçüldü) görünür. 'lost' KESİN kanıt: birincil bu replikanın ihtiyacı olan WAL'ı
+        # ZATEN silmiş — replika kendiliğinden bir daha ASLA katılamaz (pg_basebackup'la sıfırdan
+        # kurulması gerekir), ne kadar beklenirse beklensin sonuç değişmez. Bu yüzden grace period
+        # (DEGRADED_CONFIRM_AFTER) BEKLENMİYOR — `confirmed_immediately=True`.
+        lost_slots = [s for s in (facts.get("slots") or []) if s.get("wal_status") == "lost"]
+        if lost_slots:
+            return TopologyObservation(
+                KIND_CLUSTER,
+                "Replikanın WAL'ı SİLİNMİŞ (slot " + ", ".join(s.get("slot_name", "?") for s in lost_slots)
+                + ": wal_status=lost) — replika kendiliğinden bağlanamaz, pg_basebackup ile SIFIRDAN "
+                "yeniden kurulmalı.",
+                state=STATE_DEGRADED, role="primary", confirmed_immediately=True,
+            )
         return TopologyObservation(
             KIND_CLUSTER,
             "Beklenen replika BAĞLI DEĞİL: pg_stat_replication boş (bu sunucu cluster olarak yapılandırılmış "
-            "ya da son 24 saatte replikası görülmüş).",
+            "ya da son 24 saatte replikası görülmüş). Kısa süreli bir ağ/checkpoint kopması olabilir.",
             state=STATE_DEGRADED, role="primary",
         )
     return TopologyObservation(
@@ -214,16 +239,54 @@ def classify(engine: str, facts: dict[str, Any], *, expected: bool) -> TopologyO
     return TopologyObservation(KIND_UNMEASURED, f"Ölçülemedi: {engine} için topoloji tespiti yok.")
 
 
-def record_topology(instance: Instance, observation: TopologyObservation, *, now: datetime) -> None:
+def record_topology(instance: Instance, observation: TopologyObservation, *, now: datetime) -> dict[str, float]:
+    """Topolojiyi kaydeder VE alarm bayrağını döner (`sample.metrics_json`'a eklenecek).
+
+    Faz 32 Commit 12c: bayrak TEK ölçüme değil, `DEGRADED_CONFIRM_AFTER` kadar SÜREGELEN bozulmaya
+    bakıyor — `observation.confirmed_immediately` (ör. WAL kesin kanıtla silinmiş) bu beklemeyi atlar.
+    Eşiğin altında kalıp kendiliğinden iyileşen bir bozulma "geçici kopma" olarak SAYILIR
+    (`topology_transient_disconnect_count`) ama alarm ÜRETMEZ — DBA'ya hem görünür hem sessiz.
+    """
+    is_degraded = observation.kind == KIND_CLUSTER and observation.state == STATE_DEGRADED
+    since = instance.topology_degraded_since
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+
+    confirmed = False
+    reason = observation.reason
+    if is_degraded:
+        if observation.confirmed_immediately:
+            confirmed = True
+            instance.topology_degraded_since = since or now
+        else:
+            if since is None:
+                since = now
+                instance.topology_degraded_since = now
+            elapsed = now - since
+            confirmed = elapsed >= DEGRADED_CONFIRM_AFTER
+            if not confirmed:
+                remaining = int((DEGRADED_CONFIRM_AFTER - elapsed).total_seconds())
+                reason = (
+                    f"{observation.reason} Geçici bir kopma olabilir — {remaining} sn içinde hâlâ "
+                    "bozuksa alarm üretilecek."
+                )
+    else:
+        if since is not None and (now - since) < DEGRADED_CONFIRM_AFTER:
+            # Alarm eşiğine ULAŞMADAN iyileşti — hiç alarm üretmedi, ama görünmez de olmasın.
+            instance.topology_transient_disconnect_count = (instance.topology_transient_disconnect_count or 0) + 1
+        instance.topology_degraded_since = None
+
     instance.topology_kind = observation.kind
     instance.topology_state = observation.state
     instance.topology_role = observation.role
-    instance.topology_reason = observation.reason
+    instance.topology_reason = reason
     instance.topology_required_grant = observation.required_grant
     instance.topology_members = observation.members or None
     instance.topology_checked_at = now
     if observation.kind == KIND_CLUSTER:
         instance.topology_cluster_seen_at = now
+        return {DEGRADED_METRIC: 1.0 if confirmed else 0.0}
+    return {}
 
 
 def topology_status(instance: Instance, *, now: datetime | None = None) -> dict[str, Any]:
@@ -240,15 +303,18 @@ def topology_status(instance: Instance, *, now: datetime | None = None) -> dict[
             return {
                 "kind": KIND_UNMEASURED, "state": None, "role": None, "members": [], "checked_at": checked,
                 "required_grant": grant, "reason": f"Ölçülemedi: son toplama başarısız — {error}",
+                "transient_disconnect_count": instance.topology_transient_disconnect_count or 0,
             }
         return {
             "kind": KIND_UNMEASURED, "state": None, "role": None, "members": [], "checked_at": checked,
             "required_grant": None,
             "reason": "Ölçülemedi: toplayıcı son bir saatte bu sunucunun topolojisini okumadı (toplama çalışmıyor "
                       "ya da bağlantı başarısız). Tek sunucu da cluster da varsayılmıyor.",
+            "transient_disconnect_count": instance.topology_transient_disconnect_count or 0,
         }
     return {
         "kind": instance.topology_kind, "state": instance.topology_state, "role": instance.topology_role,
         "members": list(instance.topology_members or []), "checked_at": checked,
         "required_grant": instance.topology_required_grant, "reason": instance.topology_reason or "",
+        "transient_disconnect_count": instance.topology_transient_disconnect_count or 0,
     }

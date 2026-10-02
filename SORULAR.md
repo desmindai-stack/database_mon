@@ -13,6 +13,17 @@ makul bir varsayımla devam ettim.
 görünür metninin tutarlı biçimlendirmesi. Varsayımla ilerlemedim — ADIM 2 (gerçek çeviri) bu
 kararlar netleşmeden başlamıyor; tam gerekçeler ve dosya:satır referansları `docs/SOZLUK.md`'de.
 
+## Faz 32 — Commit 12c: SQL Server'da "WAL kesin silinmiş" eşdeğeri bir sinyal araştırılmadı
+
+PostgreSQL tarafında `pg_replication_slots.wal_status = 'lost'` replikanın kendiliğinden ASLA
+katılamayacağının KESİN kanıtı — bu görüldüğünde `record_topology()` grace period'u (60 sn)
+BEKLEMEDEN hemen alarm üretiyor (`TopologyObservation.confirmed_immediately`). SQL Server Always On
+tarafında eşdeğer bir "kurtarılamaz" sinyali (ör. log kesilmiş, otomatik reseed başarısız) var mı —
+ARAŞTIRILMADI. Uydurmadım (CLAUDE.md: "Ölçüm yok ile sorun yok farklı şeyler") — SQL Server'daki
+bozulmalar hâlâ GENEL hysteresis'ten (60 sn grace period) geçiyor, yalnızca PostgreSQL'in slot sinyali
+gibi bir KISAYOL yok. Gerçek bir SQL Server Always On ortamında (`sys.dm_hadr_availability_replica_
+states`, `last_connect_error_number` gibi DMV'ler) ölçülmeden eklenmemeli.
+
 ## Faz 18 — İŞ 5: Şema bölümü günlük fotoğrafa dayanıyor, canlı sekmeyle ayrışabilir
 
 Rapordaki Şema sağlığı bölümü `SchemaObjectDailySample` (günde bir kez

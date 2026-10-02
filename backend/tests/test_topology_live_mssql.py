@@ -12,7 +12,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import select
@@ -20,6 +22,7 @@ from sqlalchemy import select
 from app.database import SessionLocal, init_db
 from app.models import AlertEvent, AlertRule, Instance
 from app.collectors import scheduler
+from app.services import server_topology as server_topology_module
 from app.services.credentials import encrypt_secret
 from app.services.server_topology import DEGRADED_METRIC
 from tests.live_mssql import LOGINS, MSSQL_SKIP_REASON, MSSQL_TARGETS, mssql_target, odbc_options
@@ -102,10 +105,22 @@ async def test_login_without_view_server_state_is_unmeasured_with_the_grant(kind
     assert state["events"] == [] and state["rules"] == []
 
 
-async def test_availability_group_with_disconnected_replica_raises_the_alarm():
-    state = await _collect_and_read(await _direct("ag", "ro"))
-    log("SQL Server AG, kopuk replika, dbace_ro", state)
-    assert (state["topology"]["kind"], state["topology"]["state"], state["topology"]["role"]) == ("cluster", "degraded", "primary")
-    assert any(m["state"] == "DISCONNECTED" for m in state["topology"]["members"])
-    assert state["events"] == [DEGRADED_METRIC]
+async def test_availability_group_with_disconnected_replica_raises_the_alarm(monkeypatch):
+    """Faz 32 Commit 12c: hysteresis (`DEGRADED_CONFIRM_AFTER`) PostgreSQL'e ÖZGÜ değil, `record_topology()`
+    ortak — SQL Server'da da TEK ölçümle alarm üretilmiyor. Eşik teste hızlı olsun diye küçültüldü (üretimde
+    60 sn) — bkz. `test_topology_live_postgres.py`'deki AYNI desen."""
+    monkeypatch.setattr(server_topology_module, "DEGRADED_CONFIRM_AFTER", timedelta(seconds=2))
+    instance_id = await _direct("ag", "ro")
+
+    first = await _collect_and_read(instance_id)
+    log("SQL Server AG, kopuk replika, dbace_ro (ilk ölçüm, henüz doğrulanmadı)", first)
+    assert (first["topology"]["kind"], first["topology"]["state"], first["topology"]["role"]) == ("cluster", "degraded", "primary")
+    assert any(m["state"] == "DISCONNECTED" for m in first["topology"]["members"])
+    assert first["events"] == [], "TEK ölçümle alarm üretilmemeliydi (CLAUDE.md: süre eşiği/mekanizma kuralı)"
+
+    await asyncio.sleep(2.2)
+    confirmed = await _collect_and_read(instance_id)
+    log("SQL Server AG, kopuk replika, dbace_ro (doğrulandı)", confirmed)
+    assert (confirmed["topology"]["kind"], confirmed["topology"]["state"]) == ("cluster", "degraded")
+    assert confirmed["events"] == [DEGRADED_METRIC]
 

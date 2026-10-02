@@ -561,16 +561,49 @@ async def test_concurrent_index_build_does_not_block_writers_but_a_plain_build_d
 
 
 async def test_an_interrupted_concurrent_build_leaves_an_invalid_index_that_the_runner_replaces():
+    """Faz 32 Commit 12c: kesinti artık SÜREYE (`statement_timeout`) değil MEKANİZMAYA bağlı — eski hâli
+    `statement_timeout = '30ms'` ile yarışıyordu (CLAUDE.md'nin süre-eşiği-yerine-mekanizma kuralına
+    aykırı): makine/yük değişince 30 ms CONCURRENTLY'yi hiç kesmeyebilirdi. Artık ayrı bir oturumda
+    BİLEREK açık bırakılan bir YAZMA işlemi CONCURRENTLY'yi `wait_event_type='Lock'`/
+    `wait_event='virtualxid'` beklemesine ZORLUYOR (CONCURRENTLY, kendinden önce başlamış tüm yazma
+    işlemlerinin bitmesini bekler — ölçüldü, PG17'de doğrudan gözlendi); bu GÖRÜLÜNCE `pg_cancel_backend`
+    ile iptal ediliyor — hangi makinede/yükte olursa olsun AYNI, deterministik nokta."""
     await _upgraded()
     await _clone(PRE53, "dbace_migscale_invalid")
     conn = await _connect("dbace_migscale_invalid")
+    blocker = await _connect("dbace_migscale_invalid")
+    admin = await _connect("dbace_migscale_invalid")
     try:
         await conn.execute("ALTER TABLE slow_query_samples ADD COLUMN IF NOT EXISTS query_hash VARCHAR(40)")
         ddl = "CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_slow_query_samples_instance_hash ON slow_query_samples (instance_id, query_hash)"
-        await conn.execute("SET statement_timeout = '30ms'")
-        with pytest.raises(asyncpg.exceptions.QueryCanceledError):
-            await conn.execute(ddl)
-        await conn.execute("SET statement_timeout = 0")
+
+        # Bilerek açık bırakılan bu YAZMA (XID atanmış), CONCURRENTLY'yi KESİN olarak virtualxid
+        # beklemesine zorluyor — süreye değil, PostgreSQL'in kendi eşzamanlılık kuralına dayanıyor.
+        await blocker.execute("BEGIN")
+        await blocker.execute("UPDATE slow_query_samples SET query_hash = query_hash "
+                              "WHERE id = (SELECT min(id) FROM slow_query_samples)")
+
+        conn_pid = await conn.fetchval("SELECT pg_backend_pid()")
+        build = asyncio.ensure_future(conn.execute(ddl))
+        try:
+            deadline = time.monotonic() + 30.0
+            waiting = False
+            while time.monotonic() < deadline:
+                row = await admin.fetchrow(
+                    "SELECT wait_event_type, wait_event FROM pg_stat_activity WHERE pid = $1", conn_pid)
+                if row and row["wait_event_type"] == "Lock" and row["wait_event"] == "virtualxid":
+                    waiting = True
+                    break
+                await asyncio.sleep(0.02)
+            if not waiting:
+                build.cancel()
+                pytest.fail("CONCURRENTLY 30 sn içinde virtualxid beklemesine girmedi — mekanizma değişmiş olabilir")
+            await admin.execute("SELECT pg_cancel_backend($1)", conn_pid)
+            with pytest.raises(asyncpg.exceptions.QueryCanceledError):
+                await build
+        finally:
+            await blocker.execute("ROLLBACK")
+
         valid = lambda: conn.fetchval("SELECT indisvalid FROM pg_index WHERE indexrelid = to_regclass('ix_slow_query_samples_instance_hash')")  # noqa: E731
         assert await valid() is False, "yarıda kesilen CONCURRENTLY geçersiz index bırakmalı"
         await conn.execute(ddl)  # IF NOT EXISTS: atlıyor — index hâlâ geçersiz (sorunun kendisi)
@@ -581,6 +614,8 @@ async def test_an_interrupted_concurrent_build_leaves_an_invalid_index_that_the_
         assert await valid() is True, "uygulayıcı geçersiz index'i silip yeniden kurmalı"
     finally:
         await conn.close()
+        await blocker.close()
+        await admin.close()
         await _drop("dbace_migscale_invalid")
 
 

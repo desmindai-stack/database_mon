@@ -11124,6 +11124,11 @@
               }
             ],
             "title": "State"
+          },
+          "transient_disconnect_count": {
+            "default": 0,
+            "title": "Transient Disconnect Count",
+            "type": "integer"
           }
         },
         "required": [

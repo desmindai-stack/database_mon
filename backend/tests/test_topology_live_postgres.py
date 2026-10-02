@@ -24,7 +24,9 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -33,6 +35,7 @@ from sqlalchemy import select
 from app.database import SessionLocal, init_db
 from app.models import AlertEvent, AlertRule, Instance
 from app.services import collection as collection_module
+from app.services import server_topology as server_topology_module
 from app.services.credentials import encrypt_secret
 from app.services.server_topology import DEGRADED_METRIC
 from tests.live_pg import LIVE_DSNS, ROLE_PASSWORD, SKIP_REASON, dsn_id, prepare_live_database, replica_for, target_for
@@ -42,6 +45,8 @@ pytestmark = pytest.mark.skipif(not LIVE_DSNS, reason=SKIP_REASON)
 
 AGENT_DIR = Path(__file__).resolve().parents[2] / "agents" / "host-agent"
 AGENT_TOKEN = "topology-it"
+#: Faz 32 Commit 12c: setup'ta akışa geçemeyen replikayı SIFIRDAN yeniden kurar (bkz. `replica` fixture).
+LIVE_PG_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "live_pg.py"
 
 
 def log(title, value) -> None:
@@ -66,19 +71,25 @@ async def admin(dsn):
 #: Teardown'ın "geri bağlan ve akışa dön" beklemesi (Faz 31 Commit 10f). 30 sn PG18'de CI'da yetersiz kaldı.
 _REPLICA_RECONNECT_TIMEOUT = 180.0
 
-#: Setup'ın "hâlâ akışta mı" denetimi (Faz 31 Commit 10g — 10f'in "PG18 conninfo daha geniş, negotiation
-#: uzun sürüyor" teşhisi YANLIŞTI, tahmindi; gerçek neden burada ÖLÇÜLDÜ). `pg_stat_wal_receiver` HER
-#: sürümde, GERÇEKTEN ve TEKRARLANABİLİR biçimde geçici olarak BOŞ dönüyor — ağır bir yazma yükü
-#: (`test_migration_scale_live_postgres.py`'nin 420 bin satırlık backfill'i + CONCURRENTLY index kurulumu,
-#: dosya adı sırasıyla bu dosyadan HEMEN ÖNCE koşuyor) sürerken birincildeki checkpoint/fsync baskısı
-#: replikanın wal receiver'ını kısa süreliğine KOPARIP YENİDEN BAĞLIYOR — PostgreSQL'in normal davranışı,
-#: bir kurulum hatası değil. Yerelde, replikayı 1 sn aralıklarla izleyip AYNI anda migration-scale testini
-#: koşturarak DOĞRUDAN yakalandı: `pg_stat_wal_receiver` art arda birkaç ölçümde (~1-4 sn) BOŞ döndü, sonra
-#: kendiliğinden 'streaming'e döndü — hiçbir müdahale olmadan. CI'nın PG18 kolunda bunun DAHA UZUN sürmesi
-#: (Commit 10d'de ölçülen ~6,5× CI/yerel disk yavaşlığıyla tutarlı) tek bir sabit sorgunun bu pencereye
-#: rastlama ihtimalini yükseltiyor — teşhis "replika hiç akışa geçmiyor" değil, "denetim TEK ÖLÇÜMLÜK, kısa
-#: bir dalgalanmayı da kalıcı arıza sanıyor". Bu yüzden setup denetimi de (teardown'ınki gibi) sabırlı
-#: BEKLESİN — ama GENUINE arızayı hızlı yakalamak için teardown'dan (180 sn) çok daha kısa bir bütçeyle.
+#: Setup'ın "hâlâ akışta mı" denetimi (Faz 31 Commit 10g). `pg_stat_wal_receiver` HER sürümde, GERÇEKTEN
+#: ve TEKRARLANABİLİR biçimde geçici olarak BOŞ dönüyor — ağır bir yazma yükü (`test_migration_scale_
+#: live_postgres.py`'nin 420 bin satırlık backfill'i + CONCURRENTLY index kurulumu, dosya adı sırasıyla
+#: bu dosyadan HEMEN ÖNCE koşuyor) sürerken birincildeki checkpoint/fsync baskısı replikanın wal
+#: receiver'ını kısa süreliğine KOPARIP YENİDEN BAĞLIYOR — PostgreSQL'in normal davranışı. Yerelde
+#: doğrudan ölçüldü: 1-4 sn'lik birkaç ölçüm BOŞ döndü, sonra kendiliğinden 'streaming'e döndü.
+#:
+#: Faz 32 Commit 12c: BU patience bütçesi KENDİSİ yetmeyen, GERÇEK bir CI çöküşüyle (PG17 kolu) ortaya
+#: çıktı — replika 20 sn'nin TAMAMI boyunca hiç akışa geçmedi. Kök neden GERÇEKTEN kanıtlandı (yerelde
+#: aynı çöküş bire bir üretildi, replikanın log'unda `FATAL: could not receive data from WAL stream:
+#: ERROR: requested WAL segment ... has already been removed` görüldü): replika slot'suzdu, birincil
+#: kopuk replikanın HENÜZ okumadığı WAL'ı bir checkpoint'te SİLDİ — bu noktadan sonra replika KENDİ
+#: KENDİNE ASLA katılamaz (pg_basebackup'la sıfırdan kurulması gerekir), ne kadar beklenirse beklensin.
+#: İki savunma eklendi: (1) `scripts/live_pg.py` artık replikayı FİZİKSEL REPLİKASYON SLOTUYLA kuruyor
+#: — birincil artık replika okuyana kadar WAL'ı TUTAR, bu sınıftaki çöküşü KÖKTEN önler. (2) slot
+#: kurulduktan SONRA da (başka bir nedenle) bozulursa, aşağıdaki `replica` fixture'ı KENDİ KENDİNİ
+#: onarır: `scripts/live_pg.py rebuild` ile replikayı sıfırdan yeniden kurar — "elle onarın" demeyi
+#: beklemez. Bu sabit süre artık "genuine arıza"yı hızlı yakalamak değil, SADECE geçici dalgalanma için
+#: sabırlı olmak — genuine arıza artık rebuild ile OTOMATİK çözülüyor.
 _REPLICA_SETUP_TIMEOUT = 20.0
 
 
@@ -99,10 +110,28 @@ async def replica(dsn):
         await _wait(lambda: conn.fetchval("SELECT status FROM pg_stat_wal_receiver"), "streaming",
                    timeout=_REPLICA_SETUP_TIMEOUT)
     except AssertionError as exc:
-        raise AssertionError(
-            f"replika akışta değil ({exc}) — önceki testin teardown'u geri bağlanmayı bekleyemeden pes "
-            "etmiş olabilir (kalıcı arıza); `python scripts/live_pg.py up` ile elle onarın"
-        ) from None
+        # Faz 32 Commit 12c: "elle onarın" demek yerine KENDİ KENDİNİ onar — slotla bile kurtarılamamış
+        # (ör. WAL segmenti slot kurulmadan ÖNCEki bir koşuda zaten silinmiş, ya da slot başka bir
+        # nedenle bozulmuş) bir replikayı sıfırdan yeniden kurar.
+        print(f"\n  [replica setup] akışta değil ({exc}) — sıfırdan yeniden kuruluyor (rebuild)")
+        await conn.close()
+        port = urlparse(replica_for(dsn)).port
+        rebuild = subprocess.run(
+            [sys.executable, str(LIVE_PG_SCRIPT), "rebuild", "--port", str(port)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+        )
+        print(f"  [rebuild çıktısı] {rebuild.stdout}\n{rebuild.stderr}")
+        if rebuild.returncode != 0:
+            raise AssertionError(
+                f"replika rebuild BAŞARISIZ (çıkış {rebuild.returncode}) — `scripts/live_pg.py` dışında "
+                "bir sorun olabilir (docker ağı/disk); yukarıdaki çıktıyı elle inceleyin"
+            ) from None
+        conn = await asyncpg.connect(replica_for(dsn), statement_cache_size=0)
+        # `rebuild` zaten KENDİ İÇİNDE akışa geçene kadar bekleyip döndü (scripts/live_pg.py::up_replica) —
+        # bu yalnızca YENİ bağlantının aynı görüşü paylaştığını doğruluyor, kısa bir bütçe yeter.
+        await _wait(lambda: conn.fetchval("SELECT status FROM pg_stat_wal_receiver"), "streaming", timeout=10.0)
+        original = await conn.fetchval("SHOW primary_conninfo")
     try:
         yield conn
     finally:
@@ -240,7 +269,13 @@ async def test_standalone_with_real_host_agent_has_no_cluster_alarm(admin, repli
     assert [name for name, _ in state["services"]] == ["postgresql"]
 
 
-async def test_breaking_the_real_replica_raises_the_alarm_on_primary_and_replica(admin, replica, dsn):
+async def test_breaking_the_real_replica_raises_the_alarm_on_primary_and_replica(admin, replica, dsn, monkeypatch):
+    """Faz 32 Commit 12c: GERÇEK sunucuda doğrulanan görev 2a'nın sorusu — "geçici bir kopmada 'replika
+    BAĞLI DEĞİL' alarmı veriyor mu?" YANITI: HAYIR, ilk ölçümde vermiyor (aşağıdaki `after_first`) — grace
+    period (`DEGRADED_CONFIRM_AFTER`) kadar süregelen bozulmadan sonra veriyor (`after_confirmed`). Eşik
+    testte hızlı olsun diye 2 sn'ye küçültüldü (üretimde 60 sn) — AYNI `record_topology()` kod yolu,
+    yalnızca süre kısaltıldı (bkz. `test_statement_timeout_cancels_a_long_analyze`'deki aynı desen)."""
+    monkeypatch.setattr(server_topology_module, "DEGRADED_CONFIRM_AFTER", timedelta(seconds=2))
     version = await _version(admin)
     primary_id = await _add(_direct_instance(dsn, "monitor"))
     replica_id = await _add(_direct_instance(replica_for(dsn), "monitor"))
@@ -254,13 +289,57 @@ async def test_breaking_the_real_replica_raises_the_alarm_on_primary_and_replica
 
     await _break(replica, admin)
     await _wait(lambda: replica.fetchval("SELECT count(*) FROM pg_stat_wal_receiver"), 0)
+
+    # 1) İLK ölçüm, kopma HENÜZ grace period'un altında: alarm YOK, ama "geçici kopma olabilir" görünür.
     for iid in (primary_id, replica_id):
         await _collect(iid)
-    after = {"birincil": await _state(primary_id), "replika": await _state(replica_id)}
-    log(f"PG {version} koparıldı", {k: (v["topology"]["kind"], v["topology"]["state"], v["topology"]["reason"], v["events"]) for k, v in after.items()})
-    for view in after.values():
+    after_first = {"birincil": await _state(primary_id), "replika": await _state(replica_id)}
+    log(f"PG {version} koparıldı (ilk ölçüm, henüz doğrulanmadı)",
+        {k: (v["topology"]["kind"], v["topology"]["state"], v["topology"]["reason"], v["events"]) for k, v in after_first.items()})
+    for view in after_first.values():
+        assert (view["topology"]["kind"], view["topology"]["state"]) == ("cluster", "degraded")
+        assert view["events"] == [], "TEK ölçümle alarm üretilmemeliydi (CLAUDE.md: süre eşiği/mekanizma kuralı)"
+        assert "Geçici" in view["topology"]["reason"]
+
+    # 2) Grace period (2 sn) AŞILDI, kopma HÂLÂ sürüyor: şimdi gerçek alarm.
+    await asyncio.sleep(2.2)
+    for iid in (primary_id, replica_id):
+        await _collect(iid)
+    after_confirmed = {"birincil": await _state(primary_id), "replika": await _state(replica_id)}
+    log(f"PG {version} koparıldı (doğrulandı)",
+        {k: (v["topology"]["kind"], v["topology"]["state"], v["topology"]["reason"], v["events"]) for k, v in after_confirmed.items()})
+    for view in after_confirmed.values():
         assert (view["topology"]["kind"], view["topology"]["state"]) == ("cluster", "degraded")
         assert view["events"] == [DEGRADED_METRIC]
+        assert view["topology"]["transient_disconnect_count"] == 0, "bu kopma hiç iyileşmedi — geçici SAYILMAMALI"
+
+
+async def test_negative_control_a_transient_disconnect_that_heals_before_confirmation_never_alarms(admin, replica, dsn, monkeypatch):
+    """Faz 32 Commit 12c — görev 2d madde 2 (negatif kontrol, GERÇEK sunucuda): grace period İÇİNDE
+    kendiliğinden iyileşen bir kopma HİÇ alarm üretmemeli, ama DBA'nın görmesi için SAYILMALI."""
+    monkeypatch.setattr(server_topology_module, "DEGRADED_CONFIRM_AFTER", timedelta(seconds=5))
+    version = await _version(admin)
+    replica_id = await _add(_direct_instance(replica_for(dsn), "monitor"))
+    await _collect(replica_id)
+    original = await replica.fetchval("SHOW primary_conninfo")
+
+    await _break(replica, admin)
+    await _wait(lambda: replica.fetchval("SELECT count(*) FROM pg_stat_wal_receiver"), 0)
+    await _collect(replica_id)
+    mid = await _state(replica_id)
+    assert (mid["topology"]["kind"], mid["topology"]["state"]) == ("cluster", "degraded")
+    assert mid["events"] == [], "grace period içinde alarm üretilmemeliydi"
+
+    # Eşik (5 sn) DOLMADAN geri bağla.
+    await replica.execute(await replica.fetchval("SELECT format('ALTER SYSTEM SET primary_conninfo = %L', $1::text)", original))
+    await replica.execute("SELECT pg_reload_conf()")
+    await _wait(lambda: replica.fetchval("SELECT status FROM pg_stat_wal_receiver"), "streaming", timeout=10.0)
+    await _collect(replica_id)
+    healed = await _state(replica_id)
+    log(f"PG {version} eşiğe ulaşmadan iyileşti",
+        (healed["topology"]["kind"], healed["topology"]["state"], healed["topology"]["transient_disconnect_count"], healed["events"]))
+    assert healed["events"] == [], "hiçbir zaman alarm üretilmemiş olmalı"
+    assert healed["topology"]["transient_disconnect_count"] == 1, "eşiğe ulaşmadan iyileşen kopma SAYILMALI"
 
 
 async def test_missing_privilege_is_unmeasured_with_the_grant_and_no_alarm(admin, replica, dsn):
