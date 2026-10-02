@@ -11126,6 +11126,7 @@
             "title": "State"
           },
           "transient_disconnect_count": {
+            "counted_from": "not_a_count: eşiğe ulaşmadan kendiliğinden iyileşen bozulma serilerinin kalıcı sayacı, listelenen kalem değil",
             "default": 0,
             "title": "Transient Disconnect Count",
             "type": "integer"
